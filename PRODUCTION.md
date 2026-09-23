@@ -271,6 +271,22 @@ The signing code throws rather than emitting an URL signed with an empty secret
       restart before testing.
 - [ ] Register the webhook in the HarakaPay dashboard:
       `https://<domain>/api/webhooks/harakapay?t=<HARAKAPAY_WEBHOOK_TOKEN>`
+
+      That token is the only proof a callback came from HarakaPay. Their spec
+      has no HMAC signature, so unlike the cron secret it has to travel in the
+      URL — the one place a secret is otherwise refused (see §4.0). It is
+      compared in constant time, and **a callback that cannot be verified is
+      refused** (`src/lib/webhook-auth.ts`): in production, an unconfigured
+      token means 401 rather than "no token, so nothing to check". Accepting
+      there would let anyone POST a completed callback for a checkout they had
+      started themselves and be handed the paid content for free, with the
+      creator credited for money nobody paid.
+
+      Refusing costs nothing, because the webhook is an optimisation: the poll
+      and the reconcile sweep both ask HarakaPay directly and settle the charge
+      anyway (next bullet). What it does cost is a line in the logs —
+      `[HarakaPay Webhook] Refused: HARAKAPAY_WEBHOOK_TOKEN is not configured` —
+      which is not an attack and should be read as a configuration fault.
 - [ ] Check `GET /api/payments/health` (as admin). It reports sandbox state, key,
       webhook token, whether `NEXT_PUBLIC_APP_URL` is publicly reachable, and the
       live HarakaPay wallet/float balance. `readyForLive` must be `true`.

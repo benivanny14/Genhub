@@ -102,11 +102,19 @@ describe("requireCronSecret", () => {
   it("compares via hashed, equal-length buffers so the compare is constant-time", async () => {
     // Reading the implementation is the only way to assert this from outside:
     // a plain `===` on different-length strings returns early and leaks length.
-    const source = await import("node:fs").then((fs) =>
-      fs.readFileSync("src/lib/cron-auth.ts", "utf8")
-    );
-    expect(source).toContain("timingSafeEqual");
-    expect(source).toContain("createHash");
+    //
+    // The comparison now lives in src/lib/shared-secret.ts because the HarakaPay
+    // webhook needed the same property and compared with `!==` instead. So the
+    // property is asserted where it is implemented, and this route is asserted
+    // to *use* it rather than roll its own.
+    const fs = await import("node:fs");
+    const shared = fs.readFileSync("src/lib/shared-secret.ts", "utf8");
+    expect(shared).toContain("timingSafeEqual");
+    expect(shared).toContain("createHash");
+    expect(shared).not.toMatch(/provided\s*[!=]={2,3}\s*expected/);
+
+    const source = fs.readFileSync("src/lib/cron-auth.ts", "utf8");
+    expect(source).toContain("secretMatches");
     // And it must NOT fall back to a naive comparison anywhere.
     expect(source).not.toMatch(/provided\s*===\s*expected/);
   });

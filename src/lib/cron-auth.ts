@@ -25,21 +25,10 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { createHash, timingSafeEqual } from "node:crypto";
 import config from "./config";
-
-/**
- * Constant-time secret comparison.
- *
- * Both sides are hashed first so the buffers are always the same length:
- * timingSafeEqual throws on unequal lengths, and that throw itself would leak
- * the secret's length.
- */
-function secretMatches(provided: string, expected: string): boolean {
-  const a = createHash("sha256").update(provided).digest();
-  const b = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(a, b);
-}
+// Shared with the HarakaPay webhook, which needed the same property (problem 2
+// below) and did not have it. One implementation, so neither can drift.
+import { secretMatches } from "./shared-secret";
 
 /** The secret presented with the request, from headers only. */
 function presentedSecret(request: NextRequest): string {
