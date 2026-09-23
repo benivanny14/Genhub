@@ -137,6 +137,44 @@ The lock carries every platform, not just the one it was generated on (`/next
 swc-linux-x64-gnu` and friends are all present), so a Linux build resolves the
 same versions this laptop does.
 
+### 0.3 The same gates run on every push
+
+`.github/workflows/deploy-gates.yml` runs this list on every branch:
+
+```
+npm ci  ->  prisma migrate deploy  ->  npm run typecheck  ->  npm run audit:endpoints
+        ->  npm test               ->  npm run audit:balances  ->  npm run build
+```
+
+Vercel builds on push too. The difference is where the answer arrives: this one
+is attached to the commit, in minutes, and costs no deployment. Every step is
+something this section already tells you to run by hand, in the same order.
+
+**It needs no secrets, deliberately.** `verify:env` decides how strict to be
+from the platform (`VERCEL_ENV` / `NODE_ENV` / `RAILWAY_ENVIRONMENT` / `RENDER`),
+and a GitHub runner sets none of them — so the build here proves the **code**
+builds and the deployment's **configuration** is checked by `preflight:prod` and
+by Vercel's own production build, where that check is strict. A workflow that
+demanded production secrets would fail on every fork and stay red, and a gate
+that is always red is not read.
+
+**The database is created and thrown away with the runner.** `TEST_DATABASE_URL`
+points at a Postgres service container on localhost, which is also what makes the
+database-backed suites *run*: `src/tests/setup-env.ts` skips them rather than risk
+writing to a remote database, so without that variable the workflow would pass
+while testing almost nothing. `prisma migrate deploy` builds the schema from zero
+every run — the same thing the first deploy of a fresh database does, and the only
+way a bad migration fails here instead of on the deploy that runs it.
+
+The **balance audit runs after the suite** on purpose: it inspects the rows the
+tests have just created, spent and deleted, which is the only moment a database
+holds the sort of half-finished state a money bug would appear in.
+
+The workflow is **the same on every branch**. A break is cheapest to fix while it
+is still attached to the commit that caused it, and `npm ci` here makes the
+lockfile check (§0.2) a required step of every push rather than something you
+remember to run.
+
 ---
 
 ## 1. Secrets & repository hygiene
