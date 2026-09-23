@@ -9,7 +9,7 @@ Everything to verify before Genhub goes live as a real website. Work top to\-bot
 ```bash
 cp .env.example .env.local        # fill in real values (template documents every key)
 npm ci                            # clean install
-npm run typecheck && npm test     # gates: 158 tests incl. HarakaPay E2E + live-mode
+npm run typecheck && npm test     # gates: typecheck + the suite (HarakaPay E2E, live-mode)
 npm run preflight:prod            # THE LAUNCH GATE — exits 1 while blockers remain
 npm run build                     # prebuild re-runs the env check, in strict mode
 npm run preflight:prod -- --url https://your-domain.com   # after deploy: + live health
@@ -122,6 +122,16 @@ running `npm install` locally and committing the lockfile with the change. Skip
 that and the deploy stops with "npm ci can only install packages when your
 package.json and package-lock.json are in sync" — a loud, immediate stop rather
 than a quiet install of a tree nobody tested.
+
+That stop is worth catching earlier, because it is the one failure the other
+gates cannot see: `tsc`, `npm test` and `next build` all run against the
+`node_modules` the previous install left behind, so an edit to `package.json`
+that was never installed is green everywhere and fatal only in the cloud.
+`npm run verify:lockfile` checks the three things `npm ci` compares — the ranges
+in the lockfile's root entry, anything left behind that is no longer declared,
+and that each locked version actually satisfies its range — and `npm run
+preflight` runs it first, in **every** mode, because a drifted lock is a broken
+checkout rather than a missing key.
 
 The lock carries every platform, not just the one it was generated on (`/next
 swc-linux-x64-gnu` and friends are all present), so a Linux build resolves the
@@ -903,8 +913,12 @@ Manual checks:
 - Run `npm run smoke:harakapay` from your machine against the live key.
 
 
-Automated gates: `npm run typecheck` · `npm test` (158 tests incl. HarakaPay live-mode
-E2E against a DB) · `npm run preflight:prod` · `npm run build`.
+Automated gates: `npm run typecheck` · `npm test` (incl. the HarakaPay live-mode E2E
+against a DB) · `npm run verify:lockfile` · `npm run preflight:prod` · `npm run build`.
+
+No test counts are quoted here on purpose: a number in a launch checklist is
+stale the next time anyone writes a test, and a checklist nobody trusts is worse
+than a short one.
 
 ## 8. Operations
 

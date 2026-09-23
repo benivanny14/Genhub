@@ -16,7 +16,9 @@
 // and never delivers the prompt or settles the charge.
 // =============================================================================
 
+import { readFileSync } from "node:fs";
 import { loadEnv, ok, warn, fail, assessSecret, hasRestRedis } from "./_env.mjs";
+import { checkLockfileSync } from "./verify-lockfile.mjs";
 
 loadEnv();
 
@@ -64,6 +66,44 @@ const env = (k) => (process.env[k] || "").trim();
 const isLocal = (v) => !v || /localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(v);
 
 console.log(`\n=== GENHUB PRE-FLIGHT ===${productionMode ? " (PRODUCTION)" : ""}\n`);
+
+// --------------------------------------------------------- Repository state
+// The one check here that is about the checkout rather than the environment,
+// and a blocker in every mode: the deploy installs with `npm ci`, which
+// resolves nothing, so a package.json edit that was never installed is fatal
+// there and invisible here. `tsc`, the suite and `next build` all run against
+// the node_modules that the old edit left behind, so every other gate in this
+// file is green while the deployment cannot start.
+console.log("Repository state:");
+{
+  let report;
+  try {
+    report = checkLockfileSync(
+      JSON.parse(readFileSync("package.json", "utf8")),
+      JSON.parse(readFileSync("package-lock.json", "utf8"))
+    );
+  } catch (error) {
+    report = {
+      errors: [
+        `could not read package.json / package-lock.json (${error.message}) — run this from the project root`,
+      ],
+      warnings: [],
+      checked: 0,
+    };
+  }
+
+  must(
+    report.errors.length === 0,
+    `package.json and package-lock.json agree on ${report.checked} direct dependencies`,
+    "package.json and package-lock.json disagree — the deploy's `npm ci` would refuse to install:\n      " +
+      report.errors.join("\n      ")
+  );
+  for (const warning of report.warnings) {
+    warn(warning);
+    warnings++;
+  }
+}
+console.log("");
 
 // -------------------------------------------------------------- Blockers
 console.log("Blockers (must be fixed before real users):");
