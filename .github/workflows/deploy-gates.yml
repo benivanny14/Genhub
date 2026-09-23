@@ -1,0 +1,119 @@
+# =============================================================================
+# GENHUB - The deploy gates, on every push
+#
+# Vercel builds on push too. This workflow exists because a Vercel build is the
+# *last* place you want to learn something is broken: it is slow, it costs a
+# deployment, and its log is in another dashboard. Everything here is the same
+# sequence PRODUCTION.md §0 tells you to run by hand, so the answer to "is this
+# push safe to deploy" arrives in minutes, attached to the commit.
+#
+# It needs NO secrets. That is deliberate. `verify:env` decides how strict to be
+# from the platform (VERCEL_ENV / NODE_ENV / RAILWAY / RENDER), and none of those
+# are set on a GitHub runner, so the build here proves the *code* builds — it
+# cannot and should not prove the deployment is configured. Configuration is
+# what `npm run preflight:prod` and the first real deploy are for. A gate that
+# demanded production secrets would simply fail on every fork and every pull
+# request, and a gate that always fails stops being read.
+#
+# The database is a throwaway Postgres service created for each run, never the
+# production one: the suite creates creators, moves money, releases earnings and
+# deletes rows (see src/tests/setup-env.ts). `TEST_DATABASE_URL` is the variable
+# that file prefers, and pointing it at localhost is also what makes the
+# database-backed suites run at all — without it they skip themselves and this
+# workflow would pass while testing almost nothing.
+# =============================================================================
+
+name: Deploy gates
+
+on:
+  # Every branch, not just main: the point is to catch a break while it is still
+  # attached to the commit that caused it. A pull request raised from a branch in
+  # this repository already triggers this through `push`, so `pull_request` would
+  # only run everything twice.
+  push:
+  workflow_dispatch: {}
+
+# A second push while the first run is still going makes the first run's answer
+# worthless, so stop it instead of paying for both.
+concurrency:
+  group: deploy-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: genhub
+          POSTGRES_PASSWORD: genhub
+          POSTGRES_DB: genhub_test
+        ports:
+          - 5432:5432
+        # The steps below start the moment the container does, and Postgres
+        # needs a second to accept connections. Without this the migration step
+        # races the server and fails intermittently.
+        options: >-
+          --health-cmd "pg_isready -U genhub -d genhub_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # A database that is deleted with the runner. Both names are set because
+      # two different things read them: `prisma migrate deploy` and the audit
+      # scripts use DATABASE_URL, while src/tests/setup-env.ts prefers
+      # TEST_DATABASE_URL — and a suite that sees a non-local URL *skips* itself
+      # rather than risk writing to production.
+      TEST_DATABASE_URL: postgresql://genhub:genhub@localhost:5432/genhub_test
+      DATABASE_URL: postgresql://genhub:genhub@localhost:5432/genhub_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 22.x, matching "engines" in package.json, so the build runs on the same
+      # Node major as the machine this was developed against and as the deploy.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      # The same install the deploy runs, which means the lockfile check is here
+      # too: `npm ci` resolves nothing and refuses a package.json and
+      # package-lock.json that disagree, so a forgotten `npm install` fails on
+      # this step rather than in the cloud.
+      - name: Install the lockfile
+        run: npm ci
+
+      # Building the schema from zero, every run — the same thing the first
+      # deploy of a fresh database does, and the only way a bad migration shows
+      # up here instead of on the deploy that runs it.
+      - name: Apply migrations to the empty database
+        run: npx prisma migrate deploy
+
+      # Cheapest first, so an obvious break does not wait behind a test suite.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Every UI fetch has a route
+        run: npm run audit:endpoints
+
+      - name: Tests
+        run: npm test
+
+      # Runs after the suite on purpose: it looks at the rows the tests just
+      # created and deleted, which is the only moment the database holds the
+      # sort of half-finished state a money bug would show up in.
+      - name: Balances are balances that could exist
+        run: npm run audit:balances
+
+      # The same command the deploy runs, plus its prebuild gates
+      # (verify:gateway, then verify:env in advisory mode here).
+      - name: Production build
+        run: npm run build

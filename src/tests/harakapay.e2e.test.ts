@@ -167,7 +167,9 @@ describeE2E("HarakaPay E2E: purchase -> webhook -> status -> DB", () => {
 
   it("processes the real HarakaPay webhook (completed)", async () => {
     const token = config.harakaPay.webhookToken;
-    expect(token).toBeTruthy(); // .env.local must define HARAKAPAY_WEBHOOK_TOKEN
+    // Supplied by src/tests/setup-env.ts when the machine has no .env.local, so
+    // this is the real verification path rather than a fixture token.
+    expect(token).toBeTruthy();
 
     const res = await webhookPost(
       new NextRequest(

@@ -36,6 +36,31 @@ if (fs.existsSync(envPath)) {
 process.env.PAYMENT_SANDBOX = "true";
 
 // =============================================================================
+// Harness default: the suite has to pass on a machine that has never seen
+// .env.local.
+//
+// That machine is CI, and it is the only place a fresh install ever happens —
+// so a test that quietly depends on a developer's file is worse than a failing
+// one: it is green on the laptop and red in the pipeline, and "is this safe to
+// deploy?" stops having one answer.
+//
+// HARAKAPAY_WEBHOOK_TOKEN is the one that bit. The webhook route only compares
+// the token when one is configured (it fails *open* on an empty value), so with
+// the variable absent the "rejects webhooks with the wrong shared token" test
+// was handed a 200 and the purchase suites could not build a signed callback
+// URL at all. Both were correct code failing for an environment reason.
+//
+// This is a default and not an override: .env.local is read first and a value
+// already in the environment wins, so anyone testing against a real token still
+// sees it. Real protection lives at the other end — a production build refuses
+// to run without a genuine token (scripts/verify-env.mjs).
+// =============================================================================
+const TEST_WEBHOOK_TOKEN = "test-webhook-token-not-a-real-secret";
+if (!process.env.HARAKAPAY_WEBHOOK_TOKEN) {
+  process.env.HARAKAPAY_WEBHOOK_TOKEN = TEST_WEBHOOK_TOKEN;
+}
+
+// =============================================================================
 // Safety rail: the test suite must NEVER write to the database that serves real
 // users.
 //
