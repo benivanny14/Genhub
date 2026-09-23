@@ -410,6 +410,21 @@ export interface CronWorkerHealth {
   state: CronWorkerState;
   /** Minutes since the last *finished* run; null when it has never finished. */
   ageMinutes: number | null;
+  /**
+   * The moment this worker was last known to be alive — the run it finished, or
+   * the run it started and never came back from. null only when it has never
+   * run. This is the "since when" an operator asks for, as a timestamp rather
+   * than an age, because an age cannot be checked against a deploy or a log.
+   */
+  silentSince: string | null;
+  /**
+   * Minutes since `silentSince`.
+   *
+   * Not the same as `ageMinutes`: for a run killed mid-job, `ageMinutes` counts
+   * from the last run that *finished* — possibly days earlier, and possibly
+   * never — while the silence actually began when the dead run started.
+   */
+  silentForMinutes: number | null;
   lastStartedAt: string | null;
   lastFinishedAt: string | null;
   lastSummary: string | null;
@@ -425,6 +440,19 @@ export interface CronWorkerHealth {
 
 export interface CronHealth {
   workers: CronWorkerHealth[];
+  /**
+   * The ids of the workers that need someone, most urgent first.
+   *
+   * Sent as an order rather than left for the reader to compute: "two of four
+   * need attention" tells an operator that something is wrong and nothing else,
+   * and the question they opened the page with is which one. `never` is not
+   * here — no scheduler yet is setup work, and the card says so separately,
+   * with the fix.
+   */
+  needsAttention: CronWorkerId[];
+  /** `needsAttention` as one line, naming each worker and how long it has been
+   *  silent. Empty when nothing needs attention. */
+  attentionSummary: string;
   counts: Record<CronWorkerState, number>;
   /** Workers needing attention right now: overdue, stalled, or failing. */
   alerting: number;
@@ -475,12 +503,19 @@ export function classifyWorker(
     lastError: string | null;
   } | null,
   now: Date = new Date()
-): { state: CronWorkerState; detail: string; unfinishedRun: boolean; ageMinutes: number | null } {
+): {
+  state: CronWorkerState;
+  detail: string;
+  unfinishedRun: boolean;
+  ageMinutes: number | null;
+  silentSince: Date | null;
+} {
   if (!beat) {
     return {
       state: "never",
       unfinishedRun: false,
       ageMinutes: null,
+      silentSince: null,
       detail: `Has never run. Nothing is calling it — check ${def.schedule}.`,
     };
   }
@@ -488,6 +523,10 @@ export function classifyWorker(
   const started = beat.lastStartedAt;
   const finished = beat.lastFinishedAt;
   const ageMinutes = minutesSince(finished, now);
+  // The last sign of life. Everything except a killed run is measured from the
+  // run that finished; a killed run is measured from the start it never
+  // returned from, because that is when the worker actually went quiet.
+  const aliveAt = finished ?? started;
 
   // A run is in flight when a start is newer than the last finish.
   const unfinishedRun = !!started && (!finished || started.getTime() > finished.getTime());
@@ -503,6 +542,7 @@ export function classifyWorker(
       state: "stalled",
       unfinishedRun,
       ageMinutes,
+      silentSince: started,
       detail:
         `A run started ${humanDuration(startedAge ?? 0)} ago and never finished — it was ` +
         `killed mid-job (function timeout or crash). It runs every ${def.everyMinutes} min, ` +
@@ -517,6 +557,7 @@ export function classifyWorker(
       state: "running",
       unfinishedRun,
       ageMinutes,
+      silentSince: aliveAt,
       detail: `Running now (started ${humanDuration(startedAge ?? 0)} ago).`,
     };
   }
@@ -528,6 +569,7 @@ export function classifyWorker(
       state: "late",
       unfinishedRun,
       ageMinutes,
+      silentSince: aliveAt,
       detail:
         `Nothing has finished for ${humanDuration(referenceAge ?? 0)} (expected every ` +
         `${def.everyMinutes} min). The schedule has stopped firing — check ${def.schedule}.`,
@@ -539,6 +581,7 @@ export function classifyWorker(
       state: "failing",
       unfinishedRun,
       ageMinutes,
+      silentSince: aliveAt,
       detail: `Last run failed ${humanDuration(ageMinutes ?? 0)} ago: ${beat.lastError ?? "unknown error"}`,
     };
   }
@@ -547,8 +590,65 @@ export function classifyWorker(
     state: "ok",
     unfinishedRun,
     ageMinutes,
+    silentSince: aliveAt,
     detail: `Last run succeeded ${humanDuration(ageMinutes ?? 0)} ago.`,
   };
+}
+
+/**
+ * Severity for the admin card, in the order an operator would fix them.
+ *
+ * A killed run outranks a stopped schedule: both are silent, but this one is
+ * failing *while it tries*, so the scheduler is working and something inside
+ * the job is not — and a job that is merely `failing` has been reporting itself
+ * all along. `running`, `ok` and `never` are ranked too so the comparison is
+ * total, but they never reach the list.
+ */
+const ATTENTION_RANK: Record<CronWorkerState, number> = {
+  stalled: 0,
+  late: 1,
+  failing: 2,
+  running: 3,
+  ok: 4,
+  never: 5,
+};
+
+/**
+ * The workers that need someone, most urgent first; longest silence first
+ * within a state.
+ *
+ * Pure, so the ordering is tested rather than eyeballed in a card.
+ */
+export function workersNeedingAttention(
+  workers: readonly CronWorkerHealth[]
+): CronWorkerHealth[] {
+  return workers
+    .filter((w) => ALERTING_STATES.includes(w.state))
+    .slice()
+    .sort(
+      (a, b) =>
+        ATTENTION_RANK[a.state] - ATTENTION_RANK[b.state] ||
+        (b.silentForMinutes ?? 0) - (a.silentForMinutes ?? 0)
+    );
+}
+
+/**
+ * The stopped workers as one line, each named with how long it has been quiet.
+ *
+ * This is the sentence the card leads with. A count of affected workers is a
+ * status; naming them and dating the silence is the answer to the question
+ * somebody opened the dashboard with — and it is the difference between a page
+ * that reports a problem and one that reports it usefully.
+ */
+export function attentionSummary(workers: readonly CronWorkerHealth[]): string {
+  return workersNeedingAttention(workers)
+    .map((w) => {
+      const quietFor = humanDuration(w.silentForMinutes ?? w.ageMinutes ?? 0);
+      if (w.state === "stalled") return `${w.name}: a run started ${quietFor} ago and never finished`;
+      if (w.state === "failing") return `${w.name}: last failure ${quietFor} ago`;
+      return `${w.name}: nothing finished for ${quietFor}`;
+    })
+    .join(" · ");
 }
 
 /** Read every worker's health. Workers with no heartbeat report as "never". */
@@ -571,6 +671,8 @@ export async function getCronHealth(now: Date = new Date()): Promise<CronHealth>
       sendsCustomerRequests: def.sendsCustomerRequests,
       state: verdict.state,
       ageMinutes: verdict.ageMinutes,
+      silentSince: verdict.silentSince?.toISOString() ?? null,
+      silentForMinutes: minutesSince(verdict.silentSince, now),
       unfinishedRun: verdict.unfinishedRun,
       lastStartedAt: row?.lastStartedAt?.toISOString() ?? null,
       lastFinishedAt: row?.lastFinishedAt?.toISOString() ?? null,
@@ -594,9 +696,12 @@ export async function getCronHealth(now: Date = new Date()): Promise<CronHealth>
   for (const w of workers) counts[w.state] += 1;
 
   const alerting = ALERTING_STATES.reduce((sum, state) => sum + counts[state], 0);
+  const needing = workersNeedingAttention(workers);
 
   return {
     workers,
+    needsAttention: needing.map((w) => w.id),
+    attentionSummary: attentionSummary(needing),
     counts,
     alerting,
     // "never" is excluded on purpose — see the CronHealth doc comment.

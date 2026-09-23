@@ -68,6 +68,11 @@ interface CronWorkerHealth {
   sendsCustomerRequests: boolean;
   state: "never" | "late" | "stalled" | "failing" | "running" | "ok";
   ageMinutes: number | null;
+  /** The last moment this worker did anything — the run it finished, or the run
+   *  it started and never came back from. null when it has never run. */
+  silentSince: string | null;
+  /** Minutes since `silentSince`; differs from ageMinutes for a killed run. */
+  silentForMinutes: number | null;
   lastSummary: string | null;
   lastError: string | null;
   lastDurationMs: number | null;
@@ -79,6 +84,10 @@ interface CronWorkerHealth {
 
 interface CronHealth {
   workers: CronWorkerHealth[];
+  /** Workers needing attention, most urgent first — the server owns the order. */
+  needsAttention: string[];
+  /** Those workers named, with how long each has been quiet. */
+  attentionSummary: string;
   counts: Record<CronWorkerHealth["state"], number>;
   alerting: number;
   degraded: boolean;
@@ -301,6 +310,24 @@ const JOB_STATE_LABEL: Record<CronWorkerHealth["state"], string> = {
 
 /** States that mean someone should look. */
 const JOB_STATE_ALERTS: CronWorkerHealth["state"][] = ["late", "stalled", "failing"];
+
+/**
+ * The workers needing attention first, in the order the API ranked them.
+ *
+ * The list is otherwise in registry order, which puts whichever worker stopped
+ * wherever it happens to sit — so on a card whose entire job is to say what
+ * stopped, finding it meant reading all four rows and comparing their ages. The
+ * order comes from the server rather than being recomputed here, so the card and
+ * the API cannot disagree about which problem is the urgent one.
+ */
+function orderForAttention(jobs: CronHealth): CronWorkerHealth[] {
+  const rank = new Map(jobs.needsAttention.map((id, i) => [id, i]));
+  // Stable sort: workers that need nothing keep their registry order.
+  return [...jobs.workers].sort(
+    (a, b) =>
+      (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+  );
+}
 
 function JobStateIcon({ state }: { state: CronWorkerHealth["state"] }) {
   if (state === "ok") return <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />;
@@ -1294,8 +1321,12 @@ export default function AdminDashboard() {
                         ? jobsBusy
                           ? "Checking…"
                           : "Not loaded."
-                        : jobs.alerting > 0
-                          ? `${jobs.alerting} of ${jobs.workers.length} need attention`
+                        : jobs.needsAttention.length > 0
+                          ? // Naming them here, not only counting them: the question
+                            // this card answers is "which one stopped, and since
+                            // when", and a count alone sends the reader hunting
+                            // through four rows for the answer.
+                            `${jobs.needsAttention.length} of ${jobs.workers.length} need attention — ${jobs.attentionSummary}`
                           : jobs.counts.never === jobs.workers.length
                             ? "No scheduler is calling these yet"
                             : "All four workers are within their cadence"}
@@ -1320,7 +1351,7 @@ export default function AdminDashboard() {
                 {/* One column, not detail-left / result-right: on a phone-width
                     admin panel that split squeezed the result into a narrow
                     ribbon and wrapped the worker name onto three lines. */}
-                {(jobs?.workers || []).map((w) => (
+                {(jobs ? orderForAttention(jobs) : []).map((w) => (
                   <div
                     key={w.id}
                     className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2"
@@ -1335,6 +1366,15 @@ export default function AdminDashboard() {
                         </span>
                       </p>
                       <p className="text-xs text-white/50 break-words">{w.detail}</p>
+                      {/* The absolute moment, next to the age the detail already
+                          gives: an age cannot be held against a deploy, a log or
+                          "it was working when I left", and that comparison is
+                          what an operator actually does next. */}
+                      {JOB_STATE_ALERTS.includes(w.state) && w.silentSince && (
+                        <p className="text-xs text-white/40 break-words mt-0.5">
+                          Last activity {new Date(w.silentSince).toLocaleString("en-US")}
+                        </p>
+                      )}
                       {w.lastSummary && (
                         <p className="text-xs text-white/60 break-words mt-0.5">
                           Last result: {w.lastSummary}

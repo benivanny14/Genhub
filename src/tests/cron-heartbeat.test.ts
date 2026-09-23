@@ -22,11 +22,14 @@ import { join } from "node:path";
 import prisma from "@/lib/db";
 import {
   CRON_WORKERS,
+  attentionSummary,
   classifyWorker,
   getCronHealth,
   runCronJob,
   summarizeCronHealth,
+  workersNeedingAttention,
   type CronWorkerDef,
+  type CronWorkerHealth,
 } from "@/lib/services/cron-heartbeat.service";
 
 /** Poll until `check` passes, so a test can wait on a claim instead of sleeping. */
@@ -349,6 +352,31 @@ describe("classifyWorker", () => {
     ).toBe("stalled");
   });
 
+  it("dates the silence from the moment the worker actually went quiet", () => {
+    // For a stopped schedule that is the last run that finished...
+    const late = classifyWorker(
+      def,
+      { lastStartedAt: ago(70), lastFinishedAt: ago(65), lastOutcome: "OK", lastError: null },
+      now
+    );
+    expect(late.silentSince?.toISOString()).toBe(ago(65).toISOString());
+
+    // ...but for a killed run it is when the dead run *started*. The old finish
+    // is hours older, and dating the silence from it would tell an operator the
+    // worker has been gone since long before it actually died — the wrong
+    // answer to the only question this timestamp exists to answer.
+    const killed = classifyWorker(
+      def,
+      { lastStartedAt: ago(30), lastFinishedAt: ago(300), lastOutcome: "OK", lastError: null },
+      now
+    );
+    expect(killed.state).toBe("stalled");
+    expect(killed.silentSince?.toISOString()).toBe(ago(30).toISOString());
+
+    // Nothing to date when it has never run.
+    expect(classifyWorker(def, null, now).silentSince).toBeNull();
+  });
+
   it("treats the in-flight grace boundary as still running", () => {
     const beat = {
       lastStartedAt: ago(def.inFlightGraceMinutes),
@@ -432,6 +460,124 @@ describe("worker detail phrasing", () => {
 
   it("names the schedule when nothing is calling the worker", () => {
     expect(detailsFor[0].detail).toContain("test");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// 2b. Which worker stopped, and since when
+//
+// The card used to answer "2 of 4 need attention" and stop there. That is a
+// status, not an answer: somebody opened the page to find out *which* one, and a
+// count sends them hunting through four rows of timestamps. Two pure functions
+// carry the answer — an order and a sentence — and they are pinned here because
+// the card that renders them only shows a problem when four workers happen to be
+// in four different states.
+// -----------------------------------------------------------------------------
+
+describe("attention: which worker, and for how long", () => {
+  const ago = (minutes: number) => new Date(Date.now() - minutes * 60_000).toISOString();
+
+  /** A health row with only the fields these helpers read. */
+  function row(
+    over: Pick<CronWorkerHealth, "id" | "state"> & Partial<CronWorkerHealth>
+  ): CronWorkerHealth {
+    return {
+      name: over.id,
+      consequence: "what stops happening",
+      schedule: "where it is scheduled",
+      everyMinutes: 60,
+      staleAfterMinutes: 180,
+      inFlightGraceMinutes: 10,
+      sendsCustomerRequests: false,
+      ageMinutes: 0,
+      silentSince: null,
+      silentForMinutes: 0,
+      lastStartedAt: null,
+      lastFinishedAt: null,
+      lastSummary: null,
+      lastError: null,
+      lastDurationMs: null,
+      consecutiveFailures: 0,
+      runsTotal: 1,
+      unfinishedRun: false,
+      detail: "detail",
+      ...over,
+    };
+  }
+
+  const healthy = row({ id: "release-earnings", state: "ok", silentForMinutes: 5 });
+  const never = row({ id: "poll-encoding", state: "never", silentForMinutes: null });
+  const running = row({ id: "renew-subscriptions", state: "running", silentForMinutes: 2 });
+  const late = row({
+    id: "reconcile-payments",
+    state: "late",
+    ageMinutes: 185,
+    silentForMinutes: 185,
+    lastFinishedAt: ago(185),
+  });
+  const killed = row({
+    id: "renew-subscriptions",
+    state: "stalled",
+    ageMinutes: 240,
+    silentForMinutes: 25,
+    lastStartedAt: ago(25),
+    lastFinishedAt: ago(240),
+  });
+  const failing = row({
+    id: "release-earnings",
+    state: "failing",
+    ageMinutes: 12,
+    silentForMinutes: 12,
+    lastError: "boom",
+  });
+
+  it("leaves out every worker that does not need anyone", () => {
+    expect(workersNeedingAttention([healthy, never, running, late])).toEqual([late]);
+    // A worker with no scheduler yet is setup work, and it is reported — with the
+    // fix — by the never-run notice, not as a stopped worker.
+    expect(workersNeedingAttention([never, healthy, running])).toEqual([]);
+    expect(attentionSummary([never, healthy, running])).toBe("");
+  });
+
+  it("puts the problem that needs the most attention first", () => {
+    const ordered = workersNeedingAttention([failing, late, killed, healthy]);
+    // A killed run first (the scheduler works, the job dies), then a stopped
+    // schedule, then a job that fails — which has been saying so all along.
+    expect(ordered.map((w) => w.state)).toEqual(["stalled", "late", "failing"]);
+  });
+
+  it("puts the longest silence first when two workers are in the same state", () => {
+    const older = row({ id: "poll-encoding", state: "late", silentForMinutes: 600 });
+    const newer = row({ id: "reconcile-payments", state: "late", silentForMinutes: 45 });
+    expect(workersNeedingAttention([newer, older]).map((w) => w.id)).toEqual([
+      "poll-encoding",
+      "reconcile-payments",
+    ]);
+  });
+
+  it("names each stopped worker, with how long it has been quiet", () => {
+    const line = attentionSummary([late]);
+    expect(line).toContain("reconcile-payments");
+    expect(line).toContain("3 h");
+  });
+
+  it("tells a killed run apart from a stopped schedule", () => {
+    // Same silence, different cause and different fix, so it may not read the
+    // same: one says nothing arrives, the other says the run never came back.
+    const killedLine = attentionSummary([killed]);
+    const lateLine = attentionSummary([late]);
+
+    expect(killedLine).toContain("never finished");
+    expect(killedLine).toContain("25 min");
+    expect(lateLine).not.toContain("never finished");
+    expect(killedLine).not.toBe(lateLine);
+  });
+
+  it("reads as one line for several workers, and never doubles a preposition", () => {
+    const line = attentionSummary([late, killed, failing]);
+    expect(line.split(" · ")).toHaveLength(3);
+    expect(line).not.toMatch(/ago ago/);
+    expect(line.startsWith("renew-subscriptions")).toBe(true); // the killed run
   });
 });
 
@@ -673,6 +819,37 @@ describeDb("getCronHealth", () => {
     expect(summarizeCronHealth(health)).toBe("late");
   });
 
+  it("names the stopped worker and dates the silence, not just the count", async () => {
+    await prisma.cronHeartbeat.create({
+      data: {
+        worker: WORKER,
+        lastStartedAt: new Date(Date.now() - 3 * 60 * 60_000),
+        lastFinishedAt: new Date(Date.now() - 3 * 60 * 60_000),
+        lastOutcome: "OK",
+        runsTotal: 4,
+      },
+    });
+
+    const health = await getCronHealth();
+
+    // The card leads with this, so it has to arrive as an answer rather than as
+    // something the page works out for itself.
+    expect(health.needsAttention).toEqual([WORKER]);
+    // Named the way an operator reads it, not by its internal id.
+    expect(health.attentionSummary).toContain(CRON_WORKERS.find((w) => w.id === WORKER)!.name);
+    expect(health.attentionSummary).toContain("3 h");
+
+    const stopped = health.workers.find((w) => w.id === WORKER)!;
+    expect(stopped.silentForMinutes).toBeGreaterThanOrEqual(179);
+    // A timestamp, not only a duration: an age cannot be held against a deploy
+    // or a log line, and that comparison is the next thing an operator does.
+    expect(stopped.silentSince).not.toBeNull();
+    expect(new Date(stopped.silentSince!).getTime()).toBeLessThan(Date.now());
+
+    // Workers that are fine carry no silence to report yet.
+    expect(health.workers.find((w) => w.state === "never")!.silentSince).toBeNull();
+  });
+
   it("surfaces a never-run worker in the health verdict without degrading the app", async () => {
     const health = await getCronHealth();
     // Three of four have never run: still not an outage, but not "ok" either.
@@ -700,6 +877,9 @@ describeDb("getCronHealth", () => {
     expect(health.counts.ok).toBe(CRON_WORKERS.length);
     expect(summarizeCronHealth(health)).toBe("ok");
     expect(health.degraded).toBe(false);
+    // Nothing to name, so the card falls back to "all four are within cadence".
+    expect(health.needsAttention).toEqual([]);
+    expect(health.attentionSummary).toBe("");
   });
 });
 
@@ -726,5 +906,31 @@ describe("/api/health caching", () => {
   it("reports the worker verdict a monitor can key on", () => {
     expect(source).toContain("summarizeCronHealth");
     expect(source).toContain("backgroundJobs");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// 6. The dashboard has to use the answer
+//
+// The service can rank the stopped workers and name them, and the card will
+// still show "2 of 4 need attention" if nobody wired it up — which is the
+// failure this change exists to remove, arriving a second time. Read from the
+// source, the way the health route is checked above.
+// -----------------------------------------------------------------------------
+
+describe("the admin card names the stopped worker", () => {
+  const source = readFileSync(join(process.cwd(), "src", "app", "admin", "page.tsx"), "utf8");
+
+  it("shows the summary the API built, instead of only a count", () => {
+    expect(source).toContain("attentionSummary");
+    expect(source).toContain("needsAttention");
+  });
+
+  it("orders the rows by attention, so the stopped one is not buried", () => {
+    expect(source).toContain("orderForAttention");
+  });
+
+  it("shows when the worker last did anything, not only how long ago", () => {
+    expect(source).toContain("silentSince");
   });
 });
