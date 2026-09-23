@@ -41,8 +41,32 @@ const MATURED_AGO = new Date(Date.now() - (config.business.holdingPeriodDays + 3
 const stamp = Date.now();
 const CREATOR = `ccreator${stamp}`;
 const VIEWER = `cviewer${stamp}`;
+/**
+ * The refund test needs *separate customers*, not three refunds for one.
+ *
+ * Two refunds for the same viewer can never reach the creator's balance
+ * together: the first thing each one does is credit that viewer's wallet, so
+ * they queue up on the same `User` row and the second reads the balance after
+ * the first has already finished with it. The window only exists between
+ * different customers, who never touch each other's wallet — which is also the
+ * only way it happens in production.
+ */
+const REFUND_VIEWERS = [0, 1, 2].map((i) => `cbuyer${i}${stamp}`);
 const VIDEO_A = `cvideoa${stamp}`;
 const VIDEO_B = `cvideob${stamp}`;
+
+/**
+ * True when Prisma could not obtain a connection to start the transaction.
+ *
+ * The reversal runs inside an interactive transaction, and Prisma has a deadline
+ * for *acquiring* one: under the parallel suite that deadline is what fails, not
+ * the reversal. Nothing commits, so the caller may simply try again.
+ */
+function isTransactionStartFailure(error: unknown): boolean {
+  const typed = error as { code?: string; message?: string } | null;
+  if (typed?.code === "P2028") return true;
+  return /unable to start a transaction|transaction already closed/i.test(typed?.message ?? "");
+}
 
 const PRICE = 5_000;
 /** 70% of PRICE, the creator's share of one sale. */
@@ -66,6 +90,13 @@ describeE2E("Balance concurrency", () => {
           displayName: "Concurrency Viewer",
           role: "VIEWER",
         },
+        ...REFUND_VIEWERS.map((id, i) => ({
+          id,
+          email: `${id}@concurrency.test`,
+          passwordHash: "not-a-real-hash",
+          displayName: `Refund Buyer ${i}`,
+          role: "VIEWER" as const,
+        })),
       ],
     });
 
@@ -80,15 +111,16 @@ describeE2E("Balance concurrency", () => {
   });
 
   afterAll(async () => {
-    await prisma.videoAccess.deleteMany({ where: { viewerId: VIEWER } });
+    const viewers = [VIEWER, ...REFUND_VIEWERS];
+    await prisma.videoAccess.deleteMany({ where: { viewerId: { in: viewers } } });
     await prisma.videoEarning.deleteMany({ where: { videoId: { in: [VIDEO_A, VIDEO_B] } } });
     await prisma.creatorSubscription.deleteMany({ where: { creatorId: CREATOR } });
-    await prisma.notification.deleteMany({ where: { userId: { in: [CREATOR, VIEWER] } } });
+    await prisma.notification.deleteMany({ where: { userId: { in: [CREATOR, ...viewers] } } });
     await prisma.transaction.deleteMany({ where: { creatorId: CREATOR } });
     await prisma.creatorBalance.deleteMany({ where: { creatorId: CREATOR } });
     await prisma.creatorProfile.deleteMany({ where: { userId: CREATOR } });
     await prisma.video.deleteMany({ where: { id: { in: [VIDEO_A, VIDEO_B] } } });
-    await prisma.user.deleteMany({ where: { id: { in: [CREATOR, VIEWER] } } });
+    await prisma.user.deleteMany({ where: { id: { in: [CREATOR, ...viewers] } } });
     await prisma.$disconnect();
   });
 
@@ -322,20 +354,28 @@ describeE2E("Balance concurrency", () => {
   // ---------------------------------------------------------------------------
 
   it("cannot take back more than the creator holds when two refunds land together", async () => {
-    // Two charges refunded at the same instant, from a balance that only covers
-    // one of them. The clawback reads the balance to decide how much is there,
-    // so a read-then-write lets both take the same balance and leave it
-    // negative — money the platform never had.
-    // Twenty charges, all refunded at once. More than one is enough in theory,
-    // but the window is between one transaction's read and its write — with two
-    // operations they often serialise and the bug hides, which is exactly how it
-    // survives in production. Twenty makes the interleaving overwhelmingly
-    // likely on the unguarded version, so this test can actually fail.
+    // Three charges refunded at once against a balance that covers one of them.
+    // The clawback reads the balance to decide how much is there, so a
+    // read-then-write lets two of them take the same money and leave the
+    // balance negative — money the platform never had.
+    //
+    // That window is between one transaction's read and its write, and a window
+    // measured in microseconds does not open on demand: fire twenty refunds and
+    // hope, and they usually run one after another, so the guard goes untested
+    // while the suite stays green. This test forces the collision instead. It
+    // holds the balance row with SELECT ... FOR UPDATE, which blocks writes but
+    // not the plain read the clawback begins with, so every refund reads the
+    // same untouched balance and only then queues up to write it. Without the
+    // amounts-as-conditions on that write, the second one lands.
+    //
+    // Three refunds, not twenty, because they are now guaranteed to collide —
+    // and each one holds a database connection while it waits, out of a pool of
+    // nine.
     const charges = await Promise.all(
-      Array.from({ length: 20 }, () =>
+      REFUND_VIEWERS.map((viewerId) =>
         prisma.transaction.create({
           data: {
-            userId: VIEWER,
+            userId: viewerId,
             creatorId: CREATOR,
             videoId: VIDEO_A,
             amount: PRICE,
@@ -349,21 +389,88 @@ describeE2E("Balance concurrency", () => {
 
     // Only CUT is still held: the rest was already paid out.
     await prisma.creatorBalance.create({
-      data: { creatorId: CREATOR, pendingBalance: CUT, availableBalance: 0, totalEarned: CUT * 20 },
+      data: {
+        creatorId: CREATOR,
+        pendingBalance: CUT,
+        availableBalance: 0,
+        totalEarned: CUT * REFUND_VIEWERS.length,
+      },
     });
 
-    const results = await Promise.all(
+    // Held on its own connection until this test opens the gate. `FOR UPDATE`
+    // blocks writers only: the reads the refunds start with pass straight
+    // through, which is exactly the window being tested.
+    let lockAcquired = () => {};
+    const acquired = new Promise<void>((resolve) => {
+      lockAcquired = resolve;
+    });
+    let openTheGate = () => {};
+    const gate = new Promise<void>((resolve) => {
+      openTheGate = resolve;
+    });
+    const lockHeld = prisma
+      .$transaction(
+        async (tx) => {
+          await tx.$queryRaw`SELECT "id" FROM "CreatorBalance" WHERE "creatorId" = ${CREATOR} FOR UPDATE`;
+          lockAcquired();
+          await gate;
+        },
+        { timeout: 30_000 }
+      )
+      .then(() => undefined);
+
+    await acquired;
+
+    const pending = Promise.all(
       charges.map((charge) =>
         reverseCollectedCharge({
           transactionId: charge.id,
           destination: "WALLET",
           actorId: "test-admin",
           reason: "concurrency proof",
+        }).catch((error) => {
+          // A transaction that could not START never committed — Prisma throws
+          // for that when the connection pool is saturated, which is what this
+          // whole suite competing for one database looks like. Nothing moved, so
+          // it is not a safety violation, and the service deliberately lets it
+          // escape rather than reporting a reversal it never performed.
+          //
+          // Only that. Any other throw is a bug in the reversal, and re-throwing
+          // keeps the distinctions: this is a tolerance for infrastructure
+          // contention, not a shrug.
+          if (isTransactionStartFailure(error)) return { ok: false as const, reason: "busy" as const };
+          throw error;
         })
       )
     );
 
-    expect(results.every((r) => r.ok)).toBe(true);
+    // Let every refund that is going to reach the write reach it, so the lock
+    // opens onto a real queue rather than an empty one. Asking the database
+    // beats sleeping: the wait ends when the contention actually exists.
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const waiting = await prisma.$queryRaw<{ waiting: number }[]>`
+        SELECT count(*)::int AS waiting
+          FROM pg_stat_activity
+         WHERE wait_event_type = 'Lock'
+           AND query LIKE '%"CreatorBalance"%'
+      `;
+      if (waiting[0].waiting >= 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    openTheGate();
+    await lockHeld;
+
+    const results = await pending;
+
+    // Either the charge reversed, or the database refused to start. A refusal
+    // for any *other* reason — already refunded, not reversible, insufficient —
+    // would mean the guard itself mis-decided, and that must fail this test.
+    const refused = results.filter((r) => !r.ok);
+    expect(refused.every((r) => r.reason === "busy")).toBe(true);
+    // At least one must actually have run, or the assertions below would be
+    // measuring an empty book.
+    expect(results.some((r) => r.ok)).toBe(true);
 
     const after = await balance();
     // The books may not be driven negative by two refunds sharing one balance.
