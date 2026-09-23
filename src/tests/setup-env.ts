@@ -34,3 +34,68 @@ if (fs.existsSync(envPath)) {
 // .env.local has PAYMENT_SANDBOX=false for manual live testing. Tests always
 // run through the sandbox completion endpoint.
 process.env.PAYMENT_SANDBOX = "true";
+
+// =============================================================================
+// Safety rail: the test suite must NEVER write to the database that serves real
+// users.
+//
+// This matters more than it looks. The DB-backed suites are not read-only: they
+// create creators, move money, release matured earnings and claw refunds back.
+// `.env.local` points DATABASE_URL at the managed production database, which is
+// exactly the file `npm test` reads — so a plain `npm test` would have started
+// paying out of and deleting from live data. Nothing warns you; a green run
+// just means the writes "worked".
+//
+// Resolution order:
+//   1. TEST_DATABASE_URL          — a throwaway database (a Neon branch is free
+//                                   and disposable). Best option.
+//   2. DATABASE_URL, if it is local.
+//   3. Nothing: DATABASE_URL is cleared, so every DB-backed suite skips itself
+//      (they gate on `process.env.DATABASE_URL ? describe : describe.skip`)
+//      instead of failing. Prisma constructs fine without it and only throws if
+//      something actually queries — so a missed gate fails loudly, never
+//      silently against production.
+//
+// Deliberate override: ALLOW_TESTS_ON_EXTERNAL_DB=1. Only ever point that at a
+// database you are willing to have rewritten.
+// =============================================================================
+
+const LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]", "host.docker.internal"];
+
+/** Hostname of a connection string, or null if it cannot be read at all. */
+function hostOf(url: string): string | null {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the connection string points at this machine. */
+function isLocal(url: string): boolean {
+  const host = hostOf(url);
+  return host !== null && LOCAL_HOSTS.includes(host);
+}
+
+const testDatabaseUrl = process.env.TEST_DATABASE_URL;
+const configured = process.env.DATABASE_URL;
+const force = process.env.ALLOW_TESTS_ON_EXTERNAL_DB === "1";
+
+if (testDatabaseUrl && !force) {
+  // Named explicitly for tests, so it is used as-is. If it is not local, say so
+  // — the person needs to know which database their run is about to rewrite.
+  process.env.DATABASE_URL = testDatabaseUrl;
+  if (!isLocal(testDatabaseUrl)) {
+    console.info(`[tests] using TEST_DATABASE_URL at ${hostOf(testDatabaseUrl)} (not local)`);
+  }
+} else if (configured && !isLocal(configured) && !force) {
+  const host = hostOf(configured);
+  delete process.env.DATABASE_URL;
+  console.info(
+    `[tests] DATABASE_URL points at ${host ?? "an external database"}, so the ` +
+      "database-backed suites are SKIPPED — they create, pay out and delete real rows.\n" +
+      "        To run them, set TEST_DATABASE_URL to a throwaway database " +
+      "(a Neon branch works), or set ALLOW_TESTS_ON_EXTERNAL_DB=1 to accept " +
+      "that the suite will rewrite whatever DATABASE_URL names.",
+  );
+}

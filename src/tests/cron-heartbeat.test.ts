@@ -51,13 +51,26 @@ const WORKER = "poll-encoding" as const;
  *
  * Safe to delete: this table holds nothing but liveness metadata, and every
  * worker rewrites its own row on its next run.
+ *
+ * No database, no clearing: the sections above are pure functions and file
+ * reads, and they run whether or not one is configured (setup-env.ts drops
+ * DATABASE_URL when it points at a live database).
  */
 async function clearHeartbeats() {
+  if (!process.env.DATABASE_URL) return;
   await prisma.cronHeartbeat.deleteMany();
 }
 
 beforeEach(clearHeartbeats);
 afterEach(clearHeartbeats);
+
+/**
+ * The sections that touch a real database. Everything above them is a pure
+ * function or a source file, so it still runs when there is no database to
+ * point at — which is what setup-env.ts does rather than let a test run write
+ * to the database real users are on.
+ */
+const describeDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 // -----------------------------------------------------------------------------
 // 1. The registry is the only place a cadence is defined, so it has to be sane
@@ -426,7 +439,7 @@ describe("worker detail phrasing", () => {
 // 3. Recording, against the real database
 // -----------------------------------------------------------------------------
 
-describe("runCronJob", () => {
+describeDb("runCronJob", () => {
   it("returns the result and records a success summary", async () => {
     const outcome = await runCronJob(
       WORKER,
@@ -525,7 +538,7 @@ describe("runCronJob", () => {
 // concurrent callers, not just for a double click.
 // -----------------------------------------------------------------------------
 
-describe("the run lock", () => {
+describeDb("the run lock", () => {
   it("refuses a second trigger while a run is in flight", async () => {
     let releaseRun!: () => void;
     const gate = new Promise<void>((resolve) => (releaseRun = resolve));
@@ -621,7 +634,7 @@ describe("the run lock", () => {
 // 4. What the dashboard and the monitor are told
 // -----------------------------------------------------------------------------
 
-describe("getCronHealth", () => {
+describeDb("getCronHealth", () => {
   it("reports every registered worker, including ones with no heartbeat", async () => {
     const health = await getCronHealth();
 

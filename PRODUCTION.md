@@ -718,6 +718,37 @@ npm run db:status        # prisma migrate status — must say "up to date"
       on how many instances happen to be running.
 - [ ] Seed demo content **only** in dev — production starts clean
       (register the first admin through a controlled signup + role grant).
+      The seed route refuses to run under `NODE_ENV=production`, so nobody can
+      re-seed a live site through the API; this is about the rows already there.
+
+### 5.1 Why `npm test` must not read `.env.local`'s `DATABASE_URL`
+
+The database-backed suites are not read-only. They create creators, debit
+wallets, release matured earnings and claw refunds back. Once `DATABASE_URL`
+names a live database, a plain `npm test` would rewrite real money and delete
+real rows, and a **green** run is exactly what that looks like from outside.
+
+`src/tests/setup-env.ts` therefore resolves the test database in this order, and
+this is the same shape as the existing `PAYMENT_SANDBOX` rail right below it:
+
+| Setting | What the DB-backed suites do |
+|---|---|
+| `TEST_DATABASE_URL` | Run against it. **Use this** — a Neon branch is free and disposable. |
+| `DATABASE_URL` is local | Run against it (the default on a dev machine). |
+| `DATABASE_URL` is external | **Skip.** `DATABASE_URL` is cleared for the run, so the suites gate themselves off instead of failing. |
+| `ALLOW_TESTS_ON_EXTERNAL_DB=1` | Run against `DATABASE_URL` anyway. Only for a database you accept being rewritten. |
+
+The skip is loud on stdout, not silent, and Prisma only throws when something
+actually queries — so a suite that forgets to gate fails visibly rather than
+writing anywhere. That is not theoretical: adding the rail immediately caught
+`cron-heartbeat.test.ts`, whose database sections ran with no gate at all.
+
+```bash
+# one-time: create a Neon branch (or any scratch database) and point the suite at it
+echo 'TEST_DATABASE_URL=postgresql://...' >> .env.local
+DATABASE_URL="$TEST_DATABASE_URL" npx prisma migrate deploy   # first run only
+npm test            # 363 passed — the real number, not a partial one
+```
 - [ ] Automated backups enabled (PITR or daily snapshots) and a restore has
       been tested once.
 - [ ] **Manual SQL: use UTC.** Prisma stores `DateTime` columns as
