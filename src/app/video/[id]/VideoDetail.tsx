@@ -45,6 +45,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { DEMO_VIDEOS } from "@/lib/demo-data";
+import { demoDataEnabled } from "@/lib/demo-mode";
 // Comments render below the fold — split them out of the initial bundle too
 const CommentsSection = dynamic(() => import("@/components/CommentsSection"), {
   ssr: false,
@@ -415,8 +416,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       console.error("Failed to fetch video:", error);
     }
 
-    // Demo fallback — lets the preview work without a connected database
-    if (!found) {
+    // Demo fallback — lets the preview work without a connected database, in
+    // development only. A launched site must not answer a failed request with a
+    // scene that does not exist.
+    if (!found && demoDataEnabled()) {
       const demo = DEMO_VIDEOS.find((v) => v.id === id || v.slug === id);
       if (demo) {
         setVideo(demo);
@@ -463,9 +466,13 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
         return;
       }
     } catch {}
-    // Demo fallback
-    const pool = DEMO_VIDEOS.filter((v) => v.id !== current.id) as unknown as RelatedVideo[];
-    setRelated(rankRelated(pool, current).slice(0, 6));
+    // Nothing real to rank. Showing demo scenes under a real video is worse than
+    // showing none: these are recommendation slots, and in production they would
+    // be six invented videos presented as "more like this".
+    const pool = demoDataEnabled()
+      ? (DEMO_VIDEOS.filter((v) => v.id !== current.id) as unknown as RelatedVideo[])
+      : [];
+    setRelated(pool.length > 0 ? rankRelated(pool, current).slice(0, 6) : []);
   }
 
   async function fetchInteractions() {

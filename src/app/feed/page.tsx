@@ -9,6 +9,7 @@ import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { DEMO_VIDEOS } from "@/lib/demo-data";
+import { demoDataEnabled } from "@/lib/demo-mode";
 
 interface FeedVideo {
   id: string;
@@ -74,11 +75,15 @@ export default function FeedPage() {
         return;
       }
     } catch {}
-    // Database unreachable — show demo posts with a clear label
+    // Database unreachable. In development the demo scenes keep the page
+    // explorable and `demoMode` labels them; in production an unreachable feed
+    // shows as empty, because 24 invented scenes with a "demo" badge is still a
+    // homepage telling a visitor the platform has content it does not have.
+    const demo = demoDataEnabled();
     setCreators([]);
-    setVideos(DEMO_VIDEOS as unknown as FeedVideo[]);
+    setVideos(demo ? (DEMO_VIDEOS as unknown as FeedVideo[]) : []);
     setPosts([]);
-    setDemoMode(true);
+    setDemoMode(demo);
   }, []);
 
   const init = useCallback(async () => {

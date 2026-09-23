@@ -11,8 +11,10 @@
 //   * Stale responses (from a previous query) are dropped via a generation
 //     counter.
 //   * Appends deduplicate by id, so overlapping pages never duplicate cards.
-//   * An optional `fallback` supplies demo data when the API is unreachable
-//     or the database is empty (local dev without a DB).
+//   * An optional `fallback` supplies demo data when the API is UNREACHABLE.
+//     It is not consulted for an empty result: an empty grid is the honest
+//     thing to show when the query matched nothing. Callers pass a fallback
+//     only in development — see lib/demo-mode.ts for why.
 // =============================================================================
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -121,11 +123,11 @@ export function useInfiniteVideos<T extends { id: string }>(
         let result: VideoPageResult<T>;
         try {
           result = await fetchVideoPage<T>(queryRef.current, targetPage);
-          // Empty page 1 + a fallback configured => use demo data (dev without DB)
-          if (result.videos.length === 0 && targetPage === 1 && fallbackRef.current) {
-            const fb = fallbackRef.current(targetPage);
-            if (fb) result = fb;
-          }
+          // An empty page is a RESULT, not a failure, and the two must not be
+          // conflated: the fallback exists for "there is no database yet", and
+          // substituting it here meant a launched site with no published videos
+          // advertised 24 invented scenes instead of showing an empty grid.
+          // An unreachable API still lands in the catch below.
         } catch (fetchError) {
           const fb = fallbackRef.current?.(targetPage) ?? null;
           if (!fb) throw fetchError;

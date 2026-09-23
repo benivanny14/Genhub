@@ -19,6 +19,7 @@ import {
   type DemoVideo,
 } from "@/lib/demo-data";
 import { CATEGORIES, categoryHref } from "@/lib/categories";
+import { demoDataEnabled } from "@/lib/demo-mode";
 import { useInfiniteVideos, type InfiniteVideoQuery } from "@/hooks/useInfiniteVideos";
 
 interface HistoryItem {
@@ -138,6 +139,23 @@ function buildDemoFeed(): HomeFeed {
       ...c,
       videoCount: DEMO_VIDEOS.filter((v) => v.creator.id === c.id).length,
     })),
+  };
+}
+
+/**
+ * A real, empty feed — what the sections render when there is nothing to show.
+ *
+ * This exists so a failed request degrades honestly instead of hanging: the
+ * skeletons below are for "still loading", and without this a production page
+ * whose /api/home-feed failed would show them forever.
+ */
+function emptyFeed(): HomeFeed {
+  return {
+    featured: null,
+    rows: { new: [], popular: [], rated: [], free: [], trending: [] },
+    categories: { "": 0 },
+    totalVideos: 0,
+    creators: [],
   };
 }
 
@@ -278,21 +296,28 @@ export default function HomePage() {
     loadingMore,
     loadMore,
     reload,
-  } = useInfiniteVideos<Video>(gridQuery, (targetPage) => {
-    // Demo-feed fallback keeps infinite scroll working without a database
-    const all = filterDemoVideos({
-      q: search,
-      category,
-      sort,
-      duration,
-      date: dateFilter,
-    }).map(toFeedVideo);
-    const start = (targetPage - 1) * PAGE_SIZE;
-    return {
-      videos: all.slice(start, start + PAGE_SIZE),
-      totalPages: Math.max(1, Math.ceil(all.length / PAGE_SIZE)),
-    };
-  });
+  } = useInfiniteVideos<Video>(
+    gridQuery,
+    // Development only: when the API is unreachable the grid still has something
+    // to show. In a production bundle this argument is `undefined`, so an empty
+    // query result stays an empty grid instead of becoming 24 invented scenes.
+    demoDataEnabled()
+      ? (targetPage) => {
+          const all = filterDemoVideos({
+            q: search,
+            category,
+            sort,
+            duration,
+            date: dateFilter,
+          }).map(toFeedVideo);
+          const start = (targetPage - 1) * PAGE_SIZE;
+          return {
+            videos: all.slice(start, start + PAGE_SIZE),
+            totalPages: Math.max(1, Math.ceil(all.length / PAGE_SIZE)),
+          };
+        }
+      : undefined
+  );
 
   // Load account + watch history once on mount
   useEffect(() => {
@@ -317,9 +342,16 @@ export default function HomePage() {
         const data = await res.json();
         if (!cancelled && data.success) setFeed(data.data);
       } catch {
-        // unreachable DB — demo feed keeps the layout explorable
+        // unreachable DB — handled below, where the fallback is decided
       }
-      if (!cancelled) setFeed((prev) => prev || buildDemoFeed());
+      // Two different recoveries, and the difference is the whole point:
+      // development gets the demo feed so the layout is explorable without a
+      // database, production gets an empty feed so a launched site never
+      // advertises scenes that do not exist. Without the second branch a failed
+      // request would leave `feed` null and the skeletons up forever.
+      if (!cancelled) {
+        setFeed((prev) => prev || (demoDataEnabled() ? buildDemoFeed() : emptyFeed()));
+      }
     })();
     return () => {
       cancelled = true;
