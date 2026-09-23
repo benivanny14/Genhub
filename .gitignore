@@ -1,0 +1,34 @@
+node_modules/
+.next/
+.pgdata/
+.pgpw
+*.log
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# -----------------------------------------------------------------------------
+# Environment files
+#
+# ONLY .env.example is committed — it is the template other people copy.
+# Everything else here holds real credentials (database URL, JWT secret, Bunny
+# keys, the Upstash token, the HarakaPay key) and must never reach a remote.
+# .env.local.backup is listed explicitly: it is an easy file to forget and it
+# carries the same secrets as the file it backs up.
+# -----------------------------------------------------------------------------
+.env
+.env.local
+.env.local.*
+.env.*.local
+.env.production
+.env.development
+.env.staging
+
+# uploaded images (dev/local storage; Bunny in production)
+public/uploads/
+
+# local sandboxes and tooling
+.setup-test/
+.vercel/
+.freebuff/
+.DS_Store

@@ -1,0 +1,292 @@
+{
+  "$comment": "GENHUB - launch checklist. ONE source of truth: scripts/setup-env.mjs reads this file, and so does the admin Setup tab (src/lib/setup-check.ts). Keeping it in one place is deliberate - when these lived apart the terminal and the website could tell you different things. Order is cheapest-first: free work before anything that needs a card. `sensitive: true` means the value must never be echoed back to a browser; the API reports only its shape.",
+  "$rulesComment": "The classification rules live here too, as regex sources, for the same reason the checklist does. These were originally written twice - once in the script and once in the app - and the two disagreed on the very first real value they saw: .env.local held BUNNY_TOKEN_SECRET=\"dev-token-secret-...\", the app called it configured and the script called it a placeholder. Two renderers, two answers, about one file. Now both compile these strings. `placeholder` must NOT match 'default' or a bare 'xxx': Upstash issues rediss://default:<password>@... and real hostnames contain xxx.",
+  "rules": {
+    "placeholder": "^(dev|test|change|your|placeholder|example|sample)[-_]|\\bchange[-_]?me\\b|\\bplaceholder\\b|\\byour[-_ ]|\\bexample[-_.]|\\bsample[-_.]|\\bxxxx+\\b",
+    "local": "localhost|127\\.0\\.0\\.1|0\\.0\\.0\\.0"
+  },
+  "groups": [
+    {
+      "id": "legal",
+      "title": "Legal identity",
+      "cost": "Free",
+      "time": "5 minutes",
+      "blurb": "18 U.S.C. 2257 requires a named records custodian at a real place of business. It does NOT require a company: an individual is allowed. Selling adult content without this is criminal exposure, not a missing feature.",
+      "items": [
+        {
+          "id": "company_name",
+          "key": "NEXT_PUBLIC_COMPANY_LEGAL_NAME",
+          "title": "Records custodian name",
+          "site": "Your ID, or your BRELA certificate",
+          "steps": [
+            "No company required: 28 C.F.R. 75.2 allows an individual to be the custodian",
+            "Easiest path with nothing to register: your own full legal name as it appears on your national ID or passport",
+            "If you already have a registered entity, use that instead - most commonly the name on your HarakaPay merchant account, which is a real registered business you already trade through",
+            "Use your BRELA certificate only if you have one; do not wait for one to launch"
+          ],
+          "example": "NEXT_PUBLIC_COMPANY_LEGAL_NAME=Yusuf Juma"
+        },
+        {
+          "id": "company_address",
+          "key": "NEXT_PUBLIC_COMPANY_ADDRESS",
+          "title": "Place of business",
+          "site": "Anywhere real - read the trade-off first",
+          "steps": [
+            "A real street address where the records could actually be inspected. A P.O. Box alone does not satisfy the requirement",
+            "This address is PUBLISHED on /2257 and is public. That is the only real cost of the individual path",
+            "Your home address is legally sufficient. If you would rather not publish it, a serviced business-centre or virtual-office address works, provided someone there can actually produce the records on request",
+            "Registering a company only to obtain an address is the slowest and most expensive of the three options"
+          ],
+          "example": "NEXT_PUBLIC_COMPANY_ADDRESS=Plot 42, Nyerere Road, Dar es Salaam, Tanzania"
+        },
+        {
+          "id": "support_email",
+          "key": "NEXT_PUBLIC_SUPPORT_EMAIL",
+          "title": "Compliance inbox",
+          "site": "Your email",
+          "steps": [
+            "An address that DMCA notices, takedown requests and compliance mail can reach",
+            "A personal Gmail is acceptable; a role address on your domain looks more credible"
+          ],
+          "example": "NEXT_PUBLIC_SUPPORT_EMAIL=compliance@yourdomain.com"
+        }
+      ]
+    },
+    {
+      "id": "database",
+      "title": "Database",
+      "cost": "Free tier",
+      "time": "15 minutes",
+      "blurb": "Nothing exists without this. Right now DATABASE_URL points at your laptop, so a deploy would start completely empty.",
+      "items": [
+        {
+          "id": "database_url",
+          "key": "DATABASE_URL",
+          "title": "Managed Postgres",
+          "site": "https://neon.tech",
+          "sensitive": true,
+          "steps": [
+            "Sign up (GitHub is fastest)",
+            "Create project -> Name: genhub -> Region: closest to Tanzania",
+            "On the connection string panel, turn ON the 'Pooled connection' toggle",
+            "Copy the string starting postgresql://",
+            "Then run: npm run db:deploy"
+          ],
+          "example": "DATABASE_URL=postgresql://user:pass@ep-xxx-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require",
+          "must": "-pooler",
+          "mustHint": "This is the DIRECT connection. A serverless app opens a connection per instance and will exhaust the direct limit under load - use the pooled host."
+        }
+      ]
+    },
+    {
+      "id": "redis",
+      "title": "Rate limiting",
+      "cost": "Free tier",
+      "time": "10 minutes",
+      "blurb": "Without this, rate limits are per-instance and reset on every deploy, so the login limiter stops holding under load.",
+      "items": [
+        {
+          "id": "redis_url",
+          "key": "UPSTASH_REDIS_REST_URL",
+          "anyOf": [
+            {
+              "key": "UPSTASH_REDIS_REST_URL",
+              "must": "https://",
+              "mustHint": "The Upstash REST endpoint is always https:// - check you copied the REST URL and not the TCP one."
+            },
+            {
+              "key": "REDIS_URL",
+              "must": "rediss://",
+              "mustHint": "plaintext redis:// sends your data unencrypted. Managed Redis should always be rediss:// (TLS)."
+            }
+          ],
+          "title": "Managed Redis",
+          "site": "https://upstash.com",
+          "sensitive": true,
+          "steps": [
+            "Sign up",
+            "Create Database -> Type: Regional -> TLS: enabled",
+            "Open the 'Connect' tab - Upstash offers TWO pairs and either works",
+            "Recommended: the REST pair, UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN (two lines). It is an HTTPS connection, so it suits serverless deploys and cannot leave a TCP pool open between invocations",
+            "Alternative: choose Node / ioredis and copy the single URL starting rediss:// (two s characters) into REDIS_URL"
+          ],
+          "example": "UPSTASH_REDIS_REST_URL=https://xxx-12345.upstash.io\nUPSTASH_REDIS_REST_TOKEN=AXxx..."
+        }
+      ]
+    },
+    {
+      "id": "email",
+      "title": "Transactional email",
+      "cost": "Free tier",
+      "time": "15 minutes",
+      "blurb": "Without this a user who forgets their password is locked out permanently - reset emails only reach the server log.",
+      "items": [
+        {
+          "id": "smtp_host",
+          "key": "SMTP_HOST",
+          "title": "SMTP host",
+          "site": "https://resend.com",
+          "steps": ["Enter this exactly - it never changes:"],
+          "example": "SMTP_HOST=smtp.resend.com"
+        },
+        {
+          "id": "smtp_port",
+          "key": "SMTP_PORT",
+          "title": "SMTP port",
+          "site": "https://resend.com",
+          "steps": ["Enter this exactly:"],
+          "example": "SMTP_PORT=465"
+        },
+        {
+          "id": "smtp_user",
+          "key": "SMTP_USER",
+          "title": "SMTP user",
+          "site": "https://resend.com",
+          "steps": ["The literal word resend - NOT your email address:"],
+          "example": "SMTP_USER=resend"
+        },
+        {
+          "id": "smtp_pass",
+          "key": "SMTP_PASS",
+          "title": "API key",
+          "site": "https://resend.com",
+          "sensitive": true,
+          "steps": [
+            "Create account",
+            "Domains -> Add Domain -> enter your domain",
+            "Add the DNS records (SPF/DKIM) at your registrar, wait for status 'Verified'",
+            "API Keys -> Create API Key (permission: Sending access)",
+            "Copy the key starting re_ - you see it ONCE and never again"
+          ],
+          "example": "SMTP_PASS=re_AbCdEf123456"
+        },
+        {
+          "id": "email_from",
+          "key": "EMAIL_FROM",
+          "title": "Sender address",
+          "site": "https://resend.com",
+          "steps": [
+            "Must be on the domain you verified, otherwise every email lands in spam"
+          ],
+          "example": "EMAIL_FROM=Genhub <no-reply@yourdomain.com>"
+        }
+      ]
+    },
+    {
+      "id": "video",
+      "title": "Video hosting",
+      "cost": "Card required, usage billed",
+      "time": "30 minutes",
+      "blurb": "The single most important account: without it creators cannot upload anything and no video can stream. The catalogue would be empty.",
+      "items": [
+        {
+          "id": "bunny_library",
+          "key": "BUNNY_STREAM_LIBRARY_ID",
+          "title": "Stream library ID",
+          "site": "https://bunny.net",
+          "steps": [
+            "Sign up, verify your email",
+            "Left menu: Stream -> Add Library -> Name: genhub",
+            "Open the library -> tab 'API'",
+            "Copy 'Library ID' (a number)"
+          ],
+          "example": "BUNNY_STREAM_LIBRARY_ID=123456"
+        },
+        {
+          "id": "bunny_api_key",
+          "key": "BUNNY_STREAM_API_KEY",
+          "title": "Stream API key",
+          "site": "https://bunny.net",
+          "sensitive": true,
+          "steps": ["Library -> tab 'API' -> copy 'API Key'"],
+          "example": "BUNNY_STREAM_API_KEY=a1b2c3d4-...."
+        },
+        {
+          "id": "bunny_cdn",
+          "key": "BUNNY_CDN_HOSTNAME",
+          "title": "CDN hostname",
+          "site": "https://bunny.net",
+          "steps": ["Library -> tab 'API' -> copy 'CDN Hostname' WITHOUT the https:// part"],
+          "example": "BUNNY_CDN_HOSTNAME=vz-a1b2c3d4-567.b-cdn.net",
+          "forbid": "https://",
+          "forbidHint": "Store the bare hostname. The app adds the scheme itself."
+        },
+        {
+          "id": "bunny_token",
+          "key": "BUNNY_TOKEN_SECRET",
+          "title": "Token authentication key",
+          "site": "https://bunny.net",
+          "sensitive": true,
+          "steps": [
+            "Library -> tab 'Security'",
+            "Turn ON 'Token Authentication' <- REQUIRED, otherwise anyone with a copied link watches paid video for free",
+            "Copy the 'Token Authentication Key'"
+          ],
+          "example": "BUNNY_TOKEN_SECRET=a1b2c3d4e5f6..."
+        },
+        {
+          "id": "bunny_storage_zone",
+          "key": "BUNNY_STORAGE_ZONE",
+          "title": "Storage zone",
+          "site": "https://bunny.net",
+          "steps": ["Menu: Storage -> Add Storage Zone -> Name: genhub-thumbs"],
+          "example": "BUNNY_STORAGE_ZONE=genhub-thumbs"
+        },
+        {
+          "id": "bunny_storage_key",
+          "key": "BUNNY_STORAGE_ACCESS_KEY",
+          "title": "Storage password",
+          "site": "https://bunny.net",
+          "sensitive": true,
+          "steps": ["Storage zone -> tab 'FTP & API Access' -> on 'Password' click Copy/Show"],
+          "example": "BUNNY_STORAGE_ACCESS_KEY=a1b2c3d4-...."
+        }
+      ]
+    },
+    {
+      "id": "payments",
+      "title": "Money",
+      "cost": "Real money",
+      "time": "Dashboard action",
+      "blurb": "This is the one that made your own payments fail. HarakaPay accepts the request and reports \"USSD push sent\", but with a zero float the prompt never settles and the order stays processing forever. It is a balance in their dashboard, not a variable in a file.",
+      "items": [
+        {
+          "id": "harakapay_float",
+          "key": null,
+          "title": "Fund the merchant float",
+          "site": "HarakaPay dashboard",
+          "steps": [
+            "Sign in to the HarakaPay dashboard and fund the float (the balance used to settle collections)",
+            "If collections still do not settle, email their support with your order ids - those are the evidence",
+            "Prove it from your own phone: npm run smoke:harakapay:live"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "deploy",
+      "title": "Go live",
+      "cost": "Domain ~TZS 25,000-40,000 / year",
+      "time": "45 minutes",
+      "blurb": "HarakaPay cannot reach a localhost webhook, so until this is done settlements rely on polling. Everything else can be tested before you get here.",
+      "items": [
+        {
+          "id": "app_url",
+          "key": "NEXT_PUBLIC_APP_URL",
+          "title": "Public URL",
+          "site": "https://vercel.com",
+          "steps": [
+            "Buy a domain (Cloudflare / Namecheap / Truehost)",
+            "Enter https://yourdomain.com with NO trailing slash",
+            "Vercel -> Add New -> Project -> Import Git Repository",
+            "Environment Variables -> add every variable from .env.local",
+            "Deploy -> Settings -> Domains -> add your domain (TLS is automatic)"
+          ],
+          "example": "NEXT_PUBLIC_APP_URL=https://yourdomain.com",
+          "must": "https://",
+          "mustHint": "Must be the real public https:// URL - it is baked into SEO tags, webhook callbacks and referral links."
+        }
+      ]
+    }
+  ]
+}

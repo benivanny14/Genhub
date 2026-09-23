@@ -1,0 +1,315 @@
+// =============================================================================
+// GENHUB - Single Video API Route
+// GET /api/videos/[id] - Get video details + signed playback URL
+// PATCH /api/videos/[id] - Update video (creator only)
+// DELETE /api/videos/[id] - Delete video (creator or admin)
+// =============================================================================
+
+import { NextRequest } from "next/server";
+import prisma from "@/lib/db";
+import { getCurrentUser, requireAuth, AuthError } from "@/lib/auth";
+import { api } from "@/lib/api-response";
+import { updateVideoSchema } from "@/lib/validation";
+import { resolvePlaybackUrl, resolveTeaserUrl, deleteBunnyVideo } from "@/lib/bunny";
+import { describeEncoding } from "@/lib/services/video-encoding.service";
+import { cacheDel } from "@/lib/redis";
+
+// =============================================================================
+// GET /api/videos/[id]
+// =============================================================================
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const { id } = await params;
+    const authUser = await getCurrentUser();
+
+    const video = await prisma.video.findFirst({
+      where: {
+        OR: [{ id }, { slug: id }],
+        isDeleted: false,
+      },
+      include: {
+        creator: {
+          select: {
+            id: true,
+            displayName: true,
+            avatarUrl: true,
+          },
+        },
+        // Scene photo gallery (Brazzers-style image set under the player)
+        galleryImages: { orderBy: { position: "asc" } },
+      },
+    });
+
+    if (!video) {
+      return api.notFound("Video not found");
+    }
+
+    // Increment view count
+    await prisma.video.update({
+      where: { id: video.id },
+      data: { viewsCount: { increment: 1 } },
+    });
+
+    // Check if user has access (purchased)
+    let hasAccess = false;
+    let playbackUrl: string | null = null;
+    let teaserUrl: string | null = null;
+
+    // Teaser for anyone who has not paid: the creator's separate trailer clip
+    // when one exists, the video itself only when it is free, otherwise nothing.
+    // A paid scene must never be previewed by signing its own stream, because a
+    // Bunny token cannot limit duration — see resolveTeaserUrl.
+    teaserUrl = resolveTeaserUrl(video);
+
+    // Free videos (price = 0) are open to everyone — no purchase row needed.
+    // Without this branch, free videos stayed hasAccess=false forever and the
+    // "Free to Watch" row could never actually be watched in full.
+    const isFree = video.price === 0;
+
+    // Where access comes from — lets the UI say "Full access" (free video /
+    // admin override) instead of "Purchased".
+    let accessSource: "free" | "purchase" | "entitlement" | null = null;
+
+    // A charge for this video that is neither confirmed nor denied: the customer
+    // approved the USSD prompt and the gateway never settled it. The paywall
+    // must show "we are checking — do not pay again" instead of "Buy".
+    let paymentUnderInvestigation: {
+      transactionId: string;
+      providerRef: string | null;
+      amount: number;
+      createdAt: string;
+    } | null = null;
+
+    if (isFree) {
+      hasAccess = true;
+      accessSource = "free";
+      playbackUrl = resolvePlaybackUrl(video, 10, authUser?.userId);
+    } else if (authUser) {
+      let access = await prisma.videoAccess.findUnique({
+        where: {
+          viewerId_videoId: {
+            viewerId: authUser.userId,
+            videoId: video.id,
+          },
+        },
+      });
+
+      // SELF-HEAL: a successful purchase without an access row (legacy/seed
+      // data or an interrupted credit) must never lock a paying viewer out.
+      if (!access) {
+        const paid = await prisma.transaction.findFirst({
+          where: {
+            userId: authUser.userId,
+            videoId: video.id,
+            type: "PPV_PURCHASE",
+            status: "SUCCESS",
+          },
+          select: { id: true },
+        });
+        if (paid) {
+          access = await prisma.videoAccess.upsert({
+            where: {
+              viewerId_videoId: {
+                viewerId: authUser.userId,
+                videoId: video.id,
+              },
+            },
+            create: { viewerId: authUser.userId, videoId: video.id },
+            update: {},
+          });
+        }
+      }
+
+      hasAccess = !!access;
+      accessSource = hasAccess ? "purchase" : null;
+
+      // Generate full playback URL only if user has access
+      if (hasAccess || authUser.role === "ADMIN") {
+        accessSource = accessSource ?? "entitlement";
+        playbackUrl = resolvePlaybackUrl(video, 10, authUser.userId);
+      }
+
+      // No access yet — but is a charge for THIS video stuck in limbo? A USSD
+      // prompt that was approved and never settled leaves the customer in the
+      // worst possible place: no video, and no way to know whether they paid.
+      // Surfaced here (server-side, on first render) so the paywall can refuse
+      // to sell them the same video twice.
+      if (!hasAccess) {
+        const unresolved = await prisma.transaction.findFirst({
+          where: {
+            userId: authUser.userId,
+            videoId: video.id,
+            type: "PPV_PURCHASE",
+            status: "UNDER_INVESTIGATION",
+          },
+          orderBy: { createdAt: "desc" },
+          select: { id: true, amount: true, providerRef: true, createdAt: true },
+        });
+        if (unresolved) {
+          paymentUnderInvestigation = {
+            transactionId: unresolved.id,
+            providerRef: unresolved.providerRef,
+            amount: unresolved.amount,
+            createdAt: unresolved.createdAt.toISOString(),
+          };
+        }
+      }
+    }
+
+    // `include:` (not `select:`) means the entire row is in hand, so anything
+    // internal would be published here — and any column added to Video later
+    // would leak by default. Playback, the teaser and downloads are all resolved
+    // server-side now, so the client has no use for the raw Bunny id, and
+    // moderation state must never be public: isFlagged tells the world which
+    // reports landed, and complianceAttestedAt is an internal legal record.
+    //
+    // previewUrl is the FULL scene for side-loaded and demo rows (Bunny rows use
+    // bunnyVideoId, but those producers are seeded with previewUrl), and the
+    // client never reads it — playback and teaser arrive already resolved in
+    // `playbackUrl`/`teaserUrl`. Leaving it in meant any logged-out visitor
+    // could GET this route and stream a paid scene for free.
+    const {
+      previewUrl: _previewUrl,
+      bunnyVideoId: _bunnyVideoId,
+      teaserBunnyVideoId: _teaserBunnyVideoId,
+      teaserClipUrl: _teaserClipUrl,
+      isFlagged: _isFlagged,
+      isDeleted: _isDeleted,
+      complianceAttestedAt: _complianceAttestedAt,
+      // The encoding columns are stripped for the same reason as the rest: the
+      // client gets the ONE curated `encoding` object below instead of the raw
+      // row. `encodingNotifiedAt` is internal bookkeeping, and `encodingError`
+      // can carry Bunny's own diagnostics.
+      encodingStatus: _encodingStatus,
+      encodeProgress: _encodeProgress,
+      encodingError: _encodingError,
+      encodingCheckedAt: _encodingCheckedAt,
+      encodingNotifiedAt: _encodingNotifiedAt,
+      ...publicVideo
+    } = video;
+
+    return api.success({
+      ...publicVideo,
+      // Bunny transcodes after the upload finishes, so a video can be live but
+      // not yet playable — most often because the creator published it early
+      // (see /api/creator/videos/[id]/publish). Saying so is the difference
+      // between "this site is broken" and "this is still processing".
+      encoding: describeEncoding(video.encodingStatus, video.encodeProgress),
+      hasAccess,
+      accessSource,
+      paymentUnderInvestigation,
+      playbackUrl,
+      teaserUrl,
+      viewsCount: video.viewsCount + 1, // Reflect the view we just added
+    });
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);
+    }
+    console.error("[Get Video Error]", error);
+    return api.internal();
+  }
+}
+
+// =============================================================================
+// PATCH /api/videos/[id] - Update video
+// =============================================================================
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const auth = await requireAuth();
+    const { id } = await params;
+
+    // Find video
+    const video = await prisma.video.findUnique({ where: { id } });
+    if (!video) return api.notFound();
+
+    // Only creator or admin can update
+    if (video.creatorId !== auth.userId && auth.role !== "ADMIN") {
+      return api.forbidden();
+    }
+
+    const body = await request.json();
+    const result = updateVideoSchema.safeParse(body);
+
+    if (!result.success) {
+      return api.validation(result.error.errors[0].message);
+    }
+
+    const updated = await prisma.video.update({
+      where: { id },
+      data: result.data,
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        price: true,
+        isPublished: true,
+        updatedAt: true,
+      },
+    });
+
+    // Invalidate caches
+    await cacheDel(`videos:*`);
+
+    return api.success(updated, "Video updated");
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);
+    }
+    console.error("[Update Video Error]", error);
+    return api.internal();
+  }
+}
+
+// =============================================================================
+// DELETE /api/videos/[id] - Soft delete video
+// =============================================================================
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const auth = await requireAuth();
+    const { id } = await params;
+
+    const video = await prisma.video.findUnique({ where: { id } });
+    if (!video) return api.notFound();
+
+    if (video.creatorId !== auth.userId && auth.role !== "ADMIN") {
+      return api.forbidden();
+    }
+
+    // Soft delete
+    await prisma.video.update({
+      where: { id },
+      data: { isDeleted: true, isPublished: false },
+    });
+
+    // Also delete from Bunny.net
+    try {
+      await deleteBunnyVideo(video.bunnyVideoId);
+    } catch (e) {
+      console.error("[Bunny Delete Error]", e);
+      // Continue even if Bunny delete fails
+    }
+
+    await cacheDel(`videos:*`);
+
+    return api.success(null, "Video deleted");
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);
+    }
+    console.error("[Delete Video Error]", error);
+    return api.internal();
+  }
+}

@@ -1,0 +1,143 @@
+// =============================================================================
+// GENHUB - Wallet Top-Up API Route
+// POST /api/payments/topup - Initiate wallet top-up via HarakaPay
+// =============================================================================
+
+import { NextRequest } from "next/server";
+import prisma from "@/lib/db";
+import { requireAuth, AuthError } from "@/lib/auth";
+import { api } from "@/lib/api-response";
+import { topUpWalletSchema } from "@/lib/validation";
+import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
+import { assertSupportedGateway } from "@/lib/payments/gateway";
+import { generateOrderId } from "@/lib/utils";
+import config from "@/lib/config";
+import { applyCoupon, markCouponUsed } from "@/lib/coupons";
+
+export async function POST(request: NextRequest) {
+  try {
+    const auth = await requireAuth();
+
+    const body = await request.json();
+    const result = topUpWalletSchema.safeParse(body);
+
+    if (!result.success) {
+      return api.validation(result.error.errors[0].message);
+    }
+
+    // HarakaPay is the only gateway — checkout is a USSD push to the phone.
+    // Kept as a hard check on top of the Zod enum (see lib/payments/gateway).
+    assertSupportedGateway(result.data.gateway);
+    const { amount, phoneNumber, couponCode } = result.data;
+
+    // Coupon bonus: extra wallet credit on top of the paid amount
+    let bonus = 0;
+    let couponId: string | undefined;
+    if (couponCode) {
+      const outcome = await applyCoupon({
+        code: couponCode,
+        amount,
+        context: "topup",
+      });
+      if (!outcome.valid) {
+        return api.error(outcome.error || "This coupon is not valid", 400, "INVALID_COUPON");
+      }
+      bonus = outcome.bonus || 0;
+      couponId = outcome.couponId;
+    }
+
+    // Create pending transaction (paid amount stays `amount`; bonus rides in metadata)
+    const orderId = generateOrderId("WLT");
+    const transaction = await prisma.transaction.create({
+      data: {
+        userId: auth.userId,
+        amount,
+        type: "WALLET_TOPUP",
+        status: "PENDING",
+        gateway: "HARAKAPAY",
+        metadata: couponId ? { couponId, bonus } : undefined,
+      },
+    });
+
+    if (couponId) await markCouponUsed(couponId);
+
+    // ------------------------------------------------------------ Sandbox mode
+    const harakaSandbox =
+      config.nodeEnv !== "production" &&
+      (!config.harakaPay.apiKey || config.harakaPay.sandbox);
+
+    if (harakaSandbox) {
+      // Mirror production: HarakaPay-style order id so the webhook can find us
+      const sandboxRef = `hp_sbx_${transaction.id}`;
+      await prisma.transaction.update({
+        where: { id: transaction.id },
+        data: { providerRef: sandboxRef },
+      });
+      return api.success({
+        transactionId: transaction.id,
+        orderId: sandboxRef,
+        checkoutUrl: null,
+        sandbox: true,
+        gateway: "HARAKAPAY",
+        amount,
+        bonus,
+      });
+    }
+
+    // Live USSD push — customer confirms on their phone
+    const webhookUrl = `${config.appUrl}/api/webhooks/harakapay${
+      config.harakaPay.webhookToken ? `?t=${config.harakaPay.webhookToken}` : ""
+    }`;
+
+    try {
+      const response = await harakaCollect({
+        phone: phoneNumber,
+        amount,
+        description: "Genhub - Wallet top-up",
+        webhookUrl,
+      });
+
+      if (!response.success || !response.order_id) {
+        await prisma.transaction.update({
+          where: { id: transaction.id },
+          data: { status: "FAILED" },
+        });
+        return api.error(
+          response.error || "HarakaPay rejected the payment request. Please try again.",
+          502,
+          "GATEWAY_REJECTED"
+        );
+      }
+
+      await prisma.transaction.update({
+        where: { id: transaction.id },
+        data: { providerRef: response.order_id },
+      });
+
+      return api.success({
+        transactionId: transaction.id,
+        orderId: response.order_id,
+        checkoutUrl: null,
+        gateway: "HARAKAPAY",
+        status: "pending",
+        amount,
+        bonus,
+        message: response.message || "USSD push sent to phone",
+      });
+    } catch (harakaError: any) {
+      const reason = harakaErrorReason(harakaError);
+      await prisma.transaction.update({
+        where: { id: transaction.id },
+        data: { status: "FAILED", metadata: { gatewayError: reason } },
+      });
+      console.error("[HarakaPay TopUp Error]", reason, harakaError);
+      return api.error(`Payment failed — HarakaPay: ${reason}`, 502, "GATEWAY_ERROR");
+    }
+  } catch (error) {
+    if (error instanceof AuthError) {
+      return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);
+    }
+    console.error("[TopUp Error]", error);
+    return api.internal();
+  }
+}

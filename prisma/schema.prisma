@@ -1,0 +1,715 @@
+// =============================================================================
+// FREEBUFF - Video Monetization & Streaming Platform
+// Complete Prisma Schema for PostgreSQL
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+enum UserRole {
+  VIEWER
+  CREATOR
+  ADMIN
+}
+
+enum KycStatus {
+  NONE
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum TransactionType {
+  PPV_PURCHASE
+  SUBSCRIPTION
+  WALLET_TOPUP
+  TIP
+  PLATFORM_FEE
+  REFERRAL_BONUS
+}
+
+enum TransactionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REFUNDED
+  // A USSD prompt that we can neither confirm nor deny: the gateway accepted
+  // the charge and never settled it, so the customer MAY already have paid.
+  // Deliberately NOT "FAILED" — telling someone to "try again" when their money
+  // left their handset is how the same purchase gets charged twice. Someone has
+  // to check with the network before this becomes SUCCESS or FAILED.
+  UNDER_INVESTIGATION
+}
+
+// Genhub settles every checkout through HarakaPay (USSD push to the phone).
+// Kept as an enum so transactions stay self-describing if a second processor is
+// ever added, but HARAKAPAY is the only supported value.
+enum PaymentGateway {
+  HARAKAPAY
+}
+
+enum PayoutMethod {
+  MPESA
+  TIGO_PESA
+  AIRTEL_MONEY
+  BANK_TRANSFER
+}
+
+enum PayoutStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+}
+
+enum ReportStatus {
+  PENDING
+  RESOLVED
+  DISMISSED
+}
+
+enum ReportReason {
+  DMCA
+  INAPPROPRIATE
+  SPAM
+  VIOLENCE
+  OTHER
+}
+
+enum StrikeAction {
+  WARNING
+  HIDDEN
+  FROZEN_EARNINGS
+  BANNED
+}
+
+// =============================================================================
+// USER MODEL
+// =============================================================================
+
+model User {
+  id           String   @id @default(cuid())
+  phone        String?  @unique
+  email        String?  @unique
+  passwordHash String
+  displayName  String?
+  avatarUrl    String?
+  role         UserRole @default(VIEWER)
+  kycStatus    KycStatus @default(NONE)
+  isBanned     Boolean  @default(false)
+  banReason    String?
+  strikes      Int      @default(0)
+  walletBalance Int     @default(0) // In TZS, stored as integer (kopecks not needed for TZS)
+  isVerified    Boolean @default(false) // Public verification badge
+  referralCode  String?  @unique // Shareable code for the affiliate program
+  referredById  String?  // Who invited this user
+  referralEarnings Int   @default(0) // Lifetime TZS earned from referrals
+  locale       String   @default("sw") // sw = Kiswahili, en = English
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  videos              Video[]
+  transactions        Transaction[]      @relation("ViewerTransactions")
+  creatorTransactions Transaction[]      @relation("CreatorTransactions")
+  videoAccess         VideoAccess[]
+  reporterReports     VideoReport[]      @relation("ReporterReports")
+  resolvedReports     VideoReport[]      @relation("ReportResolver")
+  kycVerifications    KycVerification[]
+  kycReviews          KycVerification[]  @relation("KYCReviewer")
+  creatorBalance      CreatorBalance?
+  payoutRequests      PayoutRequest[]
+  processedPayouts    PayoutRequest[]    @relation("PayoutProcessor")
+  sentMessages        PayMessage[]       @relation("SenderMessages")
+  receivedMessages    PayMessage[]       @relation("ReceiverMessages")
+  subscriptions       CreatorSubscription[] @relation("SubscriptionViewer")
+  subscriberOf        CreatorSubscription[] @relation("SubscriptionCreator")
+  videoLikes          VideoLike[]
+  favorites           Favorite[]
+  passwordResets      PasswordReset[]
+  notifications       Notification[]
+  comments            Comment[]
+  watchProgresses     WatchProgress[]
+  creatorProfile      CreatorProfile?
+  referredBy          User?    @relation("Referrals", fields: [referredById], references: [id])
+  referrals           User[]   @relation("Referrals")
+  posts               CreatorPost[]
+  playlists           Playlist[]
+
+  @@index([email])
+  @@index([referralCode])
+  @@index([phone])
+  @@index([role])
+  @@index([kycStatus])
+  @@index([isBanned])
+}
+
+// =============================================================================
+// KYC VERIFICATION MODEL
+// =============================================================================
+
+model KycVerification {
+  id              String     @id @default(cuid())
+  userId          String
+  idDocumentUrl   String     // URL to uploaded government ID
+  selfieUrl       String     // URL to selfie with handwritten note
+  idDocumentType  String?    // NIDA, Passport, etc.
+  status          KycStatus  @default(PENDING)
+  rejectionReason String?
+  reviewedBy      String?    // Admin userId who reviewed
+  reviewedAt      DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  // Relations
+  user     User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer User? @relation("KYCReviewer", fields: [reviewedBy], references: [id])
+
+  @@index([userId])
+  @@index([status])
+}
+
+// =============================================================================
+// VIDEO MODEL
+// =============================================================================
+
+model Video {
+  id              String   @id @default(cuid())
+  creatorId       String
+  title           String
+  description     String?
+  slug            String?  @unique
+  bunnyVideoId    String   @unique // Bunny.net Stream Video ID
+  previewUrl      String?  // Optional custom HLS URL (demo/migrated content overrides Bunny)
+  /// Bunny id of a SEPARATE short clip shown to non-buyers. Without it a paid
+  /// scene has no preview at all (see resolveTeaserUrl) — signing the main
+  /// video for non-buyers hands them the whole scene, because Bunny tokens
+  /// authorise a path and cannot limit duration.
+  teaserBunnyVideoId String? @unique
+  /// Same idea for side-loaded content: a stored, publicly reachable trailer
+  /// URL (demo / migrated rows), symmetric with previewUrl. Ignored when
+  /// teaserBunnyVideoId is set.
+  teaserClipUrl   String?
+  thumbnailUrl    String?
+  price           Int      @default(1000) // Price in TZS
+  teaserDuration  Int      @default(15) // Seconds of free preview (UI: badge + hover length)
+  duration        Int?     // Total duration in seconds
+  viewsCount      Int      @default(0)
+  likesCount      Int      @default(0)
+  dislikesCount   Int      @default(0)
+  purchaseCount   Int      @default(0)
+  isPublished     Boolean  @default(false)
+  isFlagged       Boolean  @default(false)
+  isDeleted       Boolean  @default(false)
+  isPremium       Boolean  @default(false) // Shown with lock + watermark
+  isFeatured      Boolean  @default(false) // Highlighted in feed
+  category        String?
+  tags            String[]
+  // 18 U.S.C. § 2257: set when the uploader attested that every performer is
+  // an adult and that proof-of-age records are held on file.
+  complianceAttestedAt DateTime?
+  // ---------------------------------------------------------------------------
+  // Bunny processing lifecycle.
+  //
+  // Null means "not tracked" — side-loaded/demo rows that Bunny does not
+  // transcode, which must keep working exactly as they did before. Every other
+  // value comes from Bunny itself; see lib/services/video-encoding.service.ts
+  // for the code mapping and why "ready" never relies on one number alone.
+  //
+  // The states matter because Bunny accepts an upload long before the video can
+  // actually play. Publishing on upload therefore puts a dead player in front of
+  // paying viewers, which is what encodingStatus exists to prevent.
+  encodingStatus      Int?
+  /// Bunny's encodeProgress 0-100. Second, independent "is it done" signal.
+  encodeProgress      Int      @default(0)
+  /// Set only when Bunny reports a real failure, so creators see the reason.
+  encodingError       String?
+  encodingCheckedAt   DateTime?
+  /// When the "it is ready" notification was sent. Guards against re-notifying
+  /// on every poll, which would spam a creator every few minutes forever.
+  encodingNotifiedAt  DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  creator         User          @relation(fields: [creatorId], references: [id])
+  transactions    Transaction[]
+  videoAccess     VideoAccess[]
+  reports         VideoReport[]
+  earnings        VideoEarning?
+  likes           VideoLike[]
+  favorites       Favorite[]
+  comments        Comment[]
+  watchProgresses WatchProgress[]
+  playlistItems   PlaylistItem[]
+  galleryImages   GalleryImage[]
+
+  @@index([creatorId])
+  @@index([isPublished])
+  @@index([createdAt])
+  @@index([price])
+  // Drives the poller: find everything still encoding without scanning the table.
+  @@index([encodingStatus])
+}
+
+// =============================================================================
+// VIDEO EARNING (aggregated per video)
+// =============================================================================
+
+model VideoEarning {
+  id              String   @id @default(cuid())
+  videoId         String   @unique
+  totalEarned     Int      @default(0) // 70% of purchases go here
+  totalPurchases  Int      @default(0)
+  updatedAt       DateTime @updatedAt
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+}
+
+// =============================================================================
+// TRANSACTION MODEL
+// =============================================================================
+
+model Transaction {
+  id          String            @id @default(cuid())
+  userId      String            // Viewer who paid
+  creatorId   String?           // Creator who receives (null for wallet topup)
+  videoId     String?           // For PPV_PURCHASE
+  amount      Int               // Amount in TZS
+  platformFee Int?              // 30% platform cut
+  creatorCut  Int?              // 70% creator cut
+  type        TransactionType
+  status      TransactionStatus @default(PENDING)
+  gateway     PaymentGateway?
+  providerRef String?           // Reference from payment provider
+  metadata    Json?             // Additional provider data
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  // Relations
+  viewer     User              @relation("ViewerTransactions", fields: [userId], references: [id])
+  creator    User?             @relation("CreatorTransactions", fields: [creatorId], references: [id])
+  video      Video?            @relation(fields: [videoId], references: [id])
+
+  @@index([userId])
+  @@index([creatorId])
+  @@index([videoId])
+  @@index([status])
+  @@index([type])
+  @@index([providerRef])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// CREATOR BALANCE MODEL
+// =============================================================================
+
+model CreatorBalance {
+  id              String   @id @default(cuid())
+  creatorId       String   @unique
+  pendingBalance  Int      @default(0) // Funds within 14-day holding
+  availableBalance Int     @default(0) // Funds available for payout
+  totalEarned     Int      @default(0) // Lifetime earnings
+  releasedTotal   Int      @default(0) // Cumulative amount released from holding (14-day maturity job)
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  creator User @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@index([creatorId])
+}
+
+// =============================================================================
+// PAYOUT REQUEST MODEL
+// =============================================================================
+
+model PayoutRequest {
+  id             String       @id @default(cuid())
+  creatorId      String
+  amount         Int          // Amount in TZS
+  paymentMethod  PayoutMethod
+  accountDetails String       // Phone number or bank account
+  bankName       String?      // For bank transfers
+  status         PayoutStatus @default(PENDING)
+  adminNote      String?
+  processedBy    String?
+  processedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  // Relations
+  creator   User  @relation(fields: [creatorId], references: [id])
+  processor User? @relation("PayoutProcessor", fields: [processedBy], references: [id])
+
+  @@index([creatorId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// VIDEO ACCESS MODEL (tracks PPV purchases)
+// =============================================================================
+
+model VideoAccess {
+  id        String   @id @default(cuid())
+  viewerId  String
+  videoId   String
+  expiresAt DateTime? // Null = lifetime access
+  createdAt DateTime @default(now())
+
+  // Relations
+  viewer User  @relation(fields: [viewerId], references: [id], onDelete: Cascade)
+  video  Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([viewerId, videoId])
+  @@index([viewerId])
+  @@index([videoId])
+}
+
+// =============================================================================
+// VIDEO REPORT MODEL
+// =============================================================================
+
+model VideoReport {
+  id          String       @id @default(cuid())
+  reporterId  String
+  videoId     String
+  reason      ReportReason
+  description String?
+  status      ReportStatus @default(PENDING)
+  resolvedBy  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime     @default(now())
+
+  // Relations
+  reporter User  @relation("ReporterReports", fields: [reporterId], references: [id])
+  video    Video @relation(fields: [videoId], references: [id])
+  resolver User? @relation("ReportResolver", fields: [resolvedBy], references: [id])
+
+  @@index([videoId])
+  @@index([status])
+  @@index([reporterId])
+}
+
+// =============================================================================
+// PAY MESSAGE MODEL (Pay-to-Chat)
+// =============================================================================
+
+model PayMessage {
+  id         String   @id @default(cuid())
+  senderId   String
+  receiverId String
+  amount     Int      // Amount in TZS to view message
+  content    String
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  sender   User @relation("SenderMessages", fields: [senderId], references: [id])
+  receiver User @relation("ReceiverMessages", fields: [receiverId], references: [id])
+
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// HOLDING PERIOD LOG (tracks automatic balance transfers)
+// =============================================================================
+
+// =============================================================================
+// ADMIN STRIKE LOG
+// =============================================================================
+
+model StrikeLog {
+  id         String      @id @default(cuid())
+  creatorId  String
+  action     StrikeAction
+  reason     String
+  videoId    String?
+  issuedBy   String
+  createdAt  DateTime    @default(now())
+
+  @@index([creatorId])
+  @@index([issuedBy])
+}
+
+// =============================================================================
+// CREATOR SUBSCRIPTIONS (Monthly recurring)
+// =============================================================================
+
+model CreatorSubscription {
+  id            String   @id @default(cuid())
+  viewerId      String
+  creatorId     String
+  price         Int      @default(5000) // TZS per month
+  startDate     DateTime @default(now())
+  expiresAt     DateTime
+  isActive      Boolean  @default(true)
+  autoRenew     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // --- Renewal bookkeeping (see subscription-renewal.service.ts) -------------
+  // Renewals are attempted in the 24h before expiresAt. Each failed charge
+  // increments renewAttempts; a successful one resets it and clears the error.
+  renewAttempts      Int       @default(0)
+  lastRenewAttemptAt DateTime?
+  lastRenewedAt      DateTime?
+  lastRenewError     String?
+  // Last phone a gateway charge was sent to, so a renewal can push USSD again
+  // without asking the fan to re-enter their number.
+  renewPhone         String?
+
+  viewer  User @relation("SubscriptionViewer", fields: [viewerId], references: [id], onDelete: Cascade)
+  creator User @relation("SubscriptionCreator", fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@unique([viewerId, creatorId])
+  @@index([viewerId])
+  @@index([creatorId])
+  @@index([expiresAt])
+}
+
+// =============================================================================
+// VIDEO LIKES
+// =============================================================================
+
+model VideoLike {
+  id        String   @id @default(cuid())
+  userId    String
+  videoId   String
+  type      String   @default("LIKE") // LIKE | DISLIKE
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([videoId])
+}
+
+// =============================================================================
+// FAVORITES / WATCHLIST
+// =============================================================================
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  videoId   String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([videoId])
+}
+
+// =============================================================================
+// PASSWORD RESET TOKENS
+// =============================================================================
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+}
+
+// =============================================================================
+// NOTIFICATIONS
+// =============================================================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String   @default("info") // info, success, warning, error
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// COMMENT MODEL (threaded — parentId for replies)
+// =============================================================================
+
+model Comment {
+  id        String   @id @default(cuid())
+  videoId   String
+  userId    String
+  parentId  String?
+  body      String
+  isDeleted Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  video   Video     @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  user    User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  parent  Comment?  @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies Comment[] @relation("CommentThread")
+
+  @@index([videoId])
+  @@index([userId])
+  @@index([parentId])
+}
+
+// =============================================================================
+// WATCH PROGRESS (resume + continue-watching)
+// =============================================================================
+
+model WatchProgress {
+  id              String   @id @default(cuid())
+  userId          String
+  videoId         String
+  positionSeconds Int      @default(0)
+  percent         Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, videoId])
+  @@index([userId])
+  @@index([updatedAt])
+}
+
+// =============================================================================
+// CREATOR PROFILE / SETTINGS
+// =============================================================================
+
+// =============================================================================
+// COUPON / PROMO CODES
+// =============================================================================
+
+model Coupon {
+  id        String    @id @default(cuid())
+  code      String    @unique // Stored uppercase, e.g. WELCOME10
+  type      String    @default("PERCENT") // PERCENT | FIXED (TZS off)
+  value     Int // 10 = 10% off, or 500 = TZS 500 off
+  isActive  Boolean   @default(true)
+  maxUses   Int? // null = unlimited
+  usedCount Int       @default(0)
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([code])
+  @@index([isActive])
+}
+
+// =============================================================================
+// CREATOR POSTS (status / timeline feed — OnlyFans style)
+// =============================================================================
+
+model CreatorPost {
+  id        String   @id @default(cuid())
+  creatorId String
+  body      String
+  imageUrl  String?
+  createdAt DateTime @default(now())
+
+  creator User @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+
+  @@index([creatorId])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// CREATOR PROFILE / SETTINGS
+// =============================================================================
+
+model CreatorProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  bio             String?
+  coverImageUrl   String?
+  subscriptionPrice Int?   @default(5000) // Monthly subscription price
+  socialLinks     Json?    // { twitter, instagram, youtube, tiktok }
+  totalSubscribers Int     @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// =============================================================================
+// PLAYLISTS / WATCH LATER
+// =============================================================================
+
+model Playlist {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  /// Exactly one auto-created playlist per user ("Watch Later") — cannot be renamed or deleted
+  isWatchLater Boolean @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user  User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items PlaylistItem[]
+
+  @@index([userId])
+}
+
+model PlaylistItem {
+  id         String   @id @default(cuid())
+  playlistId String
+  videoId    String
+  position   Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  video    Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@unique([playlistId, videoId])
+  @@index([playlistId])
+  @@index([videoId])
+}
+
+// =============================================================================
+// SCENE PHOTO GALLERIES (image sets attached to a video)
+// =============================================================================
+
+model GalleryImage {
+  id        String   @id @default(cuid())
+  videoId   String
+  url       String
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
+
+  @@index([videoId])
+}
