@@ -95,6 +95,38 @@ npm run admin:create you@domain.com                 # bootstrap the first admin
 #    - buy your cheapest video with a real phone once (smoke:harakapay --collect)
 ```
 
+### 0.2 The deploy installs the lockfile, not a fresh resolve
+
+`vercel.json` pins the install step:
+
+```json
+{ "installCommand": "npm ci" }
+```
+
+Vercel's default is `npm install`, which is allowed to **re-resolve** the
+dependency tree. That is how a build passes on your laptop and dies in the
+cloud: npm keeps the tree it was already handed locally, but re-resolves from
+scratch on a clean machine — and a range that cannot be satisfied then fails
+there and only there. That is exactly what happened with `@types/node`
+(`^20.14.0` against vitest 5's `^22.0.0 || >=24.0.0`), and the lockfile being
+in sync did nothing to prevent it, because the failure was in the *range*, not
+the lock.
+
+`npm ci` installs the lock and nothing else, so the deployed tree is the tree
+the gates above were run against. It is also the same command the runbook tells
+you to run locally, so both sides of the wire use one install.
+
+The trade is deliberate: `npm ci` **refuses to run** when `package.json` and
+`package-lock.json` disagree. Adding or changing a dependency therefore means
+running `npm install` locally and committing the lockfile with the change. Skip
+that and the deploy stops with "npm ci can only install packages when your
+package.json and package-lock.json are in sync" — a loud, immediate stop rather
+than a quiet install of a tree nobody tested.
+
+The lock carries every platform, not just the one it was generated on (`/next
+swc-linux-x64-gnu` and friends are all present), so a Linux build resolves the
+same versions this laptop does.
+
 ---
 
 ## 1. Secrets & repository hygiene
@@ -447,6 +479,7 @@ run lock and a duplicate trigger is refused rather than repeated.
 
 ```json
 {
+  "installCommand": "npm ci",
   "crons": [
     { "path": "/api/cron/release-earnings", "schedule": "0 * * * *" },
     { "path": "/api/cron/reconcile-payments", "schedule": "*/10 * * * *" },
