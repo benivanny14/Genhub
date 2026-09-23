@@ -65,6 +65,7 @@
 
 import prisma from "../db";
 import { resyncSubscriberCount } from "./subscription.service";
+import { debitWallet } from "./balance.service";
 
 /** Where the customer's money actually goes back to. */
 export type RefundDestination = "WALLET" | "GATEWAY";
@@ -210,20 +211,10 @@ export async function reverseCollectedCharge(
         return { conflict: true as const };
       }
 
-      // For a top-up reversal the customer must still hold the credit, or we
-      // would be paying out money they have already spent.
-      if (isTopUp) {
-        const customer = await db.user.findUnique({
-          where: { id: tx.userId },
-          select: { walletBalance: true },
-        });
-        if (!customer || customer.walletBalance < walletTopUpCredit) {
-          return {
-            insufficient: true as const,
-            balance: customer?.walletBalance ?? 0,
-          };
-        }
-      }
+      // The "does the customer still hold this credit?" check is the debit
+      // itself, further down — see the top-up leg. A read here could only
+      // describe the moment before a second refund, a video purchase or a tip
+      // spent the same credit.
 
       // ------------------------------------------------- 1. the customer's leg
       let walletCredited = 0;
@@ -232,10 +223,13 @@ export async function reverseCollectedCharge(
 
       if (isTopUp) {
         // Take the credit back, then (for GATEWAY) it is returned to the phone.
-        await db.user.update({
-          where: { id: tx.userId },
-          data: { walletBalance: { decrement: walletTopUpCredit } },
-        });
+        // Conditional (debitWallet): if the customer has already spent it, the
+        // debit moves nothing and the reversal stops here rather than paying out
+        // money we no longer hold.
+        const taken = await debitWallet(db, { userId: tx.userId, amount: walletTopUpCredit });
+        if (!taken.ok) {
+          return { insufficient: true as const, balance: taken.balance };
+        }
         walletDebited = walletTopUpCredit;
         revoked = "TOPUP_CREDIT";
       } else if (destination === "WALLET") {
@@ -295,22 +289,67 @@ export async function reverseCollectedCharge(
         if (balance) {
           // Pending first: that is money we have not paid out, so it is the
           // safest to take back. Then whatever has already matured.
-          clawedBackPending = Math.min(creatorShare, Math.max(0, balance.pendingBalance));
-          const remaining = creatorShare - clawedBackPending;
-          clawedBackAvailable = Math.min(remaining, Math.max(0, balance.availableBalance));
-          shortfall = remaining - clawedBackAvailable;
+          //
+          // How much is there comes from a read, and between that read and the
+          // write another refund, or a release, can move the same balance —
+          // sub-millisecond against a local database, wide open across a
+          // network. So the write carries the same amounts as conditions, and a
+          // refusal re-reads once instead of taking the balance negative. The
+          // amounts the caller is told are the ones that actually moved.
+          let applied = false;
 
-          await db.creatorBalance.update({
-            where: { creatorId: tx.creatorId },
-            data: {
-              pendingBalance: { decrement: clawedBackPending },
-              availableBalance: { decrement: clawedBackAvailable },
-              // Lifetime earnings drop by the full share: the money was returned,
-              // so the creator never earned it — including the part we could not
-              // recover, which we record rather than hide.
-              totalEarned: { decrement: Math.min(creatorShare, balance.totalEarned) },
-            },
-          });
+          for (let attempt = 0; attempt < 2 && !applied; attempt++) {
+            const held =
+              attempt === 0
+                ? balance
+                : await db.creatorBalance.findUnique({
+                    where: { creatorId: tx.creatorId },
+                    select: {
+                      pendingBalance: true,
+                      availableBalance: true,
+                      totalEarned: true,
+                    },
+                  });
+
+            if (!held) {
+              clawedBackPending = 0;
+              clawedBackAvailable = 0;
+              shortfall = creatorShare;
+              break;
+            }
+
+            clawedBackPending = Math.min(creatorShare, Math.max(0, held.pendingBalance));
+            const remaining = creatorShare - clawedBackPending;
+            clawedBackAvailable = Math.min(remaining, Math.max(0, held.availableBalance));
+
+            const taken = await db.creatorBalance.updateMany({
+              where: {
+                creatorId: tx.creatorId,
+                pendingBalance: { gte: clawedBackPending },
+                availableBalance: { gte: clawedBackAvailable },
+              },
+              data: {
+                pendingBalance: { decrement: clawedBackPending },
+                availableBalance: { decrement: clawedBackAvailable },
+                // Lifetime earnings drop by the full share: the money was
+                // returned, so the creator never earned it — including the part
+                // we could not recover, which we record rather than hide.
+                totalEarned: { decrement: Math.min(creatorShare, Math.max(0, held.totalEarned)) },
+              },
+            });
+
+            applied = taken.count === 1;
+          }
+
+          if (!applied) {
+            // Both attempts lost the race: nothing was taken, so nothing may be
+            // reported as taken.
+            clawedBackPending = 0;
+            clawedBackAvailable = 0;
+            shortfall = creatorShare;
+          } else {
+            shortfall = creatorShare - clawedBackPending - clawedBackAvailable;
+          }
         } else {
           shortfall = creatorShare;
         }

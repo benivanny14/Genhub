@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { debitWallet } from "@/lib/services/balance.service";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 import { z } from "zod";
@@ -45,22 +46,17 @@ export async function POST(request: NextRequest) {
     });
     if (!creator || creator.isBanned) return api.notFound("This creator does not exist");
 
-    // Check wallet balance
-    const viewer = await prisma.user.findUnique({
-      where: { id: auth.userId },
-      select: { walletBalance: true },
-    });
-    if (!viewer || viewer.walletBalance < amount) {
-      return api.error("Your wallet balance is too low. Top up first.");
-    }
-
-    // Create tip transaction — 100% to creator
+    // Create tip transaction — 100% to creator. The balance check IS the
+    // deduction (debitWallet): reading first and decrementing after let several
+    // tips start on one balance and all be accepted.
     const transaction = await prisma.$transaction(async (tx) => {
-      // Deduct from viewer wallet
-      await tx.user.update({
-        where: { id: auth.userId },
-        data: { walletBalance: { decrement: amount } },
-      });
+      const debited = await debitWallet(tx, { userId: auth.userId, amount });
+      if (!debited.ok) {
+        return {
+          insufficient: true as const,
+          balance: debited.balance,
+        };
+      }
 
       // Create transaction
       const txRecord = await tx.transaction.create({
@@ -101,6 +97,15 @@ export async function POST(request: NextRequest) {
 
       return txRecord;
     });
+
+    // The debit refused: the tip never happened, so nothing was written. The
+    // message names the real balance, because "too low" without a number is
+    // what makes someone try the same amount again.
+    if ("insufficient" in transaction) {
+      return api.error(
+        `Your wallet balance is too low (TZS ${transaction.balance.toLocaleString()}). Top up first.`
+      );
+    }
 
     return api.success(transaction, "Tip sent!");
   } catch (error) {

@@ -15,6 +15,7 @@ import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
 import { generateOrderId } from "@/lib/utils";
 import { checkRateLimit } from "@/lib/redis";
 import { grantSubscription, resyncSubscriberCount } from "@/lib/services/subscription.service";
+import { debitWallet } from "@/lib/services/balance.service";
 
 const subscribeSchema = z.object({
   creatorId: z.string().min(1),
@@ -175,26 +176,24 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------- Legacy wallet path
-    // Check wallet balance
+    // Read only for the notification's display name — the balance is NOT checked
+    // here. A read cannot authorise a debit: it describes the moment before it,
+    // which is how two checkouts starting together both passed.
     const viewer = await prisma.user.findUnique({
       where: { id: auth.userId },
-      select: { walletBalance: true, displayName: true },
+      select: { displayName: true },
     });
-    if (!viewer || viewer.walletBalance < price) {
-      return api.error(`Your balance is too low. You need TZS ${price.toLocaleString()}`);
-    }
 
     // Create subscription — 30% platform, 70% creator. Steps 1-3 (debit, split,
     // access) are one transaction via the shared grantSubscription(), so a
     // wallet subscribe, a gateway settlement and an auto-renewal can never
     // disagree about the price, the split or the expiry date.
     const subscription = await prisma.$transaction(async (tx) => {
-      const debited = await tx.user.updateMany({
-        where: { id: auth.userId, walletBalance: { gte: price } },
-        data: { walletBalance: { decrement: price } },
-      });
-      // Someone spent the balance between the check above and this debit.
-      if (debited.count === 0) return null;
+      // The debit is the check (debitWallet): it refuses rather than overdrawing
+      // when someone spent the balance first — a video purchase, a tip, or the
+      // renewal worker charging a due membership at the same instant.
+      const debited = await debitWallet(tx, { userId: auth.userId, amount: price });
+      if (!debited.ok) return null;
 
       await tx.transaction.create({
         data: {
@@ -228,7 +227,9 @@ export async function POST(request: NextRequest) {
     });
 
     if (!subscription) {
-      return api.error(`Your balance is too low. You need TZS ${price.toLocaleString()}`);
+      return api.error(
+        `Your balance is too low. You need TZS ${price.toLocaleString()}. Top up your wallet to subscribe.`
+      );
     }
 
     return api.success(subscription, "Umejiandikisha kikamilifu!", 201);

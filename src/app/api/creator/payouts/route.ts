@@ -9,7 +9,7 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { requestPayoutSchema } from "@/lib/validation";
-import config from "@/lib/config";
+import { requestPayout } from "@/lib/services/payout.service";
 
 export async function POST(request: NextRequest) {
   try {
@@ -34,57 +34,55 @@ export async function POST(request: NextRequest) {
       return api.forbidden("Your KYC must be approved before you can withdraw");
     }
 
-    // Check available balance
-    const balance = await prisma.creatorBalance.findUnique({
-      where: { creatorId: auth.userId },
+    // Every balance check and the deduction live in requestPayout, where they
+    // are one statement. Doing the comparison here and the `decrement` there is
+    // how two requests arriving together both pass a check that was only true a
+    // moment earlier.
+    const outcome = await requestPayout({
+      creatorId: auth.userId,
+      amount,
+      paymentMethod,
+      accountDetails,
+      bankName,
     });
 
-    if (!balance || balance.availableBalance < config.business.minPayoutAmount) {
+    if (!outcome.ok) {
+      const minimum = outcome.minimum.toLocaleString();
+
+      if (outcome.reason === "AMOUNT_BELOW_MINIMUM") {
+        return api.error(`The minimum withdrawal is TZS ${minimum}`, 400);
+      }
+
+      if (outcome.reason === "BALANCE_BELOW_MINIMUM") {
+        return api.error(
+          `Your balance is too low. The minimum payout is TZS ${minimum}`,
+          400
+        );
+      }
+
+      if (outcome.reason === "ALREADY_PENDING") {
+        return api.error("A withdrawal request is already in progress. Please wait.", 409);
+      }
+
       return api.error(
-        `Your balance is too low. The minimum payout is TZS ${config.business.minPayoutAmount.toLocaleString()}`,
+        `Balance mismatch. Your balance is TZS ${outcome.availableBalance.toLocaleString()}`,
         400
       );
     }
 
-    if (amount > balance.availableBalance) {
-      return api.error(
-        `Balance mismatch. Your balance is TZS ${balance.availableBalance.toLocaleString()}`,
-        400
-      );
-    }
-
-    // Check for pending payout requests
-    const pendingPayout = await prisma.payoutRequest.findFirst({
-      where: {
+    return api.success(
+      {
+        id: outcome.payoutId,
         creatorId: auth.userId,
-        status: { in: ["PENDING", "APPROVED"] },
+        amount: outcome.amount,
+        paymentMethod,
+        accountDetails,
+        bankName: bankName ?? null,
+        status: "PENDING",
       },
-    });
-
-    if (pendingPayout) {
-      return api.error("A withdrawal request is already in progress. Please wait.", 409);
-    }
-
-    // Deduct from available balance and create payout request
-    const payout = await prisma.$transaction(async (tx) => {
-      await tx.creatorBalance.update({
-        where: { creatorId: auth.userId },
-        data: { availableBalance: { decrement: amount } },
-      });
-
-      return tx.payoutRequest.create({
-        data: {
-          creatorId: auth.userId,
-          amount,
-          paymentMethod,
-          accountDetails,
-          bankName,
-          status: "PENDING",
-        },
-      });
-    });
-
-    return api.success(payout, "Withdrawal request submitted", 201);
+      "Withdrawal request submitted",
+      201
+    );
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);

@@ -7,6 +7,7 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
+import { debitWallet } from "@/lib/services/balance.service";
 import { api } from "@/lib/api-response";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
@@ -50,21 +51,13 @@ export async function POST(request: NextRequest) {
     });
     if (!receiver || receiver.isBanned) return api.notFound("This user does not exist");
 
-    // Check wallet
-    const viewer = await prisma.user.findUnique({
-      where: { id: auth.userId },
-      select: { walletBalance: true },
-    });
-    if (!viewer || viewer.walletBalance < amount) {
-      return api.error("Your wallet balance is too low");
-    }
-
     const message = await prisma.$transaction(async (tx) => {
-      // Deduct sender wallet
-      await tx.user.update({
-        where: { id: auth.userId },
-        data: { walletBalance: { decrement: amount } },
-      });
+      // The balance check and the deduction are one statement (debitWallet).
+      // Checking with a read first let two messages start on one balance.
+      const debited = await debitWallet(tx, { userId: auth.userId, amount });
+      if (!debited.ok) {
+        return { insufficient: true as const, balance: debited.balance };
+      }
 
       // Create message
       const msg = await tx.payMessage.create({
@@ -116,6 +109,12 @@ export async function POST(request: NextRequest) {
 
       return msg;
     });
+
+    if ("insufficient" in message) {
+      return api.error(
+        `Your wallet balance is too low (TZS ${message.balance.toLocaleString()})`
+      );
+    }
 
     return api.success(message, "Message sent", 201);
   } catch (error) {

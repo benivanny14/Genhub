@@ -861,3 +861,80 @@ rather than passing the client's value through.
 - [ ] Admin accounts: MFA/strong passwords, minimal admin roster, KYC for
       creator payouts before any real money moves.
 - [ ] Content moderation flow (reports → strikes) staffed before launch.
+
+### 8.2 One balance, two writers
+
+Money in this app is written from several places at once: a fan's wallet is
+spent by a video purchase, a tip, a paid message and the renewal worker, and a
+creator's balance is credited by a gateway webhook while it is drained by the
+holdings release. Whenever two of those overlap, the risk is a **lost update**:
+both read the same balance, both decide from what they read, and the second
+write erases the first.
+
+**The rule: the check and the write must be one statement.**
+
+```ts
+// WRONG — the comparison describes the moment before, not the write
+const user = await tx.user.findUnique({ where: { id }, select: { walletBalance: true } });
+if (user.walletBalance < amount) return "too low";
+await tx.user.update({ where: { id }, data: { walletBalance: { decrement: amount } } });
+
+// RIGHT — Postgres decides, and refuses rather than overdrawing
+tx.user.updateMany({
+  where: { id, walletBalance: { gte: amount } },
+  data: { walletBalance: { decrement: amount } },
+}); // count === 0 means insufficient funds, and nothing was written
+```
+
+`decrement` is *relative*, so it has no opinion about the result: against a
+5,000 balance, five simultaneous purchases of 5,000 were **all accepted** and
+the wallet finished at **-20,000**. Nothing raised an error. The window is
+sub-millisecond against a local database — which is exactly why this class of
+bug survives development and opens up on a networked one.
+
+Where it is enforced:
+
+| Flow | Guard |
+|---|---|
+| Wallet spend (purchase, tip, DM, subscribe, renewal) | `debitWallet()` in `lib/services/balance.service.ts` — one implementation, so the check cannot drift per route |
+| Payout requests | `requestPayout()` in `lib/services/payout.service.ts` — conditional debit of `availableBalance` |
+| Refund clawbacks | `reverseCollectedCharge()` — both legs conditional, amounts re-read once on a refusal |
+| Holdings release | optimistic lock on `releasedTotal` plus `pendingBalance >= amount` — already correct, and now covered by tests |
+| Credits | always `increment`, never a computed absolute value |
+
+**The release worker and the renewal worker touching one creator at the same
+instant is safe**, and there are tests for it: the release claims per creator
+through `releasedTotal`, and credits are relative. What was *not* safe was the
+fan's side of the same idea — five simultaneous spends of one wallet — and two
+payout requests finding one balance.
+
+**Check it, do not trust it:**
+
+```bash
+npm run audit:balances
+```
+
+It reports negative wallets, negative creator buckets (pending, available,
+lifetime), and creators holding more than they have ever earned — the signature
+of a credit that overwrote instead of adding. It exits `1` on a violation, so it
+can run as a deploy gate or a nightly job. A clean run looks like:
+
+```
+✓ wallets below zero                                   0
+✓ creator pending below zero                           0
+✓ creator available below zero                         0
+✓ creator lifetime earnings below zero                 0
+✓ held (pending + available) above lifetime earnings   0
+```
+
+**Deliberately not left to scheduling.** `release-earnings` fires on the hour
+and `renew-subscriptions` at :15, but an offset is not a guarantee — either can
+be started by hand from the admin panel, GitHub Actions delays under load, and a
+creator opening their balance page triggers a release for themselves. The guards
+above are what hold; the offset only reduces how often they are exercised.
+
+**Residual, stated rather than hidden:** the renewal worker's own claim on one
+membership is its retry gap (`lastRenewAttemptAt`) plus the run lock, so two
+*scheduled* runs cannot double-charge a fan. Reaching the service concurrently by
+another route (support tooling calling it directly) is still possible; nothing
+in the product does that today.

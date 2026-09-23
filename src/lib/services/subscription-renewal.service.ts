@@ -31,6 +31,7 @@ import config from "../config";
 import { harakaCollect, harakaErrorReason } from "../payments/harakapay";
 import { generateOrderId } from "../utils";
 import { grantSubscription, resyncSubscriberCount } from "./subscription.service";
+import { debitWallet } from "./balance.service";
 
 /** Start trying this long before the membership expires. */
 export const RENEW_LEAD_MS = 24 * 60 * 60 * 1000;
@@ -244,12 +245,11 @@ async function renewFromWallet(params: {
 
   const outcome = await prisma.$transaction(async (tx) => {
     // Conditional debit: if the fan spent the balance between the read and here
-    // (a video purchase, a tip…), count is 0 and nothing is touched.
-    const debited = await tx.user.updateMany({
-      where: { id: viewerId, walletBalance: { gte: price } },
-      data: { walletBalance: { decrement: price } },
-    });
-    if (debited.count === 0) return null;
+    // (a video purchase, a tip…), it refuses and nothing is touched. Shared with
+    // every other wallet spend, so the renewal worker and a fan checking out at
+    // the same instant cannot both take the same money.
+    const debited = await debitWallet(tx, { userId: viewerId, amount: price });
+    if (!debited.ok) return null;
 
     const created = await tx.transaction.create({
       data: {

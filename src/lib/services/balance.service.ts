@@ -86,6 +86,57 @@ async function grantVideoPurchase(
 }
 
 // =============================================================================
+// Spending a balance, safely
+//
+// Every debit in this codebase goes through debitWallet below. Not for tidiness:
+// the check and the write have to be ONE statement, and the only way to keep
+// that true is to have one place where it happens.
+//
+// The bug this replaces: read the balance, compare it in JavaScript, then
+// `decrement`. `decrement` is relative — it has no opinion about the result —
+// and two spends that start together both read the old value and both pass.
+// Measured on a 5,000 balance with five simultaneous purchases of 5,000, all
+// five were accepted and the wallet finished at -20,000: the customer received
+// TZS 25,000 of content for TZS 5,000, and nothing anywhere reported an error.
+//
+// Postgres decides instead. `UPDATE ... WHERE walletBalance >= amount` moves the
+// row for exactly one caller; the losers get count 0, and that is what
+// "insufficient funds" now means. The measured window is sub-millisecond against
+// a local database, which is exactly why this survived: it opens up on a
+// networked one.
+// =============================================================================
+
+export type WalletDebitResult =
+  | { ok: true; balance: number }
+  | { ok: false; balance: number };
+
+/**
+ * Take `amount` out of a wallet, atomically, refusing to overdraw.
+ *
+ * Must be called with the caller's transaction client so the debit and whatever
+ * it paid for commit together: a debit that survives a failure to deliver is a
+ * customer who paid for nothing.
+ */
+export async function debitWallet(
+  tx: Prisma.TransactionClient,
+  params: { userId: string; amount: number }
+): Promise<WalletDebitResult> {
+  const { userId, amount } = params;
+
+  const debited = await tx.user.updateMany({
+    where: { id: userId, walletBalance: { gte: amount } },
+    data: { walletBalance: { decrement: amount } },
+  });
+
+  const after = await tx.user.findUnique({
+    where: { id: userId },
+    select: { walletBalance: true },
+  });
+
+  return { ok: debited.count === 1, balance: after?.walletBalance ?? 0 };
+}
+
+// =============================================================================
 // Credit Creator After Successful Gateway Payment
 // =============================================================================
 
@@ -136,16 +187,16 @@ export async function purchaseVideoWithWallet(params: {
   const { userId, creatorId, videoId, amount, originalPrice, couponId } = params;
 
   return prisma.$transaction(async (tx) => {
-    const user = await tx.user.findUnique({
-      where: { id: userId },
-      select: { walletBalance: true },
-    });
+    // Conditional debit — see debitWallet. The pre-check that used to sit here
+    // was a read, so five simultaneous purchases of one 5,000 balance all passed
+    // it and all decremented. Nothing is decided in JavaScript any more.
+    const debited = await debitWallet(tx, { userId, amount });
 
-    if (!user || user.walletBalance < amount) {
+    if (!debited.ok) {
       return {
         success: false as const,
         reason: "INSUFFICIENT_FUNDS" as const,
-        newBalance: user?.walletBalance ?? 0,
+        newBalance: debited.balance,
       };
     }
 
@@ -164,12 +215,6 @@ export async function purchaseVideoWithWallet(params: {
       },
     });
 
-    const updated = await tx.user.update({
-      where: { id: userId },
-      data: { walletBalance: { decrement: amount } },
-      select: { walletBalance: true },
-    });
-
     await grantVideoPurchase(tx, {
       transactionId: created.id,
       viewerId: userId,
@@ -181,7 +226,7 @@ export async function purchaseVideoWithWallet(params: {
     return {
       success: true as const,
       transactionId: created.id,
-      newBalance: updated.walletBalance,
+      newBalance: debited.balance,
     };
   });
 }
