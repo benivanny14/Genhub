@@ -68,9 +68,11 @@ reports whether the file was actually stored.
 
 Single purchases and tips use a 70/30 split, with the creator's share held for 14
 days before it becomes withdrawable (chargeback window). Subscriptions renew
-automatically and are charged from the wallet or by USSD push. Cron workers in
-`vercel.json` handle holding release, payment reconciliation, subscription renewal
-and video encoding.
+automatically and are charged from the wallet or by USSD push. Four background
+workers handle holding release, payment reconciliation, subscription renewal and
+video encoding; they are driven by the GitHub Actions workflows in
+`.github/workflows/`, and need the `APP_URL` variable and `CRON_SECRET` secret
+set on the repository (see `PRODUCTION.md` §4.0.1).
 
 ## Payments and compliance
 

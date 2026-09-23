@@ -1,20 +1,3 @@
 {
-  "crons": [
-    {
-      "path": "/api/cron/release-earnings",
-      "schedule": "0 * * * *"
-    },
-    {
-      "path": "/api/cron/reconcile-payments",
-      "schedule": "*/10 * * * *"
-    },
-    {
-      "path": "/api/cron/renew-subscriptions",
-      "schedule": "15 * * * *"
-    },
-    {
-      "path": "/api/cron/poll-encoding",
-      "schedule": "*/3 * * * *"
-    }
-  ]
+  "crons": []
 }

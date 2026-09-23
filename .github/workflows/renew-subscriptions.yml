@@ -13,9 +13,10 @@
 # MAX_RENEW_ATTEMPTS per period, so a delayed or duplicated run cannot double
 # charge a fan.
 #
-# NOTE FOR VERCEL HOBBY: the free plan allows only 2 cron jobs and only at
-# daily granularity, so vercel.json cannot schedule all four workers there.
-# This workflow is the scheduler for Hobby deployments. See PRODUCTION.md §3.3.
+# SCHEDULER: this workflow is the only scheduler for this worker. `vercel.json`
+# ships an empty `crons` array on purpose — Vercel rejects sub-daily cron
+# expressions on the Hobby plan at deploy time, which fails the whole
+# deployment. See PRODUCTION.md §4.0.1.
 # =============================================================================
 
 name: Renew subscriptions

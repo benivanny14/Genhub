@@ -51,8 +51,17 @@ vercel link                              # attach the project
 vercel --prod
 ```
 
-`vercel.json` already schedules `/api/cron/release-earnings` hourly; Vercel
-calls it with `Authorization: Bearer $CRON_SECRET` automatically.
+**Nothing is scheduled yet at this point.** `vercel.json` ships an empty `crons`
+array — sub-daily cron expressions fail a Hobby deployment — so the workers run
+from GitHub Actions. Set the two repository values below (`APP_URL`,
+`CRON_SECRET`) or no background job runs at all: earnings stay in holding,
+renewals lapse and uploaded videos never publish. See §4.0.1.
+
+```
+GitHub → repo → Settings → Secrets and variables → Actions
+  Variables  → New variable → APP_URL     = https://your-domain   (no trailing slash)
+  Secrets    → New secret   → CRON_SECRET = <the server's CRON_SECRET>
+```
 
 After deploy: set `NEXT_PUBLIC_APP_URL` to the final `https://` domain
 **before** sharing links — it feeds sitemap, OG tags, webhooks and referral
@@ -265,18 +274,19 @@ Use `GET /api/payments/health` (admin) as the dashboard:
 
 ## 4. Background jobs
 
-Four schedulers ship in `vercel.json`:
+Four workers need a scheduler, and they run from GitHub Actions — one workflow
+per worker, all four in `.github/workflows/`:
 
 | Cron | Schedule | Purpose |
 |---|---|---|
 | `/api/cron/release-earnings` | hourly | 14-day holding release |
 | `/api/cron/reconcile-payments` | every 10 min | settle PENDING gateway orders, flag never-settled ones as under investigation |
 | `/api/cron/renew-subscriptions` | hourly (minute 15) | charge memberships that expire within 24h |
-| `/api/cron/poll-encoding` | every 3 min | publish uploaded videos once Bunny Stream can serve them, and tell the creator |
+| `/api/cron/poll-encoding` | every 5 min | publish uploaded videos once Bunny Stream can serve them, and tell the creator |
 
-On the **Hobby (free) plan these will not deploy** — Vercel limits Hobby cron to
-once per day. Remove the `crons` block and use the four GitHub Actions
-workflows in `.github/workflows/` instead. See §4.0.1.
+`vercel.json` deliberately ships an empty `crons` array: the same schedules
+there fail a **Hobby** deployment outright. On **Pro**, move them back into
+`vercel.json` for tighter timing — the exact JSON is in §4.0.1.
 
 ### 3.2 Video processing (why a new upload is not live immediately)
 
@@ -312,11 +322,11 @@ worse than no gate:
 
 The release job moves matured earnings `pendingBalance → availableBalance`:
 
-- [ ] **Vercel**: `vercel.json` already schedules
-      `/api/cron/release-earnings` hourly (Vercel sends
-      `Authorization: Bearer $CRON_SECRET` automatically).
-- [ ] **Other hosts / GitHub Actions**: `.github/workflows/release-earnings.yml`
-      runs hourly — set repository variable `APP_URL` and secret `CRON_SECRET`.
+- [ ] **Scheduled**: set repository variable `APP_URL` and secret `CRON_SECRET`,
+      and `.github/workflows/release-earnings.yml` runs it hourly. Nothing runs
+      until both are set — see §4.0.1.
+- [ ] **On Pro**: move the four schedules into `vercel.json` instead (§4.0.1),
+      which removes the 60-day-inactivity rule below and gives per-minute timing.
 - [ ] Verify: `curl -H "x-cron-secret: $CRON_SECRET" https://<domain>/api/cron/release-earnings`
       → `{"success":true,...}` (wrong/missing secret must return 401).
 - [ ] Admins can also trigger releases manually from **Admin → Earnings**.
@@ -361,21 +371,20 @@ curl -s -o /dev/null -w "query:   %{http_code}\n" -X POST "$B/api/cron/release-e
 curl -s -o /dev/null -w "wrong:   %{http_code}\n" -X POST $B/api/cron/release-earnings -H "x-cron-secret: wrong"     # 401
 ```
 
-### 4.0.1 Choosing a scheduler: Vercel Cron or GitHub Actions
+### 4.0.1 Choosing a scheduler: GitHub Actions (default) or Vercel Cron
 
-The table above is `vercel.json`, and it is correct for **Pro/Enterprise**. On
-the **Hobby (free) plan it will not deploy at all**. Vercel restricts Hobby cron
-to **once per day**, and a more frequent expression fails the build:
+**`vercel.json` ships an empty `crons` array on purpose.** Four sub-daily
+schedules used to live there. On a Hobby account that does not merely delay the
+jobs — it **fails the deployment**, so nothing ships at all:
 
 ```
 Hobby accounts are limited to daily cron jobs.
 This cron expression would run more than once per day.
 ```
 
-Every worker here runs sub-daily — hourly, every 10 minutes, every 3 minutes —
-so on Hobby **remove the `crons` block from `vercel.json`** and let GitHub
-Actions drive them instead. One workflow per worker, all four already in the
-repo:
+Vercel allows plenty of cron jobs on Hobby (100), but only **once per day**, and
+every worker here is sub-daily. GitHub Actions drives all four instead — one
+workflow per worker, all four already in the repo:
 
 | Workflow | Schedule | Endpoint |
 |---|---|---|
@@ -399,10 +408,10 @@ the Actions tab stays quiet instead of red while you are still setting up.
 
 Three caveats worth knowing before you rely on this:
 
-- **GitHub's minimum interval is 5 minutes**, so `poll-encoding` runs every 5
-  minutes rather than the 3 minutes `vercel.json` asks for. Nothing breaks: the
-  worker is idempotent and a creator can still advance their own uploads by
-  opening the dashboard. A finished encode just surfaces within 5 minutes.
+- **GitHub's minimum interval is 5 minutes**, so `poll-encoding` cannot run
+  more often than that. Nothing breaks: the worker is idempotent and a creator
+  can still advance their own uploads by opening the dashboard. A finished
+  encode just surfaces within 5 minutes.
 - **Scheduled workflows are disabled after 60 days of repository inactivity.**
   GitHub emails the owner first, and any commit re-enables them — but on a quiet
   repo, payments and renewals would stop. Budget one commit (or a
@@ -428,6 +437,27 @@ done   # expect four 200s; a wrong secret must give 401
 Each workflow is also runnable by hand from **Actions → <workflow> → Run
 workflow**, which is the fastest way to confirm `APP_URL` and `CRON_SECRET` are
 wired correctly without waiting for the schedule.
+
+#### Going back to Vercel Cron (Pro and above)
+
+Vercel Cron has no inactivity rule and per-minute precision, so on Pro it is the
+better scheduler. Paste this into `vercel.json` and the four workflows become
+redundant — though leaving them in place is harmless, since the workers hold a
+run lock and a duplicate trigger is refused rather than repeated.
+
+```json
+{
+  "crons": [
+    { "path": "/api/cron/release-earnings", "schedule": "0 * * * *" },
+    { "path": "/api/cron/reconcile-payments", "schedule": "*/10 * * * *" },
+    { "path": "/api/cron/renew-subscriptions", "schedule": "15 * * * *" },
+    { "path": "/api/cron/poll-encoding", "schedule": "*/3 * * * *" }
+  ]
+}
+```
+
+Vercel calls each one with `Authorization: Bearer $CRON_SECRET` automatically.
+Do not paste this on a Hobby account: it does not warn, it fails the build.
 
 ### 4.0.2 Knowing whether they are actually running
 

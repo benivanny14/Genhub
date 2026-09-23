@@ -6,17 +6,17 @@
 # (The same two values feed release-earnings.yml — configure them once.)
 # The job skips cleanly (green) until both are configured.
 #
-# CADENCE: vercel.json schedules this every 3 minutes. GitHub Actions cannot
-# express that — its minimum interval is 5 minutes — so on Hobby this runs every
-# 5. Nothing breaks: the worker is idempotent (publication only ever flips
-# unpublished -> published, and a creator is notified at most once), and
-# /api/creator/videos also polls a creator's own pending uploads on read. The
-# only difference is that a finished encode can take up to 5 minutes to surface
-# instead of 3.
+# CADENCE: every 5 minutes, which is the shortest interval GitHub Actions can
+# express. Nothing breaks by being slower: the worker is idempotent (publication
+# only ever flips unpublished -> published, and a creator is notified at most
+# once), and /api/creator/videos also polls a creator's own pending uploads on
+# read. The only difference is that a finished encode takes up to 5 minutes to
+# surface.
 #
-# NOTE FOR VERCEL HOBBY: the free plan allows only 2 cron jobs and only at
-# daily granularity, so vercel.json cannot schedule all four workers there.
-# This workflow is the scheduler for Hobby deployments. See PRODUCTION.md §3.3.
+# SCHEDULER: this workflow is the only scheduler for this worker. `vercel.json`
+# ships an empty `crons` array on purpose — Vercel rejects sub-daily cron
+# expressions on the Hobby plan at deploy time, which fails the whole
+# deployment. See PRODUCTION.md §4.0.1.
 # =============================================================================
 
 name: Poll video encoding
