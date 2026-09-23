@@ -29,6 +29,9 @@ export async function POST(request: NextRequest) {
 
   try {
     let created = { creators: 0, viewers: 0, videos: 0, comments: 0, transactions: 0, progress: 0, gallery: 0, misc: 0 };
+    // Reported separately from `created`: these are pre-existing rows the seed
+    // had to repair, so "0 created, 2 corrected" is readable instead of silence.
+    const corrected = { viewers: 0, admins: 0 };
 
     // ---------------------------------------------------------------- Creators
     for (const creator of DEMO_CREATORS) {
@@ -51,7 +54,15 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------------ Viewers
-    if (!(await prisma.user.findUnique({ where: { id: VIEWER_ID } }))) {
+    // These two accounts have FIXED identities: demo-login signs in by id and the
+    // role decides what the person testing sees. So the seed has to converge an
+    // existing row back to its intended role, not merely create it when absent.
+    // A stale row from an earlier seed is the exact way this goes wrong: the
+    // viewer account was left as CREATOR, and then "testing the paywall as a
+    // viewer" silently tested it as a creator — the one path that decides whether
+    // real money works — until someone happened to query the table.
+    const viewer = await prisma.user.findUnique({ where: { id: VIEWER_ID } });
+    if (!viewer) {
       await prisma.user.create({
         data: {
           id: VIEWER_ID,
@@ -63,10 +74,15 @@ export async function POST(request: NextRequest) {
         },
       });
       created.viewers++;
+    } else if (viewer.role !== "VIEWER") {
+      // Keep the wallet: its balance is what makes the purchase flow testable.
+      await prisma.user.update({ where: { id: VIEWER_ID }, data: { role: "VIEWER" } });
+      corrected.viewers++;
     }
 
     // ---------------------------------------------------------------------- Admin
-    if (!(await prisma.user.findUnique({ where: { id: ADMIN_ID } }))) {
+    const admin = await prisma.user.findUnique({ where: { id: ADMIN_ID } });
+    if (!admin) {
       await prisma.user.create({
         data: {
           id: ADMIN_ID,
@@ -80,6 +96,11 @@ export async function POST(request: NextRequest) {
         },
       });
       created.viewers++;
+    } else if (admin.role !== "ADMIN") {
+      // An admin that lost its role is a locked door with no key: nobody else can
+      // reach the moderation and payouts screens that fix it.
+      await prisma.user.update({ where: { id: ADMIN_ID }, data: { role: "ADMIN" } });
+      corrected.admins++;
     }
 
     // ------------------------------------------------------------------- Videos
@@ -459,6 +480,7 @@ export async function POST(request: NextRequest) {
 
     return api.success({
       ...created,
+      corrected,
       total:
         created.creators +
         created.viewers +
