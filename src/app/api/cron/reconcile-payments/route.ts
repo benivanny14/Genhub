@@ -10,7 +10,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/cron-auth";
-import { reconcileStalePayments } from "@/lib/services/payment-reconcile.service";
+import { describeReconcile, runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 export async function GET(request: NextRequest) {
   return handle(request);
@@ -28,19 +28,27 @@ async function handle(request: NextRequest) {
   if (denied) return denied;
 
   try {
-    const result = await reconcileStalePayments();
+    // A silently dead reconciler is the failure mode this endpoint exists to
+    // prevent, so its own liveness is recorded rather than assumed.
+    const outcome = await runWorkerNow("reconcile-payments");
+
+    if (!outcome.ran) {
+      console.log(`[Cron] Payment reconciliation skipped: ${outcome.reason}`);
+      return NextResponse.json({
+        status: "skipped",
+        reason: outcome.reason,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     console.log(
-      `[Cron] Payments reconciled: ${result.checked} checked, ` +
-        `${result.settledSuccess} settled, ${result.settledFailed} failed, ` +
-        `${result.underInvestigation} newly flagged, ` +
-        `${result.awaitingResolution} awaiting resolution, ` +
-        `${result.stillProcessing} still processing`
+      `[Cron] Payments reconciled: ${describeReconcile(outcome.result)}, ` +
+        `${outcome.result.settledFailed} failed`
     );
 
     return NextResponse.json({
       status: "ok",
-      ...result,
+      ...outcome.result,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

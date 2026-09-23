@@ -31,6 +31,7 @@ import {
   RefreshCcw,
   ReceiptText,
   Loader2,
+  Play,
   Rocket,
   Upload,
 } from "lucide-react";
@@ -49,6 +50,39 @@ interface SystemReadiness {
   checks: { key: string; ok: boolean; value?: string | number; hint?: string }[];
   topWarnings: string[];
   delivery?: { stuckPending?: number; deliveryWarning?: string | null };
+}
+
+/**
+ * Liveness of the scheduled background workers. A schedule that stops firing
+ * produces no request and no error, so this is the only place it can show up.
+ */
+interface CronWorkerHealth {
+  id: string;
+  name: string;
+  consequence: string;
+  schedule: string;
+  everyMinutes: number;
+  staleAfterMinutes: number;
+  inFlightGraceMinutes: number;
+  /** Reaches a customer's phone, so "Run now" asks before starting it. */
+  sendsCustomerRequests: boolean;
+  state: "never" | "late" | "stalled" | "failing" | "running" | "ok";
+  ageMinutes: number | null;
+  lastSummary: string | null;
+  lastError: string | null;
+  lastDurationMs: number | null;
+  consecutiveFailures: number;
+  runsTotal: number;
+  unfinishedRun: boolean;
+  detail: string;
+}
+
+interface CronHealth {
+  workers: CronWorkerHealth[];
+  counts: Record<CronWorkerHealth["state"], number>;
+  alerting: number;
+  degraded: boolean;
+  checkedAt: string;
 }
 
 interface KycItem {
@@ -254,6 +288,32 @@ function SetupProbeIcon({ state }: { state: SetupProbe["state"] }) {
   return <XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />;
 }
 
+const JOB_STATE_LABEL: Record<CronWorkerHealth["state"], string> = {
+  ok: "Running on schedule",
+  running: "Running now",
+  late: "Overdue",
+  // Distinct from "overdue" on purpose: the schedule is fine here, the job is
+  // dying when it runs, and the two need different fixes.
+  stalled: "Killed mid-run",
+  failing: "Failing",
+  never: "Never run",
+};
+
+/** States that mean someone should look. */
+const JOB_STATE_ALERTS: CronWorkerHealth["state"][] = ["late", "stalled", "failing"];
+
+function JobStateIcon({ state }: { state: CronWorkerHealth["state"] }) {
+  if (state === "ok") return <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />;
+  if (state === "running")
+    return <Loader2 className="w-4 h-4 text-blue-400 shrink-0 mt-0.5 animate-spin" />;
+  if (state === "late") return <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />;
+  if (state === "stalled") return <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />;
+  if (state === "failing") return <XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />;
+  // Muted, not red: a worker that has never run usually means no scheduler is
+  // configured yet, which is setup work rather than something that broke.
+  return <HelpCircle className="w-4 h-4 text-white/25 shrink-0 mt-0.5" />;
+}
+
 function SetupGroupCard({ group }: { group: SetupGroup }) {
   const pending = group.items.filter((i) => i.state !== "ok");
   const settled = group.items.filter((i) => i.state === "ok");
@@ -391,6 +451,18 @@ export default function AdminDashboard() {
   const [refunding, setRefunding] = useState<string | null>(null);
   const [system, setSystem] = useState<SystemReadiness | null>(null);
   const [systemBusy, setSystemBusy] = useState(false);
+  const [jobs, setJobs] = useState<CronHealth | null>(null);
+  const [jobsBusy, setJobsBusy] = useState(false);
+  // Starting a worker by hand: which one is running, which one is waiting for
+  // the operator to confirm that it may charge a customer's phone, and what the
+  // last manual run came back with.
+  const [runBusy, setRunBusy] = useState<string | null>(null);
+  const [runConfirm, setRunConfirm] = useState<string | null>(null);
+  const [runResult, setRunResult] = useState<{
+    worker: string;
+    tone: "ok" | "error";
+    text: string;
+  } | null>(null);
   const [setup, setSetup] = useState<SetupReport | null>(null);
   const [setupBusy, setSetupBusy] = useState(false);
   const [pipeline, setPipeline] = useState<PipelineTest | null>(null);
@@ -446,6 +518,7 @@ export default function AdminDashboard() {
       fetchPayouts();
       fetchPayments();
       fetchSystemReadiness();
+      fetchJobs();
       // Cheap on purpose: reading config opens no connections, and this is what
       // populates the tab badge before anyone clicks it.
       fetchSetup();
@@ -543,6 +616,61 @@ export default function AdminDashboard() {
       // Readiness is informational — never surface it as an error toast
     } finally {
       setSystemBusy(false);
+    }
+  }
+
+  async function fetchJobs() {
+    setJobsBusy(true);
+    try {
+      const res = await fetch("/api/admin/jobs");
+      const data = await res.json();
+      if (data.success) setJobs(data.data as CronHealth);
+    } catch {
+      // Informational, like readiness — never an error toast
+    } finally {
+      setJobsBusy(false);
+    }
+  }
+
+  /**
+   * Start one worker now.
+   *
+   * The success path refreshes the card from the response itself, so the row
+   * shows the run that just happened rather than the state before it.
+   */
+  async function runWorker(workerId: string, confirm = false) {
+    setRunBusy(workerId);
+    setRunConfirm(null);
+    try {
+      const res = await fetch("/api/admin/jobs/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ worker: workerId, confirm }),
+      });
+      const data = await res.json();
+
+      if (data.success) {
+        setRunResult({
+          worker: workerId,
+          tone: "ok",
+          text: `${data.message || "Ran."}${
+            data.data?.durationMs != null ? ` · ${(data.data.durationMs / 1000).toFixed(1)}s` : ""
+          }`,
+        });
+        if (data.data?.health) setJobs(data.data.health as CronHealth);
+      } else {
+        setRunResult({
+          worker: workerId,
+          tone: "error",
+          text: data.error || "Could not run it.",
+        });
+        // A refusal or a failed run both leave the card out of date.
+        fetchJobs();
+      }
+    } catch {
+      setRunResult({ worker: workerId, tone: "error", text: "The request failed." });
+    } finally {
+      setRunBusy(null);
     }
   }
 
@@ -1142,6 +1270,179 @@ export default function AdminDashboard() {
                 {system?.gateway || "—"} · Run <code>npm run preflight:prod</code> for the full
                 launch gate.
               </p>
+            </div>
+
+            {/* Background jobs — a schedule that stops firing produces no
+                request, no log line and no error, so nothing else in the app
+                can report it. Each worker stamps a heartbeat as it runs. */}
+            <div className="glass-card p-5">
+              <div className="flex items-start justify-between gap-3 flex-wrap mb-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                      jobs?.degraded ? "bg-red-500/20" : "bg-brand-500/20"
+                    }`}
+                  >
+                    <Clock
+                      className={`w-5 h-5 ${jobs?.degraded ? "text-red-400" : "text-brand-400"}`}
+                    />
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold">Background jobs</h3>
+                    <p className="text-xs text-white/50">
+                      {!jobs
+                        ? jobsBusy
+                          ? "Checking…"
+                          : "Not loaded."
+                        : jobs.alerting > 0
+                          ? `${jobs.alerting} of ${jobs.workers.length} need attention`
+                          : jobs.counts.never === jobs.workers.length
+                            ? "No scheduler is calling these yet"
+                            : "All four workers are within their cadence"}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={fetchJobs}
+                  disabled={jobsBusy}
+                  className="btn-ghost text-sm flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {jobsBusy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="w-4 h-4" />
+                  )}
+                  Re-check
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {/* One column, not detail-left / result-right: on a phone-width
+                    admin panel that split squeezed the result into a narrow
+                    ribbon and wrapped the worker name onto three lines. */}
+                {(jobs?.workers || []).map((w) => (
+                  <div
+                    key={w.id}
+                    className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2"
+                  >
+                    <div className="flex items-start gap-2">
+                    <JobStateIcon state={w.state} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">
+                        {w.name}{" "}
+                        <span className="text-xs text-white/40 font-normal">
+                          · every {w.everyMinutes} min
+                        </span>
+                      </p>
+                      <p className="text-xs text-white/50 break-words">{w.detail}</p>
+                      {w.lastSummary && (
+                        <p className="text-xs text-white/60 break-words mt-0.5">
+                          Last result: {w.lastSummary}
+                        </p>
+                      )}
+                      {(w.state === "late" || w.state === "never" || w.state === "stalled") && (
+                        <p className="text-xs text-white/35 mt-0.5 break-words">
+                          While it is not running: {w.consequence}
+                        </p>
+                      )}
+                      <p className="text-xs text-white/30 mt-1">
+                        <span
+                          className={
+                            JOB_STATE_ALERTS.includes(w.state)
+                              ? "text-amber-400/70"
+                              : w.state === "never"
+                                ? "text-white/40"
+                                : "text-emerald-400/70"
+                          }
+                        >
+                          {JOB_STATE_LABEL[w.state]}
+                        </span>
+                        {w.runsTotal > 0 && ` · ${w.runsTotal} run(s) recorded`}
+                        {w.lastDurationMs != null && ` · took ${(w.lastDurationMs / 1000).toFixed(1)}s`}
+                        {w.consecutiveFailures > 0 &&
+                          ` · ${w.consecutiveFailures} consecutive failure(s)`}
+                      </p>
+                    </div>
+                    {/* Runs the real job through the same lock and heartbeat as
+                        the schedule, so a green result here means the schedule
+                        will work too — not that a simulation did. */}
+                    <button
+                      onClick={() =>
+                        w.sendsCustomerRequests ? setRunConfirm(w.id) : runWorker(w.id)
+                      }
+                      disabled={runBusy === w.id}
+                      title="Run this worker now — it makes the same changes a scheduled run would"
+                      className="btn-ghost text-xs flex items-center gap-1 shrink-0 disabled:opacity-50"
+                    >
+                      {runBusy === w.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Play className="w-3.5 h-3.5" />
+                      )}
+                      Run now
+                    </button>
+                    </div>
+
+                    {runConfirm === w.id && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                        <p className="text-xs text-amber-200/80 flex-1 min-w-[12rem]">
+                          This is the one worker that can charge someone who did not ask: when a
+                          wallet cannot cover a renewal it sends a USSD prompt to that fan&apos;s
+                          phone. Running it can charge real renewals that are already due.
+                        </p>
+                        <button onClick={() => runWorker(w.id, true)} className="btn-brand text-xs">
+                          Run it anyway
+                        </button>
+                        <button onClick={() => setRunConfirm(null)} className="btn-ghost text-xs">
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+
+                    {runResult?.worker === w.id && (
+                      <p
+                        className={`text-xs mt-1.5 break-words ${
+                          runResult.tone === "ok" ? "text-emerald-400" : "text-red-400"
+                        }`}
+                      >
+                        {runResult.tone === "ok" ? "Ran now: " : "Could not run it: "}
+                        {runResult.text}
+                      </p>
+                    )}
+                  </div>
+                ))}
+                {!jobs && (
+                  <p className="text-sm text-white/50">
+                    {jobsBusy ? "Reading heartbeats…" : "Heartbeats not loaded."}
+                  </p>
+                )}
+              </div>
+
+              {jobs && jobs.counts.never > 0 && (
+                <div className="mt-4 flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-200/80">
+                    {jobs.counts.never === jobs.workers.length
+                      ? "No worker has ever run. Nothing is scheduling them yet — either the cron block is not deployed or the GitHub Actions workflow has no APP_URL and CRON_SECRET configured. See PRODUCTION.md §4.0.1. Run any of them now to check the job itself works while you fix the schedule."
+                      : `${jobs.counts.never} worker(s) have never run. Check their schedules in PRODUCTION.md §4.0.1, or run them now to prove the job itself works.`}
+                  </p>
+                </div>
+              )}
+
+              {jobs && (
+                <p className="text-xs text-white/40 mt-4">
+                  Checked as of {new Date(jobs.checkedAt).toLocaleTimeString()}. Each worker counts
+                  as overdue after roughly four of its own intervals of silence, so one late run
+                  does not raise an alarm; a run still open well past its usual runtime counts as
+                  killed. Both thresholds are listed against the worker itself in{" "}
+                  <code className="text-white/50">cron-heartbeat.service.ts</code>. Run now
+                  starts the real job — the same code, the same lock and the same heartbeat as the
+                  schedule — so a green result here means the schedule will work too. A worker
+                  that is already running is refused rather than started twice, and anything
+                  started here is recorded as a manual run.
+                </p>
+              )}
             </div>
 
             {/* Top creators */}

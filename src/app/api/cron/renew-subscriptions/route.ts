@@ -15,7 +15,7 @@
 import { NextRequest } from "next/server";
 import { api } from "@/lib/api-response";
 import { requireCronSecret } from "@/lib/cron-auth";
-import { renewDueSubscriptions } from "@/lib/services/subscription-renewal.service";
+import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 async function handle(request: NextRequest) {
   // One shared rule for every cron route: header-only secret, timing-safe
@@ -25,12 +25,14 @@ async function handle(request: NextRequest) {
   if (denied) return denied;
 
   try {
-    const result = await renewDueSubscriptions();
-    return api.success(
-      result,
-      `Renewals: ${result.renewedFromWallet} from wallet, ${result.pushedToPhone} USSD push(es), ` +
-        `${result.awaitingApproval} awaiting approval, ${result.failed} failed`
-    );
+    // This worker is the one that can charge a fan who did not ask: when a
+    // wallet cannot cover a renewal it sends a USSD push. The run lock in
+    // runWorkerNow is what stops a second scheduler from pushing twice.
+    const outcome = await runWorkerNow("renew-subscriptions");
+
+    if (!outcome.ran) return api.success({ skipped: true, reason: outcome.reason }, outcome.reason);
+
+    return api.success(outcome.result, outcome.summary ?? undefined);
   } catch (error) {
     console.error("[Cron Renew Subscriptions Error]", error);
     return api.internal();

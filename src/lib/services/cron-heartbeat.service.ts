@@ -1,0 +1,624 @@
+// =============================================================================
+// GENHUB - Background job heartbeats
+//
+// A schedule that stops firing is invisible. No request arrives, so there is no
+// log line, no error and no metric — the app looks exactly like an app with
+// nothing to do. That is how the HarakaPay webhook and the Bunny upload both
+// stayed broken while every endpoint answered "success".
+//
+// So each worker stamps this table on every run, and "silence" becomes a
+// readable fact: nothing finished recently. The registry below is the other
+// half — a heartbeat is meaningless without the cadence it is supposed to keep,
+// and having the cadence in code is what lets a missed run be computed rather
+// than guessed at.
+//
+// Two rules that keep this honest:
+//
+//   * Every scheduled worker must be listed. A worker that writes no heartbeat
+//     reads as "never ran", which is the safe direction — a false alarm, not a
+//     false all-clear. `src/tests/cron-heartbeat.test.ts` scans the cron routes
+//     so a new one cannot be added silently.
+//   * Heartbeat writes never throw. A table that cannot be written must not
+//     take down a worker that moves money; it degrades to a warning, and the
+//     resulting staleness is itself visible.
+//
+// The registry also owns the run lock (runLockedAt). Supporting two schedulers
+// at once — Vercel Cron and GitHub Actions — plus a manual "Run now" button in
+// the admin panel means the same worker can be reached twice at the same
+// instant, and for renew-subscriptions that is a second USSD charge on a real
+// person's phone. One conditional UPDATE turns the second caller into a skip.
+// =============================================================================
+
+import prisma from "@/lib/db";
+
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
+
+export type CronWorkerId =
+  | "release-earnings"
+  | "reconcile-payments"
+  | "renew-subscriptions"
+  | "poll-encoding";
+
+export interface CronWorkerDef {
+  id: CronWorkerId;
+  /** Human label for the admin card. */
+  name: string;
+  /** What stops happening while this worker does not run. */
+  consequence: string;
+  /** How often the scheduler is expected to call it (minutes). */
+  everyMinutes: number;
+  /**
+   * How long without a finished run before it counts as overdue (minutes).
+   *
+   * Deliberately several intervals, not one: a single late or skipped
+   * invocation is normal for both Vercel Cron and GitHub Actions (whose
+   * schedules are delayed under load), and an alarm that cries wolf gets
+   * ignored. This is set to roughly 4 missed runs.
+   */
+  staleAfterMinutes: number;
+  /**
+   * How long a single run may stay unfinished before it is presumed dead
+   * (minutes).
+   *
+   * Separate from staleAfterMinutes on purpose, and much tighter. These jobs
+   * finish in seconds (measured: 0.4-2.5s, and the slowest sends USSD pushes),
+   * so a run still open after minutes is not slow — it was killed, most likely
+   * by a function timeout. Reusing the stale budget here would report a run
+   * that has been dead for forty minutes as "running", which is the one answer
+   * that stops anyone looking.
+   */
+  inFlightGraceMinutes: number;
+  /** Where the schedule is declared, so the card can point at the fix. */
+  schedule: string;
+  /**
+   * True when running this worker reaches a customer's phone.
+   *
+   * Only renew-subscriptions does: it falls back to a HarakaPay USSD push, so a
+   * stray run sends a real charge request to a real fan. The admin "Run now"
+   * action therefore requires an explicit confirmation for it and not for the
+   * others, where a run only moves internal state.
+   */
+  sendsCustomerRequests: boolean;
+}
+
+export const CRON_WORKERS: readonly CronWorkerDef[] = [
+  {
+    id: "release-earnings",
+    name: "Release matured earnings",
+    consequence:
+      "Creator earnings stay inside the 14-day holding period and creators cannot withdraw.",
+    everyMinutes: 60,
+    staleAfterMinutes: 180,
+    inFlightGraceMinutes: 10,
+    schedule: "vercel.json or .github/workflows/release-earnings.yml",
+    sendsCustomerRequests: false,
+  },
+  {
+    id: "reconcile-payments",
+    name: "Reconcile stale payments",
+    consequence:
+      "A charge the gateway accepted but never reported is never settled, and nobody is told.",
+    everyMinutes: 10,
+    staleAfterMinutes: 40,
+    inFlightGraceMinutes: 5,
+    schedule: "vercel.json or .github/workflows/reconcile-payments.yml",
+    // Reads gateway state about charges that already exist; it never starts one.
+    sendsCustomerRequests: false,
+  },
+  {
+    id: "renew-subscriptions",
+    name: "Renew subscriptions",
+    consequence: "Memberships expire instead of renewing, and the fan is never retried.",
+    everyMinutes: 60,
+    staleAfterMinutes: 180,
+    // Longest of the four: it sends one USSD push per subscriber, and each push
+    // is a round trip to the gateway.
+    inFlightGraceMinutes: 15,
+    schedule: "vercel.json or .github/workflows/renew-subscriptions.yml",
+    // The only worker that can charge someone who did not ask, right now: when
+    // the wallet cannot cover a renewal it sends a USSD prompt to the fan.
+    sendsCustomerRequests: true,
+  },
+  {
+    id: "poll-encoding",
+    name: "Publish finished uploads",
+    consequence:
+      "A transcoded video is never published, so the creator waits for a video that is already ready.",
+    // vercel.json asks for 3 minutes; GitHub Actions cannot go below 5.
+    everyMinutes: 5,
+    staleAfterMinutes: 20,
+    inFlightGraceMinutes: 5,
+    schedule: "vercel.json or .github/workflows/poll-encoding.yml",
+    sendsCustomerRequests: false,
+  },
+] as const;
+
+const WORKERS_BY_ID = new Map<string, CronWorkerDef>(CRON_WORKERS.map((w) => [w.id, w]));
+
+/** Every route that must report a heartbeat. */
+export const SCHEDULED_CRON_ROUTE_IDS: readonly CronWorkerId[] = CRON_WORKERS.map((w) => w.id);
+
+function workerDef(id: CronWorkerId): CronWorkerDef {
+  const def = WORKERS_BY_ID.get(id);
+  if (!def) throw new Error(`Unknown cron worker "${id}" — add it to CRON_WORKERS`);
+  return def;
+}
+
+/**
+ * Look a worker up by an untrusted id (an admin request, say).
+ *
+ * Returns undefined rather than throwing so the caller decides what a bad id
+ * means — for an API route that is a 422 naming the valid ids, not a crash.
+ */
+export function findWorker(id: string): CronWorkerDef | undefined {
+  return WORKERS_BY_ID.get(id);
+}
+
+// ---------------------------------------------------------------------------
+// Recording
+// ---------------------------------------------------------------------------
+
+const MAX_DETAIL_CHARS = 500;
+
+function describe(error: unknown): string {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "Unknown error";
+  return message.slice(0, MAX_DETAIL_CHARS);
+}
+
+/**
+ * Best-effort heartbeat write.
+ *
+ * Never throws: see the file header. The warning is intentionally loud enough to
+ * find in logs, because a heartbeat that cannot be written means the stale
+ * alarm is blind.
+ */
+async function writeHeartbeat(
+  id: CronWorkerId,
+  data: { startedAt: Date; outcome: "OK" | "ERROR"; summary?: string | null; error?: string | null }
+): Promise<void> {
+  const durationMs = Date.now() - data.startedAt.getTime();
+  const base = {
+    lastStartedAt: data.startedAt,
+    lastFinishedAt: new Date(),
+    lastOutcome: data.outcome,
+    lastSummary: data.summary ?? null,
+    lastError: data.error ?? null,
+    lastDurationMs: durationMs,
+  };
+
+  try {
+    await prisma.cronHeartbeat.upsert({
+      where: { worker: id },
+      create: {
+        worker: id,
+        ...base,
+        consecutiveFailures: data.outcome === "ERROR" ? 1 : 0,
+        runsTotal: 1,
+      },
+      update: {
+        ...base,
+        // Reset on success so the count always means "failing right now".
+        consecutiveFailures: data.outcome === "ERROR" ? { increment: 1 } : 0,
+        runsTotal: { increment: 1 },
+      },
+    });
+  } catch (error) {
+    console.warn(`[CronHeartbeat] Could not record "${id}": ${describe(error)}`);
+  }
+}
+
+/** Best-effort start stamp, for the fail-open path where no claim was taken. */
+async function stampStart(worker: CronWorkerId, startedAt: Date): Promise<void> {
+  try {
+    await prisma.cronHeartbeat.upsert({
+      where: { worker },
+      create: { worker, lastStartedAt: startedAt },
+      update: { lastStartedAt: startedAt },
+    });
+  } catch (error) {
+    console.warn(`[CronHeartbeat] Could not mark start of "${worker}": ${describe(error)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The run lock
+// ---------------------------------------------------------------------------
+
+/**
+ * Take the lock for one worker, atomically.
+ *
+ * A single conditional UPDATE decides the winner: the row is claimable only when
+ * the lock is free, so two callers arriving in the same millisecond cannot both
+ * read "free" and both proceed — which is the whole reason this is a statement
+ * and not a read-then-write. Claiming also stamps the start, because the two
+ * facts are the same instant and a killed run must stay distinguishable from
+ * one that never began.
+ *
+ * `staleBefore` is the worker's own in-flight grace: a run that died without
+ * releasing the lock expires rather than blocking the worker forever.
+ */
+export async function claimRun(
+  worker: CronWorkerId,
+  startedAt: Date,
+  staleBefore: Date
+): Promise<{ claimed: true } | { claimed: false; lockedAt: Date | null }> {
+  const taken = await prisma.cronHeartbeat.updateMany({
+    where: {
+      worker,
+      OR: [{ runLockedAt: null }, { runLockedAt: { lt: staleBefore } }],
+    },
+    data: { runLockedAt: startedAt, lastStartedAt: startedAt },
+  });
+
+  if (taken.count === 1) return { claimed: true };
+
+  // Nothing was claimable. Either the lock is genuinely held, or this worker has
+  // never run and so has no row to update yet.
+  const existing = await prisma.cronHeartbeat.findUnique({
+    where: { worker },
+    select: { runLockedAt: true },
+  });
+
+  if (existing) return { claimed: false, lockedAt: existing.runLockedAt };
+
+  try {
+    await prisma.cronHeartbeat.create({
+      data: { worker, runLockedAt: startedAt, lastStartedAt: startedAt },
+    });
+    return { claimed: true };
+  } catch {
+    // Lost a race against another first-ever run: treat it as held, like any
+    // other concurrent claim.
+    const raced = await prisma.cronHeartbeat.findUnique({
+      where: { worker },
+      select: { runLockedAt: true },
+    });
+    return { claimed: false, lockedAt: raced?.runLockedAt ?? null };
+  }
+}
+
+/**
+ * Release the lock, but only if it is still ours.
+ *
+ * The `runLockedAt: startedAt` condition matters: if our run outlived its own
+ * grace and a newer run claimed the row, an unconditional release would hand
+ * that run's lock to a third caller.
+ */
+async function releaseRun(worker: CronWorkerId, startedAt: Date): Promise<void> {
+  try {
+    await prisma.cronHeartbeat.updateMany({
+      where: { worker, runLockedAt: startedAt },
+      data: { runLockedAt: null },
+    });
+  } catch (error) {
+    console.warn(`[CronHeartbeat] Could not release the run lock for "${worker}": ${describe(error)}`);
+  }
+}
+
+/**
+ * What a trigger got back: the job's result, or a refusal because the job was
+ * already running.
+ *
+ * A refusal is not a failure, and callers must not report it as one — a
+ * scheduler that gets a 500 for a skipped duplicate would page someone about a
+ * job that is working correctly.
+ */
+export type CronRunOutcome<T> =
+  | { ran: true; result: T; summary: string | null; durationMs: number }
+  | { ran: false; reason: string; lockedAt: Date | null };
+
+/**
+ * Run a cron job, holding its lock, and record how it went.
+ *
+ * The lock is what makes an extra trigger harmless. Two schedulers can be
+ * configured at once (Vercel Cron and GitHub Actions are both supported), and a
+ * run can also be started by hand from the admin panel; without this, renewals
+ * could push a second USSD charge to the same fan.
+ *
+ * A run that is refused still reports `ran: false` rather than throwing, so the
+ * caller chooses how loud to be. Errors from the job itself are recorded and
+ * then re-thrown, so the route still answers 500 and the scheduler still sees a
+ * failure.
+ */
+export async function runCronJob<T>(
+  worker: CronWorkerId,
+  run: () => Promise<T>,
+  summarize?: (result: T) => string,
+  origin?: string
+): Promise<CronRunOutcome<T>> {
+  const def = workerDef(worker);
+  const startedAt = new Date();
+  const staleBefore = new Date(startedAt.getTime() - def.inFlightGraceMinutes * 60_000);
+
+  let claim: { claimed: true } | { claimed: false; lockedAt: Date | null };
+  try {
+    claim = await claimRun(worker, startedAt, staleBefore);
+  } catch (error) {
+    // Fail open, on purpose. Every one of these jobs reads the same database the
+    // lock lives in, so a lock query that fails means the job has nothing to
+    // work on anyway — and refusing to run on an unrelated read failure would
+    // stop money from moving, which is the worse of the two failures.
+    console.warn(
+      `[CronHeartbeat] Could not claim the run lock for "${worker}": ${describe(error)}. ` +
+        "Running anyway — overlapping runs are not protected while this lasts."
+    );
+    claim = { claimed: true };
+    await stampStart(worker, startedAt);
+  }
+
+  if (!claim.claimed) {
+    const heldFor = claim.lockedAt ? humanDuration(minutesSince(claim.lockedAt, startedAt) ?? 0) : null;
+    return {
+      ran: false,
+      lockedAt: claim.lockedAt,
+      reason:
+        `A run started ${heldFor ?? "recently"} ago and has not finished, so this one was ` +
+        `skipped rather than run twice. It is not stuck: if it died, the lock expires ` +
+        `${def.inFlightGraceMinutes} min after it started.`,
+    };
+  }
+
+  try {
+    const result = await run();
+    const summary = summarize ? summarize(result) : null;
+    await writeHeartbeat(worker, {
+      startedAt,
+      outcome: "OK",
+      summary: origin ? (summary ? `${summary} (${origin})` : origin) : summary,
+    });
+    return {
+      ran: true,
+      result,
+      summary,
+      durationMs: Date.now() - startedAt.getTime(),
+    };
+  } catch (error) {
+    await writeHeartbeat(worker, {
+      startedAt,
+      outcome: "ERROR",
+      error: origin ? `${describe(error)} (${origin})` : describe(error),
+    });
+    throw error;
+  } finally {
+    await releaseRun(worker, startedAt);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
+
+export type CronWorkerState = "never" | "late" | "stalled" | "failing" | "running" | "ok";
+
+/** States that need someone to act. `running` and `ok` do not, and `never` is
+ *  unconfigured setup rather than a regression — see CronHealth.degraded. */
+const ALERTING_STATES: readonly CronWorkerState[] = ["late", "stalled", "failing"];
+
+export interface CronWorkerHealth {
+  id: CronWorkerId;
+  name: string;
+  consequence: string;
+  schedule: string;
+  everyMinutes: number;
+  staleAfterMinutes: number;
+  inFlightGraceMinutes: number;
+  /** Reaches a customer's phone (a USSD charge request), so a manual run asks first. */
+  sendsCustomerRequests: boolean;
+  state: CronWorkerState;
+  /** Minutes since the last *finished* run; null when it has never finished. */
+  ageMinutes: number | null;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastSummary: string | null;
+  lastError: string | null;
+  lastDurationMs: number | null;
+  consecutiveFailures: number;
+  runsTotal: number;
+  /** A run began and never finished — a timeout or a crash mid-job. */
+  unfinishedRun: boolean;
+  /** One line an operator can act on. */
+  detail: string;
+}
+
+export interface CronHealth {
+  workers: CronWorkerHealth[];
+  counts: Record<CronWorkerState, number>;
+  /** Workers needing attention right now: overdue, stalled, or failing. */
+  alerting: number;
+  /**
+   * True when something that used to run has stopped or is failing. A worker
+   * that has *never* run does not set this — that is an unconfigured schedule
+   * (setup), not a regression, and treating it as an outage would make a fresh
+   * deploy permanently degraded and train operators to ignore the alarm.
+   */
+  degraded: boolean;
+  checkedAt: string;
+}
+
+function minutesSince(date: Date | null, now: Date): number | null {
+  if (!date) return null;
+  return Math.max(0, Math.round((now.getTime() - date.getTime()) / 60000));
+}
+
+/**
+ * A plain duration — no "ago". The sentences below add their own preposition,
+ * and a helper that hard-codes one produces "for 3 h ago" and "30 min ago ago".
+ */
+function humanDuration(minutes: number): string {
+  if (minutes < 1) return "less than a minute";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  return `${Math.floor(hours / 24)} d`;
+}
+
+/** The classification rule, pure and testable — see the tests for the table. */
+/**
+ * Order of precedence, most specific first:
+ *
+ *   1. no heartbeat      -> never     (nothing is configured to call it)
+ *   2. run never came back -> stalled (killed mid-job)
+ *   3. run in progress    -> running (working, not idle)
+ *   4. nothing finished in the budget -> late (the schedule stopped)
+ *   5. last run errored   -> failing
+ *   6. otherwise          -> ok
+ */
+export function classifyWorker(
+  def: CronWorkerDef,
+  beat: {
+    lastStartedAt: Date | null;
+    lastFinishedAt: Date | null;
+    lastOutcome: string | null;
+    lastError: string | null;
+  } | null,
+  now: Date = new Date()
+): { state: CronWorkerState; detail: string; unfinishedRun: boolean; ageMinutes: number | null } {
+  if (!beat) {
+    return {
+      state: "never",
+      unfinishedRun: false,
+      ageMinutes: null,
+      detail: `Has never run. Nothing is calling it — check ${def.schedule}.`,
+    };
+  }
+
+  const started = beat.lastStartedAt;
+  const finished = beat.lastFinishedAt;
+  const ageMinutes = minutesSince(finished, now);
+
+  // A run is in flight when a start is newer than the last finish.
+  const unfinishedRun = !!started && (!finished || started.getTime() > finished.getTime());
+  const startedAge = minutesSince(started, now);
+  const stalled = unfinishedRun && startedAge !== null && startedAge > def.inFlightGraceMinutes;
+
+  // A run that began and never came back. Reported on its own because it needs
+  // a different fix from a dead schedule: the scheduler is fine, the job is
+  // dying when it runs — a function timeout, or an error before its own handler
+  // could catch it. Checked first: this is the most specific thing we know.
+  if (stalled) {
+    return {
+      state: "stalled",
+      unfinishedRun,
+      ageMinutes,
+      detail:
+        `A run started ${humanDuration(startedAge ?? 0)} ago and never finished — it was ` +
+        `killed mid-job (function timeout or crash). It runs every ${def.everyMinutes} min, ` +
+        `so later attempts are failing the same way.`,
+    };
+  }
+
+  // In flight and still inside its budget: working, not idle. Checked before
+  // the overdue test so a legitimately slow run is not reported as missing.
+  if (unfinishedRun) {
+    return {
+      state: "running",
+      unfinishedRun,
+      ageMinutes,
+      detail: `Running now (started ${humanDuration(startedAge ?? 0)} ago).`,
+    };
+  }
+
+  // Nothing has finished inside the budget: the schedule has stopped firing.
+  const referenceAge = minutesSince(finished ?? started, now);
+  if (referenceAge === null || referenceAge > def.staleAfterMinutes) {
+    return {
+      state: "late",
+      unfinishedRun,
+      ageMinutes,
+      detail:
+        `Nothing has finished for ${humanDuration(referenceAge ?? 0)} (expected every ` +
+        `${def.everyMinutes} min). The schedule has stopped firing — check ${def.schedule}.`,
+    };
+  }
+
+  if (beat.lastOutcome === "ERROR") {
+    return {
+      state: "failing",
+      unfinishedRun,
+      ageMinutes,
+      detail: `Last run failed ${humanDuration(ageMinutes ?? 0)} ago: ${beat.lastError ?? "unknown error"}`,
+    };
+  }
+
+  return {
+    state: "ok",
+    unfinishedRun,
+    ageMinutes,
+    detail: `Last run succeeded ${humanDuration(ageMinutes ?? 0)} ago.`,
+  };
+}
+
+/** Read every worker's health. Workers with no heartbeat report as "never". */
+export async function getCronHealth(now: Date = new Date()): Promise<CronHealth> {
+  const rows = await prisma.cronHeartbeat.findMany();
+  const byWorker = new Map(rows.map((r) => [r.worker, r]));
+
+  const workers: CronWorkerHealth[] = CRON_WORKERS.map((def) => {
+    const row = byWorker.get(def.id) ?? null;
+    const verdict = classifyWorker(def, row, now);
+
+    return {
+      id: def.id,
+      name: def.name,
+      consequence: def.consequence,
+      schedule: def.schedule,
+      everyMinutes: def.everyMinutes,
+      staleAfterMinutes: def.staleAfterMinutes,
+      inFlightGraceMinutes: def.inFlightGraceMinutes,
+      sendsCustomerRequests: def.sendsCustomerRequests,
+      state: verdict.state,
+      ageMinutes: verdict.ageMinutes,
+      unfinishedRun: verdict.unfinishedRun,
+      lastStartedAt: row?.lastStartedAt?.toISOString() ?? null,
+      lastFinishedAt: row?.lastFinishedAt?.toISOString() ?? null,
+      lastSummary: row?.lastSummary ?? null,
+      lastError: row?.lastError ?? null,
+      lastDurationMs: row?.lastDurationMs ?? null,
+      consecutiveFailures: row?.consecutiveFailures ?? 0,
+      runsTotal: row?.runsTotal ?? 0,
+      detail: verdict.detail,
+    };
+  });
+
+  const counts: Record<CronWorkerState, number> = {
+    never: 0,
+    late: 0,
+    stalled: 0,
+    failing: 0,
+    running: 0,
+    ok: 0,
+  };
+  for (const w of workers) counts[w.state] += 1;
+
+  const alerting = ALERTING_STATES.reduce((sum, state) => sum + counts[state], 0);
+
+  return {
+    workers,
+    counts,
+    alerting,
+    // "never" is excluded on purpose — see the CronHealth doc comment.
+    degraded: alerting > 0,
+    checkedAt: now.toISOString(),
+  };
+}
+
+/**
+ * The one-word verdict for /api/health, without leaking which worker or why.
+ *
+ * Ordered by severity, and "never" is reported rather than folded into "ok":
+ * a scheduled worker that has never once run is a real gap even if the others
+ * are healthy, and an uptime monitor is the only reader that is awake when
+ * nobody is looking at the dashboard.
+ */
+export function summarizeCronHealth(
+  health: CronHealth
+): "late" | "stalled" | "failing" | "never" | "ok" {
+  for (const state of ALERTING_STATES) {
+    if (health.counts[state] > 0) return state as "late" | "stalled" | "failing";
+  }
+  if (health.counts.never > 0) return "never";
+  return "ok";
+}

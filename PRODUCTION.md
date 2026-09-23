@@ -429,6 +429,112 @@ Each workflow is also runnable by hand from **Actions → <workflow> → Run
 workflow**, which is the fastest way to confirm `APP_URL` and `CRON_SECRET` are
 wired correctly without waiting for the schedule.
 
+### 4.0.2 Knowing whether they are actually running
+
+A schedule that stops firing is the one failure with no symptom inside the app:
+no request arrives, so there is no log line, no error and no metric to alert on.
+Both the HarakaPay webhook and the Bunny upload stayed broken while every
+endpoint answered "success" — this is the check for that class of bug.
+
+Every worker stamps a heartbeat as it runs. **Admin → Overview → Background
+jobs** shows each one with its verdict, when it last finished, what it returned
+and how long it took:
+
+| State | Means | What to do |
+|---|---|---|
+| **Running on schedule** | Finished inside its cadence | nothing |
+| **Running now** | A run is in flight and still inside its grace | nothing |
+| **Overdue** | Nothing has finished for ~4 missed runs | the schedule stopped — check §4.0.1 |
+| **Killed mid-run** | A run began and never came back | the job times out or crashes when it runs |
+| **Failing** | It ran recently and returned an error | read the error on the card |
+| **Never run** | No heartbeat has ever been written | no scheduler is configured yet |
+
+`Overdue` and `Killed mid-run` are deliberately separate. They look identical
+from outside — nothing is running either way — but one means the *scheduler* is
+dead and the other means the *job* dies when it runs. The fix is different, so
+the dashboard says which.
+
+The thresholds live with the registry in
+`src/lib/services/cron-heartbeat.service.ts`. A worker counts as overdue after
+roughly four missed invocations (not one), because a single late run is normal
+for both Vercel Cron and GitHub Actions; and a run is presumed killed after a
+few minutes, since these jobs finish in 0.4–2.5s measured.
+
+**For an uptime monitor**, `GET /api/health` reports the same verdict as
+`checks.backgroundJobs` — `ok`, `never`, `late`, `stalled` or `failing` — so an
+external check can alert while nobody has the dashboard open:
+
+```bash
+curl -s https://<domain>/api/health | grep -o '"backgroundJobs":"[a-z]*"'
+```
+
+One deliberate asymmetry: `late`, `stalled` and `failing` make `/api/health`
+answer **503**, but `never` does not. A worker that has never run means no
+scheduler is configured yet — setup work, not an outage — and folding that in
+would leave every fresh deployment permanently red, which is how an alarm stops
+being read. `never` is surfaced loudly on the admin card instead.
+
+- [ ] Open **Admin → Overview → Background jobs** and confirm no worker says
+      `Never run`. Four of them saying so means nothing is calling them yet.
+- [ ] Press **Re-check** after switching schedulers (Vercel Cron ↔ GitHub
+      Actions) and confirm the "last run" times move.
+- [ ] Point your uptime monitor at `/api/health` and confirm it treats a
+      `backgroundJobs` of `late`/`stalled`/`failing` as an alert.
+
+### 4.0.3 Running a worker by hand (`Run now`)
+
+Each row on **Admin → Overview → Background jobs** has a **Run now** button. It
+exists for the question the card cannot answer by itself: *is this pipeline
+working, or does it just have nothing to do?* A worker showing `Never run` — or
+one that has been silent since a deploy — can be started and read immediately,
+instead of waiting an hour for a schedule that may not be configured at all.
+
+It is a real run, not a simulation. It goes through the same job, the same
+lock and the same heartbeat as the schedule, so a green result here means the
+schedule will work too. That also means it makes the same changes a scheduled
+run would.
+
+**The lock.** Every worker takes a run lock for the duration of its run, claimed
+with a single conditional `UPDATE`. Two schedulers can be configured at once
+(the docs describe Vercel Cron *and* GitHub Actions), and a person can press
+**Run now** while either is running — for `renew-subscriptions` a second
+concurrent run is not a duplicated log line, it is a **second USSD charge on a
+real fan's phone**. Whichever caller wins the claim runs; the others are
+refused. A run that dies without releasing the lock expires on its own after the
+worker's own in-flight grace (5–15 min, listed next to each worker in
+`cron-heartbeat.service.ts`), so one timed-out run cannot disable a worker
+permanently.
+
+**What a refusal looks like.** They are deliberately unequal, because they have
+different readers:
+
+| Trigger | Answer on a locked worker | Why |
+|---|---|---|
+| `Run now` (admin) | `409 ALREADY_RUNNING` with how long ago the run started | a person is watching and needs the reason |
+| `/api/cron/*` (scheduler) | **200** with `"status": "skipped"` | a scheduler that got a 500 would page someone about a job that is working correctly |
+
+A refused trigger writes nothing to the heartbeat: a run that never happened
+must not look like one that did.
+
+**One worker asks for confirmation.** `renew-subscriptions` is the only worker
+that can reach a customer's phone, so starting it by hand requires an explicit
+confirmation. That is enforced in the endpoint (`CONFIRMATION_REQUIRED`), not
+just in the button — a guard that lives in the UI is a guard a stray request
+walks past.
+
+**Every manual run says so.** The heartbeat records the trigger, so the card
+shows `Last result: … (manual run from the admin panel)` and "running on
+schedule" is never claimed about something a person started.
+
+- [ ] Press **Run now** on `poll-encoding`, `reconcile-payments` and
+      `release-earnings` once. Each should return a summary and the row should
+      flip to `Running on schedule · 1 run(s) recorded` with
+      `(manual run from the admin panel)` in the result.
+- [ ] Press **Run now** on `renew-subscriptions` and confirm you get the
+      confirmation warning before anything is charged.
+- [ ] While one worker is running, press **Run now** on it again and confirm
+      you get the "already running" refusal rather than a second run.
+
 ### 4.1 Charges nobody can classify yet (`UNDER_INVESTIGATION`)
 
 A USSD push ends in one of four ways, and only one of them produces a webhook:

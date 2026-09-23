@@ -713,3 +713,44 @@ model GalleryImage {
 
   @@index([videoId])
 }
+
+// =============================================================================
+// BACKGROUND JOB HEARTBEATS
+//
+// One row per scheduled worker, written by the worker itself on every run.
+//
+// This exists because a schedule that stops firing is the one failure nothing
+// else in the app can see: no request arrives, so no log line, no error, no
+// metric. The absence of a row is therefore the signal — which only works
+// because the worker writes it, so an unimplemented worker looks "never run"
+// rather than healthy.
+//
+// `worker` matches a key in lib/services/cron-heartbeat.service.ts, where the
+// expected cadence lives. Deleting a row is safe: it reads as "never ran".
+// =============================================================================
+
+model CronHeartbeat {
+  id                  String    @id @default(cuid())
+  worker              String    @unique
+  /// Set when a run begins — lets a run that was killed mid-flight (function
+  /// timeout, crash) be told apart from one that has not started yet.
+  lastStartedAt       DateTime?
+  /// Held for the duration of a run and cleared when it returns.
+  ///
+  /// Claimed with a single conditional UPDATE, which is what makes a double
+  /// fire safe: two schedulers (Vercel Cron *and* GitHub Actions) or one
+  /// double-clicked button cannot both start the same job. A run that dies
+  /// without releasing it expires on its own after inFlightGraceMinutes.
+  runLockedAt         DateTime?
+  lastFinishedAt      DateTime?
+  /// OK | ERROR. Null until the first run finishes.
+  lastOutcome         String?
+  /// Human-readable result, e.g. "Released TZS 12,000 for 2 creator(s)".
+  lastSummary         String?
+  lastError           String?
+  lastDurationMs      Int?
+  consecutiveFailures Int       @default(0)
+  runsTotal           Int       @default(0)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+}

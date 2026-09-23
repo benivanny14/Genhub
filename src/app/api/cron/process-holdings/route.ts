@@ -12,7 +12,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/cron-auth";
-import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
+import { describeReleaseEarnings, runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 export async function GET(request: NextRequest) {
   return handle(request);
@@ -30,10 +30,25 @@ async function handle(request: NextRequest) {
   if (denied) return denied;
 
   try {
-    const result = await releaseMatureEarnings();
+    // Recorded as "release-earnings", not as a worker of its own: this route
+    // runs the same job, so a deployment whose old cron config points here must
+    // not leave release-earnings reporting "never ran" forever. The origin is
+    // written into the heartbeat, where it tells a future reader which trigger
+    // actually did the work.
+    const outcome = await runWorkerNow("release-earnings", { origin: "legacy process-holdings route" });
+
+    if (!outcome.ran) {
+      return NextResponse.json({
+        status: "skipped",
+        reason: outcome.reason,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    const result = outcome.result;
 
     console.log(
-      `[Cron] Holdings processed (alias): ${result.creators} creator(s), TZS ${result.released} released`
+      `[Cron] Holdings processed (alias): ${describeReleaseEarnings(result)}`
     );
 
     return NextResponse.json({

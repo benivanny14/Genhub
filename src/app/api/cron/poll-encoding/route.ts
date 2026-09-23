@@ -15,7 +15,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { requireCronSecret } from "@/lib/cron-auth";
-import { refreshPendingEncodings } from "@/lib/services/video-encoding.service";
+import { describeEncoding, runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 export async function GET(request: NextRequest) {
   return handle(request);
@@ -32,16 +32,24 @@ async function handle(request: NextRequest) {
   if (denied) return denied;
 
   try {
-    const result = await refreshPendingEncodings();
+    const outcome = await runWorkerNow("poll-encoding");
+
+    if (!outcome.ran) {
+      console.log(`[Cron] Encoding poll skipped: ${outcome.reason}`);
+      return NextResponse.json({
+        status: "skipped",
+        reason: outcome.reason,
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     console.log(
-      `[Cron] Encoding poll: ${result.checked} checked, ` +
-        `${result.ready} ready, ${result.published} published, ${result.failed} failed`
+      `[Cron] Encoding poll: ${describeEncoding(outcome.result)}, ${outcome.result.ready} ready`
     );
 
     return NextResponse.json({
       status: "ok",
-      ...result,
+      ...outcome.result,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {

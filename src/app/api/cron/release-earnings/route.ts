@@ -12,7 +12,7 @@
 import { NextRequest } from "next/server";
 import { api } from "@/lib/api-response";
 import { requireCronSecret } from "@/lib/cron-auth";
-import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
+import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 async function handle(request: NextRequest) {
   // One shared rule for every cron route: header-only secret, timing-safe
@@ -22,11 +22,16 @@ async function handle(request: NextRequest) {
   if (denied) return denied;
 
   try {
-    const result = await releaseMatureEarnings();
-    return api.success(
-      result,
-      `Released TZS ${result.released.toLocaleString()} for ${result.creators} creator(s)`
-    );
+    // runWorkerNow holds the worker's run lock and stamps the heartbeat, so
+    // this route cannot run the same job twice at once, and the admin dashboard
+    // learns what happened. Wording lives with the job, not here.
+    const outcome = await runWorkerNow("release-earnings");
+
+    // Another trigger got there first. Not a failure: answering 500 here would
+    // page someone about a job that is running fine.
+    if (!outcome.ran) return api.success({ skipped: true, reason: outcome.reason }, outcome.reason);
+
+    return api.success(outcome.result, outcome.summary ?? undefined);
   } catch (error) {
     console.error("[Cron Release Earnings Error]", error);
     return api.internal();
