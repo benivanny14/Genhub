@@ -608,6 +608,60 @@ being read. `never` is surfaced loudly on the admin card instead.
 - [ ] Point your uptime monitor at `/api/health` and confirm it treats a
       `backgroundJobs` of `late`/`stalled`/`failing` as an alert.
 
+#### The watchdog, every hour
+
+`.github/workflows/uptime.yml` asks `/api/health` once an hour and **fails** when
+the answer is bad. A failed scheduled run is an email to the repository owner and
+a red mark in the Actions tab, so the alarm needs no account, no dashboard and no
+service to sign up for. `npm run watchdog` runs the same check by hand, which
+makes it the quickest post-deploy question there is — *is this deployment
+actually working, right now?*
+
+It needs no new configuration: it reads `APP_URL`, the repository variable §4.0.1
+already asks for, and it reads the public health endpoint rather than a
+secret-guarded one, so rotating `CRON_SECRET` cannot quietly disable the thing
+that is supposed to notice problems.
+
+| Answer | Verdict |
+|---|---|
+| `database: down` | **alarm** — every page that reads data is failing |
+| `backgroundJobs: late` / `stalled` / `failing` | **alarm** — names the state; the detail is on the admin card |
+| Degraded for a reason this check cannot read | **alarm** — a 503 nothing explains is the worst thing to shrug at |
+| Not JSON (a proxy, a parking page, a 502) | **alarm** |
+| `backgroundJobs: never` | **notice only** — no scheduler configured yet, which is setup, not an outage |
+| `payments: sandbox` on production | **notice only** — legitimate on a staging URL, a quiet emergency on a live one |
+
+The decision table lives in `scripts/watchdog.mjs` rather than in the workflow,
+because the rules are not obvious and the two ways of getting them wrong are both
+expensive: an alarm that misses an outage, and an alarm that cries wolf until
+somebody mutes it. It is pure, so `src/tests/watchdog.test.ts` covers every
+branch without a server.
+
+To have the alarm pushed somewhere you will actually see it, set the optional
+`ALERT_WEBHOOK_URL` **secret** to a Slack or Discord webhook
+(`Settings → Secrets and variables → Actions → New secret`); the message is sent
+in the shape both understand. Without it the alarm is GitHub's own failure email.
+
+**One failure this cannot report, and it is worth knowing.** GitHub disables
+*every* scheduled workflow in a repository after 60 days without activity (§4.0.1,
+caveat 2) — this watchdog included, at the same moment as the four workers it
+watches. So it cannot warn you about the one outage that also silences it. For
+that, point a free external monitor (UptimeRobot, Better Stack, healthchecks.io)
+at `/api/health`: the endpoint answers **503** when the jobs have gone quiet, and
+a monitor outside the repository does not go quiet with it. Two cheap habits cover
+the rest: keep an eye on the Actions tab, and commit anything once every couple
+of months, which re-enables every schedule at once.
+
+- [ ] Run the watchdog by hand once after deploying: `APP_URL=https://<domain>
+      npm run watchdog` — expect `status=ok` and exit 0.
+- [ ] Confirm it *can* fail: `npm run watchdog -- --url https://example.com`
+      should exit 1 with "did not answer with JSON", so the alarm path is proven
+      before it is ever needed.
+- [ ] Set `ALERT_WEBHOOK_URL` if GitHub's failure email is not somewhere you
+      look.
+- [ ] Point an external monitor at `/api/health` for the case the watchdog
+      cannot report (§ above).
+
 ### 4.0.3 Running a worker by hand (`Run now`)
 
 Each row on **Admin → Overview → Background jobs** has a **Run now** button. It

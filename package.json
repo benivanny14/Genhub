@@ -28,6 +28,7 @@
     "verify:env": "node scripts/verify-env.mjs",
     "verify:lockfile": "node scripts/verify-lockfile.mjs",
     "verify:live": "node scripts/verify-connections.mjs",
+    "watchdog": "node scripts/watchdog.mjs",
     "smoke:harakapay": "node scripts/harakapay-smoke.mjs",
     "smoke:harakapay:live": "node scripts/harakapay-live.mjs",
     "smoke:bunny": "node scripts/verify-bunny.mjs",

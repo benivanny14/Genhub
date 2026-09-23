@@ -1,0 +1,57 @@
+# =============================================================================
+# GENHUB - Uptime watchdog
+#
+# Asks /api/health once an hour and FAILS when the answer is bad, because a
+# failed scheduled run is an email to the repository owner and a red mark in the
+# Actions tab — an alarm with no account to sign up for.
+#
+#     node scripts/watchdog.mjs        # the same check, by hand
+#
+# What it catches that nothing else does: a schedule that stopped firing. No
+# request arrives when that happens, so there is no log line, no error and no
+# metric — every page still loads while creators stop being paid. The app writes
+# a heartbeat per worker so the *absence* of a run is the signal, and this is the
+# thing that reads it while nobody has the dashboard open.
+#
+# No new configuration: it reads `APP_URL`, the repository variable §4.0.1 already
+# asks you to set. Set the optional `ALERT_WEBHOOK_URL` secret (a Slack or
+# Discord webhook) to get the alarm pushed somewhere you will actually see it,
+# instead of only in GitHub's email.
+#
+# -----------------------------------------------------------------------------
+# The blind spot, which is why §4.0.2 also recommends a monitor outside GitHub
+#
+# GitHub disables *every* scheduled workflow in a repository after 60 days
+# without activity — this one included, at the same moment as the four workers it
+# is watching. So it cannot report the one failure that also silences it. For
+# that, point any free uptime monitor at /api/health: the endpoint answers 503
+# when the jobs have gone quiet, and a monitor is not hosted in the repository
+# that went quiet.
+# =============================================================================
+
+name: Uptime watchdog
+
+on:
+  schedule:
+    # Minute 45: clear of the workers (release :00, renew :15, reconcile every
+    # 10, encoding every 5), so a run that is seconds late is not mistaken for
+    # one that never happened.
+    - cron: "45 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - name: Check the health endpoint
+        env:
+          APP_URL: ${{ vars.APP_URL }}
+          ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+        run: node scripts/watchdog.mjs
