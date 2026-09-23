@@ -1,0 +1,48 @@
+# =============================================================================
+# GENHUB - Poll video encoding (publish + notify creators when Bunny is ready)
+# Calls POST /api/cron/poll-encoding every 5 minutes. Setup required:
+#   * Repository variable  APP_URL      — e.g. https://genhub.co.tz
+#   * Repository secret    CRON_SECRET  — must match the server's CRON_SECRET
+# (The same two values feed release-earnings.yml — configure them once.)
+# The job skips cleanly (green) until both are configured.
+#
+# CADENCE: vercel.json schedules this every 3 minutes. GitHub Actions cannot
+# express that — its minimum interval is 5 minutes — so on Hobby this runs every
+# 5. Nothing breaks: the worker is idempotent (publication only ever flips
+# unpublished -> published, and a creator is notified at most once), and
+# /api/creator/videos also polls a creator's own pending uploads on read. The
+# only difference is that a finished encode can take up to 5 minutes to surface
+# instead of 3.
+#
+# NOTE FOR VERCEL HOBBY: the free plan allows only 2 cron jobs and only at
+# daily granularity, so vercel.json cannot schedule all four workers there.
+# This workflow is the scheduler for Hobby deployments. See PRODUCTION.md §3.3.
+# =============================================================================
+
+name: Poll video encoding
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call encoding poll endpoint
+        env:
+          BASE_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$BASE_URL" ]; then
+            echo "APP_URL repository variable not set — skipping run."
+            exit 0
+          fi
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET repository secret not set — skipping run."
+            exit 0
+          fi
+          curl -fsS -X POST "$BASE_URL/api/cron/poll-encoding" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            --max-time 120

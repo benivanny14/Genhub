@@ -274,6 +274,10 @@ Four schedulers ship in `vercel.json`:
 | `/api/cron/renew-subscriptions` | hourly (minute 15) | charge memberships that expire within 24h |
 | `/api/cron/poll-encoding` | every 3 min | publish uploaded videos once Bunny Stream can serve them, and tell the creator |
 
+On the **Hobby (free) plan these will not deploy** — Vercel limits Hobby cron to
+once per day. Remove the `crons` block and use the four GitHub Actions
+workflows in `.github/workflows/` instead. See §4.0.1.
+
 ### 3.2 Video processing (why a new upload is not live immediately)
 
 Bunny Stream accepts an upload seconds after the browser starts sending, then
@@ -356,6 +360,74 @@ curl -s -o /dev/null -w "bearer:  %{http_code}\n" -X POST $B/api/cron/release-ea
 curl -s -o /dev/null -w "query:   %{http_code}\n" -X POST "$B/api/cron/release-earnings?secret=$S"                  # 401
 curl -s -o /dev/null -w "wrong:   %{http_code}\n" -X POST $B/api/cron/release-earnings -H "x-cron-secret: wrong"     # 401
 ```
+
+### 4.0.1 Choosing a scheduler: Vercel Cron or GitHub Actions
+
+The table above is `vercel.json`, and it is correct for **Pro/Enterprise**. On
+the **Hobby (free) plan it will not deploy at all**. Vercel restricts Hobby cron
+to **once per day**, and a more frequent expression fails the build:
+
+```
+Hobby accounts are limited to daily cron jobs.
+This cron expression would run more than once per day.
+```
+
+Every worker here runs sub-daily — hourly, every 10 minutes, every 3 minutes —
+so on Hobby **remove the `crons` block from `vercel.json`** and let GitHub
+Actions drive them instead. One workflow per worker, all four already in the
+repo:
+
+| Workflow | Schedule | Endpoint |
+|---|---|---|
+| `.github/workflows/release-earnings.yml` | hourly | `/api/cron/release-earnings` |
+| `.github/workflows/reconcile-payments.yml` | every 10 min | `/api/cron/reconcile-payments` |
+| `.github/workflows/renew-subscriptions.yml` | hourly (minute 15) | `/api/cron/renew-subscriptions` |
+| `.github/workflows/poll-encoding.yml` | every 5 min | `/api/cron/poll-encoding` |
+
+They all authenticate the same way Vercel Cron does — header only, never a
+query string (see §4.0) — so no code changes are needed to switch. Configure
+this **once** per repository; every workflow reads the same two values:
+
+```
+GitHub → your repo → Settings → Secrets and variables → Actions
+  Variables  → New variable → APP_URL = https://your-domain      (no trailing slash)
+  Secrets    → New secret   → CRON_SECRET = <same value as the server's CRON_SECRET>
+```
+
+Until both are set, each job **skips and exits green** rather than failing, so
+the Actions tab stays quiet instead of red while you are still setting up.
+
+Three caveats worth knowing before you rely on this:
+
+- **GitHub's minimum interval is 5 minutes**, so `poll-encoding` runs every 5
+  minutes rather than the 3 minutes `vercel.json` asks for. Nothing breaks: the
+  worker is idempotent and a creator can still advance their own uploads by
+  opening the dashboard. A finished encode just surfaces within 5 minutes.
+- **Scheduled workflows are disabled after 60 days of repository inactivity.**
+  GitHub emails the owner first, and any commit re-enables them — but on a quiet
+  repo, payments and renewals would stop. Budget one commit (or a
+  `workflow_dispatch` run) every couple of months, or move to Pro and use Vercel
+  Cron, which has no such rule.
+- **These run off GitHub's clock, not yours.** Schedules are delayed during
+  periods of high load, so treat the interval as "roughly", not "exactly".
+  Every worker is written to be safe under a late or duplicated run —
+  `release-earnings` only ever moves matured balances, `renew-subscriptions`
+  charges at most once per `RETRY_GAP`, and `poll-encoding` only ever flips
+  unpublished → published.
+
+Verify after switching:
+
+```bash
+B=https://<domain>; S=$CRON_SECRET
+for r in release-earnings reconcile-payments renew-subscriptions poll-encoding; do
+  printf "%-22s " "$r"
+  curl -s -o /dev/null -w "%{http_code}\n" -X POST "$B/api/cron/$r" -H "x-cron-secret: $S"
+done   # expect four 200s; a wrong secret must give 401
+```
+
+Each workflow is also runnable by hand from **Actions → <workflow> → Run
+workflow**, which is the fastest way to confirm `APP_URL` and `CRON_SECRET` are
+wired correctly without waiting for the schedule.
 
 ### 4.1 Charges nobody can classify yet (`UNDER_INVESTIGATION`)
 

@@ -1,0 +1,49 @@
+# =============================================================================
+# GENHUB - Renew subscriptions before they lapse
+# Calls POST /api/cron/renew-subscriptions hourly (at :15). Setup required:
+#   * Repository variable  APP_URL      — e.g. https://genhub.co.tz
+#   * Repository secret    CRON_SECRET  — must match the server's CRON_SECRET
+# (The same two values feed release-earnings.yml — configure them once.)
+# The job skips cleanly (green) until both are configured.
+#
+# :15 rather than :00 on purpose — release-earnings fires on the hour and both
+# workers touch creator balances, so they are kept off the same minute.
+#
+# The job is idempotent by design: at most one charge attempt per RETRY_GAP and
+# MAX_RENEW_ATTEMPTS per period, so a delayed or duplicated run cannot double
+# charge a fan.
+#
+# NOTE FOR VERCEL HOBBY: the free plan allows only 2 cron jobs and only at
+# daily granularity, so vercel.json cannot schedule all four workers there.
+# This workflow is the scheduler for Hobby deployments. See PRODUCTION.md §3.3.
+# =============================================================================
+
+name: Renew subscriptions
+
+on:
+  schedule:
+    - cron: "15 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call renewal endpoint
+        env:
+          BASE_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$BASE_URL" ]; then
+            echo "APP_URL repository variable not set — skipping run."
+            exit 0
+          fi
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET repository secret not set — skipping run."
+            exit 0
+          fi
+          # 300s: this batch sends HarakaPay USSD pushes, which are slower than
+          # a status lookup and are the reason this worker is hourly.
+          curl -fsS -X POST "$BASE_URL/api/cron/renew-subscriptions" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            --max-time 300
