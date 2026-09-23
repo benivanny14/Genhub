@@ -747,8 +747,50 @@ writing anywhere. That is not theoretical: adding the rail immediately caught
 # one-time: create a Neon branch (or any scratch database) and point the suite at it
 echo 'TEST_DATABASE_URL=postgresql://...' >> .env.local
 DATABASE_URL="$TEST_DATABASE_URL" npx prisma migrate deploy   # first run only
-npm test            # 363 passed — the real number, not a partial one
+npm test            # the real number of tests, not a partial one
 ```
+
+### 5.2 Clearing the demo content, and the first real accounts
+
+A database that was ever seeded has 24 invented videos and 5 invented creators
+in it, and the seed route cannot take them back out — it only ever adds. Those
+rows are what a first visitor would see.
+
+```bash
+# 1. Look first. Nothing is deleted without --yes, on purpose: the first time
+#    anyone runs this is on a database that may already have real users in it.
+npm run demo:wipe
+
+# 2. Delete, unless it stopped. It stops when a real person is attached to demo
+#    content — a purchase, a subscription, a comment — and shows you the rows.
+#    --force overrides that, and means refunding by hand.
+npm run demo:wipe -- --yes
+
+# 3. Create the first real accounts (prints a generated password once).
+npm run accounts:create -- \
+  --admin owner@yourdomain.com \
+  --creator owner@yourdomain.com \
+  --name "Your Display Name"
+```
+
+- [ ] Demo content removed (`npm run demo:wipe` reports 0 left).
+- [ ] At least one real ADMIN account able to sign in.
+- [ ] At least one CREATOR that can actually upload — see the KYC note below.
+- [ ] Promo codes reviewed: the seed creates `WELCOME10`, `GENHUB500` and
+      `TOPUP25`. The wipe lists what is still active; deactivate the rest.
+
+**One address can be both.** `requireRole("CREATOR")` accepts an ADMIN, so
+`--admin` and `--creator` may be the same email: the account stays ADMIN, gets
+a `CreatorBalance` row, and can upload and moderate from one sign-in. Give the
+creator side its own account later if you want the payout trail to belong to
+somebody who is not also the reviewer.
+
+**KYC is the gate.** Uploads require `kycStatus: APPROVED`, normally produced by
+a review (submit at `/creator/kyc`, approve in Admin → KYC, which writes a
+`KycVerification` row). `--kyc-approved` sets the flag directly and creates **no
+review record**, so the account uploads while Admin → KYC shows nothing. That is
+the right trade for your own account during setup and the wrong one for a third
+party, which is why it is a flag and not the default.
 - [ ] Automated backups enabled (PITR or daily snapshots) and a restore has
       been tested once.
 - [ ] **Manual SQL: use UTC.** Prisma stores `DateTime` columns as
