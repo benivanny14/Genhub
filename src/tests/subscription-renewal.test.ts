@@ -143,6 +143,18 @@ describeE2E("Subscription auto-renewal", () => {
     });
   }
 
+  /**
+   * The database suites share one database and vitest runs the files in
+   * parallel, so other suites have their own due memberships in this table at
+   * the same moment (balance-concurrency.test.ts keeps one for its own fan).
+   * An unscoped sweep would count those rows in this file's totals and the
+   * assertions would fail at random. Scoping to the fans created here keeps
+   * the numbers about us; it is the same query and the same code path that
+   * runs in production, only with the filter the cron could always pass.
+   */
+  const renew = (viewerId: string = ctx.viewerId) =>
+    renewDueSubscriptions({ viewerId });
+
   // ---------------------------------------------------------------- 1. wallet
   it("renews from the wallet, splits 70/30 and extends from the old expiry", async () => {
     await prisma.user.update({
@@ -151,7 +163,7 @@ describeE2E("Subscription auto-renewal", () => {
     });
     const before = await dueSubscription();
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.renewedFromWallet).toBe(1);
     expect(result.pushedToPhone).toBe(0);
@@ -204,7 +216,7 @@ describeE2E("Subscription auto-renewal", () => {
   it("sends a USSD push when the wallet is short but a phone number is on file", async () => {
     await dueSubscription({ renewPhone: PHONE });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.pushedToPhone).toBe(1);
     expect(result.renewedFromWallet).toBe(0);
@@ -241,7 +253,7 @@ describeE2E("Subscription auto-renewal", () => {
   it("records the reason and tells the fan when there is no wallet balance and no phone", async () => {
     await dueSubscription();
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.failed).toBe(1);
     expect(harakaCollect).not.toHaveBeenCalled();
@@ -270,7 +282,7 @@ describeE2E("Subscription auto-renewal", () => {
       lastRenewAttemptAt: new Date(Date.now() - RETRY_GAP_MS / 2),
     });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.skipped).toBe(1);
     expect(harakaCollect).not.toHaveBeenCalled();
@@ -291,7 +303,7 @@ describeE2E("Subscription auto-renewal", () => {
       },
     });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.awaitingApproval).toBe(1);
     expect(result.pushedToPhone).toBe(0);
@@ -326,7 +338,7 @@ describeE2E("Subscription auto-renewal", () => {
       data: { createdAt: new Date(Date.now() - 6 * HOUR) },
     });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.awaitingApproval).toBe(1);
     expect(result.renewedFromWallet).toBe(0);
@@ -350,7 +362,7 @@ describeE2E("Subscription auto-renewal", () => {
       data: { walletBalance: ctx.amount * 3 },
     });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.skipped).toBe(1);
     expect(harakaCollect).not.toHaveBeenCalled();
@@ -371,7 +383,7 @@ describeE2E("Subscription auto-renewal", () => {
       data: { walletBalance: ctx.amount * 3 },
     });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.failed).toBe(1);
     expect(harakaCollect).not.toHaveBeenCalled();
@@ -392,7 +404,7 @@ describeE2E("Subscription auto-renewal", () => {
       error: "insufficient balance",
     });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.failed).toBe(1);
     const sub = await prisma.creatorSubscription.findFirst({
@@ -411,7 +423,7 @@ describeE2E("Subscription auto-renewal", () => {
   it("ignores memberships that are not inside the renewal window", async () => {
     await dueSubscription({ expiresAt: new Date(Date.now() + 10 * DAY) });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.considered).toBe(0);
     expect(harakaCollect).not.toHaveBeenCalled();
@@ -424,7 +436,7 @@ describeE2E("Subscription auto-renewal", () => {
       data: { walletBalance: ctx.amount * 3 },
     });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.considered).toBe(0);
     const viewer = await prisma.user.findUnique({
@@ -456,7 +468,7 @@ describeE2E("Subscription auto-renewal", () => {
       data: { userId: ctx.creatorId, totalSubscribers: 99 },
     });
 
-    const result = await renewDueSubscriptions();
+    const result = await renew();
 
     expect(result.failed).toBe(1);
     const lapsed = await prisma.creatorSubscription.findUnique({ where: { id: sub.id } });
