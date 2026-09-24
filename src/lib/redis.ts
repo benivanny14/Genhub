@@ -19,6 +19,16 @@
 //
 // Fallback: an in-memory bucket per process when neither backend answers. Still
 // enforces limits for this instance instead of failing open.
+//
+// Nothing here may hold a request open. Every data call is bounded (750ms) and
+// a backend that keeps failing is skipped entirely for a while, because this
+// module sits on the payment path: `processPaymentWebhook` awaits cacheDel, and
+// a Redis that accepts the connection and then never answers used to add seconds
+// to *every* settlement — on a serverless function that is a charge that stays
+// pending, and in CI it was two payment tests failing at their 15s timeout.
+// Rate limiting and the cache both degrade on their own (per-instance memory,
+// cache miss); verification does not, because an admin asking whether Redis
+// works must get the truth rather than the fast answer.
 // =============================================================================
 
 import Redis from "ioredis";
@@ -162,6 +172,110 @@ function createIoRedisBackend(client: Redis): RedisBackend {
 }
 
 // -----------------------------------------------------------------------------
+// A bounded data call, and a breaker for a backend that keeps failing
+// -----------------------------------------------------------------------------
+
+/** Marker for "the backend did not answer in time", so it is not an unexpected throw. */
+const TIMED_OUT = Symbol("redis-call-timed-out");
+
+/** Reject after `ms` without leaving the backend's own promise unhandled. */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      // The call may still settle later. Swallow it here, or a late rejection
+      // surfaces as an unhandled rejection long after the request moved on.
+      promise.catch(() => {});
+      reject(TIMED_OUT);
+    }, ms);
+    // Never keep the process alive for a call nobody is waiting on any more.
+    timer.unref?.();
+
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
+}
+
+export type BoundedOutcome<T> =
+  | { ok: true; value: T }
+  | { ok: false; reason: "timeout" | "error" | "open" };
+
+export interface BoundedCallerOptions {
+  /** How long one call may take before it is abandoned. */
+  timeoutMs?: number;
+  /** How long the breaker stays open after `failuresToOpen` failures in a row. */
+  openForMs?: number;
+  /** Failures in a row before calls stop being attempted at all. */
+  failuresToOpen?: number;
+  /** Injectable clock, so the breaker is testable without waiting. */
+  now?: () => number;
+}
+
+/**
+ * A caller that gives up, and then stops trying for a while.
+ *
+ * The breaker matters as much as the timeout. One unreachable Redis is not one
+ * slow call — it is every call for the rest of the process's life, each paying
+ * the connect-and-retry cycle again. A payment that touches the cache three
+ * times would pay it three times; a suite of thirty files pays it hundreds.
+ * Pure, so every branch is covered in src/tests/redis-bounded.test.ts.
+ */
+export function createBoundedCaller(options: BoundedCallerOptions = {}) {
+  const timeoutMs = options.timeoutMs ?? 750;
+  const openForMs = options.openForMs ?? 15_000;
+  const failuresToOpen = options.failuresToOpen ?? 2;
+  const now = options.now ?? (() => Date.now());
+
+  let openUntil = 0;
+  let failures = 0;
+  let attempted = 0;
+  let skipped = 0;
+
+  return {
+    async run<T>(op: () => Promise<T>): Promise<BoundedOutcome<T>> {
+      if (now() < openUntil) {
+        skipped += 1;
+        return { ok: false, reason: "open" };
+      }
+
+      attempted += 1;
+      try {
+        const value = await withTimeout(op(), timeoutMs);
+        failures = 0;
+        return { ok: true, value };
+      } catch (error) {
+        failures += 1;
+        if (failures >= failuresToOpen) openUntil = now() + openForMs;
+        return { ok: false, reason: error === TIMED_OUT ? "timeout" : "error" };
+      }
+    },
+    /** For the admin report and for tests. */
+    state: () => ({ openUntil, failures, attempted, skipped }),
+  };
+}
+
+/**
+ * The one caller the data path uses.
+ *
+ * 750ms, because a cache read on the way to a payment must be quicker than the
+ * customer's patience and definitely quicker than a function timeout; Upstash
+ * answers in tens of milliseconds, so anything slower is a problem already.
+ *
+ * The window is a minute rather than a few seconds: the cost being avoided is
+ * paid per attempt, so a short window just means paying it again and again — a
+ * minute of skipped caching costs nothing, and rate limiting degrades to its
+ * documented per-instance fallback meanwhile.
+ */
+const dataCall = createBoundedCaller({ timeoutMs: 750, openForMs: 60_000 });
+
+// -----------------------------------------------------------------------------
 // Which backend this process uses
 // -----------------------------------------------------------------------------
 
@@ -179,6 +293,10 @@ function createBackend(): RedisBackend {
       },
       enableReadyCheck: true,
       lazyConnect: true,
+      // Without this a host that accepts nothing hangs on the OS-level connect
+      // timeout, which is tens of seconds — longer than the call allowance above,
+      // so every call would pay the full 750ms instead of failing at once.
+      connectTimeout: 1_000,
     });
 
   globalForRedis.redis = client;
@@ -250,27 +368,30 @@ export async function checkRateLimit(
   const windowKey = `rl:${key}:${Math.floor(now / windowMs)}`;
   const resetAt = Math.ceil((now + windowMs) / 1000);
 
-  try {
-    const current = await redisBackend.incr(windowKey);
-    if (current === 1) {
-      // A missing TTL only leaks an unused key — never fail the request for it
-      await redisBackend.pexpire(windowKey, windowMs).catch(() => {});
-    }
-    return {
-      allowed: current <= maxRequests,
-      remaining: Math.max(0, maxRequests - current),
-      resetAt,
-    };
-  } catch {
+  const outcome = await dataCall.run(() => redisBackend.incr(windowKey));
+
+  if (!outcome.ok) {
     if (!warnedRedisDown) {
       warnedRedisDown = true;
       console.warn(
-        "[Redis] unreachable — using in-memory rate limiting (per-instance only)"
+        `[Redis] ${outcome.reason} — using in-memory rate limiting and skipping the cache ` +
+          "(per-instance only) until it recovers"
       );
     }
     const fallback = memoryRateLimit(windowKey, maxRequests, windowMs, now);
     return { ...fallback, resetAt };
   }
+
+  if (outcome.value === 1) {
+    // A missing TTL only leaks an unused key — never fail the request for it.
+    await dataCall.run(() => redisBackend.pexpire(windowKey, windowMs));
+  }
+
+  return {
+    allowed: outcome.value <= maxRequests,
+    remaining: Math.max(0, maxRequests - outcome.value),
+    resetAt,
+  };
 }
 
 // -----------------------------------------------------------------------------
@@ -278,10 +399,12 @@ export async function checkRateLimit(
 // -----------------------------------------------------------------------------
 
 export async function cacheGet<T>(key: string): Promise<T | null> {
+  const outcome = await dataCall.run(() => redisBackend.get(key));
+  if (!outcome.ok || !outcome.value) return null;
   try {
-    const data = await redisBackend.get(key);
-    return data ? JSON.parse(data) : null;
+    return JSON.parse(outcome.value) as T;
   } catch {
+    // A corrupt entry is a miss, not an error: never let it fail the caller.
     return null;
   }
 }
@@ -291,20 +414,18 @@ export async function cacheSet(
   value: unknown,
   ttlSeconds: number = 300
 ): Promise<void> {
-  try {
-    await redisBackend.setex(key, ttlSeconds, JSON.stringify(value));
-  } catch {
-    // Cache write failure is non-critical
-  }
+  // Non-critical either way: a cache that cannot be written is a slower read.
+  await dataCall.run(() => redisBackend.setex(key, ttlSeconds, JSON.stringify(value)));
 }
 
+/**
+ * Drop every key matching a pattern.
+ *
+ * Called at the end of a settlement, which is why it is bounded: a cache
+ * invalidation must never be the reason a paid-for video stays locked.
+ */
 export async function cacheDel(pattern: string): Promise<void> {
-  try {
-    const keys = await redisBackend.keys(pattern);
-    if (keys.length > 0) {
-      await redisBackend.del(keys);
-    }
-  } catch {
-    // Non-critical
-  }
+  const listed = await dataCall.run(() => redisBackend.keys(pattern));
+  if (!listed.ok || listed.value.length === 0) return;
+  await dataCall.run(() => redisBackend.del(listed.value));
 }

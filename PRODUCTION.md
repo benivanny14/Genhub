@@ -1037,6 +1037,14 @@ npm run db:status        # prisma migrate status — must say "up to date"
       one of them rate limiting degrades to per-instance counters and every
       deploy starts with a cold cache — payment and auth throttling then depend
       on how many instances happen to be running.
+- [ ] If Redis is configured, confirm it is *reachable*: a Redis that accepts
+      the connection and never answers is worse than none. Every cache and
+      rate-limit call is bounded (750ms) and a backend that fails twice in a row
+      is skipped for a minute, so a settlement can no longer be held open by it —
+      but the charge is still paying for a cache it is not getting, and rate
+      limiting silently drops to per-instance memory. `npm run verify:live`
+      probes it (that check is deliberately unbounded: an admin asking whether
+      Redis works must get the truth, not the fast answer).
 - [ ] Seed demo content **only** in dev — production starts clean
       (register the first admin through a controlled signup + role grant).
       The seed route refuses to run under `NODE_ENV=production`, so nobody can
