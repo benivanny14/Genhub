@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
@@ -54,7 +55,7 @@ export default function UploadPage() {
 
   const checkAccess = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
       const data = await res.json();
       if (!data.success || data.data.role !== "CREATOR") {
         router.push("/");

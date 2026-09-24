@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { fetchCurrentUser, forgetCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -125,7 +126,7 @@ export default function Header() {
 
   async function fetchUser() {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
       const data = await res.json();
       if (data.success) {
         setUser(data.data);
@@ -137,6 +138,8 @@ export default function Header() {
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
+    // The shared answer is now wrong, and the Header is not the only reader.
+    forgetCurrentUser();
     setUser(null);
     router.push("/");
     router.refresh();

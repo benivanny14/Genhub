@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
@@ -101,7 +102,7 @@ export default function CreatorAnalyticsPage() {
 
   const init = useCallback(async () => {
     try {
-      const me = await fetch("/api/auth/me");
+      const me = await fetchCurrentUser();
       if (me.status === 401) {
         router.push("/");
         return;

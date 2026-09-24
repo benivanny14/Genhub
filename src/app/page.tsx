@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import Image from "next/image";
 import Header from "@/components/Header";
@@ -374,7 +375,7 @@ export default function HomePage() {
 
   async function fetchUser() {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
       const data = await res.json();
       if (data.success) {
         setUser(data.data);

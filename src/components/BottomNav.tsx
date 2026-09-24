@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Home, Search, Heart, Upload, User } from "lucide-react";
@@ -29,7 +30,7 @@ export default function BottomNav({ userRole }: BottomNavProps) {
     }
 
     let cancelled = false;
-    fetch("/api/auth/me")
+    fetchCurrentUser()
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (!cancelled) setRole(data?.success ? data.data.role : undefined);

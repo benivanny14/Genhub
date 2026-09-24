@@ -9,6 +9,7 @@
 // =============================================================================
 
 import { useState, useEffect } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
@@ -88,7 +89,7 @@ export default function BecomeCreatorPage() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/auth/me");
+        const res = await fetchCurrentUser();
         if (res.status === 401) {
           if (!cancelled) setState({ kind: "guest" });
           return;

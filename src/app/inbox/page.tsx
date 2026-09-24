@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import Header from "@/components/Header";
 import { Mail, Send, Inbox, MessageSquare } from "lucide-react";
@@ -92,7 +93,7 @@ export default function InboxPage() {
 
   async function init() {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
       if (res.status === 401) {
         setLoading(false);
         return;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import dynamic from "next/dynamic";
 import Header from "@/components/Header";
 // hls.js inside VideoPlayer is heavy — load it after hydration so the initial
@@ -433,7 +434,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
   const fetchUser = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
       const data = await res.json();
       if (data.success) setUser(data.data);
     } catch {}

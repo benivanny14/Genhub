@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -538,7 +539,7 @@ export default function AdminDashboard() {
   // real dependency of the callers below.
   const checkAdmin = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
 
       // Two different situations that used to share one destination. Nobody
       // signed in can be helped by the home page — they need the sign-in form,

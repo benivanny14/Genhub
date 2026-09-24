@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -67,7 +68,7 @@ export default function ProfilePage() {
 
   const fetchUser = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
       const data = await res.json();
       if (data.success) {
         setUser(data.data);

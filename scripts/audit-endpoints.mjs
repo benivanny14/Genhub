@@ -84,8 +84,27 @@ const uiFiles = [
 // `fetch` (case-insensitive) still names a route.
 const FETCH_CALL = /\b\w*fetch\(/gi;
 
+/**
+ * The `/api/...` strings a file gives names to.
+ *
+ * The second way this audit went blind: `/api/auth/me` is the one route every
+ * page and the shared header depends on, and when those fifteen call sites moved
+ * behind `fetchCurrentUser()` the path became a constant in lib/current-user.ts —
+ * leaving the audit with a route it could no longer see anybody call. A wrapper
+ * that hides the literal is still a call site, so the name is resolved here.
+ */
+function apiPathConstants(src) {
+  const found = new Map();
+  const declaration =
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*["'`](\/api\/[^"'`]*)["'`]/g;
+  let match;
+  while ((match = declaration.exec(src)) !== null) found.set(match[1], match[2]);
+  return found;
+}
+
 function extractFetchCalls(src) {
   const out = [];
+  const constants = apiPathConstants(src);
   const callRe = new RegExp(FETCH_CALL.source, "gi");
   let m;
   while ((m = callRe.exec(src)) !== null) {
@@ -112,10 +131,17 @@ function extractFetchCalls(src) {
     // Do not re-scan the arguments we just consumed.
     callRe.lastIndex = i;
     const arg = callSrc.match(/^\s*(?:"(\/api\/[^"]*)"|'(\/api\/[^']*)'|`(\/api\/[^`]*)`)/);
-    if (!arg) continue;
+    // A named path (`fetch(CURRENT_USER_PATH)`) is resolved through the
+    // constants this file declares; anything else is not a route we can name.
+    const named = arg ? null : callSrc.match(/^\s*([A-Za-z_$][\w$]*)\s*(?:,|\)|$)/);
+    const raw = arg
+      ? arg[1] || arg[2] || arg[3] || ""
+      : named && constants.get(named[1]);
+    if (!raw) continue;
+
     const methodMatch = callSrc.match(/method:\s*["']([A-Za-z]+)["']/);
     out.push({
-      raw: arg[1] || arg[2] || arg[3] || "",
+      raw,
       method: methodMatch ? methodMatch[1].toUpperCase() : "GET",
     });
   }

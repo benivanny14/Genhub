@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import { useRouter } from "next/navigation";
 import { Wallet, ArrowUpRight, ArrowDownLeft, Plus, History, Phone, Ticket } from "lucide-react";
@@ -108,7 +109,7 @@ export default function WalletPage() {
 
   const fetchUserData = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
       const data = await res.json();
       if (data.success) {
         setUser(data.data);

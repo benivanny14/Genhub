@@ -13,6 +13,7 @@
 // =============================================================================
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
@@ -110,7 +111,7 @@ export default function PaymentsPage() {
 
   const load = useCallback(async () => {
     try {
-      const me = await fetch("/api/auth/me").then((r) => r.json());
+      const me = await fetchCurrentUser().then((r) => r.json());
       if (!me?.success) {
         router.push("/login");
         return;

@@ -7,6 +7,7 @@
 // =============================================================================
 
 import { useState, useEffect } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
@@ -85,7 +86,7 @@ export default function BillingPage() {
   async function load() {
     try {
       const [meRes, subRes, txRes] = await Promise.all([
-        fetch("/api/auth/me"),
+        fetchCurrentUser(),
         fetch("/api/subscriptions"),
         fetch("/api/wallet/transactions"),
       ]);

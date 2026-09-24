@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import Header from "@/components/Header";
 import VideoCard from "@/components/VideoCard";
@@ -88,7 +89,7 @@ export default function FeedPage() {
 
   const init = useCallback(async () => {
     try {
-      const res = await fetch("/api/auth/me");
+      const res = await fetchCurrentUser();
       if (res.status === 401) {
         // Definitively signed out
         setLoading(false);

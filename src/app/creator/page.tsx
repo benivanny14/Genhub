@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -142,7 +143,7 @@ export default function CreatorDashboard() {
     try {
       const [balanceRes, userRes, videosRes] = await Promise.all([
         fetch("/api/creator/balance"),
-        fetch("/api/auth/me"),
+        fetchCurrentUser(),
         fetch("/api/creator/videos"),
       ]);
 

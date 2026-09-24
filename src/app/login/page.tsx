@@ -9,6 +9,7 @@ import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { safeInAppPath } from "@/lib/redirect";
+import { forgetCurrentUser } from "@/lib/current-user";
 
 /**
  * Where signing in should land.
@@ -59,6 +60,10 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (data.success) {
+        // The response the components are holding says "signed out". Drop it
+        // before navigating, or the Header can paint the signed-out menu over a
+        // session that now exists (lib/current-user.ts has a two-second window).
+        forgetCurrentUser();
         router.push(landingPath());
         router.refresh();
       } else {
