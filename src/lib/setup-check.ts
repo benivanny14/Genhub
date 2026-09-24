@@ -527,6 +527,53 @@ async function probeHarakapay(): Promise<ProbeResult> {
   }
 }
 
+/**
+ * What an answer from `<appUrl>/api/health` means.
+ *
+ * Pure, so it can be pinned without a network — the same reason the CDN probe's
+ * "any HTTP answer proves DNS resolves" rule is written down where it is.
+ *
+ * The bug this comes from: /api/health answers **503 while degraded**, and
+ * "degraded" includes the background workers lagging. Judging this probe on
+ * `res.ok` therefore made the deployment report its own job lag back to itself
+ * as `Public URL -> HTTP 503` — pointing whoever read it at DNS or at
+ * `NEXT_PUBLIC_APP_URL`, neither of which was wrong. The probe's actual question
+ * is "does this public address answer at all", and the reason it is unhappy is
+ * the business of the `database` and background-job probes, which report it once.
+ *
+ * So a degraded answer is a **warn**: it keeps the deployment's state visible on
+ * the admin card without joining `failing`, which is what the watchdog and
+ * `launch:check --remote` read as a broken service.
+ */
+export function classifyAppUrlAnswer(
+  httpStatus: number,
+  body: unknown,
+  url: string
+): Pick<ProbeResult, "state" | "detail"> {
+  const payload = body as { status?: unknown; checks?: unknown } | null;
+  const isThisApp =
+    !!payload && typeof payload === "object" && "checks" in payload && "status" in payload;
+
+  // A different site answering 200 is the dangerous case, not a 503 from ours:
+  // NEXT_PUBLIC_APP_URL feeds the sitemap, OG tags and the gateway's webhook_url.
+  if (!isThisApp) {
+    return {
+      state: "fail",
+      detail:
+        `${url}/api/health answered HTTP ${httpStatus} but not with this app's health payload` +
+        " — is NEXT_PUBLIC_APP_URL the right domain?",
+    };
+  }
+
+  const status = payload.status === "ok" ? "ok" : String(payload.status);
+  return {
+    state: status === "ok" ? "ok" : "warn",
+    detail:
+      `${url}/api/health answered HTTP ${httpStatus}` +
+      (status === "ok" ? "" : ` · this deployment reports "${status}"`),
+  };
+}
+
 async function probeAppUrl(): Promise<ProbeResult> {
   const base = { id: "appUrl", name: "Public URL" };
   const url = config.appUrl;
@@ -539,7 +586,10 @@ async function probeAppUrl(): Promise<ProbeResult> {
   }
   try {
     const res = await fetch(`${url}/api/health`, { signal: timeout(15_000) });
-    return { ...base, state: res.ok ? "ok" : "fail", detail: `${url}/api/health -> HTTP ${res.status}` };
+    // A response is an answer even when its status is 503, so the body is read
+    // before any verdict is reached.
+    const body = await res.json().catch(() => null);
+    return { ...base, ...classifyAppUrlAnswer(res.status, body, url) };
   } catch (error) {
     return { ...base, state: "fail", detail: `${url} unreachable (${String((error as Error)?.message || error).slice(0, 90)})` };
   }
