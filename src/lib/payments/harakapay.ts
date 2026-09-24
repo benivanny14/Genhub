@@ -7,6 +7,7 @@
 
 import config from "../config";
 import { createBoundedCaller } from "../bounded-caller";
+import { reportCredentialFault } from "../credential-alert";
 
 // =============================================================================
 // Types
@@ -111,6 +112,19 @@ const gatewayCall = createBoundedCaller({
   // "Could we reach the gateway?" — a 4xx proves we could, so it is not counted.
   countsAsFailure: (error) =>
     !(error instanceof HarakaHttpError) || error.status >= 500,
+  // Announced only when the breaker trips — two calls in a row unanswered. A
+  // single slow collect is not news; a gateway that has stopped answering is,
+  // and waiting for the hourly watchdog to notice means up to an hour of
+  // collects nobody will ever deliver.
+  onFailure: ({ reason, failures, opened }) => {
+    if (!opened) return;
+    void reportCredentialFault({
+      service: "HarakaPay",
+      detail:
+        `the gateway stopped answering (${failures} failure(s) in a row, last one ${reason}) ` +
+        "— collect and status calls are being skipped; payments are not reaching handsets",
+    });
+  },
 });
 
 /** The gateway breaker's live state, for diagnostics and tests. */
@@ -175,6 +189,18 @@ async function harakaFetch<T>(path: string, init?: RequestInit): Promise<T> {
       };
 
       if (!response.ok) {
+        // A 401/403 is the one fault the breaker deliberately ignores — the
+        // gateway answered, so it is not down — and it is exactly the one an
+        // operator has to fix: a rotated, revoked or wrong API key. It would
+        // otherwise only surface when somebody opened the admin panel.
+        if (response.status === 401 || response.status === 403) {
+          void reportCredentialFault({
+            service: "HarakaPay",
+            detail:
+              `the gateway rejected HARAKAPAY_API_KEY (HTTP ${response.status} on ${path}) ` +
+              "— collects are refused immediately, so this is the key, not the network",
+          });
+        }
         throw new HarakaHttpError(
           path,
           response.status,

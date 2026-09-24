@@ -1,0 +1,77 @@
+# =============================================================================
+# GENHUB - The launch check, run against every production deploy
+#
+# A deploy that broke the gateway key, the mail password or the scheduler is
+# indistinguishable from a good one from the outside: every page loads. The
+# sequence in PRODUCTION.md §0 answers that question, and it is run by hand,
+# which means it is run when somebody remembers — and never at 2am.
+#
+# So: every successful PRODUCTION deployment triggers this, and the verdict is
+# written to the run's own page (GITHUB_STEP_SUMMARY). A red run is an email.
+#
+# -----------------------------------------------------------------------------
+# Why this needs two values, not twenty
+#
+# The check runs --remote, which means it asks the DEPLOYMENT about itself at
+# /api/health and /api/health/services, rather than reading this runner's
+# environment. That matters twice over:
+#
+#   * the answer is about the site that is actually serving, so it cannot
+#     disagree with production the way a duplicated copy of a secret would; and
+#   * this runner holds APP_URL and CRON_SECRET and nothing else. The live
+#     gateway key, the database URL and the mail password are never copied into
+#     GitHub to run a read-only check.
+#
+# `deployment_status` is what the Vercel GitHub app posts after each build, so
+# no webhook or deploy hook has to be configured. It fires for previews and for
+# in-progress states too — the `if` below keeps only a successful Production
+# deployment, because that is the only one a customer can reach.
+#
+# If this workflow never appears in the Actions tab, the repo is not linked to
+# Vercel through GitHub and no deployment events are being posted: run it by hand
+# instead — Actions -> Post-deploy check -> Run workflow (it takes APP_URL from
+# the repository variable and CRON_SECRET from the secret, both set for the
+# uptime watchdog).
+# =============================================================================
+
+name: Post-deploy check
+
+on:
+  deployment_status:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# Two deploys landing together settle the same question; the older answer is
+# then about a site that no longer exists. Stop it and keep the newer one.
+concurrency:
+  group: post-deploy-${{ github.event.deployment.environment || 'manual' }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment.environment == 'Production')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `npm ci`, no Prisma client, no lockfile: --remote opens two HTTP
+      # connections and parses two JSON bodies, so the check itself cannot be the
+      # thing that fails to build. Only the Node major matters, and it matches
+      # the deploy (see `engines` in package.json).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Ask the deployment whether it is launch-ready
+        env:
+          # The same two values the uptime watchdog already uses. See the header.
+          APP_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: node scripts/launch-check.mjs --remote --json

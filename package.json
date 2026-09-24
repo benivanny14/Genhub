@@ -26,6 +26,8 @@
     "preflight": "node scripts/preflight.mjs",
     "preflight:prod": "node scripts/preflight.mjs --production",
     "launch:check": "node scripts/launch-check.mjs",
+    "launch:check:remote": "node scripts/launch-check.mjs --remote",
+    "launch:check:wait": "node scripts/launch-check.mjs --remote --wait",
     "verify:env": "node scripts/verify-env.mjs",
     "verify:lockfile": "node scripts/verify-lockfile.mjs",
     "verify:live": "node scripts/verify-connections.mjs",

@@ -34,6 +34,7 @@
 import Redis from "ioredis";
 import config from "./config";
 import { createBoundedCaller } from "./bounded-caller";
+import { reportCredentialFault } from "./credential-alert";
 
 // The caller is provider-agnostic now that the payment gateway needs it too, so
 // it lives in ./bounded-caller. Re-exported here because this was its first home
@@ -198,7 +199,23 @@ function createIoRedisBackend(client: Redis): RedisBackend {
  * minute of skipped caching costs nothing, and rate limiting degrades to its
  * documented per-instance fallback meanwhile.
  */
-const dataCall = createBoundedCaller({ timeoutMs: 750, openForMs: 60_000 });
+const dataCall = createBoundedCaller({
+  timeoutMs: 750,
+  openForMs: 60_000,
+  // Only when the breaker trips. A cache that is merely slow under load is not
+  // worth waking somebody for; a cache that has stopped answering means every
+  // rate limit has fallen back to per-instance memory and every cached read is
+  // going straight to Postgres.
+  onFailure: ({ reason, failures, opened }) => {
+    if (!opened) return;
+    void reportCredentialFault({
+      service: "Redis",
+      detail:
+        `the data path stopped answering (${failures} failure(s) in a row, last one ${reason}) ` +
+        "— caching and rate limiting are being skipped",
+    });
+  },
+});
 
 /** What the data-path breaker looks like right now, for the admin report. */
 export interface RedisDataCallState {

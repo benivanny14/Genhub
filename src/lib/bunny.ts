@@ -5,6 +5,7 @@
 
 import { createHash, createHmac } from "node:crypto";
 import config from "./config";
+import { reportCredentialFault } from "./credential-alert";
 
 // The Stream management API lives on video.bunnycdn.com/library/{libraryId}.
 // NOT video.bunny.net, and NOT the /api/v2 prefix — that host does not resolve
@@ -39,17 +40,42 @@ async function bunnyFetch(
   what: string
 ): Promise<Response> {
   try {
-    return await fetch(url, {
+    const response = await fetch(url, {
       ...init,
       signal: AbortSignal.timeout(BUNNY_MANAGEMENT_TIMEOUT_MS),
     });
+
+    // The answer arrives immediately and is still a credential fault: a revoked
+    // key or a key without access to this library. Nothing downstream can tell
+    // that apart from a video that does not exist, and uploads simply stop.
+    if (response.status === 401 || response.status === 403) {
+      void reportCredentialFault({
+        service: "Bunny Stream",
+        detail:
+          `BUNNY_STREAM_API_KEY was rejected for ${what} (HTTP ${response.status}) ` +
+          "— the key is wrong, revoked, or lacks access to this library",
+      });
+    }
+
+    return response;
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
     if (name === "TimeoutError" || name === "AbortError") {
+      // Reported because an encoding poll and an upload signature both wait on
+      // this call: a Bunny that has gone quiet stalls uploads, and the only
+      // symptom inside the app is a video stuck in `processing`.
+      void reportCredentialFault({
+        service: "Bunny Stream",
+        detail: `the management API did not answer within ${BUNNY_MANAGEMENT_TIMEOUT_MS / 1000}s (${what})`,
+      });
       throw new Error(
         `Bunny ${what} timed out after ${BUNNY_MANAGEMENT_TIMEOUT_MS / 1000}s — the API did not answer`
       );
     }
+    void reportCredentialFault({
+      service: "Bunny Stream",
+      detail: `the management API could not be reached (${what}): ${(error as Error)?.message || error}`,
+    });
     throw error;
   }
 }

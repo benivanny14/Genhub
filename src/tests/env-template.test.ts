@@ -32,6 +32,10 @@ const SUPPLIED_BY_PLATFORM = new Set([
   "VERCEL_PROJECT_PRODUCTION_URL",
   "RAILWAY_ENVIRONMENT",
   "RENDER",
+  // scripts/launch-check.mjs: GitHub points this at a markdown file for the
+  // run's own page. Documenting it would invite someone to set it by hand,
+  // where it does nothing.
+  "GITHUB_STEP_SUMMARY",
   "SETUP_NO_OPEN", // scripts/setup-env.mjs: skips opening the browser
 ]);
 

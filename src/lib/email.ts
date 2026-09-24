@@ -17,6 +17,7 @@
 
 import nodemailer, { type Transporter } from "nodemailer";
 import config from "./config";
+import { isCredentialFailure, reportCredentialFault } from "./credential-alert";
 
 export interface MailResult {
   sent: boolean;
@@ -79,6 +80,17 @@ export async function sendMail(options: SendMailOptions): Promise<MailResult> {
       "[Email:smtp] send failed:",
       error instanceof Error ? error.message : error
     );
+    // Only an auth or connection code. A single rejected address is a typo in a
+    // signup form, not a rotated SMTP password, and reporting it as one would
+    // teach whoever reads the alerts to stop reading them.
+    if (isCredentialFailure(error)) {
+      void reportCredentialFault({
+        service: "SMTP",
+        detail:
+          `${config.email.host} refused the send (${(error as { code?: string })?.code}) ` +
+          "— password resets and welcome emails are only reaching the server log",
+      });
+    }
     // Fall back to console so the link still reaches a developer log
     console.log(
       `[Email:console:fallback] -> ${options.to} | ${options.subject}\n${options.text}`

@@ -67,6 +67,16 @@ export interface BoundedCallerOptions {
    * answered, so the next call deserves a fresh attempt.
    */
   countsAsFailure?: (error: unknown) => boolean;
+  /**
+   * Called after a failure that counted toward the breaker.
+   *
+   * Injected rather than performed here, so this module keeps its promise of no
+   * clock, no network and no globals: the provider decides what to do about it
+   * (Genhub raises an alert), and the tests pass a spy. `opened` is true on the
+   * call that tripped the breaker, which is the moment a dependency stops being
+   * merely slow and starts being down.
+   */
+  onFailure?: (info: { reason: "timeout" | "error"; failures: number; opened: boolean }) => void;
 }
 
 /**
@@ -107,7 +117,17 @@ export function createBoundedCaller(options: BoundedCallerOptions = {}) {
         const timedOut = error === TIMED_OUT;
         if (timedOut || countsAsFailure(error)) {
           failures += 1;
-          if (failures >= failuresToOpen) openUntil = now() + openForMs;
+          const opened = failures >= failuresToOpen;
+          if (opened) openUntil = now() + openForMs;
+          if (options.onFailure) {
+            // A reporter that throws must not turn one failure into a different
+            // failure — the caller is already handling the reason this ran.
+            try {
+              options.onFailure({ reason: timedOut ? "timeout" : "error", failures, opened });
+            } catch {
+              // Deliberately ignored.
+            }
+          }
         } else {
           // The dependency answered — this request failed, but not because it is
           // unreachable, so it is not evidence for the breaker. Clear the streak

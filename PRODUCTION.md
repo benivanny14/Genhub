@@ -135,6 +135,34 @@ one it hunts for, so the last step in the sequence never runs unless it is named
 and the summary says out loud that it was skipped, because that is the only thing
 a green run did not prove.
 
+#### The same verdict, asked of the deployment: `--remote`
+
+```bash
+APP_URL=https://your-domain.com npm run launch:check:remote
+```
+
+The run above reads **this machine's** environment, which is right on a laptop
+and wrong on a CI runner: it would mean copying the live gateway key, the
+database URL and the mail password into GitHub, and then trusting that copy has
+not drifted from the one Vercel actually runs. When the two disagree, the answer
+is about the runner.
+
+`--remote` asks the deployment instead, at the two endpoints built for it —
+`/api/health` (database up, schedules firing) and `/api/health/services` (the
+credentials, opened for real). It needs `APP_URL` and `CRON_SECRET` and nothing
+else, and produces the same verdict from the same summary line.
+
+`.github/workflows/post-deploy.yml` is that command, run for you: every
+successful **Production** deployment (Vercel posts the event) triggers it and the
+verdict lands on the run's own page via `GITHUB_STEP_SUMMARY`. A deploy that
+broke the gateway key or the mail password is then a red run and an email,
+instead of a site that loads every page and cannot take money. It installs
+nothing — the check is two HTTP requests — so the gate cannot itself be the thing
+that fails to build.
+
+Add `--json` and stdout carries one JSON object and nothing else, for anything
+that wants to branch on the verdict rather than read it.
+
 ### 0.2 The deploy installs the lockfile, not a fresh resolve
 
 `vercel.json` pins the install step:
@@ -214,6 +242,13 @@ The workflow is **the same on every branch**. A break is cheapest to fix while i
 is still attached to the commit that caused it, and `npm ci` here makes the
 lockfile check (§0.2) a required step of every push rather than something you
 remember to run.
+
+`.github/workflows/post-deploy.yml` is the other half, and runs *after* the
+deploy rather than before it. These gates prove the code builds from a clean
+checkout; that one asks the deployment that is now serving whether it is
+launch-ready (§0.1, `--remote`). It needs `APP_URL` and `CRON_SECRET`, no
+install, and no other secret — see §0.1 for why the check asks the site instead
+of reading a copy of its environment.
 
 ---
 
@@ -783,6 +818,54 @@ Prove it by hand:
 APP_URL=https://<domain> CRON_SECRET=$CRON_SECRET npm run watchdog
 #   ✗ Bunny Stream is configured but failing: HTTP 401 — wrong key, or it lacks access to this library
 ```
+
+#### The same news, seconds after it happens
+
+An hourly probe is the right net and the wrong latency. A key revoked at 10:02
+means every collect until 11:00 is accepted by a gateway that will never deliver
+it, and a password reset in that window reaches nobody.
+
+So the app reports the fault itself, the moment it discovers one — see
+`src/lib/credential-alert.ts`. Four places raise it, each at the point where the
+failure is unambiguous:
+
+| Where | What has to be true |
+|---|---|
+| Redis | the data-path breaker tripped (two calls in a row unanswered) |
+| HarakaPay | the breaker tripped, **or** the gateway answered `401`/`403` |
+| Bunny Stream | the management API timed out, could not be reached, or answered `401`/`403` |
+| SMTP | nodemailer failed with an auth or connection code (`EAUTH`, `ECONNECTION`, …) |
+
+Three properties are deliberate, and each is a decision:
+
+* **It never depends on Redis.** A dead cache is one of the faults it reports, so
+a dedupe kept there would go quiet exactly when it is needed most. The window
+lives in the process, so on serverless a fault can alert from a few instances at
+once — the right way for an alarm to be wrong.
+* **It is said once per 30 minutes, per service.** A payload that retries, or a
+sweep that fails per row, must not produce an alert per attempt; an alarm that
+repeats is an alarm somebody mutes.
+* **A rejected recipient is not a rotated password.** SMTP only reports auth and
+connection codes, so one customer's typo in a signup form does not look like a
+broken mail credential.
+
+Set `ALERT_WEBHOOK_URL` in the **deployment's** environment (not only on the
+repository) to receive it; without one the line is written to the server log, and
+the hourly watchdog remains the record. The message is sent in the shape both
+Slack and Discord understand, and it names the service, what was observed and
+the app URL.
+
+#### What is still blocking a launch, on the admin card
+
+`npm run preflight:prod` is the launch gate, and it needs a shell. **Admin →
+Overview → System readiness** now leads with the same verdict, read from the
+deployment's own environment: either *Launch-ready — nothing blocking* or the
+count, each blocker with where to get the value. `GET
+/api/admin/launch-readiness` serves it (ADMIN only, no network, read-only).
+
+It is deliberately a **strict subset** of what preflight checks — no entropy
+maths, no lockfile, no repository state — so it can miss a blocker but can never
+invent one. Two lists that disagree about the same deployment are worse than one.
 
 #### Naming the worker that stopped
 

@@ -49,6 +49,15 @@ interface SystemReadiness {
   sandbox?: boolean;
   checks: { key: string; ok: boolean; value?: string | number; hint?: string }[];
   topWarnings: string[];
+  /**
+   * The launch gate, asked of this deployment (§ `/api/admin/launch-readiness`).
+   * Unlike `topWarnings`, every entry here is a hard stop before real users, so
+   * the card can lead with a verdict instead of a list to interpret.
+   */
+  launch?: {
+    ready: boolean;
+    blockers: { id: string; label: string; fix: string }[];
+  };
   delivery?: { stuckPending?: number; deliveryWarning?: string | null };
   /**
    * The local gateway circuit breaker. Open means calls are being skipped for a
@@ -586,12 +595,16 @@ export default function AdminDashboard() {
   async function fetchSystemReadiness() {
     setSystemBusy(true);
     try {
-      const [healthRes, payRes] = await Promise.all([
+      const [healthRes, payRes, launchRes] = await Promise.all([
         fetch("/api/health"),
         fetch("/api/payments/health"),
+        // The launch gate. Read-only and network-free, so it costs nothing to
+        // ask alongside the other two rather than behind a button.
+        fetch("/api/admin/launch-readiness"),
       ]);
       const health = await healthRes.json().catch(() => null);
       const pay = await payRes.json().catch(() => null);
+      const launch = await launchRes.json().catch(() => null);
 
       const checks: SystemReadiness["checks"] = [];
       if (pay?.data?.checks) {
@@ -664,6 +677,7 @@ export default function AdminDashboard() {
         ],
         delivery: pay?.data?.delivery,
         gatewayBreaker: pay?.data?.gatewayBreaker,
+        launch: launch?.data,
       });
     } catch {
       // Readiness is informational — never surface it as an error toast
@@ -1270,6 +1284,53 @@ export default function AdminDashboard() {
                   Re-check
                 </button>
               </div>
+
+              {/* The verdict first. An operator glancing at this card should
+                  learn whether the site can face real users before reading a
+                  single check — and every line in it is a hard stop, not a
+                  preference, which is what separates it from the warnings
+                  further down. */}
+              {system?.launch && (
+                <div
+                  className={`mb-4 rounded-xl border px-3 py-2.5 ${
+                    system.launch.ready
+                      ? "border-emerald-500/20 bg-emerald-500/5"
+                      : "border-red-500/25 bg-red-500/5"
+                  }`}
+                >
+                  <p
+                    className={`text-sm font-semibold flex items-center gap-2 ${
+                      system.launch.ready ? "text-emerald-300" : "text-red-300"
+                    }`}
+                  >
+                    {system.launch.ready ? (
+                      <CheckCircle className="w-4 h-4" />
+                    ) : (
+                      <XCircle className="w-4 h-4" />
+                    )}
+                    {system.launch.ready
+                      ? "Launch-ready — nothing blocking"
+                      : `${system.launch.blockers.length} blocker(s) before real users`}
+                  </p>
+                  {!system.launch.ready && (
+                    <ul className="mt-2 space-y-1.5">
+                      {system.launch.blockers.map((b) => (
+                        <li key={b.id} className="text-xs text-white/70">
+                          <span className="text-red-300/90">{b.label}</span>
+                          <span className="text-white/40"> · {b.fix}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {/* Says where the value comes from, because the fix lines
+                      above name variables and nothing else would tell the
+                      reader that SETUP.md is the answer. */}
+                  <p className="text-xs text-white/40 mt-2">
+                    The same list <code>npm run preflight:prod</code> prints, read from this
+                    deployment&apos;s own environment.
+                  </p>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {(system?.checks || []).map((c) => (
