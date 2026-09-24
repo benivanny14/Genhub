@@ -37,13 +37,23 @@ export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
-    // Mark all as read
+    // One notification, or all of them. Opening one from the bell marks that one
+    // — it is the difference between "I have read this" and "I have read
+    // everything", and a bell that clears itself because one line was opened is
+    // a bell that hides the other four.
+    //
+    // Scoped by userId as well as by id: the id comes from the browser, and an
+    // update that matched only on it would let any signed-in user mark somebody
+    // else's notification read.
+    const body = await request.json().catch(() => null);
+    const id = typeof body?.id === "string" && body.id ? body.id : null;
+
     await prisma.notification.updateMany({
-      where: { userId: auth.userId, isRead: false },
+      where: { userId: auth.userId, isRead: false, ...(id ? { id } : {}) },
       data: { isRead: true },
     });
 
-    return api.success(null, "Tarishe zimeonekana");
+    return api.success(null, id ? "Notification read" : "Tarishe zimeonekana");
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);

@@ -8,6 +8,25 @@ import { Play, Mail, Phone, Lock, Eye, EyeOff } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
+import { safeInAppPath } from "@/lib/redirect";
+
+/**
+ * Where signing in should land.
+ *
+ * The middleware sends you here as `/login?redirect=/admin` when you ask for a
+ * page that needs a session, and this page used to ignore it: you signed in and
+ * arrived at the home page, so the page you were actually going to had to be
+ * found again by hand — which is exactly the moment people give up.
+ *
+ * Read from `window.location` rather than `useSearchParams()`: that hook makes
+ * this page need a Suspense boundary and fails the production build where it is
+ * missing. The value is validated (see lib/redirect.ts) because it arrives in a
+ * link somebody else can compose — an unchecked one is an open redirect.
+ */
+function landingPath(): string {
+  if (typeof window === "undefined") return "/";
+  return safeInAppPath(new URLSearchParams(window.location.search).get("redirect")) ?? "/";
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -40,7 +59,7 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (data.success) {
-        router.push("/");
+        router.push(landingPath());
         router.refresh();
       } else {
         setError(data.error || t("common.error"));

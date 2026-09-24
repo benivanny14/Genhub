@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Bell, CheckCheck, Inbox } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
@@ -11,11 +12,14 @@ interface Notification {
   title: string;
   message: string;
   type: string;
+  /** Where the notification is about, e.g. `/admin`. Null for a plain notice. */
+  link: string | null;
   isRead: boolean;
   createdAt: string;
 }
 
 export default function NotificationBell() {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -62,6 +66,38 @@ export default function NotificationBell() {
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       setUnreadCount(0);
     } catch {}
+  }
+
+  /**
+   * Open a notification: mark this one read, then go where it points.
+   *
+   * The record already says what to do — every alert in this app is written with
+   * the action in it ("Open /admin → Background jobs and press Run now") — and
+   * until now the only way to act on that was to read the sentence and type the
+   * path out by hand. A notification that names a problem and cannot take you to
+   * it is a notification somebody closes.
+   *
+   * Marking read happens first and does not wait: it is the reader's intent, and
+   * a slow network must not cost them the navigation. A failure there costs the
+   * unread dot coming back, which is the harmless direction.
+   */
+  function openNotification(n: Notification) {
+    if (!n.isRead) {
+      setNotifications((prev) =>
+        prev.map((x) => (x.id === n.id ? { ...x, isRead: true } : x))
+      );
+      setUnreadCount((count) => Math.max(0, count - 1));
+      void fetch("/api/notifications", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: n.id }),
+      }).catch(() => {});
+    }
+
+    if (n.link) {
+      setOpen(false);
+      router.push(n.link);
+    }
   }
 
   function formatTime(dateStr: string) {
@@ -137,10 +173,14 @@ export default function NotificationBell() {
               </div>
             ) : (
               notifications.map((n) => (
-                <div
+                <button
                   key={n.id}
+                  type="button"
+                  onClick={() => openNotification(n)}
+                  title={n.link ? `Open ${n.link}` : undefined}
                   className={cn(
-                    "px-4 py-3 border-b last:border-b-0 transition",
+                    "w-full text-left px-4 py-3 border-b last:border-b-0 transition",
+                    n.link ? "cursor-pointer hover:bg-brand-500/10" : "cursor-default",
                     isLight
                       ? `border-gray-50 ${n.isRead ? "bg-white" : "bg-brand-50/50"}`
                       : `border-white/5 ${n.isRead ? "bg-transparent" : "bg-brand-500/5"}`
@@ -162,7 +202,7 @@ export default function NotificationBell() {
                       </p>
                     </div>
                   </div>
-                </div>
+                </button>
               ))
             )}
           </div>
