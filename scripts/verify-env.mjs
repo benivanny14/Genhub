@@ -14,12 +14,21 @@
 // and would otherwise always look like production on a laptop.
 // =============================================================================
 
-import { loadEnv, hasRestRedis } from "./_env.mjs";
-
-loadEnv();
+import { loadSingleEnv, hasRestRedis } from "./_env.mjs";
 
 const args = process.argv.slice(2);
 const forceStrict = args.includes("--strict");
+
+// `--env-from <path>`: check a different file, which is how you reproduce the
+// build the hosting provider just failed. See scripts/_env.mjs for why the flag
+// is not called `--env-file`, and why exactly one file is loaded.
+const envResolution = loadSingleEnv(args);
+if ("error" in envResolution) {
+  console.error(`\n  \u2717 ${envResolution.error} — ${envResolution.hint}\n`);
+  process.exit(2);
+}
+const envFrom = envResolution.pulled ? envResolution.file : "";
+
 const platformSaysProduction =
   process.env.VERCEL_ENV === "production" ||
   process.env.NODE_ENV === "production" ||
@@ -134,6 +143,12 @@ if (env("NEXT_PUBLIC_APP_URL") && isLocal(env("NEXT_PUBLIC_APP_URL")) && ROOT) {
 // ------------------------------------------------------------------ Report
 const label = strict ? "strict (production pipeline)" : "advisory (development)";
 console.log(`\n=== GENHUB environment check — ${label} ===\n`);
+if (envFrom) {
+  console.log(
+    `  Reading ${envFrom} — a SNAPSHOT of what the deployment holds, not the\n` +
+      "  deployment itself, and only the variables that were pulled.\n"
+  );
+}
 
 if (blockers.length === 0) {
   console.log("  ✓ Every critical setting is present\n");

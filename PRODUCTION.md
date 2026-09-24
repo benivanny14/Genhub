@@ -40,6 +40,60 @@ verify:live` runs (one definition in `scripts/_probes.mjs`), so the two commands
 cannot disagree about whether a service is up.
 Treat it as the gate: **do not deploy while it exits 1.**
 
+#### If the domain answers 404 with `DEPLOYMENT_NOT_FOUND`
+
+That is Vercel's edge saying **no deployment is aliased to this hostname** — it
+is not our app returning a 404, and no amount of checking `NEXT_PUBLIC_APP_URL`
+will change it. Because `verify:env` is strict under `NODE_ENV=production`, a
+single missing critical setting fails `prebuild`, so `next build` never runs,
+Vercel records the deployment as **Error**, and the production hostname keeps
+pointing at nothing. The symptom of a missing environment variable is therefore
+**a site that is entirely absent**, not a site that is subtly degraded — which is
+deliberate for a site taking money, but it means the first place to look is the
+build log, not the app.
+
+Check, in this order:
+
+1. **Vercel → Deployments.** Is the newest Production entry green (*Ready*) or
+   red (*Error*)?
+2. **Red → open its build log** and search for `BLOCKING:`. The gate names the
+   exact variables in the ✗ lines above it.
+3. **Green, or no deployments at all → `Settings → Domains`** and use the domain
+   Vercel lists there. A renamed project releases its old
+   `<project>.vercel.app` hostname, so a bookmarked URL can die while the site is
+   perfectly fine under a new name.
+4. **Variables are correct?** Then check their **scope**. Vercel stores them per
+   environment (Production / Preview / Development); a value added under
+   *Development* is absent from Production, and the next build fails exactly as
+   above.
+
+Reproduce the strict gate locally — same command, same exit code Vercel sees:
+
+```bash
+NODE_ENV=production npm run verify:env    # exit 1 = the build would fail there too
+```
+
+And when the settings look right but the build still fails, check the list Vercel
+is actually holding rather than the one you think you typed:
+
+```bash
+npx vercel env pull .env.vercel --environment=production
+NODE_ENV=production npm run verify:env -- --env-from .env.vercel
+#   ✗ <exactly the variable the build log named>
+```
+
+`--env-from` loads **that file alone**, never merged with `.env.local`, so a value
+missing from the deployment cannot be supplied by your laptop and reported as
+present. It is a snapshot, not the deployment — a pulled value can be deleted
+afterwards — which is why the gate says which file it read. (`vercel env pull`
+writes `.env.local` by default; pass `.env.vercel` so your development file is
+not overwritten, and keep it out of git — it holds the same secrets.
+`.env.vercel` is in `.gitignore` for exactly this reason.)
+
+Once a deployment exists, `APP_URL=https://<domain> npm run launch:check:remote`
+is the command that asks *it* (rather than this checkout) what it is configured
+with. See §2.
+
 Integration smoke tests (move from “code exists” to “credentials proven”):
 
 | Script | What it proves |
@@ -305,6 +359,30 @@ be **empty** in production. The admin panel shows the same list under
 **Admin → Overview → System readiness**, together with the app URL, the video
 host, email/SMS transport and the gateway float, so nobody needs shell access
 to answer "is this deployment actually live?".
+
+#### Where a check reads from: this checkout or the deployment
+
+Vercel's environment and this checkout's `.env.local` are two different places,
+and no script on a laptop can see the first one. Every local gate reads
+`.env.local` (plus the shell), so a variable you set in the hosting provider's
+dashboard stays invisible here — and `preflight:prod` now says which file it read
+before it says anything else.
+
+| Question | Ask it where the answer lives |
+| --- | --- |
+| Is *this checkout* configured? | `npm run preflight:prod` (reads `.env.local`) |
+| Is *the deployment* configured? | Admin → Overview → System readiness, or `GET /api/health` + `/api/health/services` |
+| Is *the deployment* configured, from a laptop? | `APP_URL=https://your-domain npm run launch:check:remote` |
+| What does the provider actually hold? | `npx vercel env pull .env.vercel --environment=production` then `npm run preflight:prod -- --env-from .env.vercel` |
+
+Two traps that produce a red check on a site that is actually fine, and a green
+one on a site that is not:
+
+- **Scope.** Vercel stores variables per environment (Production / Preview /
+  Development). A value added under *Development* is absent from Production.
+- **Build time.** `NEXT_PUBLIC_*` are inlined when the bundle is built, so adding
+  or changing one needs a **redeploy** — a restart, or a dashboard save, changes
+  nothing on the running site.
 
 ### 2.1 `NEXT_PUBLIC_APP_URL` — the one variable that silently breaks webhooks
 
@@ -1253,6 +1331,10 @@ npm run db:status        # prisma migrate status — must say "up to date"
 - [ ] Add `npm run db:deploy` to the deploy pipeline **before** the app starts.
       On Vercel that means a `postinstall`/build step or a release command, so a
       schema change never lands while old code is still serving traffic.
+- [ ] The **build** runs `prisma generate` (`build` is
+      `prisma generate && next build`). Not only a `postinstall` hook — Vercel
+      caches `node_modules` and skips the install entirely when the lockfile has
+      not changed, so a postinstall-only generate never runs (see §5.3).
 - [ ] `DATABASE_URL` points at **managed Postgres** (Neon / Supabase / RDS /
       Railway), not localhost. `npm run preflight:prod` blocks on this.
 - [ ] Redis is managed, via **either** the Upstash REST pair
@@ -1355,6 +1437,41 @@ party, which is why it is a flag and not the default.
       detection, the sweeper cutoff) misread it. Use
       `now() at time zone 'UTC'` for hand-written rows; application code is
       unaffected.
+
+### 5.3 Why the build regenerates Prisma Client itself
+
+`build` is `prisma generate && next build`. The first half is not decoration.
+
+Vercel caches `node_modules` between deployments and skips the install entirely
+when the lockfile has not changed. `@prisma/client`'s `postinstall` hook — the
+thing that normally runs `prisma generate` — is part of that install, so on a
+cached build it does not happen, and the deployment is compiled against whatever
+Prisma Client was baked into the cached tree.
+
+An outdated client does not announce itself. Next.js imports every API route to
+collect page data, that import loads the native query engine, and the failure
+arrives wearing a Next.js costume:
+
+```
+> Build error occurred
+Error: Failed to collect page data for /api/account/become-creator
+  at /vercel/path0/.next/server/app/api/account/become-creator/route.js:1:955
+  { clientVersion: '5.22.0', errorCode: undefined }
+Error: Command "npm run build" exited with 1
+```
+
+The route named is incidental: whichever route Next imported first would have
+raised it. The useful signal is `clientVersion` on an error that Next is
+reporting about a page — that combination means Prisma, not the page.
+
+- [ ] Do not "fix" this by moving `prisma generate` to `postinstall` and calling
+      it done. The hook is skipped by exactly the caching that causes the
+      problem.
+- [ ] `prisma` stays declared in `devDependencies` (Vercel installs those for
+      the build). If a deploy ever reports `prisma: command not found`, the CLI
+      was not installed and must be moved to `dependencies`.
+- [ ] `src/tests/build-generates-client.test.ts` fails if the generate step is
+      dropped from `build`, because no local check can see this otherwise.
 
 ## 6. SEO & discoverability
 

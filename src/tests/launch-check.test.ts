@@ -236,6 +236,24 @@ describe("the real USSD push stays opt-in", () => {
   });
 });
 
+describe("the local report names the environment it read", () => {
+  const source = readFileSync(join(process.cwd(), "scripts", "preflight.mjs"), "utf8");
+
+  it("says so when it is describing this checkout in --production mode", () => {
+    // The confusion this pins down is not hypothetical: running
+    // `preflight:prod` on a laptop and reading it as a verdict about the
+    // deployment is the read that sends someone hunting for a variable they
+    // already set in their hosting provider's dashboard. Naming the file is the
+    // whole fix, so it must not be edited away.
+    expect(source).toContain("this report describes THIS CHECKOUT, not your deployment");
+    expect(source).toContain("launch:check:remote");
+  });
+
+  it("prints the .env.local path it actually read", () => {
+    expect(source).toContain("Reading ${envFilePath}");
+  });
+});
+
 describe("the scheduled deploy check runs --remote", () => {
   const workflow = readFileSync(
     join(process.cwd(), ".github", "workflows", "post-deploy.yml"),

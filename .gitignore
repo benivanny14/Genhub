@@ -24,6 +24,11 @@ next-env.d.ts
 .env.development
 .env.staging
 
+# A snapshot pulled out of the hosting provider for `--env-from` — same secrets
+# as .env.local, and an easy thing to create by hand and forget to delete.
+.env.vercel
+.env.vercel.*
+
 # uploaded images (dev/local storage; Bunny in production)
 public/uploads/
 

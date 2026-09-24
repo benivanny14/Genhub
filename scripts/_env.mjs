@@ -24,8 +24,8 @@ function stripInlineComment(value) {
   return value.trim();
 }
 
-export function loadEnv() {
-  const file = resolve(process.cwd(), ".env.local");
+export function loadEnv(fileName = ".env.local") {
+  const file = resolve(process.cwd(), fileName);
   if (!existsSync(file)) return false;
   for (const line of readFileSync(file, "utf8").split(/\r?\n/)) {
     const match = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
@@ -35,6 +35,80 @@ export function loadEnv() {
     if (!(match[1] in process.env)) process.env[match[1]] = value;
   }
   return true;
+}
+
+// -----------------------------------------------------------------------------
+// `--env-from <path>` — run a gate against a different file
+//
+// The flag is NOT called `--env-file` on purpose: Node 20.6+ claims `--env-file`
+// for itself, and it reads it even when it appears after the script path —
+// `node scripts/verify-env.mjs --env-file x` makes NODE try to load `x` and exit
+// with "x: not found" before a line of ours runs. A flag whose only failure mode
+// is being eaten by the runtime is worse than an unfamiliar name.
+//
+// Every script here reads .env.local, which on a laptop means "what this checkout
+// is configured with". The one question that cannot be answered that way is the
+// one that matters after a deploy: what does the DEPLOYMENT hold? Vercel's
+// variables are not visible from here, and the place people look for them — the
+// hosting provider's dashboard — is a different list that has to be compared by
+// eye.
+//
+// So the gates take a file instead of assuming one:
+//
+//   npx vercel env pull .env.vercel --environment=production
+//   NODE_ENV=production npm run verify:env -- --env-from .env.vercel
+//
+// Same command, same exit code, same wording as the build that failed — but
+// offline, before another push, and against the values the platform actually
+// holds rather than the ones you believe you typed there.
+//
+// It is a snapshot, not the deployment: `vercel env pull` fetches values, and a
+// value can be pulled and then deleted. That is why the gates say which file they
+// read rather than calling it "production".
+// -----------------------------------------------------------------------------
+
+/**
+ * The path after `--env-from`, or "" when the flag is absent or has no value.
+ * Pure, so src/tests/env-loading.test.ts pins it without spawning anything.
+ */
+export function envFileFromArgs(args = process.argv.slice(2)) {
+  const index = args.indexOf("--env-from");
+  if (index === -1) return "";
+  return (args[index + 1] || "").trim();
+}
+
+/**
+ * Load EXACTLY ONE environment file: the `--env-from` path when given, otherwise
+ * `.env.local`. Both real gates call this instead of `loadEnv` so the rule has a
+ * single home.
+ *
+ * "Exactly one" is the whole point, and it is a bug this function exists to make
+ * impossible. Loading a pulled file and then `.env.local` MERGES the two lists,
+ * and a gate reports on the union — so a variable missing from the deployment is
+ * quietly supplied by the developer's own file, and the check passes on data the
+ * deployment will never see. Worse, it passes with a confident
+ * "every critical setting is present", which is the opposite of the truth. That
+ * exact mistake was in the first version of this flag.
+ *
+ * `.env.local` being absent is not an error (a CI runner has none), but an
+ * explicitly named file that is absent IS: falling back silently would check the
+ * wrong list and look like it worked.
+ *
+ * @returns {{ file: string, pulled: boolean, loaded: boolean } | { error: string, hint: string }}
+ */
+export function loadSingleEnv(args = process.argv.slice(2)) {
+  const from = envFileFromArgs(args);
+  const file = from || ".env.local";
+  const loaded = loadEnv(file);
+  if (from && !loaded) {
+    return {
+      error: `--env-from ${from} does not exist`,
+      hint:
+        "run this from the project root, or pull it first:  " +
+        "npx vercel env pull .env.vercel --environment=production",
+    };
+  }
+  return { file, pulled: Boolean(from), loaded };
 }
 
 // -----------------------------------------------------------------------------

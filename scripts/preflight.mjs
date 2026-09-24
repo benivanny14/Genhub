@@ -22,13 +22,44 @@
 // =============================================================================
 
 import { readFileSync } from "node:fs";
-import { loadEnv, ok, warn, fail, assessSecret, hasRestRedis } from "./_env.mjs";
+import { resolve } from "node:path";
+import { loadSingleEnv, ok, warn, fail, assessSecret, hasRestRedis } from "./_env.mjs";
 import { checkLockfileSync } from "./verify-lockfile.mjs";
 import { probeRedis, probeBunny, probeSmtp } from "./_probes.mjs";
 
-loadEnv();
-
+// -----------------------------------------------------------------------------
+// WHOSE environment is this?
+//
+// The most misread thing about this script, and the reason it now says so out
+// loud: it reads THIS CHECKOUT's .env.local, so a variable set in the hosting
+// provider's dashboard is invisible here. Read without that, a red
+// `preflight:prod` on a laptop looks like the deployment is broken when only the
+// laptop is out of date — and, worse, a green one gets taken as proof about
+// production. Both errors cost the same afternoon, and neither is a bug in the
+// checks.
+//
+// A deployment's own environment can only be asked from inside it:
+//   * the app's answer — Admin -> System readiness, GET /api/admin/launch-readiness
+//   * from a laptop      — APP_URL=https://your-domain npm run launch:check:remote
+//   * a pulled copy of it — npx vercel env pull .env.vercel --environment=production
+//                           npm run preflight:prod -- --env-from .env.vercel
+//
+// That last one is the whole point of `--env-from`: it is the only way to run
+// THIS gate against the list the deployment actually holds, with the same wording
+// and the same exit code, offline — before another push. The flag is not called
+// `--env-file` because Node claims that one; see scripts/_env.mjs.
+// -----------------------------------------------------------------------------
 const args = process.argv.slice(2);
+const envResolution = loadSingleEnv(args);
+if ("error" in envResolution) {
+  console.error(`\n  \u2717 ${envResolution.error} — ${envResolution.hint}\n`);
+  process.exit(2);
+}
+const envFileName = envResolution.file;
+const envFrom = envResolution.pulled ? envFileName : "";
+const envFilePath = resolve(process.cwd(), envFileName);
+const readEnvFile = envResolution.loaded;
+
 const productionMode = args.includes("--production");
 const wantUrl = args.indexOf("--url");
 let baseUrl = wantUrl !== -1 ? (args[wantUrl + 1] || "").replace(/\/+$/, "") : "";
@@ -149,6 +180,32 @@ async function checkDatabaseReach() {
 }
 
 console.log(`\n=== GENHUB PRE-FLIGHT ===${productionMode ? " (PRODUCTION)" : ""}\n`);
+console.log(
+  readEnvFile
+    ? `Reading ${envFilePath}`
+    : `No ${envFileName} in this checkout — reading the shell environment only`
+);
+console.log("");
+if (envFrom) {
+  warn(
+    `${envFrom} is a SNAPSHOT of that environment, not the environment itself —`
+  );
+  warn("only the variables that were pulled are here, and a pulled value can be deleted afterwards.");
+  console.log("");
+}
+if (productionMode && readEnvFile && !envFrom) {
+  warn(
+    "this report describes THIS CHECKOUT, not your deployment. A variable you set"
+  );
+  warn(
+    "in Vercel / Netlify / Railway is not visible from here, and NEXT_PUBLIC_* are"
+  );
+  warn(
+    "baked in at BUILD time — changing one needs a redeploy, not a restart. To ask"
+  );
+  warn("the deployment about itself:  APP_URL=https://your-domain npm run launch:check:remote");
+  console.log("");
+}
 
 // --------------------------------------------------------- Repository state
 // The one check here that is about the checkout rather than the environment,
@@ -366,6 +423,13 @@ if (baseUrl) {
 
 // ----------------------------------------------------------------- Report
 console.log(`\n=== ${blockers} blocker(s), ${warnings} warning(s) ===`);
+if (productionMode && readEnvFile) {
+  console.log(
+    "Counted against " + envFilePath + " — a value you set only in your hosting\n" +
+      "provider's dashboard is not in this file. Admin -> System readiness asks the\n" +
+      "deployment itself."
+  );
+}
 if (blockers > 0) {
   console.log(
     "Fix the blockers above, then re-run.\n" +

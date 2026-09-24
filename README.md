@@ -60,7 +60,7 @@ reports whether the file was actually stored.
 | `npm run db:seed` | Demo content |
 | `npm run admin:create` | Create an admin account |
 | `npm run verify:live` | Open real connections to every service |
-| `npm run preflight:prod` | Launch blockers |
+| `npm run preflight:prod` | Launch blockers (`--env-from .env.vercel` to check a list pulled from the deployment) |
 | `npm run launch:check` | Post-deploy: preflight + verify:live, one verdict (`--collect` for a real USSD push) |
 | `npm run launch:check:remote` | The same verdict asked of the deployment (`--json` for CI; needs only `CRON_SECRET`) |
 | `npm run launch:check:wait` | The remote check, repeated until READY — for the minutes a redeploy takes |
