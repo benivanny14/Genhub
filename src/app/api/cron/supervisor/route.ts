@@ -22,6 +22,11 @@ import { requireCronSecret, SUPERVISOR_ORIGIN_LABEL } from "@/lib/cron-auth";
 import { getCronHealth } from "@/lib/services/cron-heartbeat.service";
 import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 import { alertHeldWorkers } from "@/lib/services/cron-hold-alert.service";
+import { watchFloat } from "@/lib/services/harakapay-float-alert.service";
+import {
+  previewDueRenewals,
+  summarizeRenewalPreview,
+} from "@/lib/services/subscription-renewal.service";
 import {
   planSupervisorRuns,
   snapshotSupervisorHealth,
@@ -82,17 +87,37 @@ async function handle(request: NextRequest) {
       ran.push(await runSupervisedWorker(decision));
     }
 
+    // The float the gateway delivers USSD prompts from. At 0 it does not refuse a
+    // payment — it accepts the collect, answers "USSD push sent", and never
+    // delivers the prompt — so the alarm has to arrive on the way down, and this
+    // poke is the schedule that exists. Read-only, bounded, and it never throws:
+    // a gateway that will not answer may cost the alarm, never the poke.
+    const float = await watchFloat();
+
+    // A held renew-subscriptions is the one worker a person has to start by hand,
+    // and "how many fans would this charge?" is the question that decides it. The
+    // preview writes nothing (services/subscription-renewal.service.ts), so asking
+    // costs a read and lets the alert carry a number instead of a shrug.
+    const renewals = plan.held.some((w) => w.id === "renew-subscriptions")
+      ? await previewDueRenewals()
+      : null;
+
     // A worker that is overdue and may not be started automatically will not run
     // again until a person starts it, so this poke tells one — with the record in
     // the bell and an email that reaches somebody who is not on the site. It is
     // throttled per worker, and it never throws: an overdue worker with nobody
     // told is a silent failure, and so is a mail host that takes the poke down.
-    const alerts = await alertHeldWorkers(plan.held);
+    const alerts = await alertHeldWorkers(
+      plan.held,
+      renewals
+        ? { notes: { "renew-subscriptions": `${summarizeRenewalPreview(renewals)}.` } }
+        : {}
+    );
 
     // Re-read so the answer describes the deployment after the poke, not the one
     // it just repaired — this is the health a caller would otherwise fetch next.
     const health = snapshotSupervisorHealth(await getCronHealth());
-    const report = { ran, held: plan.held, health, alerts };
+    const report = { ran, held: plan.held, renewals, float, health, alerts };
     const summary = summarizeSupervisorRun(ran, plan.held, alerts);
 
     const failed = ran.filter((r) => r.error);

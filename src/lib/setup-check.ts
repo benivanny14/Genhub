@@ -27,6 +27,7 @@ import checklist from "./setup-checklist.json";
 import prisma from "./db";
 import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./redis";
 import { harakaBreakerNotice } from "./payments/harakapay";
+import { assessFloat, floatFloorTzs } from "./services/harakapay-float-alert.service";
 import config from "./config";
 
 // ---------------------------------------------------------------- checklist
@@ -498,6 +499,12 @@ async function probeHarakapay(): Promise<ProbeResult> {
     // The one blocker nobody can fix in code. With float 0 the gateway accepts
     // the request, reports "USSD push sent", and never delivers the prompt.
     const float = Number(body.float_balance ?? 0);
+    // How close that is to happening. Below the operator's floor this is a
+    // warning rather than a failure: payments work today, and the recovery is a
+    // top-up somebody has to make (services/harakapay-float-alert.service.ts,
+    // which also raises the alarm on the supervisor's own schedule).
+    const floor = floatFloorTzs();
+    const level = assessFloat(float, floor);
     // The probe proves the gateway answers *now*; the breaker says whether this
     // process has been skipping it. Both are needed: a healthy probe with an
     // open breaker means the fault is intermittent, not fixed.
@@ -505,14 +512,16 @@ async function probeHarakapay(): Promise<ProbeResult> {
     return {
       ...base,
       // A zero float stays a hard fail — it is the more severe problem and the
-      // one no code change can fix — so the breaker can only soften "ok" to a
-      // warning, never the other way round.
-      state: float <= 0 ? "fail" : breakerNotice ? "warn" : "ok",
+      // one no code change can fix — so everything else here can only soften
+      // "ok" to a warning, never the other way round.
+      state: level === "empty" ? "fail" : level === "low" || breakerNotice ? "warn" : "ok",
       detail:
         `key valid · wallet ${body.wallet_balance ?? 0} · float ${float}` +
-        (float > 0
-          ? ""
-          : ' · float is 0: it accepts collects and reports "USSD push sent", but orders never settle') +
+        (level === "empty"
+          ? ' · float is 0: it accepts collects and reports "USSD push sent", but orders never settle'
+          : level === "low"
+            ? ` · under the ${floor} TZS floor — top up before it reaches 0`
+            : "") +
         (breakerNotice ? ` · ${breakerNotice}` : ""),
     };
   } catch (error) {

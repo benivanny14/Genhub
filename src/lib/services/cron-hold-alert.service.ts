@@ -80,20 +80,35 @@ export interface HoldAlertCopy {
  * alert that names a problem without an action is a notification somebody reads
  * and closes.
  */
-export function holdAlertCopy(worker: SupervisorDecision, appUrl: string): HoldAlertCopy {
+export function holdAlertCopy(
+  worker: SupervisorDecision,
+  appUrl: string,
+  /**
+   * One extra sentence about this worker right now, when the caller has it.
+   *
+   * Used for renew-subscriptions, where "what would pressing the button do" is
+   * the whole question and the run itself has to be a person's decision: the
+   * caller previews the charge and passes the answer here, so the bell says
+   * "would charge 3" instead of leaving somebody to press a button that reaches
+   * three fans' phones blind (services/subscription-renewal.service.ts).
+   */
+  note?: string
+): HoldAlertCopy {
   const adminUrl = `${appUrl.replace(/\/$/, "")}${HOLD_ALERT_LINK}`;
   const action =
     `Open ${adminUrl} → Overview → Background jobs and press "Run now" on ` +
     `${worker.name}.`;
+  const withNote = note ? ` ${note}` : "";
 
   const title = `${worker.name} is overdue — it needs a person to start it`;
-  const message = `Nothing has finished inside its budget. ${worker.reason}. ${action}`;
+  const message = `Nothing has finished inside its budget. ${worker.reason}.${withNote} ${action}`;
 
   const emailSubject = `[Genhub] ${worker.name} is overdue — start it by hand`;
   const emailText = [
     `${worker.name} has not finished inside its budget.`,
     "",
     `${worker.reason}.`,
+    ...(note ? ["", note] : []),
     "",
     action,
     "",
@@ -111,6 +126,7 @@ export function holdAlertCopy(worker: SupervisorDecision, appUrl: string): HoldA
         <strong>${worker.name}</strong> has not finished inside its budget.
       </p>
       <p style="color:#9ca3af;font-size:14px;line-height:1.6">${worker.reason}.</p>
+      ${note ? `<p style="color:#e5e7eb;font-size:14px;line-height:1.6">${note}</p>` : ""}
       <p style="color:#e5e7eb;font-size:15px;line-height:1.6">
         Open <a href="${adminUrl}" style="color:#a78bfa">${adminUrl}</a>, go to
         <strong>Overview → Background jobs</strong> and press <strong>Run now</strong>.
@@ -169,7 +185,11 @@ const NOTHING_TO_DO: HoldAlertOutcome = {
  */
 export async function alertHeldWorkers(
   held: readonly SupervisorDecision[],
-  deps: { now?: () => number } = {}
+  deps: {
+    now?: () => number;
+    /** Extra sentence per worker id — see `holdAlertCopy`. */
+    notes?: Record<string, string>;
+  } = {}
 ): Promise<HoldAlertOutcome> {
   const worth = workersNeedingAPerson(held);
   if (worth.length === 0) return NOTHING_TO_DO;
@@ -200,7 +220,7 @@ export async function alertHeldWorkers(
   const outcome: HoldAlertOutcome = { ...NOTHING_TO_DO, alerted: [], alreadyTold: [], failed: [] };
 
   for (const worker of worth) {
-    const copy = holdAlertCopy(worker, config.appUrl);
+    const copy = holdAlertCopy(worker, config.appUrl, deps.notes?.[worker.id]);
     const since = new Date(now() - HOLD_ALERT_WINDOW_MS);
     let toldAnyone = false;
     let writeRefused = false;

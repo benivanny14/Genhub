@@ -491,7 +491,10 @@ node scripts/preflight.mjs --production --gateway
 ```
 
 A zero `float_balance` is the single most common cause and the one thing no code
-change can fix: it is funded in the HarakaPay dashboard. Everything below is the
+change can fix: it is funded in the HarakaPay dashboard. You should not have to
+read this section to find out — the app tells you on the way down (§4.0.6: a
+notification and an email when the float crosses `HARAKAPAY_FLOAT_FLOOR_TZS`,
+before it reaches 0). Everything below is the
 longer diagnostic for when the float is funded and prompts *still* do not arrive.
 Use `GET /api/payments/health` (admin) as the dashboard:
 
@@ -1278,6 +1281,14 @@ the card says so), and `stalled` / `failing` are jobs that die when they run —
 fix, not a button. Alerting on those would put the same words in the bell every
 poke while changing nothing.
 
+The alert also answers the question the button asks. `renew-subscriptions` is the
+one worker a person has to start, and *how many fans would this charge?* is what
+decides it — so the poke previews the run first and puts the number in the alert:
+*"Nothing has finished inside its budget. … A run now would charge 3
+membership(s): 2 from wallet, 1 by USSD push to a fan's phone. Open
+…/admin → Overview → Background jobs and press Run now on Renew subscriptions."*
+The preview writes nothing (§4.0.5), so asking costs a read and no risk.
+
 It never throws. This runs inside the poke that keeps renewals, releases and
 publishing alive, so a mail host that is down costs a log line — never the poke —
 and the notification it wrote first is already the record. If there is **no admin
@@ -1308,6 +1319,86 @@ phones.
 - [ ] After a day, check **Background jobs**: the four workers should read
       `Running on schedule` for most of the day rather than `Overdue`, and
       `/api/health` should answer 200 while nothing else is wrong.
+
+### 4.0.5 Asking what a renewal run would charge (`?dryRun=1`)
+
+`renew-subscriptions` is the one worker the supervisor will not start, because a
+USSD push lands on a fan's phone. That refusal leaves whoever has to press **Run
+now** (§4.0.3) deciding blind, and the audit log only answers afterwards. So the
+same question can be asked first:
+
+```bash
+curl -s -X POST "$APP_URL/api/cron/renew-subscriptions?dryRun=1" \
+  -H "x-cron-secret: $CRON_SECRET" | jq '.summary, .data.lines'
+#   "A run now would charge 3 membership(s): 2 from wallet, 1 by USSD push to a fan's phone"
+```
+
+`{ "dryRun": true }` in a POST body does the same thing. The answer names each
+membership it would charge (`subscriptionId`, fan, creator, price, `method`, and
+the phone a USSD push would go to), and lists what it would **not** charge with a
+reason for each — out of attempts, inside the retry gap, an earlier checkout still
+awaiting approval, or a wallet that cannot cover the price and no phone on file.
+
+**It writes nothing, and that is the whole design.** No transaction row, no
+attempt counter, no notification, no USSD push — and no run lock and no heartbeat
+slot either. The heartbeat is this app's record of what moved money, so a dry run
+that claimed one would also make `renew-subscriptions` look freshly run and
+**silence the overdue alarm** that is the only reason somebody presses the button.
+The same reason the supervisor uses it for the alert (§4.0.4) rather than starting
+the worker in a pretend mode.
+
+Both the preview and the worker decide with the same pure function
+(`renewalGate` in `src/lib/services/subscription-renewal.service.ts`), so the
+sentence in the bell cannot drift from what the worker then does.
+`src/tests/renewal-preview.test.ts` pins the boundaries and asserts the preview
+writes nothing.
+
+- [ ] Ask before charging: run the `curl` above with `renew-subscriptions` due and
+      confirm the numbers match what **Run now** then reports.
+- [ ] Confirm it is genuinely read-only: the worker's `lastRunAt` / `lastOrigin`
+      in **Background jobs** must not change, and no fan may receive a prompt.
+- [ ] Confirm it still refuses without the secret (`401`), like every cron route
+      (§4.0).
+
+### 4.0.6 The float: warned before it is empty, not when it is
+
+HarakaPay settles a USSD prompt out of a prepaid float on the merchant account,
+and at 0 it does not refuse anything: it accepts the collect, answers *"USSD push
+sent"*, and never delivers the prompt (§3.1). The customer is told it worked; the
+order never settles; the merchant finds out from a complaint. The first one on
+this deployment is in the admin's bell — *"Wallet top-up — TZS 1,000 did not go
+through. The USSD prompt was never approved"*.
+
+Topping the float up means moving money onto the merchant account, so the alarm
+has to arrive on the way down. `src/lib/services/harakapay-float-alert.service.ts`
+reads `GET /api/v1/balance` on every supervisor poke and, under
+`HARAKAPAY_FLOAT_FLOOR_TZS` (default 10,000 TZS), tells the admins once per 12 h —
+bell plus email — with the float, the floor, and what to top up.
+
+| Where | What it says |
+|---|---|
+| `GET /api/health` | `payments: live`, and the services probe is `warn` below the floor, `fail` at 0 — a warning never joins `failing`, so `launch:check --remote` still reports READY while the float is low but usable |
+| `/api/cron/supervisor` | a `float` field in every poke: `read`, `level`, `snapshot`, and what the alert did |
+| The bell + email | the number, the floor, and *"top up the float on the HarakaPay merchant account"* — at most once per 12 h, throttled on the notification row so twelve pokes are one message |
+
+Three rules worth keeping when this is changed again:
+
+- **"Could not read the balance" is not "the float is fine".** A gateway that will
+  not answer reports `read: false` with the reason; a `float_balance` the gateway
+  did not send is unreadable too, never `0` — paging somebody about a float that is
+  healthy is how the alarm gets ignored the one time it is right.
+- **One title for both levels.** The bell line is the throttle key, so a float that
+  crosses the floor and then empties inside the window is one problem and one row,
+  not two. The severity lives in the message, which is read.
+- **It never throws.** It runs inside the poke that also starts the workers: a
+  balance call that times out may cost the alarm, never the poke.
+
+- [ ] Set the floor for your own traffic and prove the alarm: with the float under
+      it, one poke should write one notification and one email.
+- [ ] Prove the throttle: poke again immediately — the answer must report
+      `alreadyTold` and nothing new may be sent.
+- [ ] Confirm the empty case reads honestly: at 0, the message must say the
+      gateway *accepts and never delivers*, not that a payment failed.
 
 ### 4.1 Charges nobody can classify yet (`UNDER_INVESTIGATION`)
 

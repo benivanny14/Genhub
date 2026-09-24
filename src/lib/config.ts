@@ -112,6 +112,13 @@ const config = {
     webhookToken: process.env.HARAKAPAY_WEBHOOK_TOKEN || "",
     // PAYMENT_SANDBOX=true keeps local dev off the real gateway (no USSD pushes)
     sandbox: process.env.PAYMENT_SANDBOX === "true",
+    // The float the gateway settles USSD prompts from, below which an admin is
+    // told (services/harakapay-float-alert.service.ts). At 0 the gateway does not
+    // refuse a payment — it accepts it, answers "USSD push sent", and never
+    // delivers the prompt — so the alarm has to fire on the way down. Zero or
+    // unset means the default floor, not "no floor": the whole point is to hear
+    // about it before the bottom.
+    floatFloorTzs: Number(process.env.HARAKAPAY_FLOAT_FLOOR_TZS || 0),
   },
 
   // Platform Business Rules

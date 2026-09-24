@@ -46,6 +46,70 @@ export const MAX_RENEW_ATTEMPTS = 4;
  */
 export const STALE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** The row shape every decision about a due membership is made from. */
+export interface RenewalCandidate {
+  id: string;
+  viewerId: string;
+  creatorId: string;
+  price: number;
+  expiresAt: Date;
+  renewAttempts: number;
+  lastRenewAttemptAt: Date | null;
+  renewPhone: string | null;
+  creator: { displayName: string | null };
+}
+
+/**
+ * What a due membership is owed, before anything is asked of the gateway.
+ *
+ * Four states, and the wording is the reason this is a function rather than
+ * three `if`s inside the loop: the same answer is needed twice — once by the
+ * worker that charges, once by the preview that says what charging would do —
+ * and two copies of a money decision that can drift apart is exactly the pair of
+ * behaviours a preview must not have.
+ *
+ *  * `charge` — nothing in the way.
+ *  * `skip`   — out of attempts inside the paid period, or inside the retry gap.
+ *               The membership keeps working; there is simply nothing to do yet.
+ *  * `lapse`  — out of attempts with the period ended, or the period ended long
+ *               enough ago that charging now would bill for time the fan did not
+ *               have. The membership is closed here.
+ *
+ * Pure, so every boundary is pinned by a test that needs no database.
+ */
+export type RenewalGate =
+  | { action: "charge" }
+  | { action: "skip"; reason: string }
+  | { action: "lapse"; reason: string };
+
+export function renewalGate(sub: RenewalCandidate, now: Date): RenewalGate {
+  // Bounded on purpose: an out-of-retries membership inside its paid period is
+  // left alone until it ends, and one that has ended is closed here. Without the
+  // cap, a permanent failure (a phone that never answers) would be retried
+  // forever, one charge request per run.
+  if (sub.renewAttempts >= MAX_RENEW_ATTEMPTS) {
+    return sub.expiresAt <= now
+      ? { action: "lapse", reason: `out of attempts (${MAX_RENEW_ATTEMPTS}) and the period has ended` }
+      : { action: "skip", reason: `out of attempts (${MAX_RENEW_ATTEMPTS}) with time left on the period` };
+  }
+
+  // If the cron was down for months, waking up and billing every stale
+  // membership at once would be a nasty surprise. Past the grace window the fan
+  // has to re-subscribe deliberately.
+  if (sub.expiresAt.getTime() < now.getTime() - STALE_WINDOW_MS) {
+    return {
+      action: "lapse",
+      reason: `the period ended more than ${STALE_WINDOW_MS / 86400_000} days ago`,
+    };
+  }
+
+  if (sub.lastRenewAttemptAt && now.getTime() - sub.lastRenewAttemptAt.getTime() < RETRY_GAP_MS) {
+    return { action: "skip", reason: `an attempt was made less than ${RETRY_GAP_MS / 3600_000} hours ago` };
+  }
+
+  return { action: "charge" };
+}
+
 export interface RenewalResult {
   /** Memberships inside the renewal window that were looked at. */
   considered: number;
@@ -114,36 +178,15 @@ export async function renewDueSubscriptions(options?: {
   for (const sub of due) {
     result.considered += 1;
 
-    // --- Out of retries ------------------------------------------------------
-    // Bounded on purpose: an out-of-retries membership inside its paid period is
-    // left alone until it ends, and one that has ended is closed here. Without
-    // the cap a permanent failure (a lapsed card, a phone that never answers)
-    // would be retried forever, every RETRY_GAP, at one login attempt per run.
-    if (sub.renewAttempts >= MAX_RENEW_ATTEMPTS) {
-      if (sub.expiresAt <= now) {
-        await lapseSubscription(sub.id, sub.creatorId);
-        result.failed += 1;
-      } else {
-        result.skipped += 1;
-      }
-      continue;
-    }
-
-    // --- Never charge a membership that lapsed long ago ----------------------
-    // If the cron was down for months, waking up and billing every stale
-    // membership at once would be a nasty surprise. Past the grace window the
-    // fan has to re-subscribe deliberately.
-    if (sub.expiresAt.getTime() < now.getTime() - STALE_WINDOW_MS) {
+    // Out of attempts, stale, or inside the retry gap — the three reasons a due
+    // membership is not charged, in the order the preview reports them too.
+    const gate = renewalGate(sub, now);
+    if (gate.action === "lapse") {
       await lapseSubscription(sub.id, sub.creatorId);
       result.failed += 1;
       continue;
     }
-
-    // --- Respect the retry gap ----------------------------------------------
-    if (
-      sub.lastRenewAttemptAt &&
-      now.getTime() - sub.lastRenewAttemptAt.getTime() < RETRY_GAP_MS
-    ) {
+    if (gate.action === "skip") {
       result.skipped += 1;
       continue;
     }
@@ -227,6 +270,199 @@ export async function renewDueSubscriptions(options?: {
   }
 
   return result;
+}
+
+// =============================================================================
+// What a run would do — asked without doing it
+//
+// This worker is the only one the supervisor will not start on its own, because
+// it can push a charge request onto a fan's phone (see cron-hold-alert.service.ts).
+// Refusing is right, and it leaves the person who has to press "Run now" with a
+// blank question: charge how many, and of whom? The audit log answers that
+// afterwards. This answers it first, from the same gate the worker uses, without
+// creating a transaction, sending a prompt, or writing a heartbeat — the
+// heartbeat is the record of what moved money, and nothing here moves any.
+// =============================================================================
+
+export interface RenewalPreviewLine {
+  subscriptionId: string;
+  viewerId: string;
+  creatorId: string;
+  /** Null when the creator has no display name on record. */
+  creatorName: string | null;
+  /** TZS the fan would be charged. */
+  price: number;
+  /** How the money would be asked for. */
+  method: "wallet" | "ussd";
+  /** Where the USSD push would go. Only set for `method: "ussd"`. */
+  phone?: string;
+  /** What the fan's wallet holds, so a "wallet" line can be checked by hand. */
+  walletBalance: number;
+  expiresAt: Date;
+}
+
+export interface RenewalPreviewSkipped {
+  subscriptionId: string;
+  reason: string;
+}
+
+export interface RenewalPreview {
+  /** Due memberships looked at. */
+  considered: number;
+  /** How many would be charged if the worker ran now. */
+  wouldCharge: number;
+  fromWallet: number;
+  byPhone: number;
+  /** Due, but held back — each with the reason the worker would give. */
+  notCharged: RenewalPreviewSkipped[];
+  /** The chargeable ones, named, so a person can recognise who they are. */
+  lines: RenewalPreviewLine[];
+  /** Rows the preview could not read. Never silently zero. */
+  errors: number;
+}
+
+/**
+ * What renewing right now would charge, without charging it.
+ *
+ * Read-only in the strong sense: no transaction row, no membership change, no
+ * attempt counter, no notification, no USSD push. The only writes anywhere near
+ * this are the ones the gateway makes, and it is not called.
+ */
+export async function previewDueRenewals(options?: {
+  limit?: number;
+  now?: Date;
+}): Promise<RenewalPreview> {
+  const limit = options?.limit ?? 200;
+  const now = options?.now ?? new Date();
+  const preview: RenewalPreview = {
+    considered: 0,
+    wouldCharge: 0,
+    fromWallet: 0,
+    byPhone: 0,
+    notCharged: [],
+    lines: [],
+    errors: 0,
+  };
+
+  const due = await prisma.creatorSubscription.findMany({
+    where: {
+      isActive: true,
+      autoRenew: true,
+      expiresAt: { lte: new Date(now.getTime() + RENEW_LEAD_MS) },
+    },
+    select: {
+      id: true,
+      viewerId: true,
+      creatorId: true,
+      price: true,
+      expiresAt: true,
+      renewAttempts: true,
+      lastRenewAttemptAt: true,
+      renewPhone: true,
+      creator: { select: { displayName: true } },
+    },
+    orderBy: { expiresAt: "asc" },
+    take: limit,
+  });
+
+  for (const sub of due) {
+    preview.considered += 1;
+
+    const gate = renewalGate(sub, now);
+    if (gate.action !== "charge") {
+      preview.notCharged.push({ subscriptionId: sub.id, reason: gate.reason });
+      continue;
+    }
+
+    try {
+      // A pending renewal checkout blocks a new attempt whatever its age — a late
+      // settlement is honoured, so a second charge could extend the membership
+      // twice for one payment. The sweeper clears abandoned ones after an hour.
+      const pending = await prisma.transaction.findFirst({
+        where: {
+          userId: sub.viewerId,
+          creatorId: sub.creatorId,
+          type: "SUBSCRIPTION",
+          status: "PENDING",
+        },
+        select: { id: true },
+        orderBy: { createdAt: "desc" },
+      });
+      if (pending) {
+        preview.notCharged.push({
+          subscriptionId: sub.id,
+          reason: "a renewal checkout from an earlier attempt is still awaiting approval",
+        });
+        continue;
+      }
+
+      const wallet = await prisma.user.findUnique({
+        where: { id: sub.viewerId },
+        select: { walletBalance: true },
+      });
+      const walletBalance = wallet?.walletBalance ?? 0;
+
+      // The same order of preference the worker uses: the wallet if it covers the
+      // price, and a USSD push only when it does not.
+      const method: "wallet" | "ussd" =
+        walletBalance >= sub.price ? "wallet" : "ussd";
+      const phone =
+        method === "ussd"
+          ? sub.renewPhone || (await lastGatewayPhone(sub.viewerId, sub.creatorId))
+          : null;
+
+      if (method === "ussd" && !phone) {
+        preview.notCharged.push({
+          subscriptionId: sub.id,
+          reason: `wallet holds TZS ${walletBalance.toLocaleString("en-US")} against a TZS ${sub.price.toLocaleString(
+            "en-US"
+          )} price and no phone number is on file`,
+        });
+        continue;
+      }
+
+      preview.wouldCharge += 1;
+      if (method === "wallet") preview.fromWallet += 1;
+      else preview.byPhone += 1;
+      preview.lines.push({
+        subscriptionId: sub.id,
+        viewerId: sub.viewerId,
+        creatorId: sub.creatorId,
+        creatorName: sub.creator.displayName,
+        price: sub.price,
+        method,
+        ...(phone ? { phone } : {}),
+        walletBalance,
+        expiresAt: sub.expiresAt,
+      });
+    } catch (error) {
+      preview.errors += 1;
+      console.warn(
+        `[Renewal Preview] Could not read a due membership (${sub.id}):`,
+        error instanceof Error ? error.message : error
+      );
+    }
+  }
+
+  return preview;
+}
+
+/**
+ * One sentence for a person: what pressing "Run now" would charge.
+ *
+ * Shared by the supervisor's response and the alert that reaches an operator, so
+ * the bell and the log cannot disagree about the number.
+ */
+export function summarizeRenewalPreview(preview: RenewalPreview): string {
+  if (preview.wouldCharge === 0) {
+    const held = preview.notCharged.length > 0 ? ", and none of them is chargeable" : "";
+    return `A run now would charge nobody (${preview.considered} due${held})`;
+  }
+
+  return (
+    `A run now would charge ${preview.wouldCharge} membership(s): ` +
+    `${preview.fromWallet} from wallet, ${preview.byPhone} by USSD push to a fan's phone`
+  );
 }
 
 // =============================================================================
