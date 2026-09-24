@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Header from "@/components/Header";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -535,21 +535,75 @@ export default function AdminDashboard() {
   }
 
   // Only depends on the router, so it is stable across renders and can be a
-  // real dependency of the mount effect below.
+  // real dependency of the callers below.
   const checkAdmin = useCallback(async () => {
     try {
       const res = await fetch("/api/auth/me");
+
+      // Two different situations that used to share one destination. Nobody
+      // signed in can be helped by the home page — they need the sign-in form,
+      // and they need to come back here afterwards, which is what the middleware
+      // writes into `?redirect=`. Somebody signed in as a non-admin is not
+      // missing a session at all; the dashboard is simply not theirs.
+      if (res.status === 401) {
+        router.push("/login?redirect=%2Fadmin");
+        return;
+      }
+
       const data = await res.json();
-      if (!data.success || data.data.role !== "ADMIN") {
+      if (!data.success || data.data?.role !== "ADMIN") {
         router.push("/");
         return;
       }
     } catch {
-      router.push("/login");
+      router.push("/login?redirect=%2Fadmin");
     } finally {
       setLoading(false);
     }
   }, [router]);
+
+  // One place to notice that this tab is no longer an admin session.
+  //
+  // Found in production: a tab opened as an admin keeps calling these endpoints
+  // after the session has moved on — a second tab signed in as somebody else, a
+  // token that expired, an admin who was demoted. Each call was answered 401/403
+  // and reported as its own toast, so the page looked usable and failed on every
+  // click: twelve 403s in a minute from one tab, and the person clicking had no
+  // way to tell that the fix was to sign in again.
+  const sessionLostAt = useRef(0);
+  const adminFetch = useCallback(
+    async (input: string, init?: RequestInit): Promise<Response> => {
+      const res = await fetch(input, init);
+      if (res.status !== 401 && res.status !== 403) return res;
+
+      // A burst of failing calls is one lost session, not twelve: re-check at
+      // most every few seconds, so a page that fires eight requests on mount
+      // does not fire eight redirects.
+      const now = Date.now();
+      if (now - sessionLostAt.current > 3000) {
+        sessionLostAt.current = now;
+        toast(
+          "warning",
+          "Your admin session has ended. Sign in again to continue."
+        );
+        void checkAdmin();
+      }
+
+      // An answer the callers already know how to read. Every one of them is
+      // `if (data.success) … else toast(data.error)`, so the explanation travels
+      // through the path that exists instead of one invented for it — which is
+      // why this returns a body rather than throwing.
+      return new Response(
+        JSON.stringify({
+          success: false,
+          code: "SESSION_LOST",
+          error: "Your admin session has ended. Sign in again to continue.",
+        }),
+        { status: res.status, headers: { "content-type": "application/json" } }
+      );
+    },
+    [checkAdmin, toast]
+  );
 
   useEffect(() => {
     checkAdmin();
@@ -586,7 +640,7 @@ export default function AdminDashboard() {
 
   async function fetchOverview() {
     try {
-      const res = await fetch("/api/admin/overview");
+      const res = await adminFetch("/api/admin/overview");
       const data = await res.json();
       if (data.success) setStats(data.data);
     } catch {}
@@ -600,7 +654,7 @@ export default function AdminDashboard() {
         fetch("/api/payments/health"),
         // The launch gate. Read-only and network-free, so it costs nothing to
         // ask alongside the other two rather than behind a button.
-        fetch("/api/admin/launch-readiness"),
+        adminFetch("/api/admin/launch-readiness"),
       ]);
       const health = await healthRes.json().catch(() => null);
       const pay = await payRes.json().catch(() => null);
@@ -689,7 +743,7 @@ export default function AdminDashboard() {
   async function fetchJobs() {
     setJobsBusy(true);
     try {
-      const res = await fetch("/api/admin/jobs");
+      const res = await adminFetch("/api/admin/jobs");
       const data = await res.json();
       if (data.success) setJobs(data.data as CronHealth);
     } catch {
@@ -709,7 +763,7 @@ export default function AdminDashboard() {
     setRunBusy(workerId);
     setRunConfirm(null);
     try {
-      const res = await fetch("/api/admin/jobs/run", {
+      const res = await adminFetch("/api/admin/jobs/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ worker: workerId, confirm }),
@@ -743,7 +797,7 @@ export default function AdminDashboard() {
 
   async function fetchKyc() {
     try {
-      const res = await fetch("/api/admin/kyc?status=PENDING");
+      const res = await adminFetch("/api/admin/kyc?status=PENDING");
       const data = await res.json();
       if (data.success) setKycList(data.data.kycs);
     } catch {}
@@ -751,7 +805,7 @@ export default function AdminDashboard() {
 
   async function fetchReports() {
     try {
-      const res = await fetch("/api/admin/reports?status=PENDING");
+      const res = await adminFetch("/api/admin/reports?status=PENDING");
       const data = await res.json();
       if (data.success) setReportList(data.data);
     } catch {}
@@ -759,7 +813,7 @@ export default function AdminDashboard() {
 
   async function fetchPayouts() {
     try {
-      const res = await fetch("/api/admin/payouts?status=PENDING");
+      const res = await adminFetch("/api/admin/payouts?status=PENDING");
       const data = await res.json();
       if (data.success) setPayoutList(data.data.payouts);
     } catch {}
@@ -767,7 +821,7 @@ export default function AdminDashboard() {
 
   async function fetchCreators() {
     try {
-      const res = await fetch("/api/admin/users?role=CREATOR");
+      const res = await adminFetch("/api/admin/users?role=CREATOR");
       const data = await res.json();
       if (data.success) setCreatorList(data.data.users);
     } catch {}
@@ -775,7 +829,7 @@ export default function AdminDashboard() {
 
   async function fetchCoupons() {
     try {
-      const res = await fetch("/api/admin/coupons");
+      const res = await adminFetch("/api/admin/coupons");
       const data = await res.json();
       if (data.success) setCouponList(data.data.coupons);
     } catch {}
@@ -785,7 +839,7 @@ export default function AdminDashboard() {
     if (!newCoupon.code.trim() || creatingCoupon) return;
     setCreatingCoupon(true);
     try {
-      const res = await fetch("/api/admin/coupons", {
+      const res = await adminFetch("/api/admin/coupons", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -812,7 +866,7 @@ export default function AdminDashboard() {
 
   async function toggleCoupon(id: string) {
     try {
-      const res = await fetch(`/api/admin/coupons?id=${id}`, { method: "DELETE" });
+      const res = await adminFetch(`/api/admin/coupons?id=${id}`, { method: "DELETE" });
       const data = await res.json();
       if (data.success) fetchCoupons();
       else toast("error", data.error || "Something went wrong");
@@ -827,7 +881,7 @@ export default function AdminDashboard() {
     reason?: string
   ) {
     try {
-      const res = await fetch("/api/admin/users", {
+      const res = await adminFetch("/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(reason ? { userId, action, reason } : { userId, action }),
@@ -857,7 +911,7 @@ export default function AdminDashboard() {
 
   async function handleKycReview(kycId: string, status: "APPROVED" | "REJECTED", reason?: string) {
     try {
-      const res = await fetch("/api/admin/kyc", {
+      const res = await adminFetch("/api/admin/kyc", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ kycId, status, rejectionReason: reason }),
@@ -875,7 +929,7 @@ export default function AdminDashboard() {
 
   async function handleReportAction(reportId: string, action: string, reason: string) {
     try {
-      const res = await fetch("/api/admin/reports", {
+      const res = await adminFetch("/api/admin/reports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reportId, action, reason }),
@@ -893,7 +947,7 @@ export default function AdminDashboard() {
 
   async function handlePayoutAction(payoutId: string, action: string, note?: string) {
     try {
-      const res = await fetch("/api/admin/payouts", {
+      const res = await adminFetch("/api/admin/payouts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ payoutId, action, adminNote: note }),
@@ -922,7 +976,7 @@ export default function AdminDashboard() {
 
   async function fetchEarnings() {
     try {
-      const res = await fetch("/api/admin/earnings");
+      const res = await adminFetch("/api/admin/earnings");
       const data = await res.json();
       if (data.success) setEarnings(data.data);
     } catch {}
@@ -932,7 +986,7 @@ export default function AdminDashboard() {
     if (releasing) return;
     setReleasing(creatorId);
     try {
-      const res = await fetch("/api/admin/earnings", {
+      const res = await adminFetch("/api/admin/earnings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(creatorId === "all" ? {} : { creatorId }),
@@ -953,7 +1007,7 @@ export default function AdminDashboard() {
 
   async function fetchPayments() {
     try {
-      const res = await fetch(`/api/admin/payments?status=${paymentStatus}`);
+      const res = await adminFetch(`/api/admin/payments?status=${paymentStatus}`);
       const data = await res.json();
       if (data.success) {
         setPaymentList(data.data.transactions || []);
@@ -967,7 +1021,7 @@ export default function AdminDashboard() {
     action: "expire" | "recheck" | "grant" | "mark_unpaid",
     note?: string
   ) {
-    const res = await fetch("/api/admin/payments", {
+    const res = await adminFetch("/api/admin/payments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, transactionId: payment.id, ...(note ? { note } : {}) }),
@@ -1036,7 +1090,7 @@ export default function AdminDashboard() {
     setPendingRefund(null);
     setRefunding(payment.id);
     try {
-      const res = await fetch("/api/admin/payments", {
+      const res = await adminFetch("/api/admin/payments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1069,7 +1123,7 @@ export default function AdminDashboard() {
     setSetupBusy(true);
     try {
       // POST runs the live probes as well; GET only reads configuration.
-      const res = await fetch("/api/admin/setup", { method: runProbes ? "POST" : "GET" });
+      const res = await adminFetch("/api/admin/setup", { method: runProbes ? "POST" : "GET" });
       const data = await res.json();
       if (data.success) {
         setSetup(data.data);
@@ -1092,7 +1146,7 @@ export default function AdminDashboard() {
     setPipelineBusy(true);
     setPipeline(null);
     try {
-      const res = await fetch("/api/admin/bunny-self-test", { method: "POST" });
+      const res = await adminFetch("/api/admin/bunny-self-test", { method: "POST" });
       const data = await res.json();
       if (data.success) {
         setPipeline(data.data as PipelineTest);

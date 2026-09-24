@@ -75,16 +75,23 @@ const uiFiles = [
 // Extract every fetch( call with a proper paren-matching scan, then read the
 // method from INSIDE that call only (a naive window grabs the next fetch's
 // method and produces false positives).
+//
+// "Every fetch" includes a wrapper: the admin page calls its endpoints through
+// `adminFetch(...)`, which carries the session-lost handling, and a scan that
+// only knows the literal `fetch(` went blind to those 22 call sites the day the
+// wrapper landed — the audit then reported live admin routes as uncalled, which
+// is the opposite of what an audit is for. Any callee whose name ends in
+// `fetch` (case-insensitive) still names a route.
+const FETCH_CALL = /\b\w*fetch\(/gi;
+
 function extractFetchCalls(src) {
   const out = [];
-  let idx = 0;
-  while ((idx = src.indexOf("fetch(", idx)) !== -1) {
-    const prev = idx > 0 ? src[idx - 1] : " ";
-    if (/[A-Za-z0-9_$]/.test(prev)) {
-      idx += 6;
-      continue;
-    }
-    let i = idx + 6;
+  const callRe = new RegExp(FETCH_CALL.source, "gi");
+  let m;
+  while ((m = callRe.exec(src)) !== null) {
+    // The `(` is the last character we matched.
+    const open = m.index + m[0].length - 1;
+    let i = open + 1;
     let depth = 1;
     let inStr = null;
     let esc = false;
@@ -101,13 +108,14 @@ function extractFetchCalls(src) {
       }
       i++;
     }
-    const callSrc = src.slice(idx + 6, i);
-    idx = i;
-    const m = callSrc.match(/^\s*(?:"(\/api\/[^"]*)"|'(\/api\/[^']*)'|`(\/api\/[^`]*)`)/);
-    if (!m) continue;
+    const callSrc = src.slice(open + 1, i);
+    // Do not re-scan the arguments we just consumed.
+    callRe.lastIndex = i;
+    const arg = callSrc.match(/^\s*(?:"(\/api\/[^"]*)"|'(\/api\/[^']*)'|`(\/api\/[^`]*)`)/);
+    if (!arg) continue;
     const methodMatch = callSrc.match(/method:\s*["']([A-Za-z]+)["']/);
     out.push({
-      raw: m[1] || m[2] || m[3] || "",
+      raw: arg[1] || arg[2] || arg[3] || "",
       method: methodMatch ? methodMatch[1].toUpperCase() : "GET",
     });
   }
