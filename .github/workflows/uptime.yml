@@ -18,6 +18,13 @@
 # Discord webhook) to get the alarm pushed somewhere you will actually see it,
 # instead of only in GitHub's email.
 #
+# Set `CRON_SECRET` (the secret the four workers already use) and the alarm names
+# the worker that stopped, with how long it has been quiet, instead of saying only
+# "background jobs: late". Optional in both directions: without it the alert is
+# what it was, and a wrong or rotated value cannot stop the alarm — the detail is
+# fetched only after the verdict is already bad, and any failure leaves the
+# message alone.
+#
 # -----------------------------------------------------------------------------
 # The blind spot, which is why §4.0.2 also recommends a monitor outside GitHub
 #
@@ -54,4 +61,7 @@ jobs:
         env:
           APP_URL: ${{ vars.APP_URL }}
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
+          # Optional: turns "background jobs: late" into the worker's name and how
+          # long it has been silent. See the header.
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
         run: node scripts/watchdog.mjs

@@ -4,6 +4,8 @@
 //
 // Run:  node scripts/watchdog.mjs                  (APP_URL from the environment)
 //       node scripts/watchdog.mjs --url https://your-domain
+//       CRON_SECRET=… node scripts/watchdog.mjs     (optional — makes the alert
+//                                   name the worker that stopped; see §4.0.2)
 //
 // Wired to .github/workflows/uptime.yml, hourly. `npm run watchdog` runs the
 // same thing by hand, which is also the quickest post-deploy check there is.
@@ -37,9 +39,16 @@
 //     endpoint already made that call (returning 200 rather than 503). Folding
 //     it in here would leave a fresh deployment alarming until someone wires a
 //     scheduler, and an alarm that is always red is an alarm nobody reads.
-//   * It does not ask for worker detail. /api/health publishes the verdict and
-//     nothing else, on purpose, so the alert says where to look instead of
-//     putting operational detail on a public endpoint.
+//   * It does not ask /api/health for worker detail, because that endpoint
+//     publishes the verdict and nothing else — it is public, and a health
+//     endpoint that names workers and their schedules is a map of the system
+//     for anyone who asks. When CRON_SECRET is configured it asks the
+//     secret-guarded sibling (/api/health/attention) instead, so the alert can
+//     name the worker that stopped and how long it has been quiet. That is
+//     enrichment and never a prerequisite: if the secret is absent or the call
+//     fails, the alert is exactly what it was before, because an alert that
+//     needs a second credential in order to fire is an alert that stops firing
+//     the day that credential rotates.
 //
 // The blind spot, stated rather than hidden: GitHub disables *every* scheduled
 // workflow in a repository after 60 days without activity — this one included,
@@ -115,9 +124,52 @@ export function assessHealth(payload, httpStatus) {
   return { ok: alarms.length === 0, alarms, notices };
 }
 
-/** One line for a chat webhook or an email subject. */
-export function alertMessage(baseUrl, report) {
-  return `Genhub ${baseUrl} — ${report.alarms.join("; ")}`;
+/**
+ * The stopped workers from the detail endpoint, as one phrase.
+ *
+ * Prefers the sentence the server built, so the alert and the dashboard cannot
+ * describe the same outage in two different ways. Falls back to naming the
+ * workers if only the list arrived.
+ *
+ * @param {any} detail the parsed `data` from /api/health/attention
+ * @returns {string} "" when there is nothing usable, which is a normal answer
+ */
+export function describeStoppedWorkers(detail) {
+  if (!detail || typeof detail !== "object") return "";
+
+  const summary = typeof detail.summary === "string" ? detail.summary.trim() : "";
+  if (summary) return summary;
+
+  const workers = Array.isArray(detail.workers) ? detail.workers : [];
+  return workers
+    .map((worker) => {
+      const name = typeof worker?.name === "string" && worker.name.trim()
+        ? worker.name.trim()
+        : typeof worker?.id === "string"
+          ? worker.id
+          : "";
+      if (!name) return "";
+      const quietFor = Number.isFinite(worker?.silentForMinutes)
+        ? ` (silent ${worker.silentForMinutes} min)`
+        : "";
+      return `${name}${quietFor}`;
+    })
+    .filter(Boolean)
+    .join(", ");
+}
+
+/**
+ * One line for a chat webhook or an email subject.
+ *
+ * `workerDetail` is optional on purpose: the alert has to be exactly as loud
+ * with and without it.
+ */
+export function alertMessage(baseUrl, report, workerDetail = "") {
+  const alarms = report.alarms.join("; ");
+  const detail = (workerDetail || "").trim();
+  return detail
+    ? `Genhub ${baseUrl} — ${alarms} — ${detail}`
+    : `Genhub ${baseUrl} — ${alarms}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -163,9 +215,18 @@ if (isCli) {
     );
   }
 
+  // Who stopped, when this runner is allowed to know. Asked only when something
+  // is already wrong, and never allowed to change the verdict: `report` is
+  // final by the time this runs.
+  let workerDetail = "";
+  if (!report.ok) {
+    workerDetail = await fetchWorkerDetail(baseUrl, process.env.CRON_SECRET);
+    if (workerDetail) console.log(`\n  · ${workerDetail}`);
+  }
+
   const alertUrl = (process.env.ALERT_WEBHOOK_URL || "").trim();
   if (!report.ok && alertUrl) {
-    const message = alertMessage(baseUrl, report);
+    const message = alertMessage(baseUrl, report, workerDetail);
     try {
       const res = await fetch(alertUrl, {
         method: "POST",
@@ -193,6 +254,34 @@ if (isCli) {
 
   console.log("\n=== PASS ===\n");
   process.exit(0);
+}
+
+/**
+ * The per-worker detail, when this runner holds the secret for it.
+ *
+ * Returns "" for every failure — no secret, a 401 from a deployment that never
+ * set one, a timeout, a body that is not what we expect. The caller's alarm does
+ * not depend on this succeeding, so a failure here must stay silent rather than
+ * become an outage of its own. The 15s timeout matches the health fetch: a
+ * hanging request must not hold the run open until GitHub kills it.
+ */
+async function fetchWorkerDetail(baseUrl, secret) {
+  const token = (secret || "").trim();
+  if (!token) return "";
+
+  try {
+    const res = await fetch(`${baseUrl}/api/health/attention`, {
+      headers: { "x-cron-secret": token, "cache-control": "no-cache" },
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) return "";
+    const body = await res.json().catch(() => null);
+    // The app answers { success, data }; a bare body is accepted too, so a
+    // change of envelope cannot silence the detail without breaking the alarm.
+    return describeStoppedWorkers(body?.data ?? body);
+  } catch {
+    return "";
+  }
 }
 
 /**

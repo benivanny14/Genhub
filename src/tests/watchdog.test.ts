@@ -18,8 +18,10 @@
 // =============================================================================
 
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
-import { assessHealth, alertMessage } from "../../scripts/watchdog.mjs";
+import { assessHealth, alertMessage, describeStoppedWorkers } from "../../scripts/watchdog.mjs";
 
 /** A healthy response, with the parts each test cares about overridden. */
 function health(overrides: Record<string, any> = {}, status = 200) {
@@ -143,5 +145,132 @@ describe("alertMessage", () => {
 
     expect(message).toContain("https://genhub.co.tz");
     expect(message).toContain("stalled");
+  });
+
+  it("names the worker that stopped when the detail is available", () => {
+    const { payload, status } = health(
+      { status: "degraded", checks: { database: "up", backgroundJobs: "late" } },
+      503
+    );
+    const report = assessHealth(payload, status);
+
+    const message = alertMessage(
+      "https://genhub.co.tz",
+      report,
+      "Reconcile stale payments: nothing finished for 3 h"
+    );
+
+    expect(message).toContain("Reconcile stale payments");
+    expect(message).toContain("3 h");
+    // The problem itself is still there: the detail is added to the alarm, not
+    // swapped for it.
+    expect(message).toContain("background jobs: late");
+  });
+
+  it("is exactly the same alarm without the detail", () => {
+    const { payload, status } = health(
+      { status: "degraded", checks: { database: "up", backgroundJobs: "late" } },
+      503
+    );
+    const report = assessHealth(payload, status);
+    const withoutDetail = alertMessage("https://genhub.co.tz", report);
+
+    // Whitespace-only must not leave a dangling separator in a notification.
+    expect(alertMessage("https://genhub.co.tz", report, "   ")).toBe(withoutDetail);
+    expect(withoutDetail).not.toMatch(/—\s*$/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The detail behind the alert
+//
+// /api/health is public and publishes the verdict only, so the worker names come
+// from a secret-guarded sibling. Two properties have to hold or the feature is
+// worse than not having it: the alarm must be exactly as loud when the detail is
+// missing (a second credential cannot be allowed to silence it), and the public
+// endpoint must not start leaking the detail instead.
+// -----------------------------------------------------------------------------
+
+describe("describeStoppedWorkers", () => {
+  it("uses the sentence the server built, so both cannot drift apart", () => {
+    const detail = {
+      verdict: "stalled",
+      summary: "Reconcile stale payments: a run started 32 min ago and never finished",
+      workers: [{ id: "reconcile-payments", name: "Reconcile stale payments", state: "stalled" }],
+    };
+
+    expect(describeStoppedWorkers(detail)).toBe(detail.summary);
+  });
+
+  it("falls back to naming the workers when only the list arrived", () => {
+    const detail = {
+      workers: [
+        { id: "reconcile-payments", name: "Reconcile stale payments", silentForMinutes: 32 },
+        { id: "release-earnings", name: "Release matured earnings", silentForMinutes: 185 },
+      ],
+    };
+
+    const line = describeStoppedWorkers(detail);
+    expect(line).toContain("Reconcile stale payments (silent 32 min)");
+    expect(line).toContain("Release matured earnings (silent 185 min)");
+  });
+
+  it("falls back to the id when the name is missing", () => {
+    expect(describeStoppedWorkers({ workers: [{ id: "poll-encoding" }] })).toContain(
+      "poll-encoding"
+    );
+  });
+
+  it.each([null, undefined, "", "late", 42, {}, { summary: "   " }, { workers: "nope" }, []])(
+    "says nothing useful about %s, rather than something wrong",
+    (bad) => {
+      expect(describeStoppedWorkers(bad)).toBe("");
+    }
+  );
+});
+
+/**
+ * Source with comments removed.
+ *
+ * A guard that reads prose fails on prose: this route's header *describes* the
+ * rule it is being held to ("every route in that tree is required to run through
+ * runWorkerNow()"), and reading that as evidence the route runs a worker is the
+ * mistake env-template.test.ts already had to fix for environment keys. Only
+ * comments are dropped, never a line of code, so this cannot hide a real call.
+ */
+function withoutComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
+describe("the detail endpoint", () => {
+  const route = readFileSync(
+    join(process.cwd(), "src", "app", "api", "health", "attention", "route.ts"),
+    "utf8"
+  );
+  const publicHealth = readFileSync(
+    join(process.cwd(), "src", "app", "api", "health", "route.ts"),
+    "utf8"
+  );
+
+  it("is guarded by the scheduler secret, which is the point of the split", () => {
+    expect(route).toContain("requireCronSecret(request)");
+    expect(route).toContain("export const dynamic = \"force-dynamic\"");
+  });
+
+  it("moves nothing — it reads, so it never takes a lock or writes a heartbeat", () => {
+    const code = withoutComments(route);
+    expect(code).not.toContain("runWorkerNow(");
+    expect(code).not.toContain("runCronJob(");
+    // Nor does it write a heartbeat of its own: a read must not look like work.
+    expect(code).not.toContain("cronHeartbeat");
+  });
+
+  it("keeps the public endpoint a verdict, with no worker names in it", () => {
+    // The split only means something if the public half stays public-safe. If
+    // someone folds the detail back into /api/health, this fails.
+    const code = withoutComments(publicHealth);
+    expect(code).not.toContain("attentionSummary");
+    expect(code).not.toContain("needsAttention");
+    expect(code).not.toContain("workersNeedingAttention");
   });
 });

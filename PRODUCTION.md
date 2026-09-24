@@ -642,6 +642,33 @@ To have the alarm pushed somewhere you will actually see it, set the optional
 (`Settings → Secrets and variables → Actions → New secret`); the message is sent
 in the shape both understand. Without it the alarm is GitHub's own failure email.
 
+#### Naming the worker that stopped
+
+Out of the box the alarm says *which kind* of problem it is — `background jobs:
+late` — and not *which worker*, because `/api/health` is public and publishes the
+verdict alone: an endpoint that hands out worker names and where each one is
+scheduled is a map of the system for anybody who asks.
+
+Set `CRON_SECRET` (the same secret the four workers already use — new **secret**,
+not a variable) and the alarm names it, with how long it has been quiet:
+
+```
+Genhub https://your-domain — background jobs: late — a scheduled worker has
+stopped running. … — Release matured earnings: nothing finished for 4 h
+```
+
+The detail comes from `GET /api/health/attention`, which is guarded by the same
+`CRON_SECRET`, is read-only (no lock, no heartbeat, nothing moved), and answers
+`401` without it. Two properties are deliberate and tested:
+
+* **The alarm is exactly as loud without it.** The detail is fetched only *after*
+the verdict is already bad, so a missing, wrong or rotated secret cannot silence
+anything — it costs a line of context, never the alarm. That is the failure this
+split could otherwise introduce.
+* **The public endpoint still says nothing.** `/api/health` returns
+`backgroundJobs: late` and no more; a test fails if worker names are ever folded
+back into it.
+
 **One failure this cannot report, and it is worth knowing.** GitHub disables
 *every* scheduled workflow in a repository after 60 days without activity (§4.0.1,
 caveat 2) — this watchdog included, at the same moment as the four workers it
@@ -659,6 +686,11 @@ of months, which re-enables every schedule at once.
       before it is ever needed.
 - [ ] Set `ALERT_WEBHOOK_URL` if GitHub's failure email is not somewhere you
       look.
+- [ ] Set `CRON_SECRET` as a repository secret too, so the alarm names the worker
+      instead of only the verdict (§ above).
+- [ ] Confirm the alarm can still fire without it: run
+      `APP_URL=https://<domain> npm run watchdog` (no `CRON_SECRET`) and check it
+      exits 1 with the verdict alone.
 - [ ] Point an external monitor at `/api/health` for the case the watchdog
       cannot report (§ above).
 
