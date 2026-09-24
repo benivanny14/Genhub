@@ -1329,7 +1329,7 @@ same question can be asked first:
 
 ```bash
 curl -s -X POST "$APP_URL/api/cron/renew-subscriptions?dryRun=1" \
-  -H "x-cron-secret: $CRON_SECRET" | jq '.summary, .data.lines'
+  -H "x-cron-secret: $CRON_SECRET" | jq '.message, .data.lines'
 #   "A run now would charge 3 membership(s): 2 from wallet, 1 by USSD push to a fan's phone"
 ```
 
