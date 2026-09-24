@@ -25,6 +25,7 @@ import {
   RECOVERABLE_WORKERS,
   alertMessage,
   assessHealth,
+  assessServices,
   describeRunOutcome,
   describeStoppedWorkers,
   noticeMessage,
@@ -599,5 +600,73 @@ describe("noticeMessage", () => {
     // And exactly once per run: a second sighting would close the mark the first
     // one opened, which is the same outage reported as already over.
     expect(code.match(/await syncWatch\(/g)).toHaveLength(1);
+  });
+});
+
+// =============================================================================
+// The credentials behind the site
+//
+// A revoked Bunny key or a rotated SMTP password leaves a deployment that
+// answers every request and cannot stream a video, send a password reset or
+// cache anything. Nothing inside the app fails loudly, so this is the only
+// check that can notice — which makes the two ways of getting it wrong both
+// expensive: miss it and the site rots quietly; alarm on it when nothing is
+// configured and the alarm gets muted before launch.
+// =============================================================================
+
+describe("assessServices", () => {
+  const probe = (name: string, state: string, detail = "detail") => ({ name, state, detail });
+
+  it("names each configured-but-broken service with the reason", () => {
+    const alarms = assessServices({
+      probes: [
+        probe("Postgres", "ok"),
+        probe("Bunny Stream", "fail", "HTTP 401 — wrong key"),
+        probe("SMTP", "fail", "getaddrinfo ENOTFOUND"),
+      ],
+    });
+
+    expect(alarms).toEqual([
+      "Bunny Stream is configured but failing: HTTP 401 — wrong key",
+      "SMTP is configured but failing: getaddrinfo ENOTFOUND",
+    ]);
+  });
+
+  it("never alarms on a service nobody has configured yet", () => {
+    // The launch checklist's business, not the watchdog's: flagging `skip` would
+    // keep every fresh deployment red, which is how an alarm stops being read.
+    expect(
+      assessServices({ probes: [probe("SMTP", "skip"), probe("Redis", "warn")] })
+    ).toEqual([]);
+  });
+
+  it("contributes nothing it cannot read", () => {
+    // No secret, a 401, a timeout, an unfamiliar body: silence, not an outage.
+    // The verdict was decided before this ran.
+    expect(assessServices(null)).toEqual([]);
+    expect(assessServices(undefined)).toEqual([]);
+    expect(assessServices("not an object")).toEqual([]);
+    expect(assessServices({})).toEqual([]);
+  });
+
+  it("still says something useful about a probe that forgot its own name", () => {
+    expect(assessServices({ probes: [{ state: "fail", detail: "connection refused" }] })).toEqual([
+      "a service is configured but failing: connection refused",
+    ]);
+  });
+
+  it("asks for the probes before it composes the alert", () => {
+    // A service failure that is fetched after sendWebhook() is a service failure
+    // nobody is told about — the mistake would pass every other test here,
+    // because they exercise the pure functions directly.
+    const code = withoutComments(
+      readFileSync(join(process.cwd(), "scripts", "watchdog.mjs"), "utf8")
+    );
+
+    const probing = code.indexOf("await fetchServiceProbes(");
+    const alerting = code.indexOf("await sendWebhook(");
+    expect(probing).toBeGreaterThan(-1);
+    expect(alerting).toBeGreaterThan(-1);
+    expect(probing).toBeLessThan(alerting);
   });
 });

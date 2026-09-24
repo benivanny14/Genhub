@@ -71,6 +71,20 @@
 //     needs a second credential in order to fire is an alert that stops firing
 //     the day that credential rotates.
 //
+// -----------------------------------------------------------------------------
+// The credentials behind the site, not only the app's own verdict
+//
+// With CRON_SECRET set the run also asks /api/health/services, which runs the
+// same live probes `npm run preflight:prod` runs: Postgres, Redis, Bunny, SMTP,
+// HarakaPay and the app URL. A revoked Bunny key or a rotated SMTP password
+// leaves a site that answers every request and cannot stream a video or send a
+// password reset — nothing inside the app fails loudly, so an outside check is
+// the only thing that can notice, and this one is already hourly.
+//
+// `skip` is not an alarm: a service nobody configured yet is the launch
+// checklist's business, and flagging it here would keep every pre-launch
+// deployment permanently red, which is how an alarm stops being read.
+//
 // The blind spot, stated rather than hidden: GitHub disables *every* scheduled
 // workflow in a repository after 60 days without activity — this one included,
 // at the same moment as the four workers it watches. For that specific failure
@@ -177,6 +191,40 @@ export function describeStoppedWorkers(detail) {
     })
     .filter(Boolean)
     .join(", ");
+}
+
+/**
+ * Services that are configured but no longer working, as alarms.
+ *
+ * The failure this catches has no symptom inside the app: a revoked Bunny key or
+ * a rotated SMTP password leaves a site that answers every request perfectly and
+ * cannot stream a video, send a password reset, or cache anything. Nothing in
+ * the app fails loudly, so the only place it can surface is an outside check.
+ *
+ * Pure, so the wording is pinned by tests rather than discovered in a chat
+ * message. A `skip` is deliberately not a failure here: a service nobody has
+ * configured yet is the launch checklist's business, and alarming on it would
+ * keep every pre-launch deployment permanently red. Anything unreadable (`null`)
+ * contributes nothing — the health verdict was already decided before this runs.
+ *
+ * @param {any} detail the parsed `data` from /api/health/services, or null
+ * @returns {string[]}
+ */
+export function assessServices(detail) {
+  if (!detail || typeof detail !== "object") return [];
+
+  const probes = Array.isArray(detail.probes) ? detail.probes : [];
+  return probes
+    .filter((probe) => probe?.state === "fail")
+    .map((probe) => {
+      const name =
+        typeof probe?.name === "string" && probe.name.trim() ? probe.name.trim() : "a service";
+      const why =
+        typeof probe?.detail === "string" && probe.detail.trim()
+          ? probe.detail.trim()
+          : "no detail";
+      return `${name} is configured but failing: ${why}`;
+    });
 }
 
 /**
@@ -420,6 +468,18 @@ if (isCli) {
       }
     : assessHealth(payload, httpStatus);
 
+  // The credentials behind the deployment, not only the app's own verdict.
+  // Purely additive: with no CRON_SECRET — or against an older deployment that
+  // has not got the route yet — this contributes nothing and the alarm is
+  // exactly what it was before.
+  const serviceAlarms = assessServices(
+    await fetchServiceProbes(baseUrl, process.env.CRON_SECRET)
+  );
+  if (serviceAlarms.length) {
+    report.alarms.push(...serviceAlarms);
+    report.ok = false;
+  }
+
   for (const notice of report.notices) console.log(`  ! ${notice}`);
   for (const alarm of report.alarms) console.log(`  ✗ ${alarm}`);
   if (report.ok) {
@@ -568,6 +628,38 @@ async function sendWebhook(alertUrl, message) {
  * become an outage of its own. The 15s timeout matches the health fetch: a
  * hanging request must not hold the run open until GitHub kills it.
  */
+/**
+ * The live service probes, when this runner holds the secret for them.
+ *
+ * Returns null for every failure — no secret, a 401 from a deployment that never
+ * set one, a timeout, a body that is not what we expect. Nothing here can turn a
+ * healthy run bad on its own: the verdict was decided first, and a probe we
+ * could not fetch is silence, not an outage.
+ *
+ * Bounded at 30s because the probes open real connections and a managed Postgres
+ * waking from idle can take seconds — but bounded all the same, so a hung probe
+ * cannot hold the run open until GitHub kills it.
+ */
+async function fetchServiceProbes(baseUrl, secret) {
+  const token = (secret || "").trim();
+  if (!token) return null;
+
+  try {
+    const res = await fetch(`${baseUrl}/api/health/services`, {
+      headers: { "x-cron-secret": token, "cache-control": "no-cache" },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!res.ok) return null;
+    const body = await res.json().catch(() => null);
+    // The app answers { success, data }; a bare body is accepted too, so a
+    // change of envelope cannot silence this without also breaking the alarm.
+    const detail = body?.data ?? body;
+    return detail && typeof detail === "object" ? detail : null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchWorkerDetail(baseUrl, secret) {
   const token = (secret || "").trim();
   if (!token) return null;

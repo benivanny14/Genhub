@@ -28,6 +28,17 @@
 # the alarm — the detail and the restart are attempted only after the verdict is
 # already bad, and any failure leaves the message alone.
 #
+# CRON_SECRET also buys the credential check: the run asks /api/health/services,
+# which runs the same live probes `npm run preflight:prod` runs — Postgres, Redis,
+# Bunny, SMTP, HarakaPay and the app URL. A revoked key or a rotated password
+# leaves a site that answers every request and cannot stream a video or send a
+# password reset; nothing inside the app fails loudly, so this is the only place
+# it becomes an alarm instead of a to-do. Additive in the same way as the worker
+# detail: no secret means no probe, and a probe that cannot be fetched is silence
+# rather than an outage. A service nobody has configured yet (`skip`) is NOT
+# alarmed on — that is the launch checklist's business, and flagging it would
+# keep every pre-launch deployment permanently red.
+#
 # To stop the automatic restarts and keep the alarm, set the repository VARIABLE
 # `WATCHDOG_RECOVER=off`. Unset means on; anything unrecognised means off.
 #

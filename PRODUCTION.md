@@ -720,6 +720,40 @@ To have the alarm pushed somewhere you will actually see it, set the optional
 (`Settings → Secrets and variables → Actions → New secret`); the message is sent
 in the shape both understand. Without it the alarm is GitHub's own failure email.
 
+#### The credentials behind the site, probed hourly
+
+`npm run preflight:prod` asks whether every service actually works, but only when
+somebody runs it. A revoked Bunny key, a rotated SMTP password, a replaced Redis
+token or a suspended database leaves a site that answers every request perfectly
+while it cannot stream a video, send a password reset or take a payment — nothing
+inside the app fails loudly, so an outside check is the only thing that can
+notice.
+
+With `CRON_SECRET` set, each watchdog run also asks `GET /api/health/services`,
+which runs the same live probes the admin Setup tab runs: Postgres, Redis, Bunny
+Stream, Bunny CDN, SMTP, HarakaPay and the app URL. The route is guarded by
+`CRON_SECRET` and **reads only** — it opens connections and moves nothing.
+
+| Probe state | Watchdog verdict |
+|---|---|
+| `fail` — configured but broken | **alarm** — names the service and the reason |
+| `warn` — works, but degraded (e.g. unsigned playback URLs) | nothing; it shows on the admin card |
+| `skip` — not configured yet | **nothing** — the launch checklist's business, not an outage. Flagging it would keep every pre-launch deployment permanently red |
+| Route unreachable, or no `CRON_SECRET` | **nothing** — enrichment, never a reason to fail a run |
+
+The last row is the same rule the worker detail follows: the probe is attempted
+only after the verdict is decided, so a rotated `CRON_SECRET` costs a line of
+context and never the alarm. `src/tests/watchdog.test.ts` pins both the wording
+and the ordering — the fetch has to happen *before* the alert is composed, or a
+broken credential is noticed by nobody.
+
+Prove it by hand:
+
+```bash
+APP_URL=https://<domain> CRON_SECRET=$CRON_SECRET npm run watchdog
+#   ✗ Bunny Stream is configured but failing: HTTP 401 — wrong key, or it lacks access to this library
+```
+
 #### Naming the worker that stopped
 
 Out of the box the alarm says *which kind* of problem it is — `background jobs:
