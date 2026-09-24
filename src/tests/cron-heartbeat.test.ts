@@ -110,6 +110,32 @@ describe("worker registry", () => {
     }
   });
 
+  it("gives every worker a budget the current scheduler can actually keep", () => {
+    // The bug this came from: the budgets were "roughly four missed runs"
+    // (20 / 40 / 180), which assumes a schedule that fires often enough for four
+    // misses to be a lot. GitHub Actions delivered a `*/5` file every 138-341
+    // minutes on this repository (§4.0.4), so every worker read `late` for most
+    // of the day and /api/health answered 503 nearly always — an alarm nobody can
+    // afford to read.
+    //
+    // 336 minutes is the worst gap measured between two deliveries of one
+    // workflow file (5h36, the hourly ones; the `*/5` file managed no better
+    // than 341). A budget above it means `late` now means "the pokes stopped",
+    // which an operator can act on, rather than "this worker's own cron is
+    // optimistic", which they cannot.
+    //
+    // When a denser scheduler is wired up — Vercel Cron on Pro, or one external
+    // 5-minute poke at /api/cron/supervisor (§4.0.4) — tighten the budgets and
+    // lower this number with them, not one without the other.
+    const WORST_MEASURED_DELIVERY_GAP_MINUTES = 336;
+    for (const w of CRON_WORKERS) {
+      expect(
+        w.staleAfterMinutes,
+        `${w.id} would flag a schedule that is behaving normally on GitHub Actions`
+      ).toBeGreaterThan(WORST_MEASURED_DELIVERY_GAP_MINUTES);
+    }
+  });
+
   it("does not list the same worker twice", () => {
     const ids = CRON_WORKERS.map((w) => w.id);
     expect(new Set(ids).size).toBe(ids.length);
@@ -872,8 +898,11 @@ describeDb("getCronHealth", () => {
     await prisma.cronHeartbeat.create({
       data: {
         worker: WORKER,
-        lastStartedAt: new Date(Date.now() - 3 * 60 * 60_000),
-        lastFinishedAt: new Date(Date.now() - 3 * 60 * 60_000),
+        // Past `staleAfterMinutes`, which is the scheduler's clock — see the
+        // registry: a deployment on GitHub Actions cannot promise less than
+        // hours between pokes, so a shorter silence is not yet evidence.
+        lastStartedAt: new Date(Date.now() - 8 * 3600_000),
+        lastFinishedAt: new Date(Date.now() - 8 * 3600_000),
         lastOutcome: "OK",
         runsTotal: 12,
       },
@@ -892,8 +921,8 @@ describeDb("getCronHealth", () => {
     await prisma.cronHeartbeat.create({
       data: {
         worker: WORKER,
-        lastStartedAt: new Date(Date.now() - 3 * 60 * 60_000),
-        lastFinishedAt: new Date(Date.now() - 3 * 60 * 60_000),
+        lastStartedAt: new Date(Date.now() - 8 * 3600_000),
+        lastFinishedAt: new Date(Date.now() - 8 * 3600_000),
         lastOutcome: "OK",
         runsTotal: 4,
       },
@@ -906,10 +935,10 @@ describeDb("getCronHealth", () => {
     expect(health.needsAttention).toEqual([WORKER]);
     // Named the way an operator reads it, not by its internal id.
     expect(health.attentionSummary).toContain(CRON_WORKERS.find((w) => w.id === WORKER)!.name);
-    expect(health.attentionSummary).toContain("3 h");
+    expect(health.attentionSummary).toContain("8 h");
 
     const stopped = health.workers.find((w) => w.id === WORKER)!;
-    expect(stopped.silentForMinutes).toBeGreaterThanOrEqual(179);
+    expect(stopped.silentForMinutes).toBeGreaterThanOrEqual(479);
     // A timestamp, not only a duration: an age cannot be held against a deploy
     // or a log line, and that comparison is the next thing an operator does.
     expect(stopped.silentSince).not.toBeNull();
@@ -981,12 +1010,13 @@ describeDb("syncCronWatch", () => {
   /**
    * The worker went quiet hours ago: past every worker's budget.
    *
-   * Four hours, deliberately not three: `staleAfterMinutes` is 180 for the two
-   * hourly workers, so three hours sits exactly on the line and half the registry
-   * is not overdue yet — a fixture that only half the workers trip tests half the
-   * code while looking like it tests all of it.
+   * Eight hours rather than a round four, because all four workers now share one
+   * `staleAfterMinutes` (POKES_STOPPED_AFTER_MINUTES = 360), and a fixture that
+   * only some of them trip tests some of the code while looking like it tests
+   * all of it. Fixed at 8 h it sits clearly past every budget with room for a
+   * future worker whose own cadence is looser.
    */
-  const down = { lastStartedAt: hours(4), lastFinishedAt: hours(4) };
+  const down = { lastStartedAt: hours(8), lastFinishedAt: hours(8) };
   /** It is running on schedule right now. */
   const up = { lastStartedAt: new Date(), lastFinishedAt: new Date() };
 
@@ -1027,10 +1057,10 @@ describeDb("syncCronWatch", () => {
     expect(r.wasState).toBe("late");
     // The length of the *outage*, not of the watchdog's wait: it was marked a
     // second ago, and an implementation dating the recovery from that sighting
-    // would report 0 here — reading "nothing finished for 4 h" out of the alarm
+    // would report 0 here — reading "nothing finished for 8 h" out of the alarm
     // and "running again after 0 min" out of the all-clear.
-    expect(r.alertedForMinutes).toBeGreaterThanOrEqual(239);
-    expect(r.alertedForMinutes).toBeLessThanOrEqual(241);
+    expect(r.alertedForMinutes).toBeGreaterThanOrEqual(479);
+    expect(r.alertedForMinutes).toBeLessThanOrEqual(481);
     expect(r.restartedOutsideSchedule).toBe(false);
     expect(sync.summary).toContain("firing again");
     // The mark is closed, not deleted: when it was first seen is the record that

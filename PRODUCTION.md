@@ -798,7 +798,7 @@ and how long it took:
 |---|---|---|
 | **Running on schedule** | Finished inside its cadence | nothing |
 | **Running now** | A run is in flight and still inside its grace | nothing |
-| **Overdue** | Nothing has finished for ~4 missed runs | the schedule stopped — check §4.0.1 |
+| **Overdue** | Nothing has finished for over 6 h — see the thresholds below | the schedule stopped — check §4.0.1 |
 | **Killed mid-run** | A run began and never came back | the job times out or crashes when it runs |
 | **Failing** | It ran recently and returned an error | read the error on the card |
 | **Never run** | No heartbeat has ever been written | no scheduler is configured yet |
@@ -809,10 +809,34 @@ dead and the other means the *job* dies when it runs. The fix is different, so
 the dashboard says which.
 
 The thresholds live with the registry in
-`src/lib/services/cron-heartbeat.service.ts`. A worker counts as overdue after
-roughly four missed invocations (not one), because a single late run is normal
-for both Vercel Cron and GitHub Actions; and a run is presumed killed after a
-few minutes, since these jobs finish in 0.4–2.5s measured.
+`src/lib/services/cron-heartbeat.service.ts`, and there are two of them because
+they answer two different questions.
+
+**Overdue: 6 hours without a finished run, for all four workers.** This is the
+*scheduler's* clock, not the worker's: it says "the pokes have stopped", which is
+the only thing an alarm can honestly measure here. It used to be "roughly four
+missed runs" per worker (20 / 40 / 180 min), which assumes a schedule that fires
+often enough for four misses to be a lot — and GitHub Actions delivered a `*/5`
+file every 138–341 minutes on this repository (§4.0.4), so every worker read
+`Overdue` for most of the day and `/api/health` answered 503 nearly always (an
+alarm nobody can afford to read). What a worker *needs* is still recorded per
+worker as `everyMinutes`, and the card prints both:
+
+```
+Nothing has finished for 7 h (expected every 5 min, flagged after 6 h).
+The schedule has stopped firing — check .github/workflows/poll-encoding.yml.
+```
+
+So a tight budget is a statement about your scheduler, and it should be tightened
+back to ~4 missed runs the moment your pokes are denser than hourly — see the
+"Going back to Vercel Cron" note in §4.0.1, or one external 5-minute poke at
+`/api/cron/supervisor` (§4.0.4).
+
+**Killed mid-run: a few minutes.** Measured, not guessed: these jobs finish in
+0.4–2.5 s, so a run still open after 5–15 min (per worker) was killed — a
+function timeout or a crash before its own handler could catch it. It is reported
+separately from `Overdue` because the fix is different: the schedule is fine, the
+job dies when it runs.
 
 **For an uptime monitor**, `GET /api/health` reports the same verdict as
 `checks.backgroundJobs` — `ok`, `never`, `late`, `stalled` or `failing` — so an
@@ -1211,8 +1235,11 @@ B=https://<domain>; S=$CRON_SECRET
 curl -s -X POST "$B/api/cron/supervisor" -H "x-cron-secret: $S" | head -c 400
 ```
 
-Its own `*/10` schedule is delivered just as sparsely as the rest. That is fine,
-and it is the point: the **endpoint** is the unit of correctness, not the file —
+Its own `*/10` schedule is delivered just as sparsely as the rest, and the four
+worker workflows now end with the same poke, so the real poke rate is the union
+of all five files — about 14 runs a day measured, worst gap 3h32 between any two
+of them. That is what the 6-hour "Overdue" budget in §4.0.2 is calibrated to. The
+**endpoint** is the unit of correctness, not the file —
 so a free 5-minute monitor (cron-job.org, healthchecks.io) sending
 `x-cron-secret` to `/api/cron/supervisor` gives per-minute precision for all four
 workers at once, and so does Vercel Cron on Pro:

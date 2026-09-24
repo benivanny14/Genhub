@@ -79,7 +79,7 @@ export const SUPERVISOR_ORIGIN_LABEL = "started by the cron supervisor";
  * Was this run started by something other than the schedule?
  *
  * Read from the heartbeat's `lastOrigin`, where null is the schedule. Deliberately
-a property of the column rather than a list of today's labels: the recovery
+ * a property of the column rather than a list of today's labels: the recovery
  * notice (§4.0.2) turns on this answer — a worker woken only because something
  * restarted it must not read as "the schedule is firing again" — and a third
  * mechanism would otherwise silently start claiming recoveries it did not earn.

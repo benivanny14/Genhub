@@ -57,10 +57,30 @@ export interface CronWorkerDef {
   /**
    * How long without a finished run before it counts as overdue (minutes).
    *
-   * Deliberately several intervals, not one: a single late or skipped
-   * invocation is normal for both Vercel Cron and GitHub Actions (whose
-   * schedules are delayed under load), and an alarm that cries wolf gets
-   * ignored. This is set to roughly 4 missed runs.
+   * Two different questions, answered by two different numbers on purpose:
+   *
+   *   * `everyMinutes` is what the WORKER needs — what a sub-hourly scheduler
+   *     would give it, and what the detail sentence quotes.
+   *   * this is how long the SCHEDULER can be trusted to stay quiet, and it is
+   *     the only thing an alarm can be built on.
+   *
+   * It used to be "roughly 4 missed runs" (20 / 40 / 180 across the four),
+   * which assumes the schedule fires often enough for four misses to be a lot.
+   * GitHub Actions does not: measured on this repository, the file asking for a
+   * run every five minutes was delivered every 138-341 minutes, and the hourly
+   * ones every 3h19-5h36 (§4.0.4). So every worker read `late` for most of the
+   * day, /api/health
+   * answered 503 nearly always, and the alarm taught people to ignore it.
+   *
+   * The four therefore share one budget, and it answers "have the pokes
+   * stopped?" rather than "did this worker miss a beat?". A worker that cannot
+   * do its job still shows as `failing` or `stalled` — those are measured
+   * against the job, not against the schedule.
+   *
+   * TIGHTEN IT BACK to roughly 4 missed runs the moment the pokes are denser:
+   * with Vercel Cron on Pro, or one external 5-minute poke at
+   * /api/cron/supervisor (§4.0.4), the schedules really do keep their intervals
+   * and the tight budget becomes both true and useful again.
    */
   staleAfterMinutes: number;
   /**
@@ -88,6 +108,18 @@ export interface CronWorkerDef {
   sendsCustomerRequests: boolean;
 }
 
+/**
+ * When "nothing has finished" means "the schedule has stopped", on GitHub
+ * Actions.
+ *
+ * Six hours, because that is the measured shape of the only scheduler this repo
+ * has: GitHub delivered ~14 runs a day across the five workflow files (worst
+ * gap between any two of them: 3h32), so a poke every ≤ 6 h is the promise the
+ * platform actually keeps — see `staleAfterMinutes` above and §4.0.4. It is not
+ * a cadence any worker *wants*; it is the one the alarm can be honest about.
+ */
+const POKES_STOPPED_AFTER_MINUTES = 360;
+
 export const CRON_WORKERS: readonly CronWorkerDef[] = [
   {
     id: "release-earnings",
@@ -95,7 +127,7 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     consequence:
       "Creator earnings stay inside the 14-day holding period and creators cannot withdraw.",
     everyMinutes: 60,
-    staleAfterMinutes: 180,
+    staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     inFlightGraceMinutes: 10,
     schedule: "vercel.json or .github/workflows/release-earnings.yml",
     sendsCustomerRequests: false,
@@ -106,7 +138,7 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     consequence:
       "A charge the gateway accepted but never reported is never settled, and nobody is told.",
     everyMinutes: 10,
-    staleAfterMinutes: 40,
+    staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     inFlightGraceMinutes: 5,
     schedule: "vercel.json or .github/workflows/reconcile-payments.yml",
     // Reads gateway state about charges that already exist; it never starts one.
@@ -117,7 +149,7 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     name: "Renew subscriptions",
     consequence: "Memberships expire instead of renewing, and the fan is never retried.",
     everyMinutes: 60,
-    staleAfterMinutes: 180,
+    staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     // Longest of the four: it sends one USSD push per subscriber, and each push
     // is a round trip to the gateway.
     inFlightGraceMinutes: 15,
@@ -133,7 +165,7 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
       "A transcoded video is never published, so the creator waits for a video that is already ready.",
     // vercel.json asks for 3 minutes; GitHub Actions cannot go below 5.
     everyMinutes: 5,
-    staleAfterMinutes: 20,
+    staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     inFlightGraceMinutes: 5,
     schedule: "vercel.json or .github/workflows/poll-encoding.yml",
     sendsCustomerRequests: false,
@@ -589,9 +621,14 @@ export function classifyWorker(
       unfinishedRun,
       ageMinutes,
       silentSince: aliveAt,
+      // Both numbers, because they are no longer the same thing: the cadence the
+      // worker needs, and the silence the scheduler is allowed before this is
+      // called a stopped schedule. Printing only the first made the sentence
+      // read like a contradiction ("nothing for 7 h (expected every 5 min)").
       detail:
         `Nothing has finished for ${humanDuration(referenceAge ?? 0)} (expected every ` +
-        `${def.everyMinutes} min). The schedule has stopped firing — check ${def.schedule}.`,
+        `${def.everyMinutes} min, flagged after ${humanDuration(def.staleAfterMinutes)}). ` +
+        `The schedule has stopped firing — check ${def.schedule}.`,
     };
   }
 
