@@ -571,4 +571,33 @@ describe("noticeMessage", () => {
     expect(exitBranch).toBeGreaterThan(noticeBranch);
     expect(code.slice(exitBranch, exitBranch + 400)).toContain("process.exit(1)");
   });
+
+  it("reads the state before it repairs anything", () => {
+    // The ordering is the value of the memory, and it is invisible from the
+    // outside: a restart writes a fresh heartbeat, so a sighting taken after it
+    // says "this worker is fine". The recovery then never fires for a worker the
+    // watchdog rescued — the alarm goes quiet because a repair succeeded, and
+    // nobody is told the schedule is still dead.
+    //
+    // This is not hypothetical: the first cut recorded after the restarts, and
+    // it passed every other test in this file, because they call syncCronWatch
+    // directly and the mistake lived in the CLI's step order.
+    const code = withoutComments(
+      readFileSync(join(process.cwd(), "scripts", "watchdog.mjs"), "utf8")
+    );
+
+    // The call sites, not the declarations — the helpers are defined above the
+    // CLI block, so matching bare names would compare the wrong two things.
+    const reading = code.indexOf("await syncWatch(");
+    const planning = code.indexOf("const plan = planRecoveries(detail");
+    const restarting = code.indexOf("await restartWorker(baseUrl");
+    expect(reading).toBeGreaterThan(-1);
+    expect(planning).toBeGreaterThan(-1);
+    expect(reading).toBeLessThan(planning);
+    expect(reading).toBeLessThan(restarting);
+
+    // And exactly once per run: a second sighting would close the mark the first
+    // one opened, which is the same outage reported as already over.
+    expect(code.match(/await syncWatch\(/g)).toHaveLength(1);
+  });
 });
