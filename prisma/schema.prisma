@@ -747,10 +747,45 @@ model CronHeartbeat {
   lastOutcome         String?
   /// Human-readable result, e.g. "Released TZS 12,000 for 2 creator(s)".
   lastSummary         String?
+  /// Who started the last run — null for a scheduled one. The uptime watchdog
+  /// restarts a worker whose schedule has died and declares itself, so "it is
+  /// running again" can be told apart from "the schedule came back": the second
+  /// is a fixed problem, and reading one as the other closes the ticket too
+  /// early. It is a column rather than a suffix inside lastSummary because the
+  /// recovery notice has to test it, and testing a human sentence is how the two
+  /// drift apart.
+  lastOrigin          String?
   lastError           String?
   lastDurationMs      Int?
   consecutiveFailures Int       @default(0)
   runsTotal           Int       @default(0)
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+}
+
+/// The uptime watchdog's memory of what it already reported.
+///
+/// Without this, "is that worker fine now?" cannot be answered: a heartbeat only
+/// describes the present, so a worker that recovered an hour ago looks exactly
+/// like one that was never broken — and the operator keeps chasing a schedule
+/// that has already been fixed. One row per worker that the watchdog has seen
+/// needing attention; the row is closed out with `resolvedAt` rather than
+/// deleted, so the app keeps the record even when a webhook delivery fails.
+model CronWatch {
+  id           String    @id @default(cuid())
+  worker       String    @unique
+  /// When the trouble began — the same instant the alarm dated it, so "nothing
+  /// finished for 4 h" and "running again after 4 h" line up. Kept on later
+  /// sightings: re-dating it would reset a week-long outage to "0 min" on every
+  /// run, and how long it was stuck is the number worth knowing.
+  alertedAt    DateTime
+  /// The state reported on the latest sighting (late | stalled | failing), so a
+  /// recovery can say what it was.
+  alertedState String
+  /// When the watchdog next found it healthy. Null while it is still down.
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([worker])
 }

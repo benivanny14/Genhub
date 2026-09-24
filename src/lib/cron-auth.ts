@@ -56,7 +56,13 @@ function presentedSecret(request: NextRequest): string {
  * CRON_SECRET has no need of that extra power.
  */
 const WATCHDOG_ORIGIN_HEADER = "watchdog";
-const WATCHDOG_ORIGIN_LABEL = "restarted by the uptime watchdog";
+/**
+ * Exported because it is compared, not only printed: the recovery notice reads
+ * it back off the heartbeat to decide whether a worker came back on its own or
+ * only because the watchdog started it. Those are two different answers for the
+ * operator, so the string has one home.
+ */
+export const WATCHDOG_ORIGIN_LABEL = "restarted by the uptime watchdog";
 
 /**
  * Who asked for this run, for the heartbeat.

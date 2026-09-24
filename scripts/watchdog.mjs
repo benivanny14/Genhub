@@ -369,6 +369,22 @@ export function describeRunOutcome(body) {
   return message ? `ran — ${message}` : "ran";
 }
 
+/**
+ * The message sent when something came back.
+ *
+ * Deliberately not the alarm wording: good news and bad news arrive in the same
+ * channel, and a muted channel's preview line is the only thing anybody sees. It
+ * never fires on a failed run, so it cannot be mistaken for one.
+ *
+ * @param {string} baseUrl
+ * @param {string} [summary] the sentence /api/health/attention built
+ * @returns {string} "" when there is nothing to say
+ */
+export function noticeMessage(baseUrl, summary) {
+  const text = (summary || "").trim();
+  return text ? `Genhub ${baseUrl} — recovered: ${text}` : "";
+}
+
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
@@ -412,6 +428,22 @@ if (isCli) {
     );
   }
 
+  // What came back since the last look — recorded BEFORE anything this run does
+  // about it.
+  //
+  // The order is the whole value of the memory. A restart below writes a fresh
+  // heartbeat, so a sighting taken afterwards would say "this worker is fine",
+  // erasing the very outage the notice exists to take back: the alarm goes quiet
+  // because a repair succeeded, and nobody is ever told that the schedule itself
+  // is still dead. Reading first, acting second, is also what the heartbeat
+  // cannot do for us — it describes the present, so only the sighting taken
+  // before the intervention knows there was something to intervene in.
+  //
+  // Runs on every run, healthy or not: the run that can notice a recovery is the
+  // one with nothing else to report, which is exactly the run that would
+  // otherwise finish in silence.
+  const recovered = await syncWatch(baseUrl, process.env.CRON_SECRET);
+
   // Who stopped, when this runner is allowed to know — and then, if it holds the
   // secret, whether it can put any of them back on their feet. Everything here
   // happens *after* the verdict is decided: the detail and the restarts are
@@ -445,25 +477,25 @@ if (isCli) {
     }
   }
 
+  if (recovered) {
+    console.log(`\n  ✓ ${recovered}`);
+    // While something else is still wrong it belongs in the alarm, rather than
+    // arriving as a second message nobody asked for.
+    if (!report.ok) additions.push(recovered);
+  }
+
   const alertUrl = (process.env.ALERT_WEBHOOK_URL || "").trim();
-  if (!report.ok && alertUrl) {
-    const message = alertMessage(baseUrl, report, additions);
-    try {
-      const res = await fetch(alertUrl, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        // `text` is Slack's field, `content` is Discord's; each ignores the other.
-        body: JSON.stringify({ text: message, content: message }),
-        signal: AbortSignal.timeout(15_000),
-      });
-      console.log(
-        res.ok
-          ? `\n  ✓ alert sent (HTTP ${res.status})`
-          : `\n  ! alert webhook answered HTTP ${res.status} — the alert was not delivered`
-      );
-    } catch (alertError) {
-      console.log(`\n  ! could not reach the alert webhook: ${alertError.message || alertError}`);
-    }
+  if (alertUrl && !report.ok) {
+    const sent = await sendWebhook(alertUrl, alertMessage(baseUrl, report, additions));
+    console.log(sent.ok ? `\n  ✓ alert ${sent.text}` : `\n  ! alert webhook ${sent.text}`);
+  } else if (alertUrl && recovered) {
+    // Good news needs a channel of its own: GitHub's failure email only fires on
+    // a failed run, and this run succeeded — so without this, whoever is chasing
+    // the schedule is never told that it stopped being a problem.
+    const sent = await sendWebhook(alertUrl, noticeMessage(baseUrl, recovered));
+    console.log(sent.ok ? `\n  ✓ notice ${sent.text}` : `\n  ! notice webhook ${sent.text}`);
+  } else if (recovered) {
+    console.log("\n  (no ALERT_WEBHOOK_URL set, so nothing was pushed — that line is the record)");
   }
 
   if (!report.ok) {
@@ -475,6 +507,56 @@ if (isCli) {
 
   console.log("\n=== PASS ===\n");
   process.exit(0);
+}
+
+/**
+ * Advance the watchdog's memory, and get back whatever recovered.
+ *
+ * Returns "" for every failure — no secret, a 401 from a deployment that never
+ * set one, a timeout, an unfamiliar body. Good news that cannot be fetched must
+ * stay silent, and must never become bad news: the verdict was decided before
+ * this runs and nothing here can change it.
+ */
+async function syncWatch(baseUrl, secret) {
+  const token = (secret || "").trim();
+  if (!token) return "";
+
+  try {
+    const res = await fetch(`${baseUrl}/api/health/attention`, {
+      method: "POST",
+      headers: { "x-cron-secret": token, "cache-control": "no-cache" },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) return "";
+    const body = await res.json().catch(() => null);
+    const summary = body?.data?.summary ?? body?.summary;
+    return typeof summary === "string" ? summary.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * POST a message to the webhook, in the shape Slack and Discord both read.
+ *
+ * Never throws: an undelivered notification is worth a line in the log, not a
+ * second failure on top of the one being reported.
+ */
+async function sendWebhook(alertUrl, message) {
+  try {
+    const res = await fetch(alertUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      // `text` is Slack's field, `content` is Discord's; each ignores the other.
+      body: JSON.stringify({ text: message, content: message }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return res.ok
+      ? { ok: true, text: `sent (HTTP ${res.status})` }
+      : { ok: false, text: `answered HTTP ${res.status} — it was not delivered` };
+  } catch (error) {
+    return { ok: false, text: `could not be reached: ${error?.message || error}` };
+  }
 }
 
 /**

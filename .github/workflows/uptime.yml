@@ -31,6 +31,14 @@
 # To stop the automatic restarts and keep the alarm, set the repository VARIABLE
 # `WATCHDOG_RECOVER=off`. Unset means on; anything unrecognised means off.
 #
+# Every run also reports what came BACK, because an alarm is never taken back on
+# its own: a schedule somebody fixed keeps getting chased, and a restart that
+# worked is never confirmed. With CRON_SECRET set, each run records what it saw
+# and announces a worker that recovered once — saying whether the schedule is
+# firing again or the only run that arrived was the one the watchdog started.
+# Good news is sent on its own, never by muting the alarm; when something else is
+# still wrong the recovery line is folded into the alarm instead.
+#
 # -----------------------------------------------------------------------------
 # The blind spot, which is why §4.0.2 also recommends a monitor outside GitHub
 #

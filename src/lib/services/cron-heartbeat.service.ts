@@ -30,6 +30,11 @@
 // =============================================================================
 
 import prisma from "@/lib/db";
+// The label a run is filed under when the uptime watchdog started it. Shared with
+// the recovery notice rather than written twice: the notice decides whether a
+// worker came back on its own or only because somebody restarted it, and two
+// copies of that string is exactly how the two answers drift apart.
+import { WATCHDOG_ORIGIN_LABEL } from "@/lib/cron-auth";
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -177,7 +182,14 @@ function describe(error: unknown): string {
  */
 async function writeHeartbeat(
   id: CronWorkerId,
-  data: { startedAt: Date; outcome: "OK" | "ERROR"; summary?: string | null; error?: string | null }
+  data: {
+    startedAt: Date;
+    outcome: "OK" | "ERROR";
+    summary?: string | null;
+    error?: string | null;
+    /** Who started this run; null (or absent) for a scheduled one. */
+    origin?: string | null;
+  }
 ): Promise<void> {
   const durationMs = Date.now() - data.startedAt.getTime();
   const base = {
@@ -187,6 +199,7 @@ async function writeHeartbeat(
     lastSummary: data.summary ?? null,
     lastError: data.error ?? null,
     lastDurationMs: durationMs,
+    lastOrigin: data.origin ?? null,
   };
 
   try {
@@ -367,6 +380,9 @@ export async function runCronJob<T>(
     await writeHeartbeat(worker, {
       startedAt,
       outcome: "OK",
+      // Both forms, on purpose: the column is what code tests (the recovery
+      // notice reads it), and the suffix is what a person reads on the card.
+      origin: origin ?? null,
       summary: origin ? (summary ? `${summary} (${origin})` : origin) : summary,
     });
     return {
@@ -379,6 +395,7 @@ export async function runCronJob<T>(
     await writeHeartbeat(worker, {
       startedAt,
       outcome: "ERROR",
+      origin: origin ?? null,
       error: origin ? `${describe(error)} (${origin})` : describe(error),
     });
     throw error;
@@ -428,6 +445,8 @@ export interface CronWorkerHealth {
   lastStartedAt: string | null;
   lastFinishedAt: string | null;
   lastSummary: string | null;
+  /** Who started the last run; null when it was the schedule. */
+  lastOrigin: string | null;
   lastError: string | null;
   lastDurationMs: number | null;
   consecutiveFailures: number;
@@ -677,6 +696,7 @@ export async function getCronHealth(now: Date = new Date()): Promise<CronHealth>
       lastStartedAt: row?.lastStartedAt?.toISOString() ?? null,
       lastFinishedAt: row?.lastFinishedAt?.toISOString() ?? null,
       lastSummary: row?.lastSummary ?? null,
+      lastOrigin: row?.lastOrigin ?? null,
       lastError: row?.lastError ?? null,
       lastDurationMs: row?.lastDurationMs ?? null,
       consecutiveFailures: row?.consecutiveFailures ?? 0,
@@ -726,4 +746,144 @@ export function summarizeCronHealth(
   }
   if (health.counts.never > 0) return "never";
   return "ok";
+}
+
+// ---------------------------------------------------------------------------
+// The watchdog's memory: telling a recovery apart from a quiet day
+//
+// "Is that worker fine now?" cannot be answered from a heartbeat. A heartbeat
+// describes the present, so a worker that came back an hour ago looks exactly
+// like one that was never broken — which is why an operator keeps chasing a
+// schedule somebody already fixed, and why a restart that worked is never
+// confirmed to the person who started it. The memory is one row per worker the
+// watchdog has reported: open while it is down, closed when it is healthy again.
+//
+// Closing it is not the same as deleting it. The row keeps when it was first
+// reported and when it came back, so the record survives a webhook that never
+// arrived — the notice is a nudge, the app is the record.
+// ---------------------------------------------------------------------------
+
+export interface CronRecovery {
+  id: string;
+  name: string;
+  /** The state the watchdog last reported while it was down. */
+  wasState: string;
+  /** When it was *first* reported — how long it was stuck. */
+  alertedAt: string;
+  alertedForMinutes: number;
+  /** Where it is now: `ok`, or `running` when a run is already in flight. */
+  state: CronWorkerState;
+  lastSummary: string | null;
+  /**
+   * True when the run that brought it back was one the uptime watchdog started.
+   *
+   * This is the distinction the whole notice exists for: the worker is running
+   * again either because the schedule came back (fixed — close the ticket) or
+   * because the only reason there is a run at all is that the watchdog started
+   * one (still broken — and it will need starting again next hour).
+   */
+  restartedByWatchdog: boolean;
+}
+
+export interface CronWatchSync {
+  recovered: CronRecovery[];
+  /** `recovered` as one sentence. Empty when there is nothing to report. */
+  summary: string;
+}
+
+/**
+ * The recovery notice, in words.
+ *
+ * Pure, so both readings are pinned by tests rather than discovered in a chat
+ * message at 3am. The two sentences must never read the same: one of them means
+ * "this is over" and the other means "this will happen again in an hour".
+ */
+export function recoverySummary(recoveries: readonly CronRecovery[]): string {
+  return recoveries
+    .map((r) => {
+      const quietFor = humanDuration(r.alertedForMinutes);
+      if (r.restartedByWatchdog) {
+        return (
+          `${r.name} is running again after ${quietFor}, but the run that brought it back ` +
+          "was one the uptime watchdog started — the schedule is still not firing (§4.0.1)"
+        );
+      }
+      return `${r.name} is running again after ${quietFor} — the schedule is firing again`;
+    })
+    .join(" · ");
+}
+
+/**
+ * Record what this run of the watchdog sees, and report what came back.
+ *
+ * Called by the watchdog on *every* run, healthy or not: the moment to notice a
+ * recovery is the run where nothing else is wrong, which is also the run that
+ * would otherwise finish in silence.
+ *
+ * A worker is only reported as recovered when it is genuinely back — `ok` or
+ * `running`. A `never` (its rows were cleared, or a scheduler was removed) keeps
+ * the mark open, because claiming a recovery nobody can see would be the worst
+ * of both worlds: the operator stops looking and the worker is still down.
+ */
+export async function syncCronWatch(now: Date = new Date()): Promise<CronWatchSync> {
+  const health = await getCronHealth(now);
+  const marks = await prisma.cronWatch.findMany();
+  const markByWorker = new Map(marks.map((m) => [m.worker, m]));
+
+  const recovered: CronRecovery[] = [];
+
+  for (const worker of health.workers) {
+    const mark = markByWorker.get(worker.id);
+
+    if (ALERTING_STATES.includes(worker.state)) {
+      if (mark) {
+        // Still down. Keep the original date (how long it has been stuck is the
+        // useful number — and re-dating it here would reset the outage to "0 min"
+        // on every run) and refresh the state, so the notice describes the
+        // problem as it was last seen rather than as it was first guessed.
+        if (mark.resolvedAt || mark.alertedState !== worker.state) {
+          await prisma.cronWatch.update({
+            where: { worker: worker.id },
+            data: { alertedState: worker.state, resolvedAt: null },
+          });
+        }
+      } else {
+        // Dated the way the alarm dates it, not the way this run found it.
+        //
+        // The alarm says "nothing finished for 4 h", measured from the worker's
+        // own silence. Dating the recovery from the moment the watchdog happened
+        // to look would answer "running again after 0 min" an hour after that
+        // alarm was sent — two sentences about one outage that nobody can line
+        // up. A worker is also usually found already past its budget, so the
+        // sighting is late by construction: it is the silence that is the length
+        // of the outage, and it is already on the payload.
+        const beganAt = worker.silentSince ? new Date(worker.silentSince) : now;
+        await prisma.cronWatch.create({
+          data: { worker: worker.id, alertedAt: beganAt, alertedState: worker.state },
+        });
+      }
+      continue;
+    }
+
+    if (!mark || mark.resolvedAt) continue;
+    if (worker.state !== "ok" && worker.state !== "running") continue;
+
+    recovered.push({
+      id: worker.id,
+      name: worker.name,
+      wasState: mark.alertedState,
+      alertedAt: mark.alertedAt.toISOString(),
+      alertedForMinutes: minutesSince(mark.alertedAt, now) ?? 0,
+      state: worker.state,
+      lastSummary: worker.lastSummary,
+      restartedByWatchdog: worker.lastOrigin === WATCHDOG_ORIGIN_LABEL,
+    });
+
+    await prisma.cronWatch.update({
+      where: { worker: worker.id },
+      data: { resolvedAt: now },
+    });
+  }
+
+  return { recovered, summary: recoverySummary(recovered) };
 }

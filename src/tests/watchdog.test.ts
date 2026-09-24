@@ -27,6 +27,7 @@ import {
   assessHealth,
   describeRunOutcome,
   describeStoppedWorkers,
+  noticeMessage,
   planRecoveries,
   recoveryEnabled,
   shouldRecover,
@@ -263,8 +264,11 @@ describe("the detail endpoint", () => {
   );
 
   it("is guarded by the scheduler secret, which is the point of the split", () => {
-    expect(route).toContain("requireCronSecret(request)");
     expect(route).toContain("export const dynamic = \"force-dynamic\"");
+    // Both verbs, not just the first one: POST is the one that writes, and a
+    // guard that covers only the read would be found by nobody until it was
+    // used. Counted, so adding a handler without a guard fails here.
+    expect(route.match(/requireCronSecret\(request\)/g)).toHaveLength(2);
   });
 
   it("carries the one fact the restart guard reads", () => {
@@ -274,12 +278,16 @@ describe("the detail endpoint", () => {
     expect(route).toContain("sendsCustomerRequests");
   });
 
-  it("moves nothing — it reads, so it never takes a lock or writes a heartbeat", () => {
+  it("moves nothing — no worker runs, no lock is taken, no heartbeat is written", () => {
     const code = withoutComments(route);
     expect(code).not.toContain("runWorkerNow(");
     expect(code).not.toContain("runCronJob(");
     // Nor does it write a heartbeat of its own: a read must not look like work.
     expect(code).not.toContain("cronHeartbeat");
+    // It does record the watchdog's memory (syncCronWatch) — but that is a
+    // service call, so every write it makes is described by the service tests
+    // above. Touching the database from here would put those rules beyond them.
+    expect(code).not.toContain("prisma.");
   });
 
   it("keeps the public endpoint a verdict, with no worker names in it", () => {
@@ -507,5 +515,60 @@ describe("alertMessage with the recovery lines", () => {
     expect(alertMessage("https://genhub.co.tz", report, [])).toBe(bare);
     expect(alertMessage("https://genhub.co.tz", report, ["", "   "])).toBe(bare);
     expect(bare).not.toMatch(/—\s*$/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The recovery notice
+//
+// The alarm and the all-clear share a channel, and the preview line is often all
+// anybody reads. So the two must not look alike: one says something is wrong
+// right now, the other says it stopped being wrong. Anything less and the good
+// news starts getting skimmed in the same motion as the bad.
+// -----------------------------------------------------------------------------
+
+describe("noticeMessage", () => {
+  it("says nothing when there is nothing to say", () => {
+    // Every run calls this, including the runs where everything is fine.
+    expect(noticeMessage("https://genhub.co.tz", "")).toBe("");
+    expect(noticeMessage("https://genhub.co.tz", "   ")).toBe("");
+    expect(noticeMessage("https://genhub.co.tz", undefined)).toBe("");
+  });
+
+  it("cannot be mistaken for the alarm", () => {
+    const summary = "Release matured earnings is running again after 4 h — the schedule is firing again";
+    const notice = noticeMessage("https://genhub.co.tz", summary);
+    const alarm = alertMessage(
+      "https://genhub.co.tz",
+      assessHealth(health({ status: "degraded", checks: { database: "up", backgroundJobs: "late" } }, 503).payload, 503)
+    );
+
+    expect(notice).toContain("recovered:");
+    expect(notice).toContain(summary);
+    for (const word of ["background jobs", "could not reach"]) {
+      expect(notice).not.toContain(word);
+    }
+    expect(alarm).not.toContain("recovered:");
+  });
+
+  it("reports a recovery without ever letting it hide a problem", () => {
+    // Two properties, both from the source, because they are the difference
+    // between a nudge and an all-clear: the notice is only sent when the run is
+    // otherwise clean, and the run still exits non-zero when it is not.
+    const code = withoutComments(
+      readFileSync(join(process.cwd(), "scripts", "watchdog.mjs"), "utf8")
+    );
+
+    // Sent in the `report.ok` branch only — i.e. the alarm was not raised.
+    const alarmBranch = code.indexOf("if (alertUrl && !report.ok)");
+    const noticeBranch = code.indexOf("else if (alertUrl && recovered)");
+    expect(alarmBranch).toBeGreaterThan(-1);
+    expect(noticeBranch).toBeGreaterThan(alarmBranch);
+
+    // And the exit code is still driven by the alarm alone: a recovery is not a
+    // reason to sleep through a run that failed.
+    const exitBranch = code.indexOf("if (!report.ok)", noticeBranch);
+    expect(exitBranch).toBeGreaterThan(noticeBranch);
+    expect(code.slice(exitBranch, exitBranch + 400)).toContain("process.exit(1)");
   });
 });

@@ -25,12 +25,16 @@ import {
   attentionSummary,
   classifyWorker,
   getCronHealth,
+  recoverySummary,
   runCronJob,
   summarizeCronHealth,
+  syncCronWatch,
   workersNeedingAttention,
+  type CronRecovery,
   type CronWorkerDef,
   type CronWorkerHealth,
 } from "@/lib/services/cron-heartbeat.service";
+import { WATCHDOG_ORIGIN_LABEL } from "@/lib/cron-auth";
 
 /** Poll until `check` passes, so a test can wait on a claim instead of sleeping. */
 async function waitFor(check: () => Promise<boolean>, timeoutMs = 5000) {
@@ -62,6 +66,9 @@ const WORKER = "poll-encoding" as const;
 async function clearHeartbeats() {
   if (!process.env.DATABASE_URL) return;
   await prisma.cronHeartbeat.deleteMany();
+  // The watchdog's memory lives and dies with the same feature, and several
+  // cases below are about *not* having a mark yet.
+  await prisma.cronWatch.deleteMany();
 }
 
 beforeEach(clearHeartbeats);
@@ -496,6 +503,7 @@ describe("attention: which worker, and for how long", () => {
       lastFinishedAt: null,
       lastSummary: null,
       lastError: null,
+      lastOrigin: null,
       lastDurationMs: null,
       consecutiveFailures: 0,
       runsTotal: 1,
@@ -578,6 +586,67 @@ describe("attention: which worker, and for how long", () => {
     expect(line.split(" · ")).toHaveLength(3);
     expect(line).not.toMatch(/ago ago/);
     expect(line.startsWith("renew-subscriptions")).toBe(true); // the killed run
+  });
+});
+
+// -----------------------------------------------------------------------------
+// 2c. The recovery notice
+//
+// A worker coming back is the one event nobody is watching for. The alarm that
+// said "this stopped" is still sitting in a webhook channel, and nothing takes
+// it back — so the schedule somebody already fixed gets chased for a week. Two
+// sentences are the whole feature, and they must never be interchangeable: one
+// closes the ticket, the other says the only run that arrived was the one the
+// watchdog started, so it will be needed again next hour.
+// -----------------------------------------------------------------------------
+
+describe("recovery: what the notice says", () => {
+  function rec(over: Partial<CronRecovery>): CronRecovery {
+    return {
+      id: "release-earnings",
+      name: "Release matured earnings",
+      wasState: "late",
+      alertedAt: new Date(Date.now() - 4 * 3600_000).toISOString(),
+      alertedForMinutes: 240,
+      state: "ok",
+      lastSummary: "Released TZS 0 for 0 creator(s)",
+      restartedByWatchdog: false,
+      ...over,
+    };
+  }
+
+  it("says nothing when nothing came back", () => {
+    expect(recoverySummary([])).toBe("");
+  });
+
+  it("closes the ticket when the schedule is firing again", () => {
+    const line = recoverySummary([rec({})]);
+    expect(line).toContain("Release matured earnings");
+    expect(line).toContain("4 h");
+    expect(line).toContain("firing again");
+  });
+
+  it("warns instead of closing when only the watchdog's own run arrived", () => {
+    const fixed = recoverySummary([rec({})]);
+    const started = recoverySummary([rec({ restartedByWatchdog: true })]);
+
+    expect(started).not.toBe(fixed);
+    expect(started).toContain("running again");
+    // The whole distinction: this worker will be quiet again in an hour, and the
+    // person reading it must not close the ticket.
+    expect(started).toContain("the uptime watchdog started");
+    expect(started).toContain("still not firing");
+    expect(fixed).not.toContain("still not firing");
+  });
+
+  it("names every worker, so one line covers a whole recovery", () => {
+    const line = recoverySummary([
+      rec({ id: "poll-encoding", name: "Publish finished uploads" }),
+      rec({ id: "release-earnings", name: "Release matured earnings" }),
+    ]);
+    expect(line.split(" · ")).toHaveLength(2);
+    expect(line).toContain("Publish finished uploads");
+    expect(line).toContain("Release matured earnings");
   });
 });
 
@@ -880,6 +949,197 @@ describeDb("getCronHealth", () => {
     // Nothing to name, so the card falls back to "all four are within cadence".
     expect(health.needsAttention).toEqual([]);
     expect(health.attentionSummary).toBe("");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// 4b. The watchdog's memory: open while down, closed when back
+//
+// Every one of these cases is about *not* reporting something — a recovery that
+// was never observed, a worker that was never down, a second notice for the same
+// event. A notice that fires wrongly is worse than a missing one: it teaches the
+// operator to skim the channel that carries the alarm.
+// -----------------------------------------------------------------------------
+
+describeDb("syncCronWatch", () => {
+  const hours = (n: number) => new Date(Date.now() - n * 3600_000);
+
+  /** A heartbeat in whatever shape the case needs. */
+  function beat(
+    over: {
+      lastStartedAt?: Date | null;
+      lastFinishedAt?: Date | null;
+      lastOutcome?: string;
+      lastError?: string | null;
+    } = {}
+  ) {
+    return prisma.cronHeartbeat.create({
+      data: { worker: WORKER, runsTotal: 1, lastOutcome: "OK", ...over },
+    });
+  }
+
+  /**
+   * The worker went quiet hours ago: past every worker's budget.
+   *
+   * Four hours, deliberately not three: `staleAfterMinutes` is 180 for the two
+   * hourly workers, so three hours sits exactly on the line and half the registry
+   * is not overdue yet — a fixture that only half the workers trip tests half the
+   * code while looking like it tests all of it.
+   */
+  const down = { lastStartedAt: hours(4), lastFinishedAt: hours(4) };
+  /** It is running on schedule right now. */
+  const up = { lastStartedAt: new Date(), lastFinishedAt: new Date() };
+
+  const mark = () => prisma.cronWatch.findUnique({ where: { worker: WORKER } });
+
+  it("records the first sighting, and reports no recovery", async () => {
+    await beat(down);
+
+    const sync = await syncCronWatch();
+    expect(sync.recovered).toEqual([]);
+    expect(sync.summary).toBe("");
+
+    const open = await mark();
+    expect(open?.alertedState).toBe("late");
+    expect(open?.resolvedAt).toBeNull();
+  });
+
+  it("stays quiet about a worker that was never reported", async () => {
+    // A healthy system is the common case, and the notice runs on every single
+    // watchdog run — so "nothing was wrong" has to produce nothing at all.
+    await beat(up);
+
+    const sync = await syncCronWatch();
+    expect(sync.recovered).toEqual([]);
+    expect(await mark()).toBeNull();
+  });
+
+  it("reports the worker that came back, with how long it was stuck", async () => {
+    await beat(down);
+    await syncCronWatch();
+
+    await prisma.cronHeartbeat.update({ where: { worker: WORKER }, data: up });
+    const sync = await syncCronWatch();
+
+    expect(sync.recovered).toHaveLength(1);
+    const [r] = sync.recovered;
+    expect(r.name).toBe(CRON_WORKERS.find((w) => w.id === WORKER)!.name);
+    expect(r.wasState).toBe("late");
+    // The length of the *outage*, not of the watchdog's wait: it was marked a
+    // second ago, and an implementation dating the recovery from that sighting
+    // would report 0 here — reading "nothing finished for 4 h" out of the alarm
+    // and "running again after 0 min" out of the all-clear.
+    expect(r.alertedForMinutes).toBeGreaterThanOrEqual(239);
+    expect(r.alertedForMinutes).toBeLessThanOrEqual(241);
+    expect(r.restartedByWatchdog).toBe(false);
+    expect(sync.summary).toContain("firing again");
+    // The mark is closed, not deleted: when it was first seen is the record that
+    // survives a notice nobody read.
+    expect((await mark())?.resolvedAt).not.toBeNull();
+  });
+
+  it("reports a recovery once, not on every run after", async () => {
+    await beat(down);
+    await syncCronWatch();
+    await prisma.cronHeartbeat.update({ where: { worker: WORKER }, data: up });
+
+    expect((await syncCronWatch()).recovered).toHaveLength(1);
+    expect((await syncCronWatch()).recovered).toEqual([]);
+  });
+
+  it("does not close a ticket on a run the watchdog itself started", async () => {
+    // The distinction the whole feature exists for. Same heartbeat shape, same
+    // worker, one field different.
+    await beat(down);
+    await syncCronWatch();
+    await prisma.cronHeartbeat.update({
+      where: { worker: WORKER },
+      data: { ...up, lastOrigin: WATCHDOG_ORIGIN_LABEL },
+    });
+
+    const sync = await syncCronWatch();
+    expect(sync.recovered[0].restartedByWatchdog).toBe(true);
+    // It is running, so the mark closes — but the notice says not to celebrate.
+    expect(sync.summary).toContain("still not firing");
+    expect((await mark())?.resolvedAt).not.toBeNull();
+  });
+
+  it("counts a run already in flight as back", async () => {
+    // A worker the watchdog restarted is mid-run when the next watchdog run
+    // looks; reporting "still down" there would make the restart invisible for
+    // another hour.
+    await beat(down);
+    await syncCronWatch();
+    await prisma.cronHeartbeat.update({
+      where: { worker: WORKER },
+      data: { lastStartedAt: new Date(), lastFinishedAt: null },
+    });
+
+    const sync = await syncCronWatch();
+    expect(sync.recovered[0].state).toBe("running");
+    expect(sync.recovered[0].lastSummary).toBeNull();
+  });
+
+  it("keeps the first sighting while it is still down, but tracks the newest state", async () => {
+    await beat(down);
+    await syncCronWatch();
+    const first = (await mark())!.alertedAt;
+
+    // It is no longer silent — it is failing. Same worker, a different problem,
+    // and "stuck for 4 h" still has to mean the first time anyone noticed.
+    await prisma.cronHeartbeat.update({
+      where: { worker: WORKER },
+      data: {
+        lastStartedAt: new Date(),
+        lastFinishedAt: new Date(),
+        lastOutcome: "ERROR",
+        lastError: "boom",
+      },
+    });
+    expect((await syncCronWatch()).recovered).toEqual([]);
+
+    const stillOpen = await mark();
+    expect(stillOpen?.alertedState).toBe("failing");
+    expect(stillOpen?.alertedAt.getTime()).toBe(first.getTime());
+
+    // Back on schedule — outcome included, or it would still read as failing.
+    await prisma.cronHeartbeat.update({
+      where: { worker: WORKER },
+      data: { ...up, lastOutcome: "OK", lastError: null },
+    });
+    expect((await syncCronWatch()).recovered[0].wasState).toBe("failing");
+  });
+
+  it("does not claim a recovery for a worker that lost its schedule", async () => {
+    // Rows cleared (deploy, migration, someone dropped the schedule): the worker
+    // reads as `never`. Calling that a recovery would be the worst answer of
+    // all — the operator stops looking, and the worker is still down.
+    await beat(down);
+    await syncCronWatch();
+    await prisma.cronHeartbeat.delete({ where: { worker: WORKER } });
+
+    const sync = await syncCronWatch();
+    expect(sync.recovered).toEqual([]);
+    expect((await mark())?.resolvedAt).toBeNull();
+  });
+
+  it("reports every worker that came back in one run", async () => {
+    for (const w of CRON_WORKERS) {
+      await prisma.cronHeartbeat.create({
+        data: { worker: w.id, runsTotal: 1, lastOutcome: "OK", ...down },
+      });
+    }
+    expect((await syncCronWatch()).recovered).toHaveLength(0);
+
+    for (const w of CRON_WORKERS) {
+      await prisma.cronHeartbeat.update({ where: { worker: w.id }, data: up });
+    }
+
+    const sync = await syncCronWatch();
+    expect(sync.recovered.map((r) => r.id).sort()).toEqual(
+      CRON_WORKERS.map((w) => w.id).sort()
+    );
+    expect(sync.summary.split(" · ")).toHaveLength(CRON_WORKERS.length);
   });
 });
 

@@ -658,8 +658,16 @@ stopped running. … — Release matured earnings: nothing finished for 4 h
 ```
 
 The detail comes from `GET /api/health/attention`, which is guarded by the same
-`CRON_SECRET`, is read-only (no lock, no heartbeat, nothing moved), and answers
-`401` without it. Two properties are deliberate and tested:
+`CRON_SECRET`, and answers `401` without it. It reads: no lock, no heartbeat,
+nothing moved. Two properties are deliberate and tested:
+
+* **The alarm is exactly as loud without it.** The detail is fetched only *after*
+the verdict is already bad, so a missing, wrong or rotated secret cannot silence
+anything — it costs a line of context, never the alarm. That is the failure this
+split could otherwise introduce.
+* **The public endpoint still says nothing.** `/api/health` returns
+`backgroundJobs: late` and no more; a test fails if worker names are ever folded
+back into it.
 
 #### It also restarts the worker, within narrow limits
 
@@ -701,13 +709,66 @@ deployment you are deliberately holding still), set the repository **variable**
 `WATCHDOG_RECOVER=off`. Anything unrecognised is treated as off, so a typo cannot
 quietly arm it again; leaving it unset keeps restarts on.
 
-* **The alarm is exactly as loud without it.** The detail is fetched only *after*
-the verdict is already bad, so a missing, wrong or rotated secret cannot silence
-anything — it costs a line of context, never the alarm. That is the failure this
-split could otherwise introduce.
-* **The public endpoint still says nothing.** `/api/health` returns
-`backgroundJobs: late` and no more; a test fails if worker names are ever folded
-back into it.
+#### Knowing when it comes back
+
+An alarm is only half a conversation: it says something stopped, and nothing ever
+takes it back. So a schedule somebody fixed at 09:00 keeps getting chased for a
+week, and a restart that worked is never confirmed to the person who pressed the
+button — the heartbeat can only describe *now*, and a worker that came back an
+hour ago looks exactly like one that never broke.
+
+The watchdog therefore keeps its own memory, and reports what came back. Every
+run hands `POST /api/health/attention` what it saw (the same `CRON_SECRET`, still
+no worker run and still no lock), which records one row per worker it has reported
+and closes it when the worker is healthy again. It records **before** it acts: a
+restart writes a fresh heartbeat, so a sighting taken afterwards would say *this
+worker is fine* and erase the outage it is supposed to report — which is how a
+rescue ends up looking like a repair. A worker comes back **once, in one
+message**:
+
+```
+Genhub https://your-domain — recovered: Release matured earnings is running again
+after 4 h — the schedule is firing again
+```
+
+Two readings, and the whole feature is the difference between them:
+
+| The sentence says | What it means |
+|---|---|
+| `…is running again after 4 h — the schedule is firing again` | the schedule is back. Close it |
+| `…is running again after 4 h, but the run that brought it back was one the uptime watchdog started — the schedule is still not firing (§4.0.1)` | only the watchdog's own restart arrived. It will be quiet again in an hour |
+
+That second line exists because of the restart above: once the watchdog starts
+workers itself, "it is running again" becomes ambiguous, and reading a rescue as a
+repair is how a dead schedule gets marked fixed the moment the watchdog papers
+over it. The distinction is read from the heartbeat's `lastOrigin` column, not
+from the wording of a summary — testing a human sentence is how the two answers
+drift apart.
+
+Three more rules are deliberate, and each is covered by a test:
+
+* **A recovery cannot hide a problem.** Bad news and good news arrive in the same
+  channel, so the notice is sent only when the run is otherwise clean. If
+  anything is still wrong, the recovery line is appended to the alarm instead,
+  and the run exits non-zero either way.
+* **`never` is never a recovery.** A worker whose rows were cleared (a scheduler
+  removed, a deploy) reads as `never`; calling that a recovery would be the worst
+  of both worlds — the operator stops looking and the worker is still down. Its
+  record stays open.
+* **The record outlives the notification.** A closed row keeps when it was first
+  reported and when it came back, so a webhook that was never delivered costs a
+  nudge, not the history: the app holds the record, the webhook is the doorbell.
+
+Nothing here needs configuring, and with no `CRON_SECRET` the notice is simply
+not reported — the alarm is unaffected either way.
+
+- [ ] After the first restart you perform, watch for the `✓ recovered:` line (or
+      the notice landing in `ALERT_WEBHOOK_URL`) and confirm it says the schedule
+      is firing again. If it says the watchdog's run was the *only* one, the
+      schedule is still not fixed.
+- [ ] Confirm a recovery does not close a live problem: with a worker still down,
+      run `npm run watchdog` and check the exit code is 1 and the recovery line
+      is inside the alarm rather than sent on its own.
 
 **One failure this cannot report, and it is worth knowing.** GitHub disables
 *every* scheduled workflow in a repository after 60 days without activity (§4.0.1,
@@ -732,6 +793,9 @@ of months, which re-enables every schedule at once.
       test deployment (or seed a stale heartbeat), run `npm run watchdog`, and
       check the Actions log says `Restarted …` and that the worker's heartbeat
       carries `(restarted by the uptime watchdog)`.
+- [ ] Confirm the other half of that run: the same log should end with
+      `✓ … recovered:` once the worker is healthy, saying whether it came back on
+      its own or only because the watchdog restarted it (§ above).
 - [ ] Confirm the alarm can still fire without it: run
       `APP_URL=https://<domain> npm run watchdog` (no `CRON_SECRET`) and check it
       exits 1 with the verdict alone.
