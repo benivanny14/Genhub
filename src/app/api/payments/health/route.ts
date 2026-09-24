@@ -14,7 +14,12 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import config from "@/lib/config";
-import { harakaBalance, harakaErrorReason } from "@/lib/payments/harakapay";
+import {
+  harakaBalance,
+  harakaErrorReason,
+  harakaGatewayState,
+  harakaBreakerNotice,
+} from "@/lib/payments/harakapay";
 
 export const dynamic = "force-dynamic";
 
@@ -90,6 +95,12 @@ export async function GET() {
       (balance.float_balance ?? 0) <= 0 &&
       (balance.wallet_balance ?? 0) <= 0;
 
+    // Read AFTER the balance attempt, so a failure from this very call is
+    // included — the state an operator is looking at is the state that produced
+    // what they just saw.
+    const breaker = harakaGatewayState();
+    const breakerWarning = harakaBreakerNotice(breaker);
+
     const readyForLive =
       !sandbox && checks.apiKey.ok && checks.baseUrl.ok && balance.ok === true;
 
@@ -153,15 +164,30 @@ export async function GET() {
         balance.ok && balance.float_balance !== undefined
           ? "HarakaPay deducts a transaction fee (e.g. TZS 59 on TZS 1,000). The 70/30 split uses the gross amount, so the platform keeps its 30% minus that fee."
           : null,
-      summary: readyForLive
-        ? deliveryWarning
-          ? "Live payments are on, but recent orders never settled — see delivery.deliveryWarning."
-          : floatEmpty
-            ? "Live payments are on, but the HarakaPay float is empty — top it up before going live."
-            : "Live payments are ready: a purchase will send a real USSD push to the customer's phone."
-        : sandbox
-          ? "Sandbox is ON: no USSD push is sent and no money moves. Set PAYMENT_SANDBOX=false to go live."
-          : "Live mode is on but one or more checks failed — see checks/balance above.",
+      // The local circuit breaker. When it is open, gateway calls are being
+      // *skipped*, which reads as a failed balance check unless it is named — the
+      // operator would be sent hunting for a bad key that is actually fine.
+      gatewayBreaker: {
+        open: breaker.open,
+        openUntil: breaker.open ? new Date(breaker.openUntil).toISOString() : null,
+        failures: breaker.failures,
+        skipped: breaker.skipped,
+        warning: breakerWarning,
+      },
+      // The breaker leads when it is open: every other line below is about a
+      // gateway the operator cannot currently reach, and reading them first
+      // sends somebody after the wrong fault.
+      summary: breakerWarning
+        ? breakerWarning
+        : readyForLive
+          ? deliveryWarning
+            ? "Live payments are on, but recent orders never settled — see delivery.deliveryWarning."
+            : floatEmpty
+              ? "Live payments are on, but the HarakaPay float is empty — top it up before going live."
+              : "Live payments are ready: a purchase will send a real USSD push to the customer's phone."
+          : sandbox
+            ? "Sandbox is ON: no USSD push is sent and no money moves. Set PAYMENT_SANDBOX=false to go live."
+            : "Live mode is on but one or more checks failed — see checks/balance above.",
     });
   } catch (error) {
     if (error instanceof AuthError) {

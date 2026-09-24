@@ -51,12 +51,18 @@ export function describeReleaseEarnings(result: ReleaseResult): string {
 }
 
 export function describeReconcile(result: ReconcileResult): string {
-  return (
+  const base =
     `${result.checked} checked, ${result.settledSuccess} settled, ` +
     `${result.underInvestigation} newly flagged, ` +
     `${result.awaitingResolution} awaiting resolution, ` +
-    `${result.stillProcessing} still processing`
-  );
+    `${result.stillProcessing} still processing`;
+
+  // A cut-short sweep must never read as a quiet one: "4 checked" on its own
+  // looks like four charges were examined and found fine, when the truth may be
+  // that the gateway stopped answering after four of four hundred.
+  return result.gatewayUnavailable
+    ? `${base} — STOPPED EARLY, ${result.unchecked} not checked (the gateway is not answering)`
+    : base;
 }
 
 export function describeRenewals(result: RenewalResult): string {

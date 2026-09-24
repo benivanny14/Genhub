@@ -65,6 +65,82 @@ const goLive = (cond, passMsg, failMsg) => {
 const env = (k) => (process.env[k] || "").trim();
 const isLocal = (v) => !v || /localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(v);
 
+/** Bound a promise, so the gate can never hang on a database that is waking up. */
+function withTimeout(promise, ms, what) {
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`${what} timed out (no answer within ${ms / 1000}s)`)),
+        ms
+      );
+      timer.unref?.();
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * Turn a raw driver/Prisma failure into the thing to actually do about it.
+ *
+ * The messages these libraries emit are near-identical for a wrong password, a
+ * wrong host and a database that is simply asleep, so a gate that only printed
+ * them would send the reader hunting for the wrong fault.
+ */
+function diagnoseDatabaseError(raw) {
+  const message = String(raw || "").replace(/\s+/g, " ").trim();
+  if (/can't reach database server|could not connect|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|P1001/i.test(message)) {
+    return (
+      `${message} — no route to the host. Check the connection string, and that a managed ` +
+      "database is awake (free/idle tiers such as Neon suspend and refuse the first connection)"
+    );
+  }
+  if (/authentication failed|password authentication|P1000/i.test(message)) {
+    return `${message} — the password in DATABASE_URL is rejected`;
+  }
+  if (/does not exist|P1003/i.test(message)) {
+    return `${message} — the database name in DATABASE_URL does not exist on that server`;
+  }
+  return message;
+}
+
+/**
+ * Open one real connection to Postgres. Read-only: `SELECT 1`.
+ *
+ * Bounded at 15s: Prisma's own connect timeout is generous, and a database that
+ * is waking up would otherwise stall the gate for a minute before it says
+ * anything. The timeout is not a false failure — a launch gate that takes longer
+ * than that to reach its own database is telling you something.
+ */
+async function checkDatabaseReach() {
+  const started = Date.now();
+  let prisma;
+  try {
+    const { PrismaClient } = await import("@prisma/client");
+    prisma = new PrismaClient();
+    const rows = await withTimeout(
+      prisma.$queryRawUnsafe("SELECT 1 AS ok"),
+      15_000,
+      "SELECT 1"
+    );
+    if (rows?.[0]?.ok !== 1) {
+      return { reachable: false, detail: "connected, but SELECT 1 returned nothing" };
+    }
+    return { reachable: true, detail: `SELECT 1 answered in ${Date.now() - started}ms` };
+  } catch (error) {
+    return {
+      reachable: false,
+      detail: diagnoseDatabaseError(error?.message || error).slice(0, 240),
+    };
+  } finally {
+    try {
+      await prisma?.$disconnect();
+    } catch {
+      /* a connection that never opened has nothing to close */
+    }
+  }
+}
+
 console.log(`\n=== GENHUB PRE-FLIGHT ===${productionMode ? " (PRODUCTION)" : ""}\n`);
 
 // --------------------------------------------------------- Repository state
@@ -113,6 +189,23 @@ goLive(
   "DATABASE_URL points at an external database",
   "DATABASE_URL points at localhost — production data must live in managed Postgres"
 );
+
+// "DATABASE_URL is set" is not "there is a database there". Two failures look
+// identical in an environment list and both pass every check above:
+//
+//   * a suspended managed database — Neon's free tier sleeps when idle and
+//     refuses the first connection while it wakes, and
+//   * a connection string that parses but points at the wrong host, database or
+//     password.
+//
+// Each fails on the deploy's first query, i.e. after the site looks "up". This
+// is a blocker in EVERY mode on purpose — unlike a missing SMTP host, no
+// environment can run without its database — and it is the same read-only probe
+// `npm run verify:live` uses (`SELECT 1` through Prisma).
+if (env("DATABASE_URL")) {
+  const { reachable, detail } = await checkDatabaseReach();
+  must(reachable, `database is reachable — ${detail}`, `cannot reach the database — ${detail}`);
+}
 
 const appUrl = env("NEXT_PUBLIC_APP_URL");
 must(

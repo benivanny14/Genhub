@@ -13,6 +13,48 @@ const BUNNY_STREAM_API = "https://video.bunnycdn.com";
 const BUNNY_STORAGE_API = "https://storage.bunnycdn.com";
 
 /**
+ * How long one Bunny *management* call may take before it is abandoned.
+ *
+ * The same reason every Redis call is bounded (see lib/redis.ts): these run on
+ * request paths and inside cron workers — `createVideoUpload` while a creator
+ * waits for upload credentials, `getBunnyVideoDetails` in the encoding poll, and
+ * `deleteBunnyVideo` from the video route — so a Bunny that accepts the
+ * connection and then never answers would hold the request open until the
+ * function timeout, exactly as an unresponsive Redis did on the payment path.
+ * Bunny answers in well under a second when it is healthy, so 15s is generous.
+ */
+const BUNNY_MANAGEMENT_TIMEOUT_MS = 15_000;
+
+/**
+ * One bounded call to the Stream management API.
+ *
+ * A timeout is reported by name rather than as the raw "The operation was
+ * aborted", because the reader — an operator, or the admin probe — needs to know
+ * *which* provider went quiet and for how long. Any other failure is passed
+ * through untouched, so a real HTTP error keeps its own message.
+ */
+async function bunnyFetch(
+  url: string,
+  init: RequestInit,
+  what: string
+): Promise<Response> {
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: AbortSignal.timeout(BUNNY_MANAGEMENT_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "";
+    if (name === "TimeoutError" || name === "AbortError") {
+      throw new Error(
+        `Bunny ${what} timed out after ${BUNNY_MANAGEMENT_TIMEOUT_MS / 1000}s — the API did not answer`
+      );
+    }
+    throw error;
+  }
+}
+
+/**
  * True when Bunny Stream credentials are complete enough to play signed HLS.
  * The upload path only needs the API key + library id; playback also needs the
  * CDN hostname and the token secret, and returns unsigned URLs without them.
@@ -154,7 +196,7 @@ export async function createVideoUpload(
     );
   }
 
-  const response = await fetch(
+  const response = await bunnyFetch(
     `${BUNNY_STREAM_API}/library/${config.bunny.libraryId}/videos`,
     {
       method: "POST",
@@ -163,7 +205,8 @@ export async function createVideoUpload(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ title }),
-    }
+    },
+    "upload create"
   );
 
   if (!response.ok) {
@@ -423,14 +466,15 @@ export function resolveDownloadUrl(
 // =============================================================================
 
 export async function deleteBunnyVideo(videoId: string): Promise<void> {
-  const response = await fetch(
+  const response = await bunnyFetch(
     `${BUNNY_STREAM_API}/library/${config.bunny.libraryId}/videos/${videoId}`,
     {
       method: "DELETE",
       headers: {
         AccessKey: config.bunny.apiKey,
       },
-    }
+    },
+    "delete"
   );
 
   if (!response.ok) {
@@ -443,13 +487,14 @@ export async function deleteBunnyVideo(videoId: string): Promise<void> {
 // =============================================================================
 
 export async function getBunnyVideoDetails(videoId: string) {
-  const response = await fetch(
+  const response = await bunnyFetch(
     `${BUNNY_STREAM_API}/library/${config.bunny.libraryId}/videos/${videoId}`,
     {
       headers: {
         AccessKey: config.bunny.apiKey,
       },
-    }
+    },
+    "lookup"
   );
 
   if (!response.ok) {

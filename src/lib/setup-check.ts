@@ -25,7 +25,8 @@ import path from "node:path";
 
 import checklist from "./setup-checklist.json";
 import prisma from "./db";
-import { verifyRedisWritable, redisBackendName } from "./redis";
+import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./redis";
+import { harakaBreakerNotice } from "./payments/harakapay";
 import config from "./config";
 
 // ---------------------------------------------------------------- checklist
@@ -316,6 +317,24 @@ async function probeDatabase(): Promise<ProbeResult> {
   }
 }
 
+/**
+ * The data-path breaker in words, or "" when it is healthy.
+ *
+ * Deliberately separate from the probe result: verification bypasses the breaker
+ * on purpose, so "Redis works" and "the app is using Redis" are two different
+ * facts and an operator debugging a slow site needs the second one.
+ */
+function redisBreakerNote(): string {
+  const breaker = redisDataCallState();
+  if (breaker.open) {
+    return " · WARNING: the data-path breaker is OPEN — cache reads are skipped and rate limiting has fallen back to per-instance memory (see lib/redis.ts)";
+  }
+  if (breaker.failures > 0) {
+    return ` · note: ${breaker.failures} recent data-path failure(s) — the breaker opens after 2`;
+  }
+  return "";
+}
+
 async function probeRedis(): Promise<ProbeResult> {
   const base = { id: "redis", name: "Redis" };
   const hasRest = Boolean(env("UPSTASH_REDIS_REST_URL") && env("UPSTASH_REDIS_REST_TOKEN"));
@@ -341,7 +360,14 @@ async function probeRedis(): Promise<ProbeResult> {
     // would quietly downgrade rate limiting to per-instance buckets. The helper
     // does both against whichever backend is live.
     const ok = await verifyRedisWritable();
-    return { ...base, state: "ok", detail: `${ok} · backend: ${redisBackendName()}` };
+    return {
+      ...base,
+      // The probe proves the backend answers; the breaker says whether the data
+      // path is actually using it. A backend can be healthy while every request
+      // is being served around it, so both are reported together.
+      state: redisDataCallState().open ? "warn" : "ok",
+      detail: `${ok} · backend: ${redisBackendName()}${redisBreakerNote()}`,
+    };
   } catch (error) {
     const message = String((error as Error)?.message || error);
     const readingOnly = /MISCONF|not able to persist|READONLY|read-only/i.test(message);
@@ -472,17 +498,32 @@ async function probeHarakapay(): Promise<ProbeResult> {
     // The one blocker nobody can fix in code. With float 0 the gateway accepts
     // the request, reports "USSD push sent", and never delivers the prompt.
     const float = Number(body.float_balance ?? 0);
+    // The probe proves the gateway answers *now*; the breaker says whether this
+    // process has been skipping it. Both are needed: a healthy probe with an
+    // open breaker means the fault is intermittent, not fixed.
+    const breakerNotice = harakaBreakerNotice();
     return {
       ...base,
-      state: float > 0 ? "ok" : "fail",
+      // A zero float stays a hard fail — it is the more severe problem and the
+      // one no code change can fix — so the breaker can only soften "ok" to a
+      // warning, never the other way round.
+      state: float <= 0 ? "fail" : breakerNotice ? "warn" : "ok",
       detail:
         `key valid · wallet ${body.wallet_balance ?? 0} · float ${float}` +
         (float > 0
           ? ""
-          : ' · float is 0: it accepts collects and reports "USSD push sent", but orders never settle'),
+          : ' · float is 0: it accepts collects and reports "USSD push sent", but orders never settle') +
+        (breakerNotice ? ` · ${breakerNotice}` : ""),
     };
   } catch (error) {
-    return { ...base, state: "fail", detail: String((error as Error)?.message || error).slice(0, 160) };
+    const breakerNotice = harakaBreakerNotice();
+    return {
+      ...base,
+      state: "fail",
+      detail:
+        String((error as Error)?.message || error).slice(0, 160) +
+        (breakerNotice ? ` · ${breakerNotice}` : ""),
+    };
   }
 }
 

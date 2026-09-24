@@ -50,6 +50,16 @@ interface SystemReadiness {
   checks: { key: string; ok: boolean; value?: string | number; hint?: string }[];
   topWarnings: string[];
   delivery?: { stuckPending?: number; deliveryWarning?: string | null };
+  /**
+   * The local gateway circuit breaker. Open means calls are being skipped for a
+   * moment because HarakaPay stopped answering — not that the key is wrong.
+   */
+  gatewayBreaker?: {
+    open?: boolean;
+    failures?: number;
+    skipped?: number;
+    warning?: string | null;
+  };
 }
 
 /**
@@ -625,6 +635,18 @@ export default function AdminDashboard() {
         });
       }
 
+      const breaker = pay?.data?.gatewayBreaker;
+      if (breaker) {
+        checks.push({
+          key: "gatewayBreaker",
+          ok: !breaker.open,
+          value: breaker.open
+            ? `open · ${breaker.failures ?? 0} failure(s) in a row · ${breaker.skipped ?? 0} call(s) skipped`
+            : "closed",
+          hint: "Temporary circuit breaker: while open, gateway calls are skipped instead of hanging",
+        });
+      }
+
       setSystem({
         appUrl: pay?.data?.checks?.appUrl?.value,
         appUrlSource: pay?.data?.checks?.appUrl?.source,
@@ -633,11 +655,15 @@ export default function AdminDashboard() {
         sandbox: pay?.data?.checks?.sandboxMode?.value === true,
         checks,
         topWarnings: [
+          // First, because it is the one that makes every other gateway result
+          // read wrong while it lasts.
+          ...(pay?.data?.gatewayBreaker?.warning ? [pay.data.gatewayBreaker.warning] : []),
           ...(pay?.data?.floatWarning ? [pay.data.floatWarning] : []),
           ...(pay?.data?.delivery?.deliveryWarning ? [pay.data.delivery.deliveryWarning] : []),
           ...(health?.warnings || []),
         ],
         delivery: pay?.data?.delivery,
+        gatewayBreaker: pay?.data?.gatewayBreaker,
       });
     } catch {
       // Readiness is informational — never surface it as an error toast

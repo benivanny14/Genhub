@@ -27,8 +27,15 @@ the environment, not from your laptop:
 | Vercel / any pipeline with `NODE_ENV=production`, or `--strict` | strict | missing or placeholder settings **fail the build** |
 
 `preflight:prod` is the same list plus the checks that need the network
-(live `/api/health`, and the HarakaPay balance). Treat it as the gate: **do not
-deploy while it exits 1.**
+(live `/api/health`, the HarakaPay balance, and a real `SELECT 1` against
+Postgres). That last one is there because "`DATABASE_URL` is set" and "there is a
+database there" are different facts: a suspended managed database (Neon sleeps
+when idle and refuses the first connection while it wakes) or a connection string
+with the wrong host or password passes every environment check and then fails on
+the deploy's first query — after the site already looks up. It is bounded at
+15s, so the gate cannot hang on a database that is still waking; a gate that
+waits longer than that for its own database is telling you something anyway.
+Treat it as the gate: **do not deploy while it exits 1.**
 
 Integration smoke tests (move from “code exists” to “credentials proven”):
 
@@ -290,6 +297,9 @@ The signing code throws rather than emitting an URL signed with an empty secret
 - [ ] Check `GET /api/payments/health` (as admin). It reports sandbox state, key,
       webhook token, whether `NEXT_PUBLIC_APP_URL` is publicly reachable, and the
       live HarakaPay wallet/float balance. `readyForLive` must be `true`.
+- [ ] `gatewayBreaker.open` must be `false`. It is `true` only while this server
+      is deliberately skipping gateway calls because HarakaPay stopped answering
+      — **not** a bad key. See §3.3.
 - [ ] The webhook is only an optimisation: if it never arrives, the client polls
       `/api/payments/status/<orderId>`, which reconciles against HarakaPay and
       settles the transaction anyway. A localhost `NEXT_PUBLIC_APP_URL` therefore
@@ -426,6 +436,71 @@ The release job moves matured earnings `pendingBalance → availableBalance`:
 - [ ] Verify: `curl -H "x-cron-secret: $CRON_SECRET" https://<domain>/api/cron/release-earnings`
       → `{"success":true,...}` (wrong/missing secret must return 401).
 - [ ] Admins can also trigger releases manually from **Admin → Earnings**.
+
+### 3.3 When the gateway stops answering: the local breaker
+
+A HarakaPay that *accepts the connection and then never answers* is worse than
+one that is down, because every call pays the full wait and nothing looks broken.
+`harakaStatus` is the worst of them: the reconcile sweep calls it once per
+pending charge, so one hung gateway turned a sweep that should take a second into
+minutes of sequential waits, and the checkout poll into a spinner that never
+moved.
+
+So every gateway call is bounded at **20s** and guarded by a circuit breaker
+(`src/lib/payments/harakapay.ts`). After **two unanswered calls in a row** — a
+timeout, a network failure, or a 5xx — the breaker opens for **30s**, and calls
+during that window are refused at once:
+
+```
+HarakaPay has not answered its last calls, so this one was not sent.
+```
+
+One success closes it, so a recovered gateway resumes immediately.
+
+**Do not read an open breaker as a bad key.** A rejected key answers immediately
+— a 4xx — and a 4xx is deliberately *not* counted as a fault. If 4xx responses
+counted, one customer typing a bad phone number twice would pause payments for
+everybody. Only "we could not reach the gateway" opens the breaker, so the
+correct response is to wait a moment and retry, or check HarakaPay's status
+page — not to rotate `HARAKAPAY_API_KEY`.
+
+Where to see it:
+
+- [ ] `GET /api/payments/health` → `gatewayBreaker` (`open`, `openUntil`,
+      `failures`, `skipped`, `warning`). While it is open the `summary` leads with
+      the breaker, because every other line on that response is about a gateway
+      nobody can reach right now.
+- [ ] Admin → Overview → System readiness → the **`gatewayBreaker`** row, and the
+      same sentence at the top of the warnings list.
+- [ ] The HarakaPay probe (`npm run verify:live`) reports `warn` — "key valid …
+      HarakaPay has not answered its last calls" — when the gateway answers the
+      probe but this process has been skipping it. A zero float stays a hard
+      failure; the breaker only ever softens an otherwise-healthy probe.
+
+The breaker is **per process**. A serverless cold start begins with it closed,
+which is why it is a fast-fail for a single bad spell rather than a global
+state.
+
+#### The reconcile sweep stops early instead of grinding
+
+When the breaker is open, `reconcileStalePayments` stops iterating. It has not
+asked about the rows it has not reached, and the gateway has not answered about
+them either, so walking the rest would only inflate the `errors` count and report
+a `checked` figure that looks like work. The result carries two extra fields —
+`gatewayUnavailable` and `unchecked` — and the worker's heartbeat summary says so
+out loud:
+
+```
+0 checked, 0 settled, 0 newly flagged, 0 awaiting resolution, 0 still processing
+  — STOPPED EARLY, 42 not checked (the gateway is not answering)
+```
+
+**A `STOPPED EARLY` sweep is not a failed one.** Nothing was lost: the charges are
+still `PENDING`, and the next scheduled run (every 10 minutes) picks up where this
+one stopped. The only thing that needs a human is the gateway itself — read the
+breaker section above. If the rest of the sweep was skipped on every run, check
+`gatewayBreaker.skipped` on `/api/payments/health`; a number that keeps climbing
+means the gateway is failing more often than the 30s window can recover from.
 
 ### 4.0 How cron routes are authorized
 

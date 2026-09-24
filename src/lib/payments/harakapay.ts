@@ -6,6 +6,7 @@
 // =============================================================================
 
 import config from "../config";
+import { createBoundedCaller } from "../bounded-caller";
 
 // =============================================================================
 // Types
@@ -52,44 +53,158 @@ export interface HarakaBalanceResponse {
 }
 
 // =============================================================================
-// Shared fetch wrapper (auth header + timeout)
+// Shared fetch wrapper (auth header + bound + breaker)
+//
+// HarakaPay used to have only a per-call timeout, which is half the fix: a
+// gateway that accepts the connection and then never answers is not one slow
+// call, it is every call for the life of the process. `harakaStatus` is the
+// worst of them — the reconcile sweep calls it once per pending charge, so a
+// hung gateway turned a sweep that should take a second into minutes of
+// sequential 20s waits, and the checkout poll made a customer watch a spinner
+// that never moved.
+//
+// So the bound is paired with a breaker, exactly like Redis. What is different
+// is failure classification: a 4xx is the gateway *working* ("Invalid mobile
+// number"), so it must never count toward opening the breaker — one customer's
+// typo would otherwise pause payments for everybody.
 // =============================================================================
+
+/**
+ * How long one gateway call may take before it is abandoned.
+ *
+ * 20s because a USSD collect is a real round trip to the operator; status and
+ * balance answer in far less. It is deliberately the same number as the socket
+ * abort below, so the caller and the transport give up together.
+ */
+const HARAKA_TIMEOUT_MS = 20_000;
+
+/**
+ * An HTTP answer from the gateway that is not 2xx.
+ *
+ * A class rather than a bare Error so the breaker can tell a business rejection
+ * (4xx) from a connectivity fault (5xx). The message keeps its exact shape —
+ * `harakaErrorReason` strips the prefix to show the merchant what the gateway
+ * actually said — so this is additive, not a change of contract.
+ */
+export class HarakaHttpError extends Error {
+  status: number;
+
+  constructor(path: string, status: number, detail: string) {
+    super(`HarakaPay ${path} error ${status}: ${detail}`);
+    this.name = "HarakaHttpError";
+    this.status = status;
+  }
+}
+
+/**
+ * Every gateway call, bounded and breaker-guarded.
+ *
+ * Two failures in a row open the breaker for 30s, so a *third* caller is refused
+ * at once instead of paying the wait again. The window is short on purpose: a
+ * payment must not be refused for long, and one success closes the breaker, so
+ * a recovered gateway resumes immediately.
+ */
+const gatewayCall = createBoundedCaller({
+  timeoutMs: HARAKA_TIMEOUT_MS,
+  failuresToOpen: 2,
+  openForMs: 30_000,
+  // "Could we reach the gateway?" — a 4xx proves we could, so it is not counted.
+  countsAsFailure: (error) =>
+    !(error instanceof HarakaHttpError) || error.status >= 500,
+});
+
+/** The gateway breaker's live state, for diagnostics and tests. */
+export function harakaGatewayState(now: number = Date.now()) {
+  const state = gatewayCall.state();
+  return { open: now < state.openUntil, ...state };
+}
+
+/**
+ * The gateway breaker in words — one source of wording for the two places an
+ * operator meets it (`GET /api/payments/health` and the admin System readiness
+ * probe), so the two cannot describe the same outage differently.
+ *
+ * Returns null while the breaker is closed, which is the normal state. The
+ * wording matters: an operator staring at a failed balance call needs to know
+ * the key is fine, because "the gateway is not answering" and "your key was
+ * rejected" look identical from the outside and only one of them is fixable in
+ * the HarakaPay dashboard. It cannot be the key: a rejected key answers
+ * immediately (a 4xx), and only unanswered calls open the breaker.
+ */
+export function harakaBreakerNotice(
+  state: { open: boolean; openUntil: number; failures: number } = harakaGatewayState(),
+  now: number = Date.now()
+): string | null {
+  if (!state.open) return null;
+
+  const resumeInSeconds = Math.max(1, Math.ceil((state.openUntil - now) / 1000));
+  return (
+    "HarakaPay has not answered its last calls, so this server is skipping gateway calls " +
+    `for about ${resumeInSeconds}s (${state.failures} failure(s) in a row). ` +
+    "The API key is not the problem — a rejected key answers immediately; an unanswered " +
+    "call does not. It retries on its own as soon as the window passes."
+  );
+}
 
 async function harakaFetch<T>(path: string, init?: RequestInit): Promise<T> {
   if (!config.harakaPay.apiKey) {
     throw new Error("HARAKAPAY_API_KEY is not configured");
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
+  // The breaker only reports a reason, so the original error is remembered here.
+  // Callers — and `harakaErrorReason`, which shows the gateway's own words —
+  // need the message, not just "the call failed".
+  let thrown: unknown = null;
 
-  try {
-    const response = await fetch(`${config.harakaPay.baseUrl}${path}`, {
-      ...init,
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": config.harakaPay.apiKey,
-        ...(init?.headers || {}),
-      },
-      cache: "no-store",
-    });
+  const outcome = await gatewayCall.run(async () => {
+    try {
+      const response = await fetch(`${config.harakaPay.baseUrl}${path}`, {
+        ...init,
+        signal: AbortSignal.timeout(HARAKA_TIMEOUT_MS),
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": config.harakaPay.apiKey,
+          ...(init?.headers || {}),
+        },
+        cache: "no-store",
+      });
 
-    const data = (await response.json().catch(() => ({}))) as T & {
-      success?: boolean;
-      error?: string;
-    };
+      const data = (await response.json().catch(() => ({}))) as T & {
+        success?: boolean;
+        error?: string;
+      };
 
-    if (!response.ok) {
-      throw new Error(
-        `HarakaPay ${path} error ${response.status}: ${data?.error || response.statusText}`
-      );
+      if (!response.ok) {
+        throw new HarakaHttpError(
+          path,
+          response.status,
+          data?.error || response.statusText
+        );
+      }
+
+      return data;
+    } catch (error) {
+      thrown = error;
+      throw error;
     }
+  });
 
-    return data;
-  } finally {
-    clearTimeout(timer);
+  if (outcome.ok) return outcome.value;
+
+  if (outcome.reason === "open") {
+    throw new Error(
+      `HarakaPay has not answered its last calls, so this one was not sent. ` +
+        `Give it a moment and try again (${path}).`
+    );
   }
+
+  if (outcome.reason === "timeout") {
+    throw new Error(
+      `HarakaPay ${path} timed out after ${HARAKA_TIMEOUT_MS / 1000}s — the gateway did not answer`
+    );
+  }
+
+  throw thrown ?? new Error(`HarakaPay ${path} failed`);
 }
 
 // =============================================================================

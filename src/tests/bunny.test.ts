@@ -167,6 +167,53 @@ describe("Bunny management API host", () => {
   });
 });
 
+// =============================================================================
+// Bounded management calls.
+//
+// These run on request paths and in a cron worker, so a Bunny that accepts the
+// connection and then never answers must not hold the caller open until the
+// function timeout — the same failure the Redis bound was added for. Two things
+// are pinned: every management call carries a timeout signal, and a timeout is
+// reported by name rather than as an opaque abort.
+// =============================================================================
+
+describe("Bunny management calls are bounded", () => {
+  it("signals a timeout on every management request", async () => {
+    const signals: (AbortSignal | undefined)[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        signals.push(init?.signal ?? undefined);
+        return new Response(JSON.stringify({ guid: "vid-1" }), { status: 200 });
+      })
+    );
+
+    await createVideoUpload("My scene");
+    await getBunnyVideoDetails("vid-1");
+    await deleteBunnyVideo("vid-1");
+
+    expect(signals).toHaveLength(3);
+    for (const signal of signals) expect(signal).toBeInstanceOf(AbortSignal);
+    vi.unstubAllGlobals();
+  });
+
+  it("names the provider and the wait instead of leaking an opaque abort", async () => {
+    // AbortSignal.timeout() rejects with a TimeoutError; the caller should read
+    // which provider went quiet, not "The operation was aborted".
+    const timedOut = new Error("The operation was aborted due to timeout");
+    timedOut.name = "TimeoutError";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw timedOut;
+      })
+    );
+
+    await expect(getBunnyVideoDetails("vid-1")).rejects.toThrow(/Bunny lookup timed out/);
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("Bunny signing", () => {
   it("signs the full path, leading slash included", () => {
     const url = new URL(generateSignedVideoUrl("abc-123", 10, "viewer-9"));

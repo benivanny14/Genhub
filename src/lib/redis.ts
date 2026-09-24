@@ -33,6 +33,13 @@
 
 import Redis from "ioredis";
 import config from "./config";
+import { createBoundedCaller } from "./bounded-caller";
+
+// The caller is provider-agnostic now that the payment gateway needs it too, so
+// it lives in ./bounded-caller. Re-exported here because this was its first home
+// and `@/lib/redis` is the path the existing tests and callers import it from.
+export { createBoundedCaller };
+export type { BoundedCallerOptions, BoundedOutcome } from "./bounded-caller";
 
 export type RedisBackendName = "upstash-rest" | "ioredis";
 
@@ -173,93 +180,11 @@ function createIoRedisBackend(client: Redis): RedisBackend {
 
 // -----------------------------------------------------------------------------
 // A bounded data call, and a breaker for a backend that keeps failing
+//
+// The implementation moved to ./bounded-caller once the payment gateway needed
+// the same thing; this module keeps the bound-specific configuration and the
+// re-export.
 // -----------------------------------------------------------------------------
-
-/** Marker for "the backend did not answer in time", so it is not an unexpected throw. */
-const TIMED_OUT = Symbol("redis-call-timed-out");
-
-/** Reject after `ms` without leaving the backend's own promise unhandled. */
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      // The call may still settle later. Swallow it here, or a late rejection
-      // surfaces as an unhandled rejection long after the request moved on.
-      promise.catch(() => {});
-      reject(TIMED_OUT);
-    }, ms);
-    // Never keep the process alive for a call nobody is waiting on any more.
-    timer.unref?.();
-
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        clearTimeout(timer);
-        reject(error);
-      }
-    );
-  });
-}
-
-export type BoundedOutcome<T> =
-  | { ok: true; value: T }
-  | { ok: false; reason: "timeout" | "error" | "open" };
-
-export interface BoundedCallerOptions {
-  /** How long one call may take before it is abandoned. */
-  timeoutMs?: number;
-  /** How long the breaker stays open after `failuresToOpen` failures in a row. */
-  openForMs?: number;
-  /** Failures in a row before calls stop being attempted at all. */
-  failuresToOpen?: number;
-  /** Injectable clock, so the breaker is testable without waiting. */
-  now?: () => number;
-}
-
-/**
- * A caller that gives up, and then stops trying for a while.
- *
- * The breaker matters as much as the timeout. One unreachable Redis is not one
- * slow call — it is every call for the rest of the process's life, each paying
- * the connect-and-retry cycle again. A payment that touches the cache three
- * times would pay it three times; a suite of thirty files pays it hundreds.
- * Pure, so every branch is covered in src/tests/redis-bounded.test.ts.
- */
-export function createBoundedCaller(options: BoundedCallerOptions = {}) {
-  const timeoutMs = options.timeoutMs ?? 750;
-  const openForMs = options.openForMs ?? 15_000;
-  const failuresToOpen = options.failuresToOpen ?? 2;
-  const now = options.now ?? (() => Date.now());
-
-  let openUntil = 0;
-  let failures = 0;
-  let attempted = 0;
-  let skipped = 0;
-
-  return {
-    async run<T>(op: () => Promise<T>): Promise<BoundedOutcome<T>> {
-      if (now() < openUntil) {
-        skipped += 1;
-        return { ok: false, reason: "open" };
-      }
-
-      attempted += 1;
-      try {
-        const value = await withTimeout(op(), timeoutMs);
-        failures = 0;
-        return { ok: true, value };
-      } catch (error) {
-        failures += 1;
-        if (failures >= failuresToOpen) openUntil = now() + openForMs;
-        return { ok: false, reason: error === TIMED_OUT ? "timeout" : "error" };
-      }
-    },
-    /** For the admin report and for tests. */
-    state: () => ({ openUntil, failures, attempted, skipped }),
-  };
-}
 
 /**
  * The one caller the data path uses.
@@ -274,6 +199,35 @@ export function createBoundedCaller(options: BoundedCallerOptions = {}) {
  * documented per-instance fallback meanwhile.
  */
 const dataCall = createBoundedCaller({ timeoutMs: 750, openForMs: 60_000 });
+
+/** What the data-path breaker looks like right now, for the admin report. */
+export interface RedisDataCallState {
+  /** True while the breaker is open and every cache/rate-limit call is skipped. */
+  open: boolean;
+  /** Epoch ms when the next attempt will be allowed; 0 while closed. */
+  openUntil: number;
+  /** Failures in a row as of the last attempt. */
+  failures: number;
+  /** Calls actually attempted since the process started. */
+  attempted: number;
+  /** Calls skipped because the breaker was open. */
+  skipped: number;
+}
+
+/**
+ * Read the data-path breaker.
+ *
+ * When this is open the cache is skipped and rate limiting has fallen back to
+ * per-instance memory — a real degradation that nothing else in the app
+ * announces. It matters that this is separate from `verifyRedisWritable`:
+ * verification deliberately bypasses the breaker (see the file header), so the
+ * live probe can honestly report "the backend is fine" while every request is
+ * being served *around* it. This is how the panel tells those two apart.
+ */
+export function redisDataCallState(now: number = Date.now()): RedisDataCallState {
+  const state = dataCall.state();
+  return { open: now < state.openUntil, ...state };
+}
 
 // -----------------------------------------------------------------------------
 // Which backend this process uses

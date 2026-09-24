@@ -58,11 +58,30 @@ describe("worker result summaries", () => {
       stillProcessing: 1,
       awaitingResolution: 1,
       errors: 0,
+      gatewayUnavailable: false,
+      unchecked: 0,
     });
 
     expect(summary).toContain("4 checked");
     expect(summary).toContain("2 newly flagged");
     expect(summary).toContain("1 awaiting resolution");
+  });
+
+  it("says when a sweep stopped early, so a short sweep cannot read as a quiet one", () => {
+    const summary = describeReconcile({
+      checked: 0,
+      settledSuccess: 0,
+      settledFailed: 0,
+      underInvestigation: 0,
+      stillProcessing: 0,
+      awaitingResolution: 0,
+      errors: 0,
+      gatewayUnavailable: true,
+      unchecked: 42,
+    });
+
+    expect(summary).toContain("STOPPED EARLY");
+    expect(summary).toContain("42 not checked");
   });
 
   it("names the USSD pushes, because those are on someone's phone", () => {

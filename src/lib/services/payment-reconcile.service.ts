@@ -38,6 +38,7 @@ import {
   harakaStatus,
   harakaStatusToInternal,
   harakaErrorReason,
+  harakaGatewayState,
 } from "../payments/harakapay";
 import { processPaymentWebhook } from "./webhook.service";
 import { notifyPaymentResult } from "./payment-notify.service";
@@ -56,6 +57,18 @@ export interface ReconcileResult {
   /** Already flagged, and the gateway still has no verdict after asking again. */
   awaitingResolution: number;
   errors: number;
+  /**
+   * True when the sweep stopped before examining every pending charge because
+   * the gateway stopped answering.
+   *
+   * The row is what tells an operator the queue was not actually worked: a
+   * sweep that reports `4 checked` and says nothing else looks like four
+   * charges were examined and found healthy, when the truth may be that four
+   * were reached out of four hundred.
+   */
+  gatewayUnavailable: boolean;
+  /** Pending charges this run never asked about, because of the above. */
+  unchecked: number;
 }
 
 export async function reconcileStalePayments(options?: {
@@ -76,6 +89,8 @@ export async function reconcileStalePayments(options?: {
     stillProcessing: 0,
     awaitingResolution: 0,
     errors: 0,
+    gatewayUnavailable: false,
+    unchecked: 0,
   };
 
   // Nothing to reconcile when the gateway is never contacted.
@@ -106,6 +121,16 @@ export async function reconcileStalePayments(options?: {
     orderBy: { createdAt: "asc" },
     take: limit,
   });
+
+  // A breaker already open means this process watched the gateway stop
+  // answering recently. Do not walk the queue at all: every row would be refused
+  // instantly (the bound at work), so the only things this run would produce are
+  // a misleading `errors` count and a report that looks like work was done.
+  if (harakaGatewayState().open) {
+    result.gatewayUnavailable = true;
+    result.unchecked = pending.length;
+    return result;
+  }
 
   for (const tx of pending) {
     result.checked += 1;
@@ -172,6 +197,16 @@ export async function reconcileStalePayments(options?: {
         `[Reconcile] Failed for ${tx.id}:`,
         error instanceof Error ? error.message : error
       );
+    }
+
+    // The gateway has stopped answering: it has not answered about the rows we
+    // have not reached either. Stop here rather than grinding through the rest —
+    // the next scheduled run picks them up, and the count of what was skipped
+    // travels with the result so a green-looking summary cannot hide the gap.
+    if (harakaGatewayState().open) {
+      result.gatewayUnavailable = true;
+      result.unchecked = pending.length - result.checked;
+      break;
     }
   }
 

@@ -44,6 +44,16 @@ function getTransporter(): Transporter {
       auth: process.env.SMTP_USER
         ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
         : undefined,
+      // Bounded, like every other external call on a request path. nodemailer's
+      // defaults are the OS-level socket timeouts — minutes — so a mail host
+      // that accepts the connection and then stalls would hold the
+      // registration or password-reset request open until the function is
+      // killed. `sendMail` already treats delivery as best-effort (a failure is
+      // logged, never thrown), so giving up early costs a log line, not a send,
+      // while waiting costs the whole request.
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
   }
   return transporter;
