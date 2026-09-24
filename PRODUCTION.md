@@ -26,15 +26,18 @@ the environment, not from your laptop:
 | Laptop / CI without `NODE_ENV=production` | advisory | prints every problem, exits **0** — a local build never fails for a missing Bunny key |
 | Vercel / any pipeline with `NODE_ENV=production`, or `--strict` | strict | missing or placeholder settings **fail the build** |
 
-`preflight:prod` is the same list plus the checks that need the network
-(live `/api/health`, the HarakaPay balance, and a real `SELECT 1` against
-Postgres). That last one is there because "`DATABASE_URL` is set" and "there is a
-database there" are different facts: a suspended managed database (Neon sleeps
-when idle and refuses the first connection while it wakes) or a connection string
-with the wrong host or password passes every environment check and then fails on
-the deploy's first query — after the site already looks up. It is bounded at
-15s, so the gate cannot hang on a database that is still waking; a gate that
-waits longer than that for its own database is telling you something anyway.
+`preflight:prod` is the same list plus the checks that need the network: a real
+`SELECT 1` against Postgres, live probes of **Redis, Bunny Stream + CDN and
+SMTP**, the HarakaPay balance, and `/api/health`. Both halves of that exist
+because "the value is set" and "the value works" are different facts — a
+suspended managed database (Neon sleeps when idle and refuses the first
+connection while it wakes), a connection string with the wrong host or password,
+a Bunny key that no longer authenticates and an SMTP host that stopped resolving
+all pass every environment check above and then fail in front of an operator or a
+customer. The connection probes are bounded at 15s, so the gate cannot hang on a
+database that is still waking, and they are the *same* probes `npm run
+verify:live` runs (one definition in `scripts/_probes.mjs`), so the two commands
+cannot disagree about whether a service is up.
 Treat it as the gate: **do not deploy while it exits 1.**
 
 Integration smoke tests (move from “code exists” to “credentials proven”):

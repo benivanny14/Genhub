@@ -6,6 +6,11 @@
 //       node scripts/preflight.mjs --production          (blocks: launch gate)
 //       node scripts/preflight.mjs --url https://domain  (+ live health probe)
 //       node scripts/preflight.mjs --gateway             (+ live HarakaPay float)
+//       node scripts/preflight.mjs --live                (+ Redis/Bunny/SMTP probes)
+//
+// `--production` implies `--live`: the launch gate has to answer "does it work",
+// not only "was it set". In development the probes stay opt-in so `preflight`
+// remains a fast, offline report.
 //
 // Exits 1 when launch BLOCKERS remain. In development the "go-live" items are
 // warnings (placeholders are expected); with --production they become blockers,
@@ -19,6 +24,7 @@
 import { readFileSync } from "node:fs";
 import { loadEnv, ok, warn, fail, assessSecret, hasRestRedis } from "./_env.mjs";
 import { checkLockfileSync } from "./verify-lockfile.mjs";
+import { probeRedis, probeBunny, probeSmtp } from "./_probes.mjs";
 
 loadEnv();
 
@@ -29,6 +35,7 @@ let baseUrl = wantUrl !== -1 ? (args[wantUrl + 1] || "").replace(/\/+$/, "") : "
 if (baseUrl && !/^https?:\/\//.test(baseUrl)) baseUrl = `http://${baseUrl}`;
 const wantGateway =
   args.includes("--gateway") || (productionMode && process.env.PAYMENT_SANDBOX !== "true");
+const wantLive = productionMode || args.includes("--live");
 
 let blockers = 0;
 let warnings = 0;
@@ -273,6 +280,33 @@ goLive(
   "2257 records custodian details are set",
   "NEXT_PUBLIC_COMPANY_LEGAL_NAME / NEXT_PUBLIC_COMPANY_ADDRESS missing — the §2257 page cannot name a custodian (legal requirement)"
 );
+
+// ------------------------------------------------- Live connection checks
+// Everything above asks whether a value was SET. These ask whether it WORKS —
+// a different question, and the one a launch actually depends on: a typo in a
+// connection string, a Bunny account with Token Authentication still off, and an
+// SMTP host that no longer resolves all pass every check above and then fail in
+// front of a customer. The probes are the same ones `npm run verify:live` runs
+// (see ./_probes.mjs), so the two commands cannot disagree about whether a
+// service is up.
+if (wantLive) {
+  console.log("\nLive connection checks (opening real connections):");
+  for (const probe of [probeRedis, probeBunny, probeSmtp]) {
+    for (const result of await probe()) {
+      if (result.state === "fail") {
+        fail(`${result.name}: ${result.detail}`);
+        blockers++;
+      } else if (result.state === "warn") {
+        warn(`${result.name}: ${result.detail}`);
+        warnings++;
+      } else if (result.state === "ok") {
+        ok(`${result.name}: ${result.detail}`);
+      }
+      // `skip` prints nothing: the sections above already named what is missing,
+      // and counting it here would report one gap twice.
+    }
+  }
+}
 
 // ------------------------------------------------------- Live gateway check
 // The single blocker that is NOT ours to fix: an unfunded merchant account.
