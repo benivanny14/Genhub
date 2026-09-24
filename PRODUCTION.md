@@ -94,6 +94,8 @@ npm i -g vercel && vercel link
 vercel --prod
 
 # 4) post-deploy verification
+APP_URL=https://your-domain.com npm run launch:check  # opens with
+#      the line below plus verify:live, and prints one verdict
 npm run preflight -- --url https://your-domain.com   # blockers + live health
 npm run smoke:harakapay                             # read-only key check
 npm run smoke:bunny -- --storage                    # stream + storage check
@@ -104,6 +106,34 @@ npm run admin:create you@domain.com                 # bootstrap the first admin
 #    - submit https://your-domain.com/sitemap.xml to Google Search Console
 #    - buy your cheapest video with a real phone once (smoke:harakapay --collect)
 ```
+
+#### One command to re-run that verification
+
+```bash
+APP_URL=https://your-domain.com npm run launch:check
+```
+
+Runs `preflight:prod` against the deployed URL (configuration, the live service
+probes, `/api/health`), then `verify:live` (every credential, opened for real),
+then prints one verdict:
+
+```
+=== LAUNCH CHECK: NOT READY ===
+  ✗ preflight:prod (https://your-domain.com)        5 blocker(s), 0 warning(s)
+  ✗ verify:live                                     2 configured value(s) broken · 1 warning(s)
+  ! HarakaPay collect                               SKIPPED — pass --collect <amountTZS> <07XXXXXXXX> …
+```
+
+It is a convenience, not a new source of truth: each step is the same script you
+would have run by hand, and the summary only reads its exit code and one line.
+A skipped collect is not a failure — it is the one step that needs a handset.
+
+**The real USSD push is opt-in and always will be.** `--collect <amountTZS>
+<07XXXXXXXX>` sends one genuine charge: money moves and somebody's phone rings. A
+post-deploy check that quietly charged a customer would be a worse bug than the
+one it hunts for, so the last step in the sequence never runs unless it is named —
+and the summary says out loud that it was skipped, because that is the only thing
+a green run did not prove.
 
 ### 0.2 The deploy installs the lockfile, not a fresh resolve
 
@@ -1257,6 +1287,7 @@ party, which is why it is a flag and not the default.
 ```bash
 DOMAIN=https://genhub.co.tz
 
+APP_URL=$DOMAIN npm run launch:check    # preflight + verify:live, one verdict (§0.1)
 npm run preflight -- --url $DOMAIN      # one-shot audit: blockers + health + warnings
 
 curl -fsS $DOMAIN/api/health           # status=ok, warnings=[], checks.email=smtp

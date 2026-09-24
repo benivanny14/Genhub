@@ -25,6 +25,7 @@
     "setup": "node scripts/setup-env.mjs",
     "preflight": "node scripts/preflight.mjs",
     "preflight:prod": "node scripts/preflight.mjs --production",
+    "launch:check": "node scripts/launch-check.mjs",
     "verify:env": "node scripts/verify-env.mjs",
     "verify:lockfile": "node scripts/verify-lockfile.mjs",
     "verify:live": "node scripts/verify-connections.mjs",

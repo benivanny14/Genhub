@@ -61,6 +61,7 @@ reports whether the file was actually stored.
 | `npm run admin:create` | Create an admin account |
 | `npm run verify:live` | Open real connections to every service |
 | `npm run preflight:prod` | Launch blockers |
+| `npm run launch:check` | Post-deploy: preflight + verify:live, one verdict (`--collect` for a real USSD push) |
 | `npm run setup` | Show what is left to configure, and open `.env.local` |
 | `npm run smoke:bunny` | Bunny video pipeline check (`--storage`, `--upload`) |
 
