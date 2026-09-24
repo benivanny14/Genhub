@@ -14,7 +14,7 @@
 
 import { NextRequest } from "next/server";
 import { api } from "@/lib/api-response";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { cronOrigin, requireCronSecret } from "@/lib/cron-auth";
 import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 async function handle(request: NextRequest) {
@@ -28,7 +28,7 @@ async function handle(request: NextRequest) {
     // This worker is the one that can charge a fan who did not ask: when a
     // wallet cannot cover a renewal it sends a USSD push. The run lock in
     // runWorkerNow is what stops a second scheduler from pushing twice.
-    const outcome = await runWorkerNow("renew-subscriptions");
+    const outcome = await runWorkerNow("renew-subscriptions", { origin: cronOrigin(request) });
 
     if (!outcome.ran) return api.success({ skipped: true, reason: outcome.reason }, outcome.reason);
 

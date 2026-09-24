@@ -11,7 +11,7 @@
 
 import { NextRequest } from "next/server";
 import { api } from "@/lib/api-response";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { cronOrigin, requireCronSecret } from "@/lib/cron-auth";
 import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 async function handle(request: NextRequest) {
@@ -25,7 +25,7 @@ async function handle(request: NextRequest) {
     // runWorkerNow holds the worker's run lock and stamps the heartbeat, so
     // this route cannot run the same job twice at once, and the admin dashboard
     // learns what happened. Wording lives with the job, not here.
-    const outcome = await runWorkerNow("release-earnings");
+    const outcome = await runWorkerNow("release-earnings", { origin: cronOrigin(request) });
 
     // Another trigger got there first. Not a failure: answering 500 here would
     // page someone about a job that is running fine.

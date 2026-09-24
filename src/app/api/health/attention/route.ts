@@ -58,6 +58,11 @@ export async function GET(request: NextRequest) {
         silentForMinutes: w.silentForMinutes,
         silentSince: w.silentSince,
         detail: w.detail,
+        // Whether a run of this worker can reach a customer's phone. The
+        // watchdog refuses to restart any worker that says yes, and reads it
+        // from here rather than keeping its own copy of the rule — a second
+        // list is a second thing that can go stale about who gets charged.
+        sendsCustomerRequests: w.sendsCustomerRequests,
       })),
     });
   } catch (error) {

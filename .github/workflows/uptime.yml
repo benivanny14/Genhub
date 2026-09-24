@@ -20,10 +20,16 @@
 #
 # Set `CRON_SECRET` (the secret the four workers already use) and the alarm names
 # the worker that stopped, with how long it has been quiet, instead of saying only
-# "background jobs: late". Optional in both directions: without it the alert is
-# what it was, and a wrong or rotated value cannot stop the alarm — the detail is
-# fetched only after the verdict is already bad, and any failure leaves the
-# message alone.
+# "background jobs: late". It also lets the watchdog START that worker again —
+# through the worker's own cron route, so the run takes the same lock and stamps
+# the same heartbeat, and renew-subscriptions is never among them because it can
+# send a charge request to a customer's phone. Optional in both directions:
+# without it the alert is what it was, and a wrong or rotated value cannot stop
+# the alarm — the detail and the restart are attempted only after the verdict is
+# already bad, and any failure leaves the message alone.
+#
+# To stop the automatic restarts and keep the alarm, set the repository VARIABLE
+# `WATCHDOG_RECOVER=off`. Unset means on; anything unrecognised means off.
 #
 # -----------------------------------------------------------------------------
 # The blind spot, which is why §4.0.2 also recommends a monitor outside GitHub
@@ -62,6 +68,9 @@ jobs:
           APP_URL: ${{ vars.APP_URL }}
           ALERT_WEBHOOK_URL: ${{ secrets.ALERT_WEBHOOK_URL }}
           # Optional: turns "background jobs: late" into the worker's name and how
-          # long it has been silent. See the header.
+          # long it has been silent, and lets the watchdog restart it. See the
+          # header.
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          # Optional: "off" stops the automatic restarts, keeping the alarm.
+          WATCHDOG_RECOVER: ${{ vars.WATCHDOG_RECOVER }}
         run: node scripts/watchdog.mjs

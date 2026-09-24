@@ -9,7 +9,7 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { cronOrigin, requireCronSecret } from "@/lib/cron-auth";
 import { describeReconcile, runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 export async function GET(request: NextRequest) {
@@ -30,7 +30,7 @@ async function handle(request: NextRequest) {
   try {
     // A silently dead reconciler is the failure mode this endpoint exists to
     // prevent, so its own liveness is recorded rather than assumed.
-    const outcome = await runWorkerNow("reconcile-payments");
+    const outcome = await runWorkerNow("reconcile-payments", { origin: cronOrigin(request) });
 
     if (!outcome.ran) {
       console.log(`[Cron] Payment reconciliation skipped: ${outcome.reason}`);

@@ -48,6 +48,33 @@ function presentedSecret(request: NextRequest): string {
  *   const denied = requireCronSecret(request);
  *   if (denied) return denied;
  */
+/**
+ * The only origin value a request may claim, and what it is recorded as.
+ *
+ * A header that carried free text would let anything at all be written into the
+ * heartbeat row and onto the admin card — and a caller who already holds
+ * CRON_SECRET has no need of that extra power.
+ */
+const WATCHDOG_ORIGIN_HEADER = "watchdog";
+const WATCHDOG_ORIGIN_LABEL = "restarted by the uptime watchdog";
+
+/**
+ * Who asked for this run, for the heartbeat.
+ *
+ * A scheduled trigger sends nothing and is recorded as scheduled, which is what
+ * it is. The uptime watchdog restarts a worker whose schedule has died (see
+ * PRODUCTION.md §4.0.2) and declares itself in `x-cron-origin`, so the run it
+ * rescued is not filed as though the schedule had worked: an operator reading
+ * "last run 04:45" on a card whose schedule is :00 needs to know which of the two
+ * happened, because only one of them means the schedule is fixed.
+ *
+ * Only this one literal is accepted; anything else reads as undefined.
+ */
+export function cronOrigin(request: NextRequest): string | undefined {
+  const declared = (request.headers.get("x-cron-origin") || "").trim().toLowerCase();
+  return declared === WATCHDOG_ORIGIN_HEADER ? WATCHDOG_ORIGIN_LABEL : undefined;
+}
+
 export function requireCronSecret(request: NextRequest): NextResponse | null {
   const expected = config.cron.secret;
 

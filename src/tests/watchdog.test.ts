@@ -21,7 +21,17 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { assessHealth, alertMessage, describeStoppedWorkers } from "../../scripts/watchdog.mjs";
+import {
+  RECOVERABLE_WORKERS,
+  alertMessage,
+  assessHealth,
+  describeRunOutcome,
+  describeStoppedWorkers,
+  planRecoveries,
+  recoveryEnabled,
+  shouldRecover,
+} from "../../scripts/watchdog.mjs";
+import { CRON_WORKERS } from "@/lib/services/cron-heartbeat.service";
 
 /** A healthy response, with the parts each test cares about overridden. */
 function health(overrides: Record<string, any> = {}, status = 200) {
@@ -257,6 +267,13 @@ describe("the detail endpoint", () => {
     expect(route).toContain("export const dynamic = \"force-dynamic\"");
   });
 
+  it("carries the one fact the restart guard reads", () => {
+    // Not decoration: the watchdog decides whether a worker may be started from
+    // this field, so a payload that stopped sending it would silently turn every
+    // restart into a refusal — the safe direction, but a broken feature.
+    expect(route).toContain("sendsCustomerRequests");
+  });
+
   it("moves nothing — it reads, so it never takes a lock or writes a heartbeat", () => {
     const code = withoutComments(route);
     expect(code).not.toContain("runWorkerNow(");
@@ -272,5 +289,223 @@ describe("the detail endpoint", () => {
     expect(code).not.toContain("attentionSummary");
     expect(code).not.toContain("needsAttention");
     expect(code).not.toContain("workersNeedingAttention");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Restarting a worker, and the one that may never be restarted
+//
+// A watchdog that only shouts leaves the outage in place for as long as it takes
+// somebody to read the alarm — at 3am, that is hours of unpaid creators. So it
+// starts the stopped worker itself. The property that has to hold is narrower
+// than "it recovers things": it must be *impossible* for this path to push a
+// charge request at a customer, because that money cannot be given back by
+// cancelling a run.
+//
+// `renew-subscriptions` sends a USSD prompt to a fan's phone when their wallet
+// cannot cover a renewal. It is never started from here — and these tests fail if
+// that ever changes, rather than trusting a comment.
+// -----------------------------------------------------------------------------
+
+describe("shouldRecover", () => {
+  /** The default payload for a worker the watchdog is allowed to start. */
+  const safe = {
+    id: "release-earnings",
+    name: "Release matured earnings",
+    state: "late",
+    sendsCustomerRequests: false,
+  };
+
+  it("starts a worker that stopped, when it is safe to start", () => {
+    expect(shouldRecover(safe)).toEqual({ recover: true, reason: expect.any(String) });
+  });
+
+  it("never starts the worker that can charge a customer's phone", () => {
+    const verdict = shouldRecover({
+      ...safe,
+      id: "renew-subscriptions",
+      name: "Renew subscriptions",
+      sendsCustomerRequests: true,
+    });
+
+    expect(verdict.recover).toBe(false);
+    expect(verdict.reason).toContain("phone");
+  });
+
+  it("treats an unclassified worker as one that can charge, not as safe", () => {
+    // The flag is read against `false`, not "not true". A worker added with no
+    // decision recorded about who it can reach must not inherit permission.
+    for (const flag of [undefined, null, true, "false", 0] as any[]) {
+      const verdict = shouldRecover({ ...safe, sendsCustomerRequests: flag });
+      expect(verdict.recover, `sendsCustomerRequests=${String(flag)}`).toBe(false);
+    }
+  });
+
+  it("leaves a worker alone that is not a stopped schedule", () => {
+    // `stalled` and `failing` both mean the job IS being triggered and dies when
+    // it runs: starting it again repeats the same death. `never` is setup work,
+    // and running the job by hand would hide the thing that needs doing.
+    for (const state of ["stalled", "failing", "never", "running", "ok"]) {
+      const verdict = shouldRecover({ ...safe, state });
+      expect(verdict.recover, state).toBe(false);
+      expect(verdict.reason, state).toContain(state);
+    }
+  });
+
+  it("leaves alone a worker it has not been told to touch", () => {
+    expect(shouldRecover({ ...safe, id: "process-holdings" }).recover).toBe(false);
+    expect(shouldRecover({ ...safe, id: "" }).recover).toBe(false);
+    expect(shouldRecover(undefined).recover).toBe(false);
+  });
+
+  it("can be switched off without giving up the alarm", () => {
+    const verdict = shouldRecover(safe, { enabled: false });
+    expect(verdict.recover).toBe(false);
+    expect(verdict.reason).toContain("WATCHDOG_RECOVER");
+  });
+});
+
+describe("recoveryEnabled", () => {
+  it("is on unless somebody says otherwise", () => {
+    for (const value of [undefined, null, "", "   "]) {
+      expect(recoveryEnabled(value)).toBe(true);
+    }
+    for (const value of ["1", "true", "yes", "on", "ON", " true "]) {
+      expect(recoveryEnabled(value), String(value)).toBe(true);
+    }
+  });
+
+  it.each(["off", "false", "0", "no", "maybe", "disabled", "omo"]) (
+    "fails closed on %s rather than arming itself",
+    (value) => {
+      expect(recoveryEnabled(value)).toBe(false);
+    }
+  );
+});
+
+describe("planRecoveries", () => {
+  const detail = {
+    workers: [
+      { id: "release-earnings", name: "Release matured earnings", state: "late", sendsCustomerRequests: false },
+      { id: "renew-subscriptions", name: "Renew subscriptions", state: "late", sendsCustomerRequests: true },
+      { id: "reconcile-payments", name: "Reconcile stale payments", state: "stalled", sendsCustomerRequests: false },
+    ],
+  };
+
+  it("restarts the stopped safe workers and explains the one it will not touch", () => {
+    const plan = planRecoveries(detail);
+
+    expect(plan.restarts.map((w) => w.id)).toEqual(["release-earnings"]);
+    // The reason travels in the alert, so nobody has to wonder whether the
+    // watchdog forgot about the worker it left stuck.
+    expect(plan.held).toHaveLength(1);
+    expect(plan.held[0].name).toBe("Renew subscriptions");
+    expect(plan.held[0].reason).toContain("phone");
+    // A stalled worker is left alone too, but silently: the detail on the card
+    // already says what a killed run means. Two sentences about one problem is
+    // how an alert stops being read.
+    expect(plan.held.map((w) => w.id)).not.toContain("reconcile-payments");
+  });
+
+  it("plans nothing when it was told nothing", () => {
+    for (const bad of [null, undefined, {}, { workers: "nope" }, []] as any[]) {
+      expect(planRecoveries(bad)).toEqual({ restarts: [], held: [] });
+    }
+  });
+
+  it("explains, rather than hides, that restarts are switched off", () => {
+    const plan = planRecoveries(detail, { enabled: false });
+    expect(plan.restarts).toEqual([]);
+    // Every stopped worker gets a sentence, or the reader is left wondering
+    // whether the watchdog simply forgot. That no restart will happen is a
+    // decision the operator made, and the alert should remind them of it.
+    expect(plan.held.map((w) => w.name)).toEqual([
+      "Release matured earnings",
+      "Renew subscriptions",
+    ]);
+    expect(plan.held[0].reason).toContain("WATCHDOG_RECOVER");
+    // The worker that can charge a phone keeps its own reason even then: that is
+    // the invariant, not a setting.
+    expect(plan.held[1].reason).toContain("phone");
+  });
+});
+
+describe("describeRunOutcome", () => {
+  it("reads the job's own sentence when the route sends one", () => {
+    expect(describeRunOutcome({ success: true, message: "Released TZS 9,000 for 2 creator(s)" })).toBe(
+      "ran — Released TZS 9,000 for 2 creator(s)"
+    );
+  });
+
+  it("reports a refusal as a refusal, not as a run", () => {
+    expect(describeRunOutcome({ status: "skipped", reason: "a run is already in flight" })).toBe(
+      "skipped — a run is already in flight"
+    );
+    expect(describeRunOutcome({ success: true, data: { skipped: true, reason: "locked" } })).toBe(
+      "skipped — locked"
+    );
+    expect(describeRunOutcome({ skipped: true })).toBe("skipped — a run is already in flight");
+  });
+
+  it("still says the run happened when the body is unfamiliar", () => {
+    // A restart that worked must never be reported as a failure because its JSON
+    // was not the shape this script expected.
+    expect(describeRunOutcome({ status: "ok", settledSuccess: 3 })).toBe("ran");
+    expect(describeRunOutcome(null)).toBe("ran");
+  });
+});
+
+describe("the restart list and the worker registry", () => {
+  it("only lists workers that cannot reach a customer's phone", () => {
+    // The script keeps its own list on purpose (a worker added tomorrow is not
+    // restarted by an old watchdog), which means the two can drift. This is the
+    // test that makes drifting impossible: the list is a subset of the registry,
+    // and a mismatch fails here rather than on somebody's phone.
+    for (const id of RECOVERABLE_WORKERS) {
+      const worker = CRON_WORKERS.find((w) => w.id === id);
+      expect(worker, `${id} is not a registered worker`).toBeTruthy();
+      expect(worker!.sendsCustomerRequests, `${id} can charge a phone`).toBe(false);
+    }
+  });
+
+  it("never lists a worker that sends customer requests", () => {
+    const chargeable = CRON_WORKERS.filter((w) => w.sendsCustomerRequests).map((w) => w.id);
+    // If this ever becomes empty the guard below proves nothing, so it is
+    // asserted rather than assumed.
+    expect(chargeable.length).toBeGreaterThan(0);
+    for (const id of chargeable) {
+      expect(RECOVERABLE_WORKERS).not.toContain(id);
+    }
+  });
+});
+
+describe("alertMessage with the recovery lines", () => {
+  const { payload, status } = health(
+    { status: "degraded", checks: { database: "up", backgroundJobs: "late" } },
+    503
+  );
+  const report = assessHealth(payload, status);
+
+  it("reads as one sentence, in the order the work happened", () => {
+    const message = alertMessage("https://genhub.co.tz", report, [
+      "Release matured earnings: nothing finished for 4 h",
+      "Restarted Release matured earnings: ran — Released TZS 9,000 for 2 creator(s)",
+      "Left Renew subscriptions alone: it can send a charge request to a customer's phone",
+    ]);
+
+    expect(message).toContain("background jobs: late");
+    expect(message.indexOf("nothing finished for 4 h")).toBeLessThan(
+      message.indexOf("Restarted Release matured earnings")
+    );
+    expect(message.indexOf("Restarted Release matured earnings")).toBeLessThan(
+      message.indexOf("Left Renew subscriptions alone")
+    );
+  });
+
+  it("stays the same alarm when there is nothing to add", () => {
+    const bare = alertMessage("https://genhub.co.tz", report);
+    expect(alertMessage("https://genhub.co.tz", report, [])).toBe(bare);
+    expect(alertMessage("https://genhub.co.tz", report, ["", "   "])).toBe(bare);
+    expect(bare).not.toMatch(/—\s*$/);
   });
 });

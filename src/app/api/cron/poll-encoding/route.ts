@@ -14,7 +14,7 @@
 // =============================================================================
 
 import { NextRequest, NextResponse } from "next/server";
-import { requireCronSecret } from "@/lib/cron-auth";
+import { cronOrigin, requireCronSecret } from "@/lib/cron-auth";
 import { describeEncoding, runWorkerNow } from "@/lib/services/cron-jobs.service";
 
 export async function GET(request: NextRequest) {
@@ -32,7 +32,7 @@ async function handle(request: NextRequest) {
   if (denied) return denied;
 
   try {
-    const outcome = await runWorkerNow("poll-encoding");
+    const outcome = await runWorkerNow("poll-encoding", { origin: cronOrigin(request) });
 
     if (!outcome.ran) {
       console.log(`[Cron] Encoding poll skipped: ${outcome.reason}`);

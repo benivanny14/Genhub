@@ -25,6 +25,27 @@
 // (which GitHub emails about) when the answer is bad.
 //
 // -----------------------------------------------------------------------------
+// What it does about the problem, not only about telling somebody
+//
+// With CRON_SECRET set, a worker whose schedule has stopped is started again.
+// The state is named `late` only when nothing has finished for roughly four of
+// the worker's own intervals, so an hourly restart restores at most the cadence
+// that worker was supposed to keep — it can never run a job more often than its
+// schedule would have.
+//
+// Three of the four workers may be restarted this way; `renew-subscriptions`
+// may not, ever. It sends a USSD charge request to a fan's phone when their
+// wallet cannot cover a renewal, which makes it the one run that can cost
+// somebody money they did not ask to spend. A missed renewal is recoverable by a
+// human at a keyboard; a duplicate charge is not. Anything the watchdog is
+// unsure about is left alone — a payload that does not say a worker is safe is
+// read as unsafe. The guards are on `shouldRecover`, and the reasons a stopped
+// worker was left alone travel in the alert.
+//
+// Restarting does not silence the alarm. Running the job again does not fix the
+// schedule that stopped, and an alarm that goes quiet because a repair succeeded
+// is how a broken schedule stays broken for a month.
+// -----------------------------------------------------------------------------
 // Why the decision lives in a function and not in the workflow YAML
 //
 // The rules are not obvious and getting them wrong is expensive in both
@@ -161,15 +182,191 @@ export function describeStoppedWorkers(detail) {
 /**
  * One line for a chat webhook or an email subject.
  *
- * `workerDetail` is optional on purpose: the alert has to be exactly as loud
- * with and without it.
+ * `extras` may be one string or several. They are optional on purpose: the
+ * alert has to be exactly as loud with and without them, and a notification has
+ * to read as a sentence rather than trailing off into a separator.
+ *
+ * @param {string} baseUrl
+ * @param {{ alarms: string[] }} report
+ * @param {string | string[]} [extras]
+ * @returns {string}
  */
-export function alertMessage(baseUrl, report, workerDetail = "") {
-  const alarms = report.alarms.join("; ");
-  const detail = (workerDetail || "").trim();
-  return detail
-    ? `Genhub ${baseUrl} — ${alarms} — ${detail}`
-    : `Genhub ${baseUrl} — ${alarms}`;
+export function alertMessage(baseUrl, report, extras = []) {
+  const alarm = `Genhub ${baseUrl} — ${report.alarms.join("; ")}`;
+  const tail = (Array.isArray(extras) ? extras : [extras])
+    .map((part) => (part || "").trim())
+    .filter(Boolean);
+  return [alarm, ...tail].join(" — ");
+}
+
+// ---------------------------------------------------------------------------
+// Restarting a worker whose schedule has died
+//
+// The worker learns that nothing has finished for four of its own intervals and
+// starts it. This is the difference between an alarm and a system that stays up
+// alone, and it is deliberately the narrowest version of that idea.
+//
+// The list below is explicit rather than "everything that is late", because the
+// failure that would matter is not a missed run — it is the watchdog starting
+// something nobody asked for. A worker added next year is not restarted by an
+// old watchdog until somebody adds it here on purpose.
+// ---------------------------------------------------------------------------
+
+/** Workers this script may start by itself. See the note above. */
+export const RECOVERABLE_WORKERS = ["release-earnings", "reconcile-payments", "poll-encoding"];
+
+/**
+ * Is automatic restarting switched on?
+ *
+ * On unless said otherwise: the flag exists so an operator mid-incident can stop
+ * the restarts without also giving up the alarm, and it fails closed — anything
+ * unrecognised counts as off, so a typo cannot quietly arm it again.
+ *
+ * @param {string | undefined | null} value
+ * @returns {boolean}
+ */
+export function recoveryEnabled(value) {
+  const flag = (value || "").trim().toLowerCase();
+  if (!flag) return true;
+  return flag === "1" || flag === "true" || flag === "yes" || flag === "on";
+}
+
+/**
+ * May this worker be started by the watchdog?
+ *
+ * Three conditions, all required. The middle one is the guard that matters:
+ * `renew-subscriptions` sends a USSD charge request to a fan's phone when their
+ * wallet cannot cover a renewal, so it is the one worker whose run can cost
+ * somebody money they did not ask to spend. It is never started from here — not
+ * when it is late, not when the schedule has been dead for a week. A missed
+ * renewal is recoverable by a human at a keyboard; a duplicate charge is not
+ * merely inconvenient, it is money taken from a customer.
+ *
+ * Note that the test is against `false` rather than "not true": a payload that
+ * omits the flag, or a worker nobody has classified yet, is treated as if it can
+ * charge a phone. Unknown must never mean "safe to start".
+ *
+ * The other two conditions matter as much:
+ *
+ *   - state must be exactly `late` — nothing has finished for roughly four of
+ *     the worker's own intervals. `stalled` and `failing` both mean the job *is*
+ *     being triggered and dies when it runs, so starting it again repeats the
+ *     same death instead of recovering anything. `never` means no scheduler was
+ *     ever wired up, which is setup work: papering over it by running the job by
+ *     hand would hide the one thing that needs doing.
+ *   - the id must be on the list — see above.
+ *
+ * Order matters for the *reason*, not for the decision: the phone guard is
+ * checked first so that it is the sentence an operator reads. "Not one the
+ * watchdog may start" would be true but useless about the one worker that
+ * actually matters.
+ *
+ * @param {{ id?: string, name?: string, state?: string, sendsCustomerRequests?: boolean } | undefined} worker
+ * @param {{ enabled?: boolean }} [options]
+ * @returns {{ recover: boolean, reason: string }}
+ */
+export function shouldRecover(worker, options = {}) {
+  const id = typeof worker?.id === "string" ? worker.id : "";
+
+  if (worker?.sendsCustomerRequests !== false) {
+    return {
+      recover: false,
+      reason: id
+        ? `${id} can send a charge request to a customer's phone, which is never done automatically`
+        : "the worker did not say whether it can reach a customer's phone",
+    };
+  }
+
+  if (options.enabled === false) {
+    return { recover: false, reason: "automatic restarts are turned off (WATCHDOG_RECOVER)" };
+  }
+
+  if (!RECOVERABLE_WORKERS.includes(id)) {
+    return {
+      recover: false,
+      reason: id
+        ? `${id} is not one the watchdog may start`
+        : "the worker did not say which one it is",
+    };
+  }
+
+  if (worker.state !== "late") {
+    return {
+      recover: false,
+      reason: `${id} is ${worker.state || "in an unknown state"}, not a stopped schedule`,
+    };
+  }
+
+  return { recover: true, reason: "nothing has finished for four of its own intervals" };
+}
+
+/**
+ * What this run will do about the workers that stopped.
+ *
+ * Returns both halves deliberately: the restarts, and the stopped workers it is
+ * leaving alone with the reason. The second half is what makes the alert
+ * trustworthy — somebody who sees a worker stuck on `late` and no restart
+ * happening has to be told that was a decision, not something the watchdog
+ * missed. Only workers that are actually stopped earn a sentence there; the
+ * detail already explains the rest.
+ *
+ * @param {{ workers?: Array<{ id?: string, name?: string, state?: string, sendsCustomerRequests?: boolean }> } | null | undefined} detail
+ * @param {{ enabled?: boolean }} [options]
+ * @returns {{ restarts: Array<{ id: string, name: string }>, held: Array<{ id: string, name: string, reason: string }> }}
+ */
+export function planRecoveries(detail, options = {}) {
+  const enabled = options.enabled !== false;
+  const workers = Array.isArray(detail?.workers) ? detail.workers : [];
+  const restarts = [];
+  const held = [];
+
+  for (const worker of workers) {
+    const name = typeof worker?.name === "string" && worker.name.trim()
+      ? worker.name.trim()
+      : typeof worker?.id === "string"
+        ? worker.id
+        : "a worker";
+    const verdict = shouldRecover(worker, { enabled });
+
+    if (verdict.recover) restarts.push({ id: worker.id, name });
+    else if (worker?.state === "late") held.push({ id: worker?.id || "", name, reason: verdict.reason });
+  }
+
+  return { restarts, held };
+}
+
+/**
+ * What a cron route answered, in one phrase.
+ *
+ * The four routes do not share a body shape — two answer through `api.success`
+ * and two answer a bare `{ status }` — so only the parts they agree on are read,
+ * and a body that is none of those is still reported as having run. A restart
+ * that happened must not be described as a failure because its JSON was
+ * unfamiliar.
+ *
+ * The refusal is looked for in both envelopes: two routes answer
+ * `{ skipped, reason }` directly and two answer `api.success({ skipped, reason })`,
+ * and reading only the outer one would report a skipped restart as a run that
+ * happened — the one lie this function exists to prevent.
+ *
+ * @param {any} body
+ * @returns {string}
+ */
+export function describeRunOutcome(body) {
+  if (!body || typeof body !== "object") return "ran";
+
+  const inner = body.data && typeof body.data === "object" ? body.data : {};
+  const skipped = body.skipped === true || body.status === "skipped" || inner.skipped === true;
+
+  if (skipped) {
+    const candidate = [body.reason, inner.reason, body.message].find(
+      (value) => typeof value === "string" && value.trim()
+    );
+    return `skipped — ${candidate ? candidate.trim() : "a run is already in flight"}`;
+  }
+
+  const message = typeof body.message === "string" ? body.message.trim() : "";
+  return message ? `ran — ${message}` : "ran";
 }
 
 // ---------------------------------------------------------------------------
@@ -215,18 +412,42 @@ if (isCli) {
     );
   }
 
-  // Who stopped, when this runner is allowed to know. Asked only when something
-  // is already wrong, and never allowed to change the verdict: `report` is
-  // final by the time this runs.
-  let workerDetail = "";
+  // Who stopped, when this runner is allowed to know — and then, if it holds the
+  // secret, whether it can put any of them back on their feet. Everything here
+  // happens *after* the verdict is decided: the detail and the restarts are
+  // additions to an alarm that has already been called, never a reason to change
+  // it. An alert must not depend on a second credential, and must not go quiet
+  // because a repair succeeded either — the schedule is still broken.
+  const additions = [];
   if (!report.ok) {
-    workerDetail = await fetchWorkerDetail(baseUrl, process.env.CRON_SECRET);
-    if (workerDetail) console.log(`\n  · ${workerDetail}`);
+    const detail = await fetchWorkerDetail(baseUrl, process.env.CRON_SECRET);
+    const stopped = describeStoppedWorkers(detail);
+    if (stopped) {
+      console.log(`\n  · ${stopped}`);
+      additions.push(stopped);
+    }
+
+    const plan = planRecoveries(detail, {
+      enabled: recoveryEnabled(process.env.WATCHDOG_RECOVER),
+    });
+
+    for (const worker of plan.restarts) {
+      const outcome = await restartWorker(baseUrl, process.env.CRON_SECRET, worker.id);
+      const line = `${outcome.ok ? "Restarted" : "Could not restart"} ${worker.name}: ${outcome.text}`;
+      console.log(`  ${outcome.ok ? "✓" : "✗"} ${line}`);
+      additions.push(line);
+    }
+
+    for (const worker of plan.held) {
+      const line = `Left ${worker.name} alone: ${worker.reason}`;
+      console.log(`  ! ${line}`);
+      additions.push(line);
+    }
   }
 
   const alertUrl = (process.env.ALERT_WEBHOOK_URL || "").trim();
   if (!report.ok && alertUrl) {
-    const message = alertMessage(baseUrl, report, workerDetail);
+    const message = alertMessage(baseUrl, report, additions);
     try {
       const res = await fetch(alertUrl, {
         method: "POST",
@@ -259,7 +480,7 @@ if (isCli) {
 /**
  * The per-worker detail, when this runner holds the secret for it.
  *
- * Returns "" for every failure — no secret, a 401 from a deployment that never
+ * Returns null for every failure — no secret, a 401 from a deployment that never
  * set one, a timeout, a body that is not what we expect. The caller's alarm does
  * not depend on this succeeding, so a failure here must stay silent rather than
  * become an outage of its own. The 15s timeout matches the health fetch: a
@@ -267,20 +488,61 @@ if (isCli) {
  */
 async function fetchWorkerDetail(baseUrl, secret) {
   const token = (secret || "").trim();
-  if (!token) return "";
+  if (!token) return null;
 
   try {
     const res = await fetch(`${baseUrl}/api/health/attention`, {
       headers: { "x-cron-secret": token, "cache-control": "no-cache" },
       signal: AbortSignal.timeout(15_000),
     });
-    if (!res.ok) return "";
+    if (!res.ok) return null;
     const body = await res.json().catch(() => null);
     // The app answers { success, data }; a bare body is accepted too, so a
     // change of envelope cannot silence the detail without breaking the alarm.
-    return describeStoppedWorkers(body?.data ?? body);
+    const detail = body?.data ?? body;
+    return detail && typeof detail === "object" ? detail : null;
   } catch {
-    return "";
+    return null;
+  }
+}
+
+/**
+ * Start a worker whose schedule has died.
+ *
+ * POSTs the worker's own cron route, which takes the same run lock and stamps
+ * the same heartbeat as a scheduled run — so a restart cannot overlap a live run,
+ * cannot happen twice at once, and cannot be invisible afterwards. The
+ * `x-cron-origin` header is what stops a rescued run from being filed as though
+ * the schedule had worked.
+ *
+ * Never throws. The caller's verdict is already decided, and a restart that
+ * failed must not turn into an outage of its own; it is reported in the alert
+ * instead, where somebody is already looking.
+ */
+async function restartWorker(baseUrl, secret, workerId) {
+  try {
+    const res = await fetch(`${baseUrl}/api/cron/${workerId}`, {
+      method: "POST",
+      headers: {
+        "x-cron-secret": secret,
+        "x-cron-origin": "watchdog",
+        "cache-control": "no-cache",
+      },
+      // Generous, because this is the job itself — a schedule that already
+      // stopped should not also be cut off by an impatient caller. Still
+      // bounded, so a hung job cannot hold the run open until GitHub kills it.
+      signal: AbortSignal.timeout(120_000),
+    });
+    const body = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      const why = typeof body?.error === "string" ? ` — ${body.error}` : "";
+      return { ok: false, text: `HTTP ${res.status}${why}` };
+    }
+
+    return { ok: true, text: describeRunOutcome(body) };
+  } catch (error) {
+    return { ok: false, text: error?.message || String(error) };
   }
 }
 

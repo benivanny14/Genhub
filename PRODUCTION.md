@@ -661,6 +661,46 @@ The detail comes from `GET /api/health/attention`, which is guarded by the same
 `CRON_SECRET`, is read-only (no lock, no heartbeat, nothing moved), and answers
 `401` without it. Two properties are deliberate and tested:
 
+#### It also restarts the worker, within narrow limits
+
+Alarming is only half a watchdog: a stopped schedule stays stopped until somebody
+reads the alarm, which at 03:00 is hours of creators not being paid. With
+`CRON_SECRET` set, the watchdog starts the stopped worker itself, through the
+worker's own cron route — the same code, the same run lock and the same heartbeat
+as a scheduled run, and the heartbeat records *who* started it
+(`(restarted by the uptime watchdog)`), so a rescued run is never filed as though
+the schedule had worked.
+
+**`renew-subscriptions` is never restarted, by anything, ever.** It is the one
+worker whose run can charge a fan who did not ask: when a wallet cannot cover a
+renewal it sends a USSD prompt to that person's phone. A missed renewal is
+recoverable by a human at a keyboard; a duplicate charge is money taken from a
+customer. The refusal is enforced twice over — the watchdog keeps an explicit
+list of the three workers it may start, *and* refuses anything the payload does
+not positively mark as unable to reach a phone (`sendsCustomerRequests: false`).
+Unknown reads as unsafe. A test fails if the list and the worker registry ever
+disagree.
+
+What it will not do, and why each is deliberate:
+
+| State | Restarted? | Why |
+|---|---|---|
+| `late` | **yes**, if on the list | nothing has finished for ~4 of its own intervals: the schedule stopped |
+| `stalled` | no | the job *is* being triggered and dies when it runs — a restart repeats the same death |
+| `failing` | no | same: it runs, it fails, and retrying adds nothing to an alarm you already have |
+| `never` | no | no scheduler was ever wired up. Running it by hand would hide the one thing that needs doing |
+
+Because a restart only fires once the worker is genuinely `late`, it can never run
+a job more often than its own schedule would have. Restarting also **does not
+silence the alarm** — running the job again does not fix the schedule that
+stopped, and an alarm that goes quiet when a repair succeeds is how a broken
+schedule stays broken for a month.
+
+To stop the restarts without giving up the alarm (mid-incident, or on a
+deployment you are deliberately holding still), set the repository **variable**
+`WATCHDOG_RECOVER=off`. Anything unrecognised is treated as off, so a typo cannot
+quietly arm it again; leaving it unset keeps restarts on.
+
 * **The alarm is exactly as loud without it.** The detail is fetched only *after*
 the verdict is already bad, so a missing, wrong or rotated secret cannot silence
 anything — it costs a line of context, never the alarm. That is the failure this
@@ -687,7 +727,11 @@ of months, which re-enables every schedule at once.
 - [ ] Set `ALERT_WEBHOOK_URL` if GitHub's failure email is not somewhere you
       look.
 - [ ] Set `CRON_SECRET` as a repository secret too, so the alarm names the worker
-      instead of only the verdict (§ above).
+      instead of only the verdict (§ above) — and restarts it.
+- [ ] Confirm the restart path works, not just the alarm: stop a worker on the
+      test deployment (or seed a stale heartbeat), run `npm run watchdog`, and
+      check the Actions log says `Restarted …` and that the worker's heartbeat
+      carries `(restarted by the uptime watchdog)`.
 - [ ] Confirm the alarm can still fire without it: run
       `APP_URL=https://<domain> npm run watchdog` (no `CRON_SECRET`) and check it
       exits 1 with the verdict alone.
