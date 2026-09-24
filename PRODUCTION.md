@@ -579,6 +579,9 @@ The release job moves matured earnings `pendingBalance → availableBalance`:
       until both are set — see §4.0.1.
 - [ ] **On Pro**: move the four schedules into `vercel.json` instead (§4.0.1),
       which removes the 60-day-inactivity rule below and gives per-minute timing.
+- [ ] **Either way**: point the scheduler at `/api/cron/supervisor` (§4.0.4). One
+      poke runs everything that is overdue, because GitHub Actions delivers the
+      per-worker files hours apart rather than on the interval they ask for.
 - [ ] Verify: `curl -H "x-cron-secret: $CRON_SECRET" https://<domain>/api/cron/release-earnings`
       → `{"success":true,...}` (wrong/missing secret must return 401).
 - [ ] Admins can also trigger releases manually from **Admin → Earnings**.
@@ -734,8 +737,11 @@ Three caveats worth knowing before you rely on this:
   repo, payments and renewals would stop. Budget one commit (or a
   `workflow_dispatch` run) every couple of months, or move to Pro and use Vercel
   Cron, which has no such rule.
-- **These run off GitHub's clock, not yours.** Schedules are delayed during
-  periods of high load, so treat the interval as "roughly", not "exactly".
+- **These run off GitHub's clock, not yours — and on this repository they run
+  far less often than asked.** Measured over 24 h (§4.0.4): the `*/5` schedule
+  was delivered every 138–341 min, the `*/10` every 137–336, and the two hourly
+  ones every 3h19–5h36. Treat the interval as "roughly", and rely on the
+  supervisor (§4.0.4) rather than on each file arriving when it says it will.
   Every worker is written to be safe under a late or duplicated run —
   `release-earnings` only ever moves matured balances, `renew-subscriptions`
   charges at most once per `RETRY_GAP`, and `poll-encoding` only ever flips
@@ -880,7 +886,7 @@ Stream, Bunny CDN, SMTP, HarakaPay and the app URL. The route is guarded by
 | Probe state | Watchdog verdict |
 |---|---|
 | `fail` — configured but broken | **alarm** — names the service and the reason |
-| `warn` — works, but degraded (e.g. unsigned playback URLs) | nothing; it shows on the admin card |
+| `warn` — works, but degraded (e.g. unsigned playback URLs, or a public URL that answers 503 because the deployment itself is degraded) | nothing; it shows on the admin card |
 | `skip` — not configured yet | **nothing** — the launch checklist's business, not an outage. Flagging it would keep every pre-launch deployment permanently red |
 | Route unreachable, or no `CRON_SECRET` | **nothing** — enrichment, never a reason to fail a run |
 
@@ -889,6 +895,18 @@ only after the verdict is decided, so a rotated `CRON_SECRET` costs a line of
 context and never the alarm. `src/tests/watchdog.test.ts` pins both the wording
 and the ordering — the fetch has to happen *before* the alert is composed, or a
 broken credential is noticed by nobody.
+
+**The Public URL probe reads the answer, not the status code.** `/api/health`
+answers 503 while the deployment is degraded, and the probe fetches exactly that
+URL — so judging it on `res.ok` made a deployment report its own job lag back to
+itself as `Public URL → HTTP 503`, pointing whoever read it at DNS or
+`NEXT_PUBLIC_APP_URL` when neither was wrong. It now asks the only question it
+can answer: does this address answer like *our* app (a JSON body with `status`
+and `checks`)? A degraded answer is a `warn` — visible on the card, kept out of
+`failing`, so it never reaches the alarm or `launch:check --remote`. A 200 whose
+body is something else stays a hard failure, which is the case that matters:
+`NEXT_PUBLIC_APP_URL` feeds the sitemap, OG tags and the gateway's
+`webhook_url`. `src/tests/app-url-probe.test.ts` pins the rule.
 
 Prove it by hand:
 
@@ -1039,7 +1057,7 @@ Two readings, and the whole feature is the difference between them:
 | The sentence says | What it means |
 |---|---|
 | `…is running again after 4 h — the schedule is firing again` | the schedule is back. Close it |
-| `…is running again after 4 h, but the run that brought it back was one the uptime watchdog started — the schedule is still not firing (§4.0.1)` | only the watchdog's own restart arrived. It will be quiet again in an hour |
+| `…is running again after 4 h, but the run that brought it back was started by the watchdog or the supervisor, not by the schedule — the schedule is still not firing (§4.0.1)` | only a restart arrived, from the watchdog (§4.0.2) or the supervisor (§4.0.4). It will be quiet again in an hour |
 
 That second line exists because of the restart above: once the watchdog starts
 workers itself, "it is running again" becomes ambiguous, and reading a rescue as a
@@ -1067,8 +1085,8 @@ not reported — the alarm is unaffected either way.
 
 - [ ] After the first restart you perform, watch for the `✓ recovered:` line (or
       the notice landing in `ALERT_WEBHOOK_URL`) and confirm it says the schedule
-      is firing again. If it says the watchdog's run was the *only* one, the
-      schedule is still not fixed.
+      is firing again. If it says the restart — from the watchdog or the
+      supervisor (§4.0.4) — was the *only* run, the schedule is still not fixed.
 - [ ] Confirm a recovery does not close a live problem: with a worker still down,
       run `npm run watchdog` and check the exit code is 1 and the recovery line
       is inside the alarm rather than sent on its own.
@@ -1158,6 +1176,76 @@ schedule" is never claimed about something a person started.
       confirmation warning before anything is charged.
 - [ ] While one worker is running, press **Run now** on it again and confirm
       you get the "already running" refusal rather than a second run.
+
+### 4.0.4 The cron supervisor: one poke runs everything that is overdue
+
+GitHub Actions does **not** keep the intervals §4.0.1 asks it for. Measured on
+this repository over 24 h, from the workflow-runs API and matching the heartbeats
+the app recorded:
+
+| Workflow asks for | Actually delivered |
+|---|---|
+| `poll-encoding` — every 5 min | 138, 160, 203, 297, 304, 341 min apart |
+| `reconcile-payments` — every 10 min | 137, 197, 222, 308, 314, 336 min apart |
+| `release-earnings` — hourly | 3h25, 4h42, 4h59, 5h36 apart |
+| `renew-subscriptions` — hourly | 3h19, 4h03, 5h06, 5h08, 5h12 apart |
+
+Nothing in the app is lying when that happens: each heartbeat goes past its own
+budget minutes after every delivery, so `checks.backgroundJobs` reads `late` for
+most of the day, `/api/health` answers 503, and the watchdog alarms — correctly,
+because renewals, releases and encoding publication really are hours behind. What
+is wrong is the assumption underneath §4.0.1: that each worker's own file arrives
+when it says it will. An alarm that is red nearly all the time is its own failure,
+because nobody reads it (§4.0.2).
+
+`.github/workflows/supervisor.yml` is the answer, and it is deliberately small:
+it calls `POST /api/cron/supervisor`, which runs **every worker whose heartbeat is
+past its own budget**, through the same lock and heartbeat a scheduled run would
+have used. One delivered poke therefore restores all four cadences, whichever
+file GitHub chose to deliver — and an external scheduler pointed at this one
+endpoint replaces the four per-worker ones entirely.
+
+```bash
+B=https://<domain>; S=$CRON_SECRET
+# what it ran, what it refused to run, and the verdict after the poke
+curl -s -X POST "$B/api/cron/supervisor" -H "x-cron-secret: $S" | head -c 400
+```
+
+Its own `*/10` schedule is delivered just as sparsely as the rest. That is fine,
+and it is the point: the **endpoint** is the unit of correctness, not the file —
+so a free 5-minute monitor (cron-job.org, healthchecks.io) sending
+`x-cron-secret` to `/api/cron/supervisor` gives per-minute precision for all four
+workers at once, and so does Vercel Cron on Pro:
+
+```json
+{ "crons": [{ "path": "/api/cron/supervisor", "schedule": "*/5 * * * *" }] }
+```
+
+Three rules it shares with the watchdog on purpose, because both of them start
+workers nobody asked for:
+
+| Rule | Why |
+|---|---|
+| Only `late` workers run | `ok` / `running` need nothing; `never` is unconfigured setup that running by hand would hide; `stalled` / `failing` mean the job dies *when it runs*, so another run repeats the same death instead of recovering anything |
+| `renew-subscriptions` is **never** started automatically | it can send a USSD charge request to a fan's phone. A missed renewal is recoverable by a person; a duplicate charge is not. It comes back in the response under `held`, with the reason, and **Run now** (§4.0.3) still runs it by hand |
+| A run it starts is filed as its own (`started by the cron supervisor`) | the heartbeat is the record of who moved money — and the recovery notice (§4.0.2) reads that column to tell "the schedule came back" apart from "something restarted it", so a run must not claim to be something it was not |
+
+A caller cannot name a worker: the endpoint takes no id, and the list of workers
+it may start is `SUPERVISOR_WORKERS` in
+`src/lib/services/cron-supervisor.service.ts`. `src/tests/cron-supervisor.test.ts`
+**fails if that list ever drifts from the watchdog's `RECOVERABLE_WORKERS`** — two
+copies of "may this be started by itself" is how one of them ends up charging
+phones.
+
+- [ ] With `APP_URL` and `CRON_SECRET` set (§4.0.1), run the `curl` above by
+      hand: expect 200, and a `ran` / `held` pair that matches what the admin
+      card says is actually overdue.
+- [ ] Confirm it cannot be talked into running the charging worker: with
+      `renew-subscriptions` overdue it must appear under `held`, and its
+      heartbeat's `lastOrigin` must not change.
+- [ ] After a day, check **Background jobs**: the four workers should read
+      `Running on schedule` for most of the day rather than `Overdue`, and
+      `/api/health` should answer 200 while nothing else is wrong.
 
 ### 4.1 Charges nobody can classify yet (`UNDER_INVESTIGATION`)
 

@@ -46,3 +46,11 @@ jobs:
           curl -fsS -X POST "$BASE_URL/api/cron/poll-encoding" \
             -H "x-cron-secret: $CRON_SECRET" \
             --max-time 120
+
+      # Most of these deliveries are hours apart whatever the cron above asks
+      # for (§4.0.4), so each one also runs every worker that has fallen behind.
+      - name: Run anything the schedule missed
+        uses: ./.github/actions/supervise
+        with:
+          base-url: ${{ vars.APP_URL }}
+          cron-secret: ${{ secrets.CRON_SECRET }}

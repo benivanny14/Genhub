@@ -1,0 +1,48 @@
+# =============================================================================
+# GENHUB - "Run anything the schedule missed", for any workflow to reuse
+#
+# Every scheduled worker also pokes the supervisor, so a delivery of *any* file
+# does the work of all four (§4.0.4). GitHub Actions does not keep the intervals
+# §4.0.1 asks for — measured on this repository, a `*/5` schedule arrived every
+# 138-341 minutes — so a worker that only ran when its own file arrived sat
+# hours past its budget, and an alarm that is red most of the day stops being
+# read.
+#
+# A composite action rather than the same ten lines pasted into five workflows:
+# the guard is the part that must not drift, and the endpoint is the part that
+# will change if the scheduler ever moves off GitHub.
+#
+# The supervisor never runs `renew-subscriptions` (it can send a USSD charge
+# request to a fan's phone — that worker keeps its own schedule and its own
+# hourly workflow). See PRODUCTION.md §4.0.4.
+# =============================================================================
+
+name: Supervise the schedules
+description: Run every worker whose heartbeat is past its own budget
+
+inputs:
+  base-url:
+    description: Public app URL (the repository variable APP_URL)
+    required: true
+  cron-secret:
+    description: The CRON_SECRET that matches the server's
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Run anything the schedule missed
+      shell: bash
+      env:
+        BASE_URL: ${{ inputs.base-url }}
+        CRON_SECRET: ${{ inputs.cron-secret }}
+      run: |
+        if [ -z "$BASE_URL" ] || [ -z "$CRON_SECRET" ]; then
+          echo "APP_URL / CRON_SECRET not set — skipping the supervisor."
+          exit 0
+        fi
+        # 120s: up to three jobs one after another, each a batch of work. A 500
+        # here means a worker it started failed, and this run should be red.
+        curl -fsS -X POST "$BASE_URL/api/cron/supervisor" \
+          -H "x-cron-secret: $CRON_SECRET" \
+          --max-time 120

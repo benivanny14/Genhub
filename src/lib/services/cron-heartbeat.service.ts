@@ -30,11 +30,11 @@
 // =============================================================================
 
 import prisma from "@/lib/db";
-// The label a run is filed under when the uptime watchdog started it. Shared with
-// the recovery notice rather than written twice: the notice decides whether a
-// worker came back on its own or only because somebody restarted it, and two
-// copies of that string is exactly how the two answers drift apart.
-import { WATCHDOG_ORIGIN_LABEL } from "@/lib/cron-auth";
+// Deciding whether a run came from the schedule or from something that had to
+// restart it. Shared with the labels rather than re-derived here: the recovery
+// notice turns on this answer, and two copies of the rule is exactly how the two
+// answers drift apart.
+import { startedOutsideTheSchedule } from "@/lib/cron-auth";
 
 // ---------------------------------------------------------------------------
 // Registry
@@ -775,14 +775,17 @@ export interface CronRecovery {
   state: CronWorkerState;
   lastSummary: string | null;
   /**
-   * True when the run that brought it back was one the uptime watchdog started.
+   * True when the run that brought it back was started by something other than
+   * the schedule — the uptime watchdog, or the cron supervisor (§4.0.4).
    *
    * This is the distinction the whole notice exists for: the worker is running
    * again either because the schedule came back (fixed — close the ticket) or
-   * because the only reason there is a run at all is that the watchdog started
-   * one (still broken — and it will need starting again next hour).
+   * because the only reason there is a run at all is that something started one
+   * (still broken — and it will need starting again next hour). Which mechanism
+   * it was does not change the answer, so this asks the heartbeat's origin
+   * column rather than comparing against one label.
    */
-  restartedByWatchdog: boolean;
+  restartedOutsideSchedule: boolean;
 }
 
 export interface CronWatchSync {
@@ -802,10 +805,11 @@ export function recoverySummary(recoveries: readonly CronRecovery[]): string {
   return recoveries
     .map((r) => {
       const quietFor = humanDuration(r.alertedForMinutes);
-      if (r.restartedByWatchdog) {
+      if (r.restartedOutsideSchedule) {
         return (
           `${r.name} is running again after ${quietFor}, but the run that brought it back ` +
-          "was one the uptime watchdog started — the schedule is still not firing (§4.0.1)"
+          "was started by the watchdog or the supervisor, not by the schedule — the " +
+          "schedule is still not firing (§4.0.1)"
         );
       }
       return `${r.name} is running again after ${quietFor} — the schedule is firing again`;
@@ -876,7 +880,7 @@ export async function syncCronWatch(now: Date = new Date()): Promise<CronWatchSy
       alertedForMinutes: minutesSince(mark.alertedAt, now) ?? 0,
       state: worker.state,
       lastSummary: worker.lastSummary,
-      restartedByWatchdog: worker.lastOrigin === WATCHDOG_ORIGIN_LABEL,
+      restartedOutsideSchedule: startedOutsideTheSchedule(worker.lastOrigin),
     });
 
     await prisma.cronWatch.update({

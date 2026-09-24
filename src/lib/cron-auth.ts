@@ -65,6 +65,30 @@ const WATCHDOG_ORIGIN_HEADER = "watchdog";
 export const WATCHDOG_ORIGIN_LABEL = "restarted by the uptime watchdog";
 
 /**
+ * The label a run is filed under when the *app* started it because the schedule
+ * had not — the cron supervisor (§4.0.4).
+ *
+ * A separate label from the watchdog's, because the heartbeat is the record of
+ * who moved money: "a script on a runner did this" and "the deployment did this"
+ * are different facts, and a run that lies about its own origin is worse than no
+ * origin at all.
+ */
+export const SUPERVISOR_ORIGIN_LABEL = "started by the cron supervisor";
+
+/**
+ * Was this run started by something other than the schedule?
+ *
+ * Read from the heartbeat's `lastOrigin`, where null is the schedule. Deliberately
+a property of the column rather than a list of today's labels: the recovery
+ * notice (§4.0.2) turns on this answer — a worker woken only because something
+ * restarted it must not read as "the schedule is firing again" — and a third
+ * mechanism would otherwise silently start claiming recoveries it did not earn.
+ */
+export function startedOutsideTheSchedule(origin: string | null | undefined): boolean {
+  return !!origin;
+}
+
+/**
  * Who asked for this run, for the heartbeat.
  *
  * A scheduled trigger sends nothing and is recorded as scheduled, which is what

@@ -34,7 +34,7 @@ import {
   type CronWorkerDef,
   type CronWorkerHealth,
 } from "@/lib/services/cron-heartbeat.service";
-import { WATCHDOG_ORIGIN_LABEL } from "@/lib/cron-auth";
+import { SUPERVISOR_ORIGIN_LABEL, WATCHDOG_ORIGIN_LABEL } from "@/lib/cron-auth";
 
 /** Poll until `check` passes, so a test can wait on a claim instead of sleeping. */
 async function waitFor(check: () => Promise<boolean>, timeoutMs = 5000) {
@@ -610,7 +610,7 @@ describe("recovery: what the notice says", () => {
       alertedForMinutes: 240,
       state: "ok",
       lastSummary: "Released TZS 0 for 0 creator(s)",
-      restartedByWatchdog: false,
+      restartedOutsideSchedule: false,
       ...over,
     };
   }
@@ -626,15 +626,15 @@ describe("recovery: what the notice says", () => {
     expect(line).toContain("firing again");
   });
 
-  it("warns instead of closing when only the watchdog's own run arrived", () => {
+  it("warns instead of closing when the run that arrived was not the schedule's", () => {
     const fixed = recoverySummary([rec({})]);
-    const started = recoverySummary([rec({ restartedByWatchdog: true })]);
+    const started = recoverySummary([rec({ restartedOutsideSchedule: true })]);
 
     expect(started).not.toBe(fixed);
     expect(started).toContain("running again");
     // The whole distinction: this worker will be quiet again in an hour, and the
     // person reading it must not close the ticket.
-    expect(started).toContain("the uptime watchdog started");
+    expect(started).toContain("watchdog or the supervisor");
     expect(started).toContain("still not firing");
     expect(fixed).not.toContain("still not firing");
   });
@@ -1031,7 +1031,7 @@ describeDb("syncCronWatch", () => {
     // and "running again after 0 min" out of the all-clear.
     expect(r.alertedForMinutes).toBeGreaterThanOrEqual(239);
     expect(r.alertedForMinutes).toBeLessThanOrEqual(241);
-    expect(r.restartedByWatchdog).toBe(false);
+    expect(r.restartedOutsideSchedule).toBe(false);
     expect(sync.summary).toContain("firing again");
     // The mark is closed, not deleted: when it was first seen is the record that
     // survives a notice nobody read.
@@ -1058,10 +1058,30 @@ describeDb("syncCronWatch", () => {
     });
 
     const sync = await syncCronWatch();
-    expect(sync.recovered[0].restartedByWatchdog).toBe(true);
+    expect(sync.recovered[0].restartedOutsideSchedule).toBe(true);
     // It is running, so the mark closes — but the notice says not to celebrate.
     expect(sync.summary).toContain("still not firing");
     expect((await mark())?.resolvedAt).not.toBeNull();
+  });
+
+  it("does not close a ticket on a run the supervisor started either", async () => {
+    // The supervisor is the second mechanism that starts a worker its schedule
+    // did not. Recording it under its own label is what makes the heartbeat an
+    // honest record of who moved money — but the notice must still read it as
+    // "the schedule is not firing", or a worker kept alive by the supervisor
+    // reads as fixed on exactly the deployment where the schedule is broken.
+    expect(SUPERVISOR_ORIGIN_LABEL).not.toBe(WATCHDOG_ORIGIN_LABEL);
+
+    await beat(down);
+    await syncCronWatch();
+    await prisma.cronHeartbeat.update({
+      where: { worker: WORKER },
+      data: { ...up, lastOrigin: SUPERVISOR_ORIGIN_LABEL },
+    });
+
+    const sync = await syncCronWatch();
+    expect(sync.recovered[0].restartedOutsideSchedule).toBe(true);
+    expect(sync.summary).toContain("still not firing");
   });
 
   it("counts a run already in flight as back", async () => {

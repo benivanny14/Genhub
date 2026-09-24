@@ -48,3 +48,13 @@ jobs:
           curl -fsS -X POST "$BASE_URL/api/cron/renew-subscriptions" \
             -H "x-cron-secret: $CRON_SECRET" \
             --max-time 300
+
+      # This delivery also runs every worker that has fallen behind (§4.0.4).
+      # Renewals themselves are NOT run by the supervisor — only here, on their
+      # own schedule, because a second USSD charge on a fan's phone is the one
+      # thing that cannot be taken back.
+      - name: Run anything the schedule missed
+        uses: ./.github/actions/supervise
+        with:
+          base-url: ${{ vars.APP_URL }}
+          cron-secret: ${{ secrets.CRON_SECRET }}

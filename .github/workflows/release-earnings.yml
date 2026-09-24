@@ -40,3 +40,12 @@ jobs:
           curl -fsS -X POST "$BASE_URL/api/cron/release-earnings" \
             -H "x-cron-secret: $CRON_SECRET" \
             --max-time 60
+
+      # This delivery is a scarce event (§4.0.4), so it also runs every worker
+      # that has fallen behind — including the ones whose own file GitHub has
+      # not delivered for hours.
+      - name: Run anything the schedule missed
+        uses: ./.github/actions/supervise
+        with:
+          base-url: ${{ vars.APP_URL }}
+          cron-secret: ${{ secrets.CRON_SECRET }}

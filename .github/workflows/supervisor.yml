@@ -1,0 +1,48 @@
+# =============================================================================
+# GENHUB - The cron supervisor
+# Calls POST /api/cron/supervisor, which runs every worker whose heartbeat is
+# past its own budget. Setup required (the same two values the four worker
+# workflows already read):
+#   * Repository variable  APP_URL      — e.g. https://genhub.co.tz
+#   * Repository secret    CRON_SECRET  — must match the server's CRON_SECRET
+# The job skips cleanly (green) until both are configured.
+#
+# WHY THIS FILE EXISTS. GitHub Actions does not keep the intervals the four
+# worker workflows ask for. Measured on this repository over 24 h: the `*/5`
+# poll-encoding schedule was delivered every 138-341 minutes, reconcile-payments
+# (`*/10`) every 137-336, and the two hourly ones every 3h19-5h36. Each worker
+# therefore only ran when its own file happened to arrive, and its heartbeat sat
+# past the budget in between — so `backgroundJobs` read `late` for most of the
+# day and money-moving work was hours late with nothing actually broken.
+#
+# One poke that runs everything overdue turns any delivery into a full round of
+# the workers, so the four worker workflows end with the same step as this file
+# does — one shared composite action. That is also what makes an external
+# scheduler (cron-job.org, or Vercel Cron on Pro) a complete fix rather than a
+# partial one: point it here, every 5 minutes, and every worker's real cadence
+# becomes 5 minutes without touching a single one of their own files.
+# See PRODUCTION.md §4.0.4.
+#
+# `renew-subscriptions` is deliberately NOT run by the supervisor — it can send
+# a USSD charge request to a fan's phone. The response names it as held, with the
+# reason, and Admin → Background jobs can run it by hand.
+# =============================================================================
+
+name: Cron supervisor
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  supervise:
+    runs-on: ubuntu-latest
+    steps:
+      # The same step the four worker workflows end with, so the guard and the
+      # endpoint have one home: .github/actions/supervise/action.yml
+      - name: Run whatever the schedule missed
+        uses: ./.github/actions/supervise
+        with:
+          base-url: ${{ vars.APP_URL }}
+          cron-secret: ${{ secrets.CRON_SECRET }}
