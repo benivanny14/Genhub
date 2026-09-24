@@ -21,6 +21,7 @@ import { api } from "@/lib/api-response";
 import { requireCronSecret, SUPERVISOR_ORIGIN_LABEL } from "@/lib/cron-auth";
 import { getCronHealth } from "@/lib/services/cron-heartbeat.service";
 import { runWorkerNow } from "@/lib/services/cron-jobs.service";
+import { alertHeldWorkers } from "@/lib/services/cron-hold-alert.service";
 import {
   planSupervisorRuns,
   snapshotSupervisorHealth,
@@ -81,11 +82,18 @@ async function handle(request: NextRequest) {
       ran.push(await runSupervisedWorker(decision));
     }
 
+    // A worker that is overdue and may not be started automatically will not run
+    // again until a person starts it, so this poke tells one — with the record in
+    // the bell and an email that reaches somebody who is not on the site. It is
+    // throttled per worker, and it never throws: an overdue worker with nobody
+    // told is a silent failure, and so is a mail host that takes the poke down.
+    const alerts = await alertHeldWorkers(plan.held);
+
     // Re-read so the answer describes the deployment after the poke, not the one
     // it just repaired — this is the health a caller would otherwise fetch next.
     const health = snapshotSupervisorHealth(await getCronHealth());
-    const report = { ran, held: plan.held, health };
-    const summary = summarizeSupervisorRun(ran, plan.held);
+    const report = { ran, held: plan.held, health, alerts };
+    const summary = summarizeSupervisorRun(ran, plan.held, alerts);
 
     const failed = ran.filter((r) => r.error);
     if (failed.length > 0) {

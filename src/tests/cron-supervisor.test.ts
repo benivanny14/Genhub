@@ -114,6 +114,15 @@ function healthOf(workers: CronWorkerHealth[]): CronHealth {
 // ---------------------------------------------------------------------------
 
 describe("planSupervisorRuns", () => {
+  it("carries the state each decision was made from", () => {
+    // Read by the hold alert to tell "overdue, and nobody may start it" from
+    // "never ran" — the first is a person's job now, the others are not.
+    const plan = planSupervisorRuns(healthOf([late("release-earnings"), worker("poll-encoding", { state: "never" })]));
+
+    expect(plan.run[0].state).toBe("late");
+    expect(plan.held[0].state).toBe("never");
+  });
+
   it("runs an overdue worker whose heartbeat is past its budget", () => {
     const plan = planSupervisorRuns(healthOf([late("release-earnings")]));
 
@@ -133,7 +142,12 @@ describe("planSupervisorRuns", () => {
     expect(plan.run).toEqual([]);
     expect(plan.held.map((d) => d.id)).toEqual(["renew-subscriptions"]);
     expect(plan.held[0].reason).toContain("customer's phone");
-    expect(plan.held[0].reason).toContain("Admin → Background jobs");
+    // The reason states the consequence, not the instruction: whoever shows it
+    // to a human (the response body, the hold alert's email) adds its own "press
+    // Run now", and having this one append it too produced the same three words
+    // twice in a sentence.
+    expect(plan.held[0].reason).toContain("never started automatically");
+    expect(plan.held[0].reason).not.toContain("Run now");
   });
 
   it("runs the rest while holding that one, in one pass", () => {
@@ -255,7 +269,12 @@ describe("the workers the supervisor may start", () => {
 // ---------------------------------------------------------------------------
 
 describe("summarizeSupervisorRun", () => {
-  const decision = (id: CronWorkerId): SupervisorDecision => ({ id, name: id, reason: "late" });
+  const decision = (id: CronWorkerId): SupervisorDecision => ({
+    id,
+    name: id,
+    state: "late",
+    reason: "late",
+  });
 
   it("names what ran and what it returned", () => {
     const line = summarizeSupervisorRun(
@@ -304,6 +323,26 @@ describe("summarizeSupervisorRun", () => {
   it("says which overdue workers it left for a person", () => {
     const line = summarizeSupervisorRun([], [decision("renew-subscriptions")]);
     expect(line).toContain("Left for a person: renew-subscriptions");
+  });
+
+  it("says who was told, so the log shows a person was reached", () => {
+    const line = summarizeSupervisorRun([], [decision("renew-subscriptions")], {
+      alerted: ["renew-subscriptions"],
+      noAdmins: false,
+    });
+
+    expect(line).toContain("Told an admin about: renew-subscriptions");
+  });
+
+  it("shouts when there was nobody to tell", () => {
+    // The one failure in this area that is invisible: the poke succeeded, the
+    // worker is overdue, and no admin exists to be told about it.
+    const line = summarizeSupervisorRun([], [decision("renew-subscriptions")], {
+      alerted: [],
+      noAdmins: true,
+    });
+
+    expect(line).toContain("NOTHING WAS SENT");
   });
 });
 

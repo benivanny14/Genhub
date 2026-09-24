@@ -38,6 +38,7 @@ import {
   type CronHealth,
   type CronWorkerHealth,
   type CronWorkerId,
+  type CronWorkerState,
 } from "./cron-heartbeat.service";
 
 /**
@@ -58,6 +59,14 @@ export const SUPERVISOR_WORKERS: readonly CronWorkerId[] = [
 export interface SupervisorDecision {
   id: CronWorkerId;
   name: string;
+  /**
+   * The heartbeat verdict this decision was made from.
+   *
+   * Carried so a reader can tell "overdue, and nobody may start it" from "never
+   * ran" or "dies when it runs" without re-reading the heartbeats — the first is
+   * a person's job right now, the others are not.
+   */
+  state: CronWorkerState;
   /** Why this worker is (or is not) being run, in words an operator can act on. */
   reason: string;
 }
@@ -104,9 +113,14 @@ export function planSupervisorRuns(health: CronHealth): SupervisorPlan {
       held.push({
         id: worker.id,
         name: worker.name,
+        state: worker.state,
+        // The consequence, not the instruction: the caller that shows this to a
+        // human (the response body, the hold alert) adds its own "press Run
+        // now", and one of them appending it here produced the same three words
+        // twice in one sentence.
         reason:
-          `${worker.id} can send a charge request to a customer's phone, which is never ` +
-          "done automatically — run it from Admin → Background jobs",
+          `${worker.id} can send a charge request to a customer's phone, so it is never ` +
+          "started automatically",
       });
       continue;
     }
@@ -115,6 +129,7 @@ export function planSupervisorRuns(health: CronHealth): SupervisorPlan {
       held.push({
         id: worker.id,
         name: worker.name,
+        state: worker.state,
         reason: `${worker.id} is not one the supervisor may start`,
       });
       continue;
@@ -127,6 +142,7 @@ export function planSupervisorRuns(health: CronHealth): SupervisorPlan {
         held.push({
           id: worker.id,
           name: worker.name,
+          state: worker.state,
           reason: `${worker.id} is ${worker.state}, which another run does not fix — ${worker.detail}`,
         });
       }
@@ -136,6 +152,7 @@ export function planSupervisorRuns(health: CronHealth): SupervisorPlan {
     run.push({
       id: worker.id,
       name: worker.name,
+      state: worker.state,
       reason: worker.detail,
     });
   }
@@ -184,9 +201,25 @@ export function snapshotSupervisorHealth(health: CronHealth): SupervisorHealthSn
  * Pure, so the wording is pinned by tests rather than discovered in a workflow
  * log at 3am.
  */
+/**
+ * What the hold alert did, in the shape the summary needs.
+ *
+ * Structural rather than importing the alert service: this module is the pure
+ * half, and the alert service holds the database and the mailer.
+ */
+export interface HoldAlertSummary {
+  /** Workers a person was told about on this poke. */
+  alerted: readonly string[];
+  /** Held and overdue, and nobody could be reached about them. */
+  failed?: readonly string[];
+  /** Nothing could be sent: there is no admin account to send it to. */
+  noAdmins: boolean;
+}
+
 export function summarizeSupervisorRun(
   run: readonly SupervisorRunResult[],
-  held: readonly SupervisorDecision[]
+  held: readonly SupervisorDecision[],
+  alerts?: HoldAlertSummary
 ): string {
   const parts: string[] = [];
 
@@ -215,6 +248,20 @@ export function summarizeSupervisorRun(
 
   if (held.length > 0) {
     parts.push(`Left for a person: ${held.map((h) => h.id).join(", ")}`);
+  }
+
+  if (alerts?.alerted.length) {
+    parts.push(`Told an admin about: ${alerts.alerted.join(", ")}`);
+  }
+
+  // Both are loud, because they are the failures here that are otherwise
+  // invisible: the poke succeeded, the worker is overdue, and nobody was told.
+  if (alerts?.failed?.length) {
+    parts.push(`NOT TOLD: ${alerts.failed.join(", ")}`);
+  }
+
+  if (alerts?.noAdmins) {
+    parts.push("NOTHING WAS SENT: no admin account exists to be told");
   }
 
   if (parts.length === 0) return "Nothing was overdue — every worker is inside its own budget.";

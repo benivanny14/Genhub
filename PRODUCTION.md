@@ -1257,6 +1257,41 @@ workers nobody asked for:
 | `renew-subscriptions` is **never** started automatically | it can send a USSD charge request to a fan's phone. A missed renewal is recoverable by a person; a duplicate charge is not. It comes back in the response under `held`, with the reason, and **Run now** (§4.0.3) still runs it by hand |
 | A run it starts is filed as its own (`started by the cron supervisor`) | the heartbeat is the record of who moved money — and the recovery notice (§4.0.2) reads that column to tell "the schedule came back" apart from "something restarted it", so a run must not claim to be something it was not |
 
+#### Being told about the one thing it will not do
+
+Holding a worker back is correct and it is also useless on its own: a worker that
+nobody is told about is indistinguishable from one that never ran. So every poke
+that finds a **held worker which is overdue** tells the admins — a notification
+in the bell (the durable record, with the unread count that makes somebody look)
+and an email (the channel that reaches a person who is not on the site), with the
+link and the words *"Background jobs → Run now"*.
+
+Two rules, both in `src/lib/services/cron-hold-alert.service.ts`:
+
+- **Once per worker per window (12 h).** The supervisor runs on every poke — ~14
+times a day — and a warning that arrives fourteen times is one somebody mutes.
+The window is the notification row itself rather than anything in memory: on
+serverless hosting each instance would otherwise keep its own cooldown and mail
+the same worker once per instance.
+- **Only `late`.** `never` is a schedule nobody has configured (setup work, and
+the card says so), and `stalled` / `failing` are jobs that die when they run — a
+fix, not a button. Alerting on those would put the same words in the bell every
+poke while changing nothing.
+
+It never throws. This runs inside the poke that keeps renewals, releases and
+publishing alive, so a mail host that is down costs a log line — never the poke —
+and the notification it wrote first is already the record. If there is **no admin
+account at all**, the answer says so out loud (`NOTHING WAS SENT: no admin
+account exists to be told`) rather than looking like success.
+
+- [ ] Leave `renew-subscriptions` overdue for one poke and confirm both arrive:
+      the bell in the app, and an email to your admin address.
+- [ ] Then check the throttle: run the supervisor again immediately and confirm
+      the response reports it under `alreadyTold` and nothing new is sent.
+- [ ] Confirm the case that matters most: the notification must say *what to do*
+      (Admin → Overview → Background jobs → **Run now**), not merely that
+      something is wrong.
+
 A caller cannot name a worker: the endpoint takes no id, and the list of workers
 it may start is `SUPERVISOR_WORKERS` in
 `src/lib/services/cron-supervisor.service.ts`. `src/tests/cron-supervisor.test.ts`
