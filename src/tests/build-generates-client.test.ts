@@ -73,3 +73,51 @@ describe("the production build", () => {
     expect(declared.prisma).toBeTruthy();
   });
 });
+
+// The other half of the same failure. `prisma generate` runs on the build
+// image, but the client it writes is loaded on the runtime — and a query engine
+// is a native binary. Generating with no `binaryTargets` fetches only the
+// engine for the machine doing the generating, so the deployment gets a client
+// whose engine cannot be dlopen'd there:
+//
+//   PrismaClientInitializationError: Unable to require(`/vercel/path0/.../libquery_engine.so.node`).
+//   Prisma engines do not seem to be compatible with your system
+//     clientVersion: '5.22.0',
+//     errorCode: undefined
+//
+// That is the same clientVersion-and-no-errorCode shape as a stale client, which
+// is why both fixes are pinned here: the generate step and the engines it
+// produces. Losing this list is silent locally (the local engine is still one of
+// them) and fatal only on the deploy.
+const schema = readFileSync("prisma/schema.prisma", "utf8");
+
+/** The `generator client { ... }` block, so a target elsewhere cannot pass this. */
+const generatorBlock =
+  schema.match(/generator\s+client\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+
+const binaryTargets = (
+  generatorBlock.match(/binaryTargets\s*=\s*\[([^\]]*)\]/)?.[1] ?? ""
+)
+  .split(",")
+  .map((target) => target.trim().replace(/^"|"$/g, ""))
+  .filter(Boolean);
+
+describe("the generated client", () => {
+  it("declares the query engines it may be generated on", () => {
+    expect(binaryTargets, "no binaryTargets in generator client").not.toHaveLength(0);
+  });
+
+  it("carries the engine for the Linux runtime it is deployed to", () => {
+    // Vercel builds and runs on Amazon Linux with OpenSSL 3.0.x. Without this
+    // exact string the client generated during the build has no engine the
+    // runtime can load, and the failure lands at build/collect-page-data time
+    // with a Prisma error attributed to whichever page imported the client.
+    expect(binaryTargets).toContain("rhel-openssl-3.0.x");
+  });
+
+  it("still carries `native`, so a local generate stays usable", () => {
+    // Dropping `native` in favour of the deploy target would trade a red deploy
+    // for a broken `npm test` and `npm run dev` on every developer's machine.
+    expect(binaryTargets).toContain("native");
+  });
+});

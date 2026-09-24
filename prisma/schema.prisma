@@ -5,6 +5,20 @@
 
 generator client {
   provider = "prisma-client-js"
+  // The client is generated once and then shipped somewhere else. Without this
+  // line the generator downloads the query engine for the machine that ran
+  // `prisma generate` and nothing else, so a client generated on a developer's
+  // Windows laptop is useless to the Linux build image — and the reverse. The
+  // failure surfaces as "Unable to require(...) : Prisma engines do not seem to
+  // be compatible with your system", or as a PrismaClientInitializationError
+  // with no errorCode, at whatever point a page first touches the database.
+  //
+  // `native` keeps local development and tests on the platform's own engine;
+  // `rhel-openssl-3.0.x` is the engine Vercel's Node 20 runtime needs. Both are
+  // fetched, so the build does not depend on which machine ran the generate.
+  //
+  // See src/tests/build-generates-client.test.ts, which pins this list.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
