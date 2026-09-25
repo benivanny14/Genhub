@@ -405,18 +405,37 @@ async function probeBunny(): Promise<ProbeResult> {
       };
     }
 
+    const label = String(body.name || library);
+    const { probeSignedPlayback, sampleBunnyVideo } = await import("./bunny");
+
+    // An empty library has no playback to check, and "no videos yet" is not a
+    // fault — say so instead of reporting a healthy library that nobody has
+    // proved can serve anything.
+    const sample = await sampleBunnyVideo();
+    if (!sample) {
+      return { ...base, state: "ok", detail: `library "${label}" · no video to test playback with yet` };
+    }
+
     // The setting that silently breaks paid playback: without Token
     // Authentication the signature in the URL is ignored, so a copied link
-    // plays a video the viewer never bought.
-    const tokenAuth = body.TokenAuthenticationEnabled ?? null;
-    if (tokenAuth === false) {
+    // plays a video the viewer never bought. Read from the VIDEO, not from the
+    // library — `GET /library/{id}` does not report it at all, which is how this
+    // check used to pass unconditionally.
+    if (sample.tokenAuthEnabled === false) {
       return {
         ...base,
         state: "fail",
-        detail: `library "${body.name || library}" · Token Authentication is OFF - paid videos are unprotected (Stream -> Security)`,
+        detail: `library "${label}" · Token Authentication is OFF - paid videos are unprotected (Stream -> Security)`,
       };
     }
-    if (tokenAuth === true && !env("BUNNY_TOKEN_SECRET")) {
+    if (sample.tokenAuthEnabled === null) {
+      return {
+        ...base,
+        state: "warn",
+        detail: `library "${label}" · Bunny did not report the token setting; playback not verified`,
+      };
+    }
+    if (!env("BUNNY_TOKEN_SECRET")) {
       return {
         ...base,
         state: "fail",
@@ -424,37 +443,34 @@ async function probeBunny(): Promise<ProbeResult> {
       };
     }
 
-    // Present is not the same as accepted. When token auth is on, the ONLY way
-    // to know playback will work is to sign a real manifest and fetch it: a
-    // generated secret (rather than the pull zone's own key) signs URLs Bunny
-    // refuses, and every other check here still reports healthy while the player
-    // spins forever. See probeSignedPlayback in lib/bunny.ts.
-    if (tokenAuth === true) {
-      const { probeSignedPlayback, sampleBunnyVideoId } = await import("./bunny");
-      const sample = await sampleBunnyVideoId();
-      if (!sample) {
+    // The other silent killer: BUNNY_CDN_HOSTNAME pointing at the Stream library
+    // is correct, but a host copied from somewhere else serves nothing. Bunny
+    // just told us the right one for this video, so compare instead of assuming.
+    const configuredHost = env("BUNNY_CDN_HOSTNAME")
+      .replace(/^https?:\/\//, "")
+      .replace(/\/$/, "");
+    try {
+      const bunnyHost = sample.thumbnailUrl ? new URL(sample.thumbnailUrl).hostname : "";
+      if (bunnyHost && configuredHost && bunnyHost !== configuredHost) {
         return {
           ...base,
-          state: "warn",
-          detail: `library "${body.name || library}" · Token Auth ON · no video to test playback with yet`,
+          state: "fail",
+          detail: `BUNNY_CDN_HOSTNAME is ${configuredHost} but this library's CDN host is ${bunnyHost} - every video URL would 404/403`,
         };
       }
-      const playback = await probeSignedPlayback(sample);
-      if (playback.state !== "ok") {
-        return { ...base, state: "fail", detail: playback.detail };
-      }
-      return {
-        ...base,
-        state: "ok",
-        detail: `library "${body.name || library}" · Token Auth ON · ${playback.detail}`,
-      };
+    } catch {
+      // A thumbnailUrl we cannot parse is not worth failing over.
     }
 
-    return {
-      ...base,
-      state: "ok",
-      detail: `library "${body.name || library}" · videos ${body.totalVideos ?? "?"}`,
-    };
+    // Present is not the same as accepted. Token auth is on, so the ONLY way to
+    // know playback will work is to sign a real manifest and fetch it: a
+    // generated secret (rather than the pull zone's own key) signs URLs Bunny
+    // refuses, while every other check here still reports healthy and the player
+    // spins forever. See probeSignedPlayback in lib/bunny.ts.
+    const playback = await probeSignedPlayback(sample.guid);
+    return playback.state === "ok"
+      ? { ...base, state: "ok", detail: `library "${label}" · Token Auth ON · ${playback.detail}` }
+      : { ...base, state: "fail", detail: playback.detail };
   } catch (error) {
     return { ...base, state: "fail", detail: String((error as Error)?.message || error).slice(0, 160) };
   }

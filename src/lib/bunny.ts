@@ -555,9 +555,7 @@ export interface PlaybackProbe {
 /** How long the CDN gets to answer a manifest request before we call it a fail. */
 const PLAYBACK_PROBE_TIMEOUT_MS = 10_000;
 
-export async function probeSignedPlayback(
-  bunnyVideoId: string
-): Promise<PlaybackProbe> {
+export async function probeSignedPlayback(bunnyVideoId: string): Promise<PlaybackProbe> {
   if (!isBunnyPlaybackConfigured()) {
     return {
       state: "skip",
@@ -616,20 +614,52 @@ export async function probeSignedPlayback(
 }
 
 /**
- * One real video id from the library, for the probe above. Returns null when the
- * library is empty or unreachable — an empty library is a skip, not a failure.
+ * One real video, plus what Bunny says about the library's token setting.
+ *
+ * The FACT that matters is on the video, not on the library: `GET /library/{id}`
+ * answers only `{videoCount, liveStreamCount, collectionCount}`, with no
+ * `TokenAuthenticationEnabled` field at all — which is why the health check used
+ * to fall through to "ok" no matter how playback was configured. The per-video
+ * `play` endpoint reports `tokenAuthEnabled` for real.
+ *
+ * Returns null when the library is empty or unreachable — an empty library is a
+ * skip, not a failure.
  */
-export async function sampleBunnyVideoId(): Promise<string | null> {
+export interface SampledBunnyVideo {
+  guid: string;
+  tokenAuthEnabled: boolean | null;
+  /** Bunny's own view of the CDN host, for comparing against BUNNY_CDN_HOSTNAME. */
+  thumbnailUrl: string | null;
+}
+
+export async function sampleBunnyVideo(): Promise<SampledBunnyVideo | null> {
   if (!isBunnyConfigured()) return null;
   try {
-    const res = await bunnyFetch(
+    const list = await bunnyFetch(
       `${BUNNY_STREAM_API}/library/${config.bunny.libraryId}/videos?page=1&itemsPerPage=1`,
       { headers: { AccessKey: config.bunny.apiKey } },
       "probe video lookup"
     );
-    if (!res.ok) return null;
-    const body = (await res.json()) as { items?: { guid?: string }[] };
-    return body.items?.[0]?.guid ?? null;
+    if (!list.ok) return null;
+    const guid = ((await list.json()) as { items?: { guid?: string }[] }).items?.[0]?.guid;
+    if (!guid) return null;
+
+    const play = await bunnyFetch(
+      `${BUNNY_STREAM_API}/library/${config.bunny.libraryId}/videos/${guid}/play`,
+      { headers: { AccessKey: config.bunny.apiKey } },
+      "probe playback settings"
+    );
+    if (!play.ok) return { guid, tokenAuthEnabled: null, thumbnailUrl: null };
+
+    const body = (await play.json()) as {
+      tokenAuthEnabled?: boolean;
+      thumbnailUrl?: string;
+    };
+    return {
+      guid,
+      tokenAuthEnabled: typeof body.tokenAuthEnabled === "boolean" ? body.tokenAuthEnabled : null,
+      thumbnailUrl: body.thumbnailUrl || null,
+    };
   } catch {
     return null;
   }

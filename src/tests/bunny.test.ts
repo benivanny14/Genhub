@@ -46,6 +46,7 @@ import {
   createTusCredentials,
   getBunnyVideoDetails,
   deleteBunnyVideo,
+  probeSignedPlayback,
   BunnyNotConfiguredError,
 } from "@/lib/bunny";
 
@@ -274,6 +275,57 @@ describe("Bunny signing", () => {
   it("refuses to build a playback URL without a CDN hostname", () => {
     bunny.cdnHostname = "";
     expect(() => generateSignedVideoUrl("abc-123")).toThrow(BunnyNotConfiguredError);
+  });
+
+  // ===========================================================================
+  // Signing a real manifest, which is the only check that distinguishes
+  // "the secret is set" from "the secret works".
+  // ===========================================================================
+  describe("probeSignedPlayback", () => {
+    it("reports the key mismatch when Bunny refuses the signature", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 403 }) as Response));
+
+      const result = await probeSignedPlayback("abc-123");
+
+      expect(result.state).toBe("fail");
+      // The message has to name the fix, not just the symptom: this is read by
+      // whoever pasted the wrong value into BUNNY_TOKEN_SECRET.
+      expect(result.detail).toMatch(/URL Token Authentication Key/);
+      expect(result.detail).toMatch(/403/);
+      vi.unstubAllGlobals();
+    });
+
+    it("is ok when the CDN accepts it", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 206 }) as Response));
+
+      const result = await probeSignedPlayback("abc-123");
+
+      expect(result.state).toBe("ok");
+      expect(result.detail).toMatch(/matches the pull zone/);
+      vi.unstubAllGlobals();
+    });
+
+    it("skips rather than fails when there is nothing to sign with", async () => {
+      bunny.tokenSecret = "";
+      const result = await probeSignedPlayback("abc-123");
+      expect(result.state).toBe("skip");
+    });
+
+    it("attributes a timeout to the CDN, not to the key", async () => {
+      const timedOut = new Error("aborted");
+      timedOut.name = "TimeoutError";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => {
+          throw timedOut;
+        })
+      );
+
+      const result = await probeSignedPlayback("abc-123");
+      expect(result.state).toBe("fail");
+      expect(result.detail).toMatch(/did not answer/);
+      vi.unstubAllGlobals();
+    });
   });
 
   it("reports configuration completeness", () => {
