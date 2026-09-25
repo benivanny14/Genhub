@@ -318,15 +318,13 @@ collection). Kwa hivyo:
    ambayo haijaanzishwa inakubali collect kisha inaiacha ife — dalili yake
    inafanana kabisa na float 0 (`success: true` halafu `failed`).
 
-   > **Muhimu: `float_balance` ndiyo inapaswa kupanda, sio `wallet_balance`.**
-   > `GET /api/v1/balance` inarudi namba mbili: `wallet_balance` ni salio la
-   > merchant la kuwalipa creators, na `float_balance` ni salio la prepaid
-   > linalolipia prompt/settlement. Kizuizi cha app (float gate) kinasoma
-   > **`float_balance`** tu — hivyo salio la wallet likipanda na float ikabaki
-   > 0, checkout itaendelea kukataa (`503 GATEWAY_FLOAT_EMPTY`) na mteja
-   > ataona ujumbe wa ukweli badala ya “USSD push sent” ya uongo. Deposit
-   > ikionekana kwenye wallet pekee, waambie support wa HarakaPay
-   > kuihamishia kwenye float.
+   > **Muhimu: salio linaloamua ni `float_balance`.** `GET /api/v1/balance`
+   > inarudi namba mbili: `wallet_balance` ni salio la merchant la kuwalipa
+   > creators, na `float_balance` ni salio la prepaid linalolipia
+   > prompt/settlement. Mfumo **hauzuii** mteja kulipa float ikiwa 0 — kuzuia
+   > kungeweza kusimamisha mauzo yote ya simu kwa muda mrefu, kwa kuwa hakuna
+   > njia ya sisi kuiongeza wenyewe. Kwa hivyo koleza salio hili kwa makini:
+   > collection inayokubaliwa kisha kufa ndiyo dalili yake.
 2. **Omba float kwa support wa HarakaPay kwa maandishi** (*Dashboard → Support*,
    au barua pepe yao) — swali kuu: *float inaingizwa vipi kwenye akaunti hii, na
    je live collections zimewashwa?* Tuma reference zilizoshindwa kama ushahidi:
@@ -353,11 +351,7 @@ npm run smoke:harakapay -- --collect 1000 0XXXXXXXXX
 ```
 
 Ingiza PIN. Kisha `npm run verify:live` inatakiwa kuonyesha
-`✓ HarakaPay  key valid · float > 0`. Kama bado inasema `float is 0`, pesa
-haijaingia kwenye float — angalia tena `float_balance` (sio wallet).
-
-> Float ikiingia, **hakuna redeploy wala restart**: kizuizi kinasoma salio mara
-> moja kwa dakika, hivyo malipo yanaanza yenyewe ndani ya dakika moja.
+`✓ HarakaPay  key valid · float > 0`.
 
 > Hakuna mabadiliko ya msimbo yanayoweza kurekebisha float — ni pesa, sio code.
 >

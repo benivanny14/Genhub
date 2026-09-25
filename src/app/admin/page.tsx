@@ -72,18 +72,6 @@ interface SystemReadiness {
     skipped?: number;
     warning?: string | null;
   };
-  /**
-   * The float gate: the deliberate refusal to sell while the merchant float is
-   * empty, with the exact sentence checkout returns to the customer.
-   */
-  floatGate?: {
-    state?: "ok" | "empty" | "unknown";
-    floatTzs?: number | null;
-    cached?: boolean;
-    refusing?: boolean;
-    warning?: string | null;
-    customerMessage?: string | null;
-  };
 }
 
 /**
@@ -803,16 +791,12 @@ export default function AdminDashboard() {
           // First, because it is the one that makes every other gateway result
           // read wrong while it lasts.
           ...(pay?.data?.gatewayBreaker?.warning ? [pay.data.gatewayBreaker.warning] : []),
-          // The refusal, before the raw balance reading below: this one says
-          // what the customer saw, which is the part an operator has to answer.
-          ...(pay?.data?.floatGate?.warning ? [pay.data.floatGate.warning] : []),
           ...(pay?.data?.floatWarning ? [pay.data.floatWarning] : []),
           ...(pay?.data?.delivery?.deliveryWarning ? [pay.data.delivery.deliveryWarning] : []),
           ...(health?.warnings || []),
         ],
         delivery: pay?.data?.delivery,
         gatewayBreaker: pay?.data?.gatewayBreaker,
-        floatGate: pay?.data?.floatGate,
         launch: launch?.data,
       });
     } catch {

@@ -36,15 +36,6 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-// The config mock above is minimal on purpose, and the float gate made the
-// gateway module import the cache (the gate trusts one reading for a minute), so
-// the cache is stubbed too: this suite is about the ALARM, and it must not need
-// a Redis to describe one.
-vi.mock("@/lib/redis", () => ({
-  cacheGet: async () => null,
-  cacheSet: async () => {},
-}));
-
 vi.mock("@/lib/email", () => ({
   sendMail: vi.fn(async () => ({ sent: true, transport: "console" })),
 }));

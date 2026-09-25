@@ -91,7 +91,6 @@ describe("worker result summaries", () => {
       pushedToPhone: 2,
       awaitingApproval: 1,
       failed: 1,
-      skippedNoFloat: 0,
       skipped: 0,
       errors: 0,
     });
@@ -99,23 +98,6 @@ describe("worker result summaries", () => {
     expect(summary).toContain("1 from wallet");
     expect(summary).toContain("2 USSD push(es)");
     expect(summary).toContain("1 failed");
-  });
-
-  it("names a float hold, because the missing number is a sale nobody made", () => {
-    const summary = describeRenewals({
-      considered: 3,
-      renewedFromWallet: 1,
-      pushedToPhone: 0,
-      awaitingApproval: 0,
-      failed: 0,
-      skippedNoFloat: 2,
-      skipped: 0,
-      errors: 0,
-    });
-
-    expect(summary).toContain("2 held");
-    // The action, not just the symptom: this is read on a phone by an operator.
-    expect(summary).toContain("float is empty");
   });
 
   it("reports encoding in the terms the creator cares about", () => {

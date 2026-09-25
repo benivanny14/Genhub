@@ -8,9 +8,6 @@
 //   3. nothing to pay with -> the reason is recorded and the fan is told
 //   4. one attempt per retry gap, never a second push while one is live
 //   5. out of retries and lapsed -> membership closed, counter resynced
-//   6. the merchant float is EMPTY -> the attempt is held, not failed: none of
-//      the fan's attempts is spent, the fan is not told, and the run after a
-//      top-up pushes normally (the fault is ours, so only we pay for it)
 //
 // The gateway module is replaced with a spy so nothing is ever charged.
 // =============================================================================
@@ -54,15 +51,11 @@ vi.mock("@/lib/payments/harakapay", async (importOriginal) => {
       order_id: "HP_TEST_RENEWAL",
       message: "USSD push sent to phone",
     })),
-    // The float gate is a live gateway read, so it is stubbed here too: this
-    // suite is about the worker's bookkeeping, and one test below drives the
-    // gate to "empty" to prove a refund of our own making costs the fan nothing.
-    floatGate: vi.fn(async () => ({ state: "ok" as const, floatTzs: 50_000, cached: false })),
   };
 });
 
 import prisma from "@/lib/db";
-import { harakaCollect, floatGate } from "@/lib/payments/harakapay";
+import { harakaCollect } from "@/lib/payments/harakapay";
 import {
   renewDueSubscriptions,
   MAX_RENEW_ATTEMPTS,
@@ -119,8 +112,6 @@ describeE2E("Subscription auto-renewal", () => {
 
   beforeEach(async () => {
     vi.mocked(harakaCollect).mockClear();
-    vi.mocked(floatGate).mockReset();
-    vi.mocked(floatGate).mockResolvedValue({ state: "ok", floatTzs: 50_000, cached: false });
     await prisma.creatorSubscription.deleteMany({
       where: { creatorId: ctx.creatorId },
     });
@@ -426,67 +417,6 @@ describeE2E("Subscription auto-renewal", () => {
       where: { userId: ctx.viewerId, creatorId: ctx.creatorId },
     });
     expect(tx?.status).toBe("FAILED");
-  });
-
-  // ------------------------------------------------------- 4b. empty float
-  it("holds a renewal while the float is empty, spending none of the fan's attempts", async () => {
-    await dueSubscription({ renewPhone: PHONE });
-    vi.mocked(floatGate).mockResolvedValue({ state: "empty", floatTzs: 0, cached: false });
-
-    const result = await renew();
-
-    // Counted as a hold, not a failure: the fan did nothing wrong, so this must
-    // never look like one of their four attempts going up in smoke.
-    expect(result.skippedNoFloat).toBe(1);
-    expect(result.failed).toBe(0);
-    expect(result.pushedToPhone).toBe(0);
-    expect(harakaCollect).not.toHaveBeenCalled();
-
-    const sub = await prisma.creatorSubscription.findFirst({
-      where: { creatorId: ctx.creatorId },
-    });
-    expect(sub!.renewAttempts).toBe(0);
-    expect(sub!.lastRenewError).toBeNull();
-
-    // Nothing was created for the sweeper to clear, and the fan was not told
-    // about a fault that is entirely ours.
-    const txs = await prisma.transaction.count({ where: { creatorId: ctx.creatorId } });
-    expect(txs).toBe(0);
-    const notes = await prisma.notification.count({ where: { userId: ctx.viewerId } });
-    expect(notes).toBe(0);
-  });
-
-  it("pushes the held renewal on the next run, once the float is back", async () => {
-    await dueSubscription({ renewPhone: PHONE });
-    vi.mocked(floatGate).mockResolvedValue({ state: "empty", floatTzs: 0, cached: false });
-    const held = await renew();
-    expect(held.skippedNoFloat).toBe(1);
-
-    // The float is topped up. No retry gap applies, because no attempt was ever
-    // recorded — the whole point of holding instead of failing.
-    vi.mocked(floatGate).mockResolvedValue({ state: "ok", floatTzs: 25_000, cached: false });
-    const after = await renew();
-
-    expect(after.pushedToPhone).toBe(1);
-    expect(after.skippedNoFloat).toBe(0);
-    expect(harakaCollect).toHaveBeenCalledTimes(1);
-  });
-
-  it("still renews from the wallet while the float is empty", async () => {
-    // The float is only needed to push a prompt to a handset. A fan whose wallet
-    // covers the price must keep renewing through an outage of ours.
-    await prisma.user.update({
-      where: { id: ctx.viewerId },
-      data: { walletBalance: ctx.amount * 3 },
-    });
-    await dueSubscription({ renewPhone: PHONE });
-    vi.mocked(floatGate).mockResolvedValue({ state: "empty", floatTzs: 0, cached: false });
-
-    const result = await renew();
-
-    expect(result.renewedFromWallet).toBe(1);
-    expect(result.skippedNoFloat).toBe(0);
-    expect(floatGate).not.toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------- 5. not due yet

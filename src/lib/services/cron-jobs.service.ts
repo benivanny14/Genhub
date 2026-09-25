@@ -66,17 +66,9 @@ export function describeReconcile(result: ReconcileResult): string {
 }
 
 export function describeRenewals(result: RenewalResult): string {
-  // A hold is spelled out rather than left as an empty "0 USSD push(es)": the
-  // number that is missing is a fan who was not charged, and the reason for it
-  // is an operator's to-do list, not a fan's failure.
-  const held =
-    result.skippedNoFloat > 0
-      ? `, ${result.skippedNoFloat} held (the HarakaPay float is empty — top it up and they resume)`
-      : "";
-
   return (
     `Renewals: ${result.renewedFromWallet} from wallet, ${result.pushedToPhone} USSD push(es), ` +
-    `${result.awaitingApproval} awaiting approval, ${result.failed} failed${held}`
+    `${result.awaitingApproval} awaiting approval, ${result.failed} failed`
   );
 }
 

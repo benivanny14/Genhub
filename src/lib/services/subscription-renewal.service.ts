@@ -28,13 +28,7 @@
 
 import prisma from "../db";
 import config from "../config";
-import {
-  harakaCollect,
-  harakaErrorReason,
-  floatGate,
-  HarakaFloatEmptyError,
-  type FloatGate,
-} from "../payments/harakapay";
+import { harakaCollect, harakaErrorReason } from "../payments/harakapay";
 import { generateOrderId } from "../utils";
 import { grantSubscription, resyncSubscriberCount } from "./subscription.service";
 import { debitWallet } from "./balance.service";
@@ -127,14 +121,6 @@ export interface RenewalResult {
   awaitingApproval: number;
   /** Out of retries or nothing to pay with — membership left to lapse. */
   failed: number;
-  /**
-   * Held back because the merchant float is empty, so no prompt could be
-   * delivered. Counted apart from `failed` because it is NOT the fan's fault:
-   * the attempt budget is untouched, no notification is sent, and the retry gap
-   * does not apply — the charge goes out by itself on the next run after the
-   * float is topped up. A number here is an operator's to-do, not a fan's.
-   */
-  skippedNoFloat: number;
   /** Not due yet, turned off, or outside the processable window. */
   skipped: number;
   errors: number;
@@ -146,7 +132,6 @@ const zero = (): RenewalResult => ({
   pushedToPhone: 0,
   awaitingApproval: 0,
   failed: 0,
-  skippedNoFloat: 0,
   skipped: 0,
   errors: 0,
 });
@@ -274,7 +259,6 @@ export async function renewDueSubscriptions(options?: {
       });
 
       if (push.ok) result.pushedToPhone += 1;
-      else if (push.reason === "float-empty") result.skippedNoFloat += 1;
       else result.failed += 1;
     } catch (error) {
       result.errors += 1;
@@ -335,13 +319,6 @@ export interface RenewalPreview {
   lines: RenewalPreviewLine[];
   /** Rows the preview could not read. Never silently zero. */
   errors: number;
-  /**
-   * What the float gate said when a USSD push was on the table, or null when
-   * nobody would have been charged by phone. Included so the preview and the
-   * worker cannot disagree: the preview says "would charge", and the worker it
-   * describes holds exactly the lines this state refuses.
-   */
-  float: { state: FloatGate["state"]; floatTzs: number | null } | null;
 }
 
 /**
@@ -365,7 +342,6 @@ export async function previewDueRenewals(options?: {
     notCharged: [],
     lines: [],
     errors: 0,
-    float: null,
   };
 
   const due = await prisma.creatorSubscription.findMany({
@@ -388,9 +364,6 @@ export async function previewDueRenewals(options?: {
     orderBy: { expiresAt: "asc" },
     take: limit,
   });
-
-  /** One gateway reading shared by every USSD line below, or null until needed. */
-  let float: FloatGate | null = null;
 
   for (const sub of due) {
     preview.considered += 1;
@@ -448,25 +421,6 @@ export async function previewDueRenewals(options?: {
         continue;
       }
 
-      // The float gate, read once and only when a prompt is what a run would
-      // send: the wallet path needs no float, so a preview of wallet-only
-      // renewals never contacts the gateway. Without this the preview would
-      // promise a fan a USSD charge that the worker quietly holds — the exact
-      // disagreement this function exists to prevent, told the other way round.
-      if (method === "ussd") {
-        float = float ?? (await floatGate());
-        preview.float = { state: float.state, floatTzs: float.floatTzs };
-        if (float.state === "empty") {
-          preview.notCharged.push({
-            subscriptionId: sub.id,
-            reason:
-              "the HarakaPay float is empty, so no USSD prompt can be delivered — " +
-              "top it up and the next run charges this fan",
-          });
-          continue;
-        }
-      }
-
       preview.wouldCharge += 1;
       if (method === "wallet") preview.fromWallet += 1;
       else preview.byPhone += 1;
@@ -500,22 +454,14 @@ export async function previewDueRenewals(options?: {
  * the bell and the log cannot disagree about the number.
  */
 export function summarizeRenewalPreview(preview: RenewalPreview): string {
-  // Named whenever a USSD line was held, in either branch: "3 by USSD push"
-  // without it would be a promise the worker does not keep today.
-  const heldByFloat =
-    preview.float?.state === "empty"
-      ? " (USSD renewals are held: the HarakaPay float is empty — top it up and they resume on their own)"
-      : "";
-
   if (preview.wouldCharge === 0) {
     const held = preview.notCharged.length > 0 ? ", and none of them is chargeable" : "";
-    return `A run now would charge nobody (${preview.considered} due${held})${heldByFloat}`;
+    return `A run now would charge nobody (${preview.considered} due${held})`;
   }
 
   return (
     `A run now would charge ${preview.wouldCharge} membership(s): ` +
-    `${preview.fromWallet} from wallet, ${preview.byPhone} by USSD push to a fan's phone` +
-    heldByFloat
+    `${preview.fromWallet} from wallet, ${preview.byPhone} by USSD push to a fan's phone`
   );
 }
 
@@ -605,21 +551,6 @@ async function renewFromWallet(params: {
 // 2. USSD renewal — creates a normal PENDING checkout
 // =============================================================================
 
-/**
- * How a renewal push ended.
- *
- * `float-empty` is separated from the ordinary failure on purpose: the fan did
- * nothing wrong and nothing was asked of their phone, so a run must not spend
- * one of their attempts, tell them anything, or make them wait out the retry
- * gap. The membership simply waits for the float to come back — and it resumes
- * on its own, because the reading that refused it is cached for one minute
- * (FLOAT_CACHE_MS), so the next hourly run after a top-up pushes normally.
- */
-type RenewalPushOutcome =
-  | { ok: true }
-  | { ok: false; reason: "float-empty" }
-  | { ok: false; reason: "gateway" };
-
 async function pushRenewal(params: {
   subscriptionId: string;
   viewerId: string;
@@ -630,7 +561,7 @@ async function pushRenewal(params: {
   expiresAt: Date;
   /** Attempts already on record before this one. */
   attempts: number;
-}): Promise<RenewalPushOutcome> {
+}): Promise<{ ok: boolean }> {
   const {
     subscriptionId,
     viewerId,
@@ -642,33 +573,6 @@ async function pushRenewal(params: {
     attempts,
   } = params;
   const orderId = generateOrderId("REN");
-
-  // Local dev / sandbox: mirror production with a synthetic order id so the
-  // status poll and webhook can map a callback onto this row.
-  const sandbox =
-    config.nodeEnv !== "production" &&
-    (!config.harakaPay.apiKey || config.harakaPay.sandbox);
-
-  // --- 0. Can a prompt be delivered at all? -------------------------------
-  // Asked BEFORE the PENDING row exists, so a refusal leaves nothing behind: no
-  // checkout that looks like a real attempt, nothing for the sweeper to clear,
-  // and — the point — no attempt spent against the fan's retry budget. A float
-  // that is empty is our problem, and a fan who is paying us every month must
-  // not lose the last of their four attempts (and then their membership)
-  // because our merchant account was unfunded. `harakaCollect` refuses the same
-  // state again downstream; this one only exists so the refusal costs the fan
-  // nothing at all.
-  if (!sandbox) {
-    const float = await floatGate();
-    if (float.state === "empty") {
-      console.warn(
-        `[Renewal] Held ${subscriptionId}: the HarakaPay float is empty ` +
-          `(TZS ${float.floatTzs ?? 0}), so a USSD prompt would never reach the fan. ` +
-          "Nothing was asked of their phone; top up the float and the next run pushes normally."
-      );
-      return { ok: false, reason: "float-empty" };
-    }
-  }
 
   const transaction = await prisma.transaction.create({
     data: {
@@ -688,6 +592,12 @@ async function pushRenewal(params: {
     },
     select: { id: true },
   });
+
+  // Local dev / sandbox: mirror production with a synthetic order id so the
+  // status poll and webhook can map a callback onto this row.
+  const sandbox =
+    config.nodeEnv !== "production" &&
+    (!config.harakaPay.apiKey || config.harakaPay.sandbox);
 
   if (sandbox) {
     const ref = `hp_sbx_${transaction.id}`;
@@ -737,7 +647,7 @@ async function pushRenewal(params: {
         creatorName,
         reason,
       });
-      return { ok: false, reason: "gateway" };
+      return { ok: false };
     }
 
     await prisma.$transaction([
@@ -770,25 +680,6 @@ async function pushRenewal(params: {
 
     return { ok: true };
   } catch (error) {
-    // The float emptied between the reading above and the push itself — the
-    // reading is up to a minute old by design, so this window is real. The row
-    // this attempt already created is closed as FAILED (it is not awaiting
-    // anything), but the fan is not charged an attempt and is not told: the same
-    // reasoning as the early refusal, one call later.
-    if (error instanceof HarakaFloatEmptyError) {
-      await prisma.transaction.update({
-        where: { id: transaction.id },
-        data: {
-          status: "FAILED",
-          metadata: { renewal: true, refusal: "FLOAT_EMPTY", gatewayError: "float empty" },
-        },
-      });
-      console.warn(
-        `[Renewal] Held ${subscriptionId}: the HarakaPay float emptied before the push was sent.`
-      );
-      return { ok: false, reason: "float-empty" };
-    }
-
     const reason = harakaErrorReason(error);
     await prisma.transaction.update({
       where: { id: transaction.id },
@@ -804,7 +695,7 @@ async function pushRenewal(params: {
       reason,
     });
     console.warn(`[Renewal] HarakaPay rejected renewal for ${subscriptionId}: ${reason}`);
-    return { ok: false, reason: "gateway" };
+    return { ok: false };
   }
 }
 

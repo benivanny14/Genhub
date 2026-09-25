@@ -53,11 +53,9 @@ vi.mock("@/lib/services/balance.service", () => ({
 vi.mock("@/lib/payments/harakapay", () => ({
   harakaCollect: vi.fn(),
   harakaErrorReason: (error: unknown) => String((error as Error)?.message || error),
-  floatGate: vi.fn(),
 }));
 
 import prisma from "@/lib/db";
-import { floatGate } from "@/lib/payments/harakapay";
 import {
   MAX_RENEW_ATTEMPTS,
   RETRY_GAP_MS,
@@ -99,7 +97,6 @@ beforeEach(() => {
   findMany.mockResolvedValue([due()] as never);
   findPending.mockResolvedValue(null);
   findUser.mockResolvedValue({ walletBalance: 0 } as never);
-  vi.mocked(floatGate).mockResolvedValue({ state: "ok", floatTzs: 50_000, cached: false });
 });
 
 // ---------------------------------------------------------------------------
@@ -208,37 +205,6 @@ describe("previewDueRenewals", () => {
     expect(preview.lines[0].phone).toBe("+255711111111");
   });
 
-  it("holds a USSD line when the float is empty, and says why", async () => {
-    findUser.mockResolvedValue({ walletBalance: 1_000 } as never);
-    findMany.mockResolvedValue([due({ renewPhone: "+255700000000" })] as never);
-    vi.mocked(floatGate).mockResolvedValue({ state: "empty", floatTzs: 0, cached: false });
-
-    const preview = await previewDueRenewals({ now: NOW });
-
-    // The preview has to answer with what the worker would actually do. Saying
-    // "1 by USSD push" here, while the worker holds the very same fan, is the
-    // disagreement this preview exists to prevent.
-    expect(preview.wouldCharge).toBe(0);
-    expect(preview.byPhone).toBe(0);
-    expect(preview.notCharged[0].reason).toContain("float is empty");
-    expect(preview.float).toMatchObject({ state: "empty", floatTzs: 0 });
-    expect(summarizeRenewalPreview(preview)).toContain("held");
-  });
-
-  it("charges the wallet while the float is empty, and does not ask the gateway", async () => {
-    findUser.mockResolvedValue({ walletBalance: 20_000 } as never);
-    vi.mocked(floatGate).mockResolvedValue({ state: "empty", floatTzs: 0, cached: false });
-
-    const preview = await previewDueRenewals({ now: NOW });
-
-    expect(preview.fromWallet).toBe(1);
-    expect(preview.wouldCharge).toBe(1);
-    // No phone in the plan means no float reading: a run of wallet renewals
-    // must not depend on the gateway answering.
-    expect(floatGate).not.toHaveBeenCalled();
-    expect(preview.float).toBeNull();
-  });
-
   it("says why a membership with no wallet and no phone will not be charged", async () => {
     findUser.mockResolvedValue({ walletBalance: 0 } as never);
 
@@ -322,7 +288,6 @@ describe("summarizeRenewalPreview", () => {
       notCharged: [],
       lines: [],
       errors: 0,
-      float: null,
     });
 
     expect(sentence).toContain("3");
@@ -342,7 +307,6 @@ describe("summarizeRenewalPreview", () => {
       ],
       lines: [],
       errors: 0,
-      float: null,
     });
 
     expect(sentence).toContain("charge nobody");
