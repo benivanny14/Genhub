@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import ImageCropper from "@/components/ImageCropper";
 import {
   Wallet,
   Eye,
@@ -27,8 +28,12 @@ import {
   Trash2,
   EyeOff,
   ImageOff,
+  Tag,
 } from "lucide-react";
 import { formatTZS, formatRelativeTime, formatCount } from "@/lib/utils";
+// The one list of categories — the same ids /browse/[category] serves, minus the
+// "all" pseudo-category, which is a filter and not something a video can be.
+import { CATEGORIES } from "@/lib/categories";
 
 interface CreatorData {
   balance: {
@@ -83,6 +88,9 @@ interface CreatorVideo {
   purchaseCount: number;
   thumbnailUrl: string | null;
   duration: number | null;
+  teaserDuration: number;
+  category: string | null;
+  tags: string[];
   createdAt: string;
   encoding: EncodingState;
 }
@@ -156,6 +164,14 @@ export default function CreatorDashboard() {
   const [editing, setEditing] = useState<CreatorVideo | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editPrice, setEditPrice] = useState(0);
+  const [editDescription, setEditDescription] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const [editTags, setEditTags] = useState("");
+  const [editTeaserDuration, setEditTeaserDuration] = useState(15);
+  const [editCoverUrl, setEditCoverUrl] = useState<string | null>(null);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  // The cover waiting to be framed — a 16:9 crop of the picture just picked.
+  const [coverCropFile, setCoverCropFile] = useState<File | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -245,7 +261,37 @@ export default function CreatorDashboard() {
     setEditing(video);
     setEditTitle(video.title);
     setEditPrice(video.price);
+    setEditDescription(video.description || "");
+    setEditCategory(video.category || "");
+    setEditTags((video.tags || []).join(", "));
+    setEditTeaserDuration(video.teaserDuration || 15);
+    setEditCoverUrl(video.thumbnailUrl);
     setOpenMenuId(null);
+  }
+
+  /**
+   * Replace the cover image without re-uploading the video.
+   *
+   * The file is framed first (see ImageCropper), then goes to the same
+   * /api/upload endpoint a thumbnail uses on the upload page. The returned
+   * in-app URL is what gets saved — nothing is written to the video row until
+   * Save, so a cancelled edit changes nothing.
+   */
+  async function uploadCover(file: File) {
+    setUploadingCover(true);
+    try {
+      const { uploadImage } = await import("@/lib/upload-client");
+      const url = await uploadImage(file, { kind: "public" });
+      setEditCoverUrl(url);
+      toast("success", "New cover ready — press Save to keep it");
+    } catch (error) {
+      toast(
+        "error",
+        error instanceof Error ? error.message : "The image could not be uploaded"
+      );
+    } finally {
+      setUploadingCover(false);
+    }
   }
 
   async function saveEdit() {
@@ -255,12 +301,35 @@ export default function CreatorDashboard() {
       toast("error", "The title must be at least 3 characters");
       return;
     }
+    if (!Number.isFinite(editPrice) || editPrice < 0 || editPrice > 1000000) {
+      toast("error", "The price must be between TZS 0 and TZS 1,000,000");
+      return;
+    }
+    if (editTeaserDuration < 15 || editTeaserDuration > 30) {
+      toast("error", "The preview must be between 15 and 30 seconds");
+      return;
+    }
+
+    const tags = editTags
+      .split(",")
+      .map((tag) => tag.trim())
+      .filter(Boolean)
+      .slice(0, 10);
+
     setSavingEdit(true);
     try {
       const res = await fetch(`/api/videos/${editing.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, price: editPrice }),
+        body: JSON.stringify({
+          title,
+          price: editPrice,
+          description: editDescription.trim(),
+          category: editCategory,
+          tags,
+          teaserDuration: editTeaserDuration,
+          ...(editCoverUrl ? { thumbnailUrl: editCoverUrl } : {}),
+        }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -753,17 +822,80 @@ export default function CreatorDashboard() {
         </div>
       </main>
 
-      {/* Edit Video Modal */}
+      {/* Cover cropper — a 16:9 frame, because that is the shape the feed draws. */}
+      {coverCropFile && (
+        <ImageCropper
+          file={coverCropFile}
+          shape="wide"
+          confirmLabel="Use this cover"
+          busy={uploadingCover}
+          onCancel={() => setCoverCropFile(null)}
+          onConfirm={(cropped) => {
+            setCoverCropFile(null);
+            void uploadCover(cropped);
+          }}
+        />
+      )}
+
+      {/* Edit Video Modal — everything a viewer sees before paying, in one form. */}
       {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-card w-full max-w-md p-6">
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 backdrop-blur-sm p-4">
+          <div className="glass-card my-auto w-full max-w-2xl p-6">
             <h2 className="text-xl font-display font-bold mb-1">Edit video</h2>
-            <p className="text-xs text-white/40 mb-4">
-              The cover image and the video file itself are replaced by uploading
-              again — the title and price are what buyers see.
+            <p className="text-xs text-white/40 mb-5">
+              The cover, the title, the description, the price and the free preview —
+              everything a viewer sees before they pay. The file itself is replaced
+              by uploading again.
             </p>
 
-            <div className="space-y-4">
+            <div className="space-y-5">
+              {/* Cover image */}
+              <div>
+                <label className="text-sm text-white/60 mb-2 block">Cover image</label>
+                <div className="flex items-start gap-4">
+                  <div className="w-40 h-24 shrink-0 rounded-xl overflow-hidden bg-surface-300/40 flex items-center justify-center">
+                    {editCoverUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={editCoverUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <ImageOff className="w-5 h-5 text-white/30" />
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    <label className="btn-ghost inline-flex items-center gap-1.5 text-xs cursor-pointer">
+                      {uploadingCover ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <Upload className="w-3.5 h-3.5" />
+                      )}
+                      {uploadingCover ? "Uploading…" : editCoverUrl ? "Replace cover" : "Add cover"}
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        className="hidden"
+                        disabled={uploadingCover}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          // Reset so picking the same file again still fires.
+                          e.target.value = "";
+                          if (!file) return;
+                          if (!file.type.startsWith("image/")) {
+                            toast("error", "Please choose an image file");
+                            return;
+                          }
+                          // Frame it as a 16:9 cover before it is uploaded.
+                          setCoverCropFile(file);
+                        }}
+                      />
+                    </label>
+                    <p className="text-xs text-white/40">
+                      JPEG, PNG or WebP, up to 5 MB. This is the picture on the feed —
+                      you can move and zoom it before it is saved.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <label className="text-sm text-white/60 mb-2 block" htmlFor="edit-title">
                   Title
@@ -776,23 +908,99 @@ export default function CreatorDashboard() {
                   className="input-field"
                 />
               </div>
+
               <div>
-                <label className="text-sm text-white/60 mb-2 block" htmlFor="edit-price">
-                  Price (TZS)
+                <label className="text-sm text-white/60 mb-2 block" htmlFor="edit-description">
+                  Description
                 </label>
-                <input
-                  id="edit-price"
-                  type="number"
-                  min={100}
-                  max={1000000}
-                  value={editPrice}
-                  onChange={(e) => setEditPrice(parseInt(e.target.value) || 0)}
-                  className="input-field"
+                <textarea
+                  id="edit-description"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  maxLength={5000}
+                  rows={3}
+                  placeholder="What happens in this video?"
+                  className="input-field min-h-[90px] resize-y text-white/80"
                 />
                 <p className="text-xs text-white/40 mt-1">
-                  You keep {formatTZS(Math.round(editPrice * 0.7))} of each sale
-                  (70%); 0 makes it free to watch.
+                  {editDescription.length}/5000 characters
                 </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-white/60 mb-2 block flex items-center gap-2" htmlFor="edit-price">
+                    <DollarSign className="w-4 h-4" /> Price (TZS)
+                  </label>
+                  <input
+                    id="edit-price"
+                    type="number"
+                    min={0}
+                    max={1000000}
+                    value={editPrice}
+                    onChange={(e) => setEditPrice(parseInt(e.target.value) || 0)}
+                    className="input-field"
+                  />
+                  <p className="text-xs text-white/40 mt-1">
+                    {editPrice === 0
+                      ? "Free to watch — anyone can see the whole video."
+                      : `You keep ${formatTZS(Math.round(editPrice * 0.7))} of each sale (70%); 0 makes it free to watch.`}
+                  </p>
+                </div>
+                <div>
+                  <label className="text-sm text-white/60 mb-2 block flex items-center gap-2" htmlFor="edit-teaser">
+                    <Film className="w-4 h-4" /> Free preview (seconds)
+                  </label>
+                  <input
+                    id="edit-teaser"
+                    type="number"
+                    min={15}
+                    max={30}
+                    value={editTeaserDuration}
+                    onChange={(e) => setEditTeaserDuration(parseInt(e.target.value) || 15)}
+                    className="input-field"
+                  />
+                  <p className="text-xs text-white/40 mt-1">
+                    How much a viewer sees before paying. 15-30 seconds.
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-white/60 mb-2 block" htmlFor="edit-category">
+                    Category
+                  </label>
+                  <select
+                    id="edit-category"
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value)}
+                    className="input-field"
+                  >
+                    <option value="">No category</option>
+                    {CATEGORIES.filter((c) => c.id !== "all").map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-sm text-white/60 mb-2 block flex items-center gap-2" htmlFor="edit-tags">
+                    <Tag className="w-4 h-4" /> Tags (comma separated)
+                  </label>
+                  <input
+                    id="edit-tags"
+                    value={editTags}
+                    onChange={(e) => setEditTags(e.target.value)}
+                    maxLength={200}
+                    placeholder="music, tanzania, africa"
+                    className="input-field"
+                  />
+                  <p className="text-xs text-white/40 mt-1">
+                    {editTags.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 10).length}/10 tags
+                  </p>
+                </div>
               </div>
             </div>
 

@@ -1178,8 +1178,14 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               </div>
             )}
 
-            <Link href="/inbox" className="btn-ghost flex items-center gap-2 text-sm">
-              <MessageCircle className="w-4 h-4" /> Messages
+            {/* Straight into this creator's thread: the inbox opens on the
+                conversation list otherwise, and a creator the viewer has never
+                written to is not on it. */}
+            <Link
+              href={`/inbox?userId=${video.creator.id}`}
+              className="btn-ghost flex items-center gap-2 text-sm"
+            >
+              <MessageCircle className="w-4 h-4" /> Message creator
             </Link>
             <button onClick={handleShare} className="btn-ghost flex items-center gap-2 text-sm">
               <Share2 className="w-4 h-4" /> Share

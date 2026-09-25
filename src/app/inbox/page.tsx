@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import { Mail, Send, Inbox, MessageSquare } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
@@ -76,6 +77,7 @@ export default function InboxPage() {
   const [amount, setAmount] = useState("100");
   const [sending, setSending] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
   const { theme } = useTheme();
   const { toast } = useToast();
   const isLight = theme === "light";
@@ -104,25 +106,70 @@ export default function InboxPage() {
       } else {
         setUser({ id: "" });
       }
-      await fetchConversations();
+      const list = await fetchConversations();
+      await openRequestedPartner(list);
     } catch {
       // Server unreachable — leave signed-out state
     }
     setLoading(false);
   }
 
-  async function fetchConversations() {
+  async function fetchConversations(): Promise<Conversation[]> {
     try {
       const res = await fetch("/api/messages");
       const data = await res.json();
       if (data.success) {
-        setConversations(data.data.conversations || []);
+        const list: Conversation[] = data.data.conversations || [];
+        setConversations(list);
         setDemoMode(false);
+        return list;
+      }
+    } catch {}
+    const demo = [{ partner: DEMO_PARTNER, lastMessage: DEMO_MESSAGES[1], unreadCount: 0 }];
+    setConversations(demo);
+    setDemoMode(true);
+    return demo;
+  }
+
+  /**
+   * `?userId=` opens that conversation straight away.
+   *
+   * This is how "Message creator" on a profile or a video page works. Without
+   * it the viewer landed on the inbox with nothing selected, and a creator they
+   * had never written to does not appear in the conversation list at all (that
+   * list is built from existing messages), so there was no way to send the
+   * first one.
+   *
+   * Read from window.location rather than useSearchParams() so this page stays
+   * statically rendered — the same reason the login page reads it that way.
+   */
+  async function openRequestedPartner(list: Conversation[]) {
+    if (typeof window === "undefined") return;
+    const id = new URLSearchParams(window.location.search).get("userId");
+    if (!id) return;
+
+    const known = list.find((c) => c.partner.id === id);
+    if (known) {
+      await openConversation(known.partner);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/creators/${id}`);
+      const data = await res.json();
+      if (data?.success) {
+        await openConversation({
+          id: data.data.id,
+          displayName: data.data.displayName,
+          avatarUrl: data.data.avatarUrl,
+          role: "CREATOR",
+        });
         return;
       }
     } catch {}
-    setConversations([{ partner: DEMO_PARTNER, lastMessage: DEMO_MESSAGES[1], unreadCount: 0 }]);
-    setDemoMode(true);
+
+    toast("warning", "That creator could not be loaded.");
+    router.replace("/inbox");
   }
 
   async function openConversation(partner: Partner) {
@@ -167,6 +214,13 @@ export default function InboxPage() {
         setContent("");
         await openConversation(activePartner);
         await fetchConversations();
+      } else if (res.status === 402 || /balance is too low/i.test(data.error || "")) {
+        // Paying for a message comes out of the wallet, and a first-time sender
+        // has no reason to know that. Name the fix instead of the failure.
+        toast(
+          "error",
+          `${data.error || "Your wallet balance is too low"} — top up on the Wallet page.`
+        );
       } else {
         toast("error", data.error || "Could not send message");
       }

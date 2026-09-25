@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import VideoCard from "@/components/VideoCard";
-import { Play, Users, Eye, Heart, Star, ArrowLeft, Smartphone, Wallet } from "lucide-react";
+import { Play, Users, Eye, Heart, Star, ArrowLeft, Smartphone, Wallet, MessageCircle } from "lucide-react";
 import { formatTZS, formatCount } from "@/lib/utils";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -47,6 +47,10 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
   const [subscribed, setSubscribed] = useState(false);
+  // When the paid month ends. A subscription is a month of access, so the date
+  // is the thing the viewer actually bought — "Subscribed" alone does not say
+  // whether it runs out tomorrow or next month.
+  const [subExpiresAt, setSubExpiresAt] = useState<string | null>(null);
   const [subscribing, setSubscribing] = useState(false);
   const [showSubModal, setShowSubModal] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -68,7 +72,10 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
 
       if (creatorData.success) setCreator(creatorData.data);
       if (videosData.success) setVideos(videosData.data.videos || []);
-      if (subData.success) setSubscribed(subData.data.subscribed);
+      if (subData.success) {
+        setSubscribed(subData.data.subscribed);
+        setSubExpiresAt(subData.data.subscription?.expiresAt ?? null);
+      }
     } catch {
     } finally {
       setLoading(false);
@@ -89,7 +96,10 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
     try {
       const res = await fetch(`/api/subscriptions?creatorId=${id}`);
       const data = await res.json();
-      if (data.success) setSubscribed(data.data.subscribed);
+      if (data.success) {
+        setSubscribed(data.data.subscribed);
+        setSubExpiresAt(data.data.subscription?.expiresAt ?? null);
+      }
     } catch {}
   }
 
@@ -296,31 +306,60 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
             </div>
           </div>
 
-          {/* Subscribe Button */}
-          {!subscribed ? (
-            <button
-              onClick={openSubscribe}
-              disabled={subscribing}
-              className="btn-brand flex items-center gap-2 mt-4 sm:mt-0"
+          {/* Subscribe + message */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 mt-4 sm:mt-0">
+            {!subscribed ? (
+              <button
+                onClick={openSubscribe}
+                disabled={subscribing}
+                className="btn-brand flex items-center justify-center gap-2"
+              >
+                <Star className="w-4 h-4" />
+                {subscribing ? "Subscribing..." : `Subscribe — TZS ${subPrice.toLocaleString()}/month`}
+              </button>
+            ) : (
+              <button
+                onClick={handleUnsubscribe}
+                disabled={subscribing}
+                title="Click to unsubscribe"
+                className="flex items-center justify-center gap-2 px-4 py-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-sm text-emerald-300 hover:border-emerald-500/70 transition"
+              >
+                <Star className="w-4 h-4 text-amber-400" />
+                {subscribing
+                  ? "Updating..."
+                  : subExpiresAt
+                    ? `Subscribed until ${new Date(subExpiresAt).toLocaleDateString()}`
+                    : "✓ Subscribed — click to unsubscribe"}
+              </button>
+            )}
+
+            {/* Messages are paid per message, and the composer in /inbox is where
+                the price is set — so this is the way in. */}
+            <Link
+              href={`/inbox?userId=${creator.id}`}
+              className="btn-ghost flex items-center justify-center gap-2 text-sm"
             >
-              <Star className="w-4 h-4" />
-              {subscribing ? "Subscribing..." : `Subscribe — TZS ${subPrice.toLocaleString()}/month`}
-            </button>
-          ) : (
-            <button
-              onClick={handleUnsubscribe}
-              disabled={subscribing}
-              title="Click to unsubscribe"
-              className="flex items-center gap-2 mt-4 sm:mt-0 px-4 py-2 rounded-full border border-white/15 text-sm text-white/70 hover:text-white hover:border-white/30 transition"
-            >
-              <Star className="w-4 h-4 text-amber-400" />
-              {subscribing ? "Updating..." : "✓ Subscribed — click to unsubscribe"}
-            </button>
-          )}
+              <MessageCircle className="w-4 h-4" /> Message
+            </Link>
+          </div>
         </div>
 
         {/* Videos Grid */}
-        <h2 className="font-display font-bold text-lg mb-4">Videos by {creator.displayName}</h2>
+        <h2 className="font-display font-bold text-lg mb-1">Videos by {creator.displayName}</h2>
+        {/* What the viewer's money buys here, in one line. */}
+        {subscribed ? (
+          <p className="text-xs text-emerald-400 mb-4">
+            Your subscription includes every video below
+            {subExpiresAt ? ` until ${new Date(subExpiresAt).toLocaleDateString()}` : ""} —
+            nothing else to pay.
+          </p>
+        ) : (
+          <p className="text-xs text-white/40 mb-4">
+            {videos.some((v) => v.price > 0)
+              ? `Subscribe for TZS ${subPrice.toLocaleString()}/month and watch everything below, or buy a single video and keep it.`
+              : "These videos are free to watch."}
+          </p>
+        )}
         {videos.length === 0 ? (
           <div className="text-center py-16">
             <Play className="w-12 h-12 text-white/10 mx-auto mb-3" />

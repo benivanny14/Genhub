@@ -103,7 +103,17 @@ export const createVideoSchema = z.object({
 export const updateVideoSchema = z.object({
   title: z.string().min(3).max(200).optional(),
   description: z.string().max(5000).optional(),
-  price: z.number().int().min(100).max(1000000).optional(),
+  // 0 is allowed here and only here: the edit form offers "0 makes it free",
+  // and it used to be a promise the schema broke with "must be >= 100". A
+  // creator can therefore turn a scene free after the fact; uploads still
+  // require a price, because a price is the one decision made at upload time
+  // that cannot be undone for buyers who already paid.
+  price: z
+    .number()
+    .int()
+    .min(0, "The price cannot be negative")
+    .max(1000000, "The price cannot exceed TZS 1,000,000")
+    .optional(),
   teaserDuration: z.number().int().min(15).max(30).optional(),
   category: z.string().optional(),
   tags: z.array(z.string()).max(10).optional(),

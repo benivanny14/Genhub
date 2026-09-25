@@ -8,18 +8,28 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import prisma from "@/lib/db";
 import config from "@/lib/config";
+import { getCurrentUser } from "@/lib/auth";
 import VideoDetailPage from "./VideoDetail";
 
 interface Props {
   params: { id: string };
 }
 
-async function getVideo(id: string) {
+/**
+ * Resolve a video for this request.
+ *
+ * A video that is not published is private — but not from its creator. The
+ * dashboard menu offers "View as a viewer", and every new upload starts
+ * unpublished while Bunny transcodes, so the one link a creator most wants
+ * after an upload used to land on "Video not found". `getCurrentUser` reads and
+ * verifies the session JWT only (no database round trip), which is what lets
+ * this stay a cheap check on a page that is rendered per request anyway.
+ */
+async function getVideo(id: string, viewer: Awaited<ReturnType<typeof getCurrentUser>>) {
   try {
-    return await prisma.video.findFirst({
+    const video = await prisma.video.findFirst({
       where: {
         OR: [{ slug: id }, { id }],
-        isPublished: true,
         isDeleted: false,
       },
       select: {
@@ -34,10 +44,18 @@ async function getVideo(id: string) {
         likesCount: true,
         category: true,
         isPremium: true,
+        isPublished: true,
         createdAt: true,
         creator: { select: { id: true, displayName: true, avatarUrl: true } },
       },
     });
+
+    if (!video) return null;
+
+    const maySeeUnpublished =
+      !!viewer && (viewer.role === "ADMIN" || viewer.userId === video.creator.id);
+
+    return video.isPublished || maySeeUnpublished ? video : null;
   } catch {
     return null;
   }
@@ -51,7 +69,7 @@ function isoDuration(seconds: number | null): string | undefined {
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const video = await getVideo(params.id);
+  const video = await getVideo(params.id, await getCurrentUser());
   if (!video) return { title: "Video not found" };
 
   const creatorName = video.creator.displayName || "Creator";
@@ -90,7 +108,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function VideoRoute({ params }: Props) {
-  const video = await getVideo(params.id);
+  const video = await getVideo(params.id, await getCurrentUser());
   if (!video) notFound();
 
   const base = config.appUrl.replace(/\/$/, "");

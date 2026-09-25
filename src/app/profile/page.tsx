@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { fetchCurrentUser, forgetCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
+import ImageCropper from "@/components/ImageCropper";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -77,6 +78,9 @@ export default function ProfilePage() {
   // avatar cannot be a different bug from a broken thumbnail.
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  // The file waiting to be framed. Nothing is uploaded until the picture has
+  // been moved and zoomed to the way the owner wants it to look.
+  const [cropFile, setCropFile] = useState<File | null>(null);
 
   // Delete-account state. Two separate values on purpose: the password proves it
   // is the account holder, the typed word proves it is not an accident.
@@ -288,6 +292,21 @@ export default function ProfilePage() {
   return (
     <div className="min-h-screen page-enter">
       <Header />
+
+      {/* Move and zoom the new picture, then upload the framing the owner chose. */}
+      {cropFile && (
+        <ImageCropper
+          file={cropFile}
+          confirmLabel="Save picture"
+          busy={uploadingAvatar}
+          onCancel={() => setCropFile(null)}
+          onConfirm={(cropped) => {
+            setCropFile(null);
+            void handleAvatarChange(cropped);
+          }}
+        />
+      )}
+
       <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
         <h1 className={cn("text-2xl font-display font-bold", isLight && "text-gray-900")}>My Profile</h1>
 
@@ -321,7 +340,8 @@ export default function ProfilePage() {
               </p>
               <p className={cn("text-xs", isLight ? "text-gray-500" : "text-white/40")}>
                 Shown next to your name on your profile, in the feed and on your videos.
-                JPEG, PNG or WebP, up to 5 MB.
+                JPEG, PNG or WebP, up to 5 MB. You can move and zoom the picture
+                before it is saved.
               </p>
               <div className="flex items-center gap-2">
                 <label
@@ -340,7 +360,13 @@ export default function ProfilePage() {
                       const file = e.target.files?.[0];
                       // Reset the input so picking the same file again still fires.
                       e.target.value = "";
-                      if (file) void handleAvatarChange(file);
+                      if (!file) return;
+                      if (!file.type.startsWith("image/")) {
+                        toast("error", "Please choose an image file");
+                        return;
+                      }
+                      // Frame it first — this is the whole point of the step.
+                      setCropFile(file);
                     }}
                   />
                 </label>

@@ -27,11 +27,18 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(50, parseInt(searchParams.get("limit") || "20"));
     const search = searchParams.get("q") || "";
     const category = searchParams.get("category") || "";
+    // A creator's own page asks for their videos with this. It used to be read
+    // and ignored — the parameter was never put in the WHERE clause, so
+    // /creator/<id> rendered the entire site feed under "Videos by <name>", and
+    // the SEO shell said N published videos while the grid showed everyone's.
+    const creatorId = searchParams.get("creatorId") || "";
     const sortBy = searchParams.get("sort") || "newest";
     const durationFilter = searchParams.get("duration") || ""; // short | medium | long
     const dateFilter = searchParams.get("date") || ""; // day | week | month | year
 
-    const cacheKey = `videos:list:${page}:${limit}:${search}:${category}:${sortBy}:${durationFilter}:${dateFilter}`;
+    // creatorId belongs in the key: without it one creator's page would be
+    // served the cached general feed, and the bug above would survive the fix.
+    const cacheKey = `videos:list:${page}:${limit}:${search}:${category}:${sortBy}:${durationFilter}:${dateFilter}:${creatorId}`;
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return api.success(cached);
@@ -50,6 +57,7 @@ export async function GET(request: NextRequest) {
           }
         : {}),
       ...(category ? { category } : {}),
+      ...(creatorId ? { creatorId } : {}),
       ...(durationFilter
         ? {
             duration:

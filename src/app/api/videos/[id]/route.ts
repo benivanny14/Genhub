@@ -52,6 +52,16 @@ export async function GET(
       return api.notFound("Video not found");
     }
 
+    // Unpublished is private. The page shell refuses these too, but this route
+    // is reachable on its own, and a row id is guessable enough — the only
+    // people who may read a video that is not live are its creator (previewing
+    // their own upload) and an admin.
+    const maySeeUnpublished =
+      authUser?.userId === video.creatorId || authUser?.role === "ADMIN";
+    if (!video.isPublished && !maySeeUnpublished) {
+      return api.notFound("Video not found");
+    }
+
     // Count the view, once per viewer per hour.
     //
     // This used to be an unconditional increment on every GET, which made
@@ -65,7 +75,10 @@ export async function GET(
     // viewer) and on the address otherwise, so a signed-out visitor still counts
     // — just not sixty times a minute.
     const viewerKey = authUser?.userId ?? `ip:${clientIp(request.headers)}`;
-    const counted = await claimOnce(`view:${video.id}:${viewerKey}`, 3_600);
+    // Counting a creator's own preview would inflate the number the feed ranks
+    // on, and it is not a view anybody watched.
+    const isOwnerPreview = authUser?.userId === video.creatorId && !video.isPublished;
+    const counted = (await claimOnce(`view:${video.id}:${viewerKey}`, 3_600)) && !isOwnerPreview;
 
     if (counted) {
       await prisma.video.update({
@@ -195,7 +208,7 @@ export async function GET(
       paymentUnderInvestigation,
       playbackUrl,
       teaserUrl,
-      viewsCount: video.viewsCount + 1, // Reflect the view we just added
+      viewsCount: video.viewsCount + (counted ? 1 : 0), // Reflect the view we just added
     });
   } catch (error) {
     if (error instanceof AuthError) {
