@@ -1841,6 +1841,19 @@ lockfile install), so a migration reaches production only when somebody runs:
 npm run db:deploy        # prisma migrate deploy
 ```
 
+The script is `scripts/db-migrate.mjs`, not the bare CLI, and that matters on a
+clean checkout: the Prisma CLI reads `.env` while this repo keeps `DATABASE_URL`
+in `.env.local` (see §2.2 and `src/tests/setup-env.ts` for why), so
+`prisma migrate deploy` exits 1 with
+`P1012 Environment variable not found: DATABASE_URL` and applies nothing. The
+wrapper loads the one environment file the app reads, prints which
+database/schema it is about to change (never the password), and then runs the
+real command. It reads a different file on request:
+
+```bash
+npm run db:deploy -- --env-from .env.vercel
+```
+
 The CI workflow applies them to a throwaway Postgres on every push, which proves
 they are valid and in order — it does not prove they ran anywhere real. A deploy
 that ships code expecting a column the database does not have fails at the first
@@ -1856,6 +1869,16 @@ never needs a maintenance window, and `prisma migrate deploy` is safe to run on 
 live database. The one thing to watch for is a new UNIQUE index — it fails if
 rows already violate it, which is why the per-user coupon rule shipped with the
 new table's unique pair rather than as a constraint bolted onto `Coupon`.
+
+#### The audit log and captions migration (`20260925130000`)
+
+| | |
+|---|---|
+| Adds | the `AdminAuditLog` table, and `Video.captionsUrl` (nullable) |
+| Why | an admin action left no record of who took it or why: `isBanned` has no author, `banReason` is NULLed by the next unban, and `payoutRequest.adminNote` is overwritten by the next decision. `captionsUrl` is where a WebVTT file is attached to a scene. |
+| Safe on live data | yes — a new table and a nullable column; no backfill, no new unique index |
+| Rollback | `DROP TABLE "AdminAuditLog"`; `ALTER TABLE "Video" DROP COLUMN "captionsUrl"` |
+| Degrades safely | the audit write swallows its own failure and logs it, so unaudited actions still apply rather than 500 — check the server log for `[Audit] FAILED` |
 
 #### The `CouponRedemption` migration (`20260925010000`)
 
