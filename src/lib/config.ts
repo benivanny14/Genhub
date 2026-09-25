@@ -74,6 +74,14 @@ const config = {
     legalName: process.env.NEXT_PUBLIC_COMPANY_LEGAL_NAME || "Genhub",
     address: process.env.NEXT_PUBLIC_COMPANY_ADDRESS || "",
     supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@genhub.co.tz",
+    // The public support line, and the reason it is here rather than typed into
+    // the two pages that show it: the footer and /support published
+    // "+255 700 000 000" — a reserved-looking number nobody owns — while the
+    // custodian address said Seoul. A visitor who dials it reaches a stranger,
+    // and a reviewer checking the platform's contact details finds a placeholder.
+    // One value, one place, so the next change cannot reach one page and miss
+    // the other.
+    phone: process.env.NEXT_PUBLIC_SUPPORT_PHONE || "0682642219",
   },
 
   // Database

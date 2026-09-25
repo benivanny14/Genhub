@@ -11,6 +11,7 @@ import {
   isValidTZPhone,
   truncate,
   generateOrderId,
+  toTelHref,
   cn,
 } from "./utils";
 
@@ -52,6 +53,33 @@ describe("formatCount", () => {
   it("should format millions with M", () => {
     expect(formatCount(1000000)).toBe("1.0M");
     expect(formatCount(2500000)).toBe("2.5M");
+  });
+});
+
+// The number appears on the footer and on /support, and both have to dial it.
+// A `tel:` link with a leading 0 is not a Tanzanian international number, so the
+// dialler on a phone outside the country cannot reach it — and the failure is
+// silent, which is worse than a wrong number nobody taps.
+describe("toTelHref", () => {
+  it("converts the local form the site displays into a dialable one", () => {
+    expect(toTelHref("0682642219")).toBe("tel:+255682642219");
+  });
+
+  it("leaves an already-international number alone", () => {
+    expect(toTelHref("+255682642219")).toBe("tel:+255682642219");
+    expect(toTelHref("255682642219")).toBe("tel:+255682642219");
+  });
+
+  it("ignores the spaces and dashes people type", () => {
+    expect(toTelHref("0682 642 219")).toBe("tel:+255682642219");
+    expect(toTelHref("0682-642-219")).toBe("tel:+255682642219");
+  });
+
+  it("returns nothing rather than a link that dials zero", () => {
+    // `tel:` with no number opens the dialler on some phones and does nothing on
+    // others; an empty string lets the caller render plain text instead.
+    expect(toTelHref("")).toBe("");
+    expect(toTelHref("   ")).toBe("");
   });
 });
 

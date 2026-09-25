@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Play } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
-import { cn } from "@/lib/utils";
+import { cn, toTelHref } from "@/lib/utils";
 import config from "@/lib/config";
 
 export default function Footer() {
@@ -68,7 +68,17 @@ export default function Footer() {
               <li><Link href="/support" className={cn("text-sm hover:text-brand-400 transition", isLight ? "text-gray-500" : "text-white/40")}>Help &amp; Support</Link></li>
               <li><Link href="/support" className={cn("text-sm hover:text-brand-400 transition", isLight ? "text-gray-500" : "text-white/40")}>Open a Ticket</Link></li>
               <li><span className={cn("text-sm", isLight ? "text-gray-500" : "text-white/40")}>Email: {config.compliance.supportEmail}</span></li>
-              <li><span className={cn("text-sm", isLight ? "text-gray-500" : "text-white/40")}>Phone: +255 700 000 000</span></li>
+              <li>
+                <span className={cn("text-sm", isLight ? "text-gray-500" : "text-white/40")}>
+                  Phone:{" "}
+                  <a
+                    href={toTelHref(config.compliance.phone)}
+                    className="hover:text-brand-400 transition"
+                  >
+                    {config.compliance.phone}
+                  </a>
+                </span>
+              </li>
             </ul>
           </div>
         </div>

@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   videoGroupBy: vi.fn(),
   videoCount: vi.fn(),
   userFindMany: vi.fn(),
+  userCount: vi.fn(),
   cacheGet: vi.fn(),
   cacheSet: vi.fn(),
 }));
@@ -26,6 +27,7 @@ vi.mock("@/lib/db", () => ({
     },
     user: {
       findMany: mocks.userFindMany,
+      count: mocks.userCount,
     },
   },
 }));
@@ -88,6 +90,8 @@ function primeDb() {
     { id: "c1", displayName: "Active", avatarUrl: null, isVerified: true, _count: { videos: 3 } },
     { id: "c2", displayName: "Empty", avatarUrl: null, isVerified: false, _count: { videos: 0 } },
   ]);
+  // One creator with a published video; the strip below drops the second one.
+  mocks.userCount.mockResolvedValueOnce(1);
 }
 
 beforeEach(() => {
@@ -149,6 +153,28 @@ describe("GET /api/home-feed", () => {
 
     expect(payload.creators.map((c: any) => c.id)).toEqual(["c1"]);
     expect(payload.creators[0].videoCount).toBe(3);
+  });
+
+  // The hero prints this number, so it has to be the count of creators somebody
+  // can actually go and watch — not the number of accounts with the CREATOR role.
+  it("reports a real creator count, counted the same way as the strip", async () => {
+    mocks.cacheGet.mockResolvedValueOnce(null);
+    primeDb();
+
+    const res = await GET({} as any);
+    const body = await res.json();
+
+    expect(body.data.totalCreators).toBe(1);
+
+    const where = mocks.userCount.mock.calls[0][0].where;
+    expect(where).toMatchObject({ role: "CREATOR", isBanned: false });
+    // "Has something published" is the same rule activeCreators applies, so the
+    // hero number and the faces under it cannot disagree.
+    expect(where.videos.some).toMatchObject({
+      isPublished: true,
+      isDeleted: false,
+      isFlagged: false,
+    });
   });
 
   it("serializes createdAt to an ISO string on every video", async () => {

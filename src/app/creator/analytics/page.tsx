@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { formatTZS, formatCount, cn } from "@/lib/utils";
+import { demoDataEnabled } from "@/lib/demo-mode";
 
 interface AnalyticsData {
   totals: {
@@ -29,7 +30,14 @@ interface AnalyticsData {
     pendingBalance: number;
     availableBalance: number;
     lifetimeEarned: number;
+    /** Paying subscribers, active and unexpired, right now. */
     subscribers: number;
+    /** Subscriptions STARTED in the last 30 days — the direction, not the level. */
+    subscribers30d: number;
+    /** Distinct people who have watched, all time. Not view events. */
+    uniqueViewers: number;
+    /** Distinct people who watched in the last 30 days. */
+    viewers30d: number;
     revenue30d: number;
     pendingPayouts: number;
     conversionRate: number;
@@ -54,7 +62,13 @@ interface AnalyticsData {
   }[];
 }
 
-// Demo fallback so charts are explorable without a database
+// Development scaffolding, shown ONLY in a dev build and only after a failed
+// request — see lib/demo-mode.ts. It used to stand in for a real creator's
+// numbers whenever the request failed, which is a category error: the creator
+// reads 312 subscribers and 1520 purchases, believes them, prices and plans on
+// them, and has no way to tell that the database was simply unreachable for a
+// second. A small amber banner is not enough of a defence against numbers
+// presented in the same cards, the same typography and the same position.
 const DEMO_ANALYTICS: AnalyticsData = {
   totals: {
     publishedVideos: 6,
@@ -65,6 +79,9 @@ const DEMO_ANALYTICS: AnalyticsData = {
     availableBalance: 426000,
     lifetimeEarned: 610000,
     subscribers: 312,
+    subscribers30d: 41,
+    uniqueViewers: 8420,
+    viewers30d: 1180,
     revenue30d: 96500,
     pendingPayouts: 0,
     conversionRate: 1.1,
@@ -97,10 +114,34 @@ export default function CreatorAnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [demoMode, setDemoMode] = useState(false);
+  const [error, setError] = useState(false);
   const { theme } = useTheme();
   const isLight = theme === "light";
 
   const init = useCallback(async () => {
+    setLoading(true);
+    setError(false);
+
+    /**
+     * What to show when the request did not come back.
+     *
+     * In development, invented numbers make the charts explorable. In
+     * production, the honest answer is that we do not know the numbers — and
+     * saying so is the only option that keeps the ones on screen above
+     * suspicion. A creator who is told "we could not load your stats" retries; a
+     * creator shown a plausible lie goes and makes decisions with it.
+     */
+    const fallback = () => {
+      if (demoDataEnabled()) {
+        setData(DEMO_ANALYTICS);
+        setDemoMode(true);
+        return;
+      }
+      setData(null);
+      setDemoMode(false);
+      setError(true);
+    };
+
     try {
       const me = await fetchCurrentUser();
       if (me.status === 401) {
@@ -121,13 +162,11 @@ export default function CreatorAnalyticsPage() {
       if (analytics?.success) {
         setData(analytics.data);
         setDemoMode(false);
-      } else {
-        setData(DEMO_ANALYTICS);
-        setDemoMode(true);
+        return;
       }
+      fallback();
     } catch {
-      setData(DEMO_ANALYTICS);
-      setDemoMode(true);
+      fallback();
     } finally {
       setLoading(false);
     }
@@ -136,6 +175,29 @@ export default function CreatorAnalyticsPage() {
   useEffect(() => {
     init();
   }, [init]);
+
+  if (error && !data) {
+    return (
+      <div className="min-h-screen page-enter">
+        <Header />
+        <main className="max-w-3xl mx-auto px-4 sm:px-6 py-16">
+          <div className="glass-card p-8 text-center">
+            <BarChart3 className="w-10 h-10 text-amber-400 mx-auto mb-4" />
+            <h1 className="text-xl font-display font-bold mb-2">
+              Your numbers did not load
+            </h1>
+            <p className="text-white/60 text-sm mb-6">
+              The analytics request failed, so there is nothing here worth
+              showing you. Your videos, balances and subscribers are unaffected.
+            </p>
+            <button onClick={() => init()} className="btn-brand px-5 py-2.5">
+              Try again
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   if (loading || !data) {
     return (
@@ -158,11 +220,19 @@ export default function CreatorAnalyticsPage() {
   const typeTotal = Object.values(data.byType).reduce((a, b) => a + b, 0) || 1;
 
   const statCards = [
+    // "Total Views" counts view EVENTS (one per viewer per hour); "Unique
+    // Viewers" counts people. Both belong on the page and they are deliberately
+    // adjacent, because a creator who is shown only the first will read it as
+    // audience size — which is how a platform ends up with creators who think
+    // they have 1,000 viewers when they have 40.
     { label: "Total Views", value: formatCount(t.totalViews), icon: Eye, color: "text-brand-400", bg: "bg-brand-500/20" },
+    { label: "Unique Viewers", value: formatCount(t.uniqueViewers), icon: Users, color: "text-sky-400", bg: "bg-sky-500/20" },
+    { label: "Viewers (30d)", value: formatCount(t.viewers30d), icon: Eye, color: "text-brand-300", bg: "bg-brand-500/10" },
+    { label: "Active Subscribers", value: t.subscribers.toLocaleString(), icon: Users, color: "text-purple-400", bg: "bg-purple-500/20" },
+    { label: "New Subscribers (30d)", value: t.subscribers30d.toLocaleString(), icon: TrendingUp, color: "text-purple-300", bg: "bg-purple-500/10" },
     { label: "Lifetime Earned", value: formatTZS(t.lifetimeEarned), icon: Banknote, color: "text-emerald-400", bg: "bg-emerald-500/20" },
     { label: "Available Balance", value: formatTZS(t.availableBalance), icon: Wallet, color: "text-sky-400", bg: "bg-sky-500/20" },
     { label: "Pending (14 days)", value: formatTZS(t.pendingBalance), icon: TrendingUp, color: "text-amber-400", bg: "bg-amber-500/20" },
-    { label: "Active Subscribers", value: t.subscribers.toLocaleString(), icon: Users, color: "text-purple-400", bg: "bg-purple-500/20" },
     { label: "Purchase Rate", value: `${t.conversionRate}%`, icon: ArrowUpRight, color: "text-pink-400", bg: "bg-pink-500/20" },
     { label: "Revenue (30d)", value: formatTZS(t.revenue30d), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/20" },
     { label: "Published Videos", value: t.publishedVideos.toLocaleString(), icon: BarChart3, color: "text-brand-400", bg: "bg-brand-500/20" },
@@ -195,7 +265,7 @@ export default function CreatorAnalyticsPage() {
 
         {demoMode && (
           <div className="rounded-xl px-4 py-3 text-sm border bg-amber-500/10 text-amber-400 border-amber-500/20">
-            Demo data is showing — connect a database to see your real numbers.
+            Sample data is showing — these are NOT your numbers. Development only.
           </div>
         )}
 

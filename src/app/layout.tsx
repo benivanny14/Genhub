@@ -81,12 +81,21 @@ export default function RootLayout({
               "@context": "https://schema.org",
               "@type": "WebSite",
               name: "Genhub",
-              url: "https://genhub.co.tz",
+              // The domain that is ACTUALLY serving this page, not a domain we
+              // hope to move to. This used to be the literal genhub.co.tz, while
+              // `metadataBase` below and every canonical tag were built from
+              // `config.appUrl` — so the page told Google its identity was one
+              // domain and its canonical location was another, and the one it
+              // claimed as its identity did not resolve at all. Structured data
+              // that is wrong is worse than absent: it is an assertion about a
+              // site that does not exist. One source of truth fixes it, and it
+              // follows the domain automatically when the real one goes live.
+              url: config.appUrl,
               description:
                 "Premium video streaming platform for East African creators",
               potentialAction: {
                 "@type": "SearchAction",
-                target: "https://genhub.co.tz/?q={search_term_string}",
+                target: `${config.appUrl}/?q={search_term_string}`,
                 "query-input": "required name=search_term_string",
               },
             }),

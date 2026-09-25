@@ -24,6 +24,9 @@ export async function GET(request: NextRequest) {
       topVideos,
       payoutTotal,
       topFansRaw,
+      viewersAllTime,
+      viewers30d,
+      subscribers30d,
     ] = await Promise.all([
       prisma.video.aggregate({
         where: { creatorId: auth.userId, isPublished: true, isDeleted: false },
@@ -72,6 +75,32 @@ export async function GET(request: NextRequest) {
         _count: { _all: true },
         orderBy: { _sum: { amount: "desc" } },
         take: 5,
+      }),
+      // HOW MANY PEOPLE, not how many times. `viewsCount` is a per-viewer,
+      // per-hour event counter: one fan watching on Monday and again on Tuesday
+      // adds two. That is the right input for ranking and the wrong answer to
+      // "how many viewers do I have" — a creator cannot tell five people apart
+      // from one person five times, cannot see churn, and cannot price a
+      // subscription on it. WatchProgress is keyed `(userId, videoId)`, so one
+      // grouped row per viewer is exactly a distinct person who actually
+      // started a scene (only entitled viewers reach the player, so this cannot
+      // count paywall hits as viewers).
+      prisma.watchProgress.groupBy({
+        by: ["userId"],
+        where: { video: { creatorId: auth.userId } },
+      }),
+      prisma.watchProgress.groupBy({
+        by: ["userId"],
+        where: {
+          video: { creatorId: auth.userId },
+          updatedAt: { gte: thirtyDaysAgo },
+        },
+      }),
+      // Subscribers GAINED in the window. The active count alone says how many
+      // are paying now and nothing about direction: a creator renewing 40 people
+      // while losing 40 sees a flat line and no reason for it.
+      prisma.creatorSubscription.count({
+        where: { creatorId: auth.userId, createdAt: { gte: thirtyDaysAgo } },
       }),
     ]);
 
@@ -139,6 +168,10 @@ export async function GET(request: NextRequest) {
         availableBalance: balance?.availableBalance || 0,
         lifetimeEarned: balance?.totalEarned || 0,
         subscribers,
+        subscribers30d,
+        // Distinct people, not events — see the groupBy above.
+        uniqueViewers: viewersAllTime.length,
+        viewers30d: viewers30d.length,
         revenue30d: totalRevenue30d,
         pendingPayouts: payoutTotal._sum.amount || 0,
         conversionRate:

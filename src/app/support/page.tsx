@@ -9,7 +9,7 @@ import Header from "@/components/Header";
 import { LifeBuoy, ArrowLeft, Mail, Phone, MapPin, Send } from "lucide-react";
 import Link from "next/link";
 import { useTheme } from "@/lib/ThemeProvider";
-import { cn } from "@/lib/utils";
+import { cn, toTelHref } from "@/lib/utils";
 import config from "@/lib/config";
 
 const TOPICS = [
@@ -64,7 +64,12 @@ export default function SupportPage() {
               value: config.compliance.supportEmail,
               href: `mailto:${config.compliance.supportEmail}`,
             },
-            { icon: Phone, label: "Phone", value: "+255 700 000 000", href: "tel:+255700000000" },
+            {
+              icon: Phone,
+              label: "Phone",
+              value: config.compliance.phone,
+              href: toTelHref(config.compliance.phone),
+            },
             { icon: MapPin, label: "Office", value: "Dar es Salaam, TZ", href: null },
           ].map((c) => (
             <div

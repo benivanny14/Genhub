@@ -22,7 +22,12 @@ export const metadata: Metadata = {
 const NOTICE_REQUIREMENTS = [
   "A physical or electronic signature of the copyright owner or a person authorised to act on their behalf.",
   "Identification of the copyrighted work claimed to have been infringed.",
-  "The exact URL of the material on Genhub that you say is infringing (for example https://genhub.co.tz/video/…).",
+  // Built from the domain actually serving the site, for the same reason
+  // everything else is: a takedown template that shows an address nobody can
+  // open produces notices naming the wrong host — and a copyright owner who
+  // cannot see the material they are complaining about sends a notice a human
+  // has to guess at.
+  `The exact URL of the material on Genhub that you say is infringing (for example ${config.appUrl}/video/…).`,
   "Your full name, address, telephone number and email address.",
   "A statement that you have a good-faith belief that the disputed use is not authorised by the copyright owner, its agent, or the law.",
   "A statement, under penalty of perjury, that the information in your notice is accurate and that you are the copyright owner or authorised to act on their behalf.",

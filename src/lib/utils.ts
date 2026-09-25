@@ -107,6 +107,27 @@ export function isValidTZPhone(phone: string): boolean {
   return /^(\+255|0)[67]\d{8}$/.test(phone.replace(/\s/g, ""));
 }
 
+// A `tel:` link for a phone number as a person writes it.
+//
+// Tanzanian numbers are written locally as `0682 642 219` and internationally as
+// `+255682642219`, and a `tel:` link needs the second form or the dialler treats
+// "0682642219" as an incomplete local number. Same digits, one conversion, in a
+// pure function so the two pages showing the number cannot disagree about it.
+//
+// Non-Tanzanian input is passed through with a leading `+` only when it already
+// has a country code, so a number this app did not expect is still dialable
+// rather than mangled.
+export function toTelHref(phone: string): string {
+  const digits = (phone || "").replace(/[^\d+]/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("+255")) return `tel:+${digits.slice(1)}`;
+  if (digits.startsWith("255")) return `tel:+${digits}`;
+  // Local form: 0XXXXXXXXX -> +255XXXXXXXXX (drop the trunk 0).
+  if (digits.startsWith("0")) return `tel:+255${digits.slice(1)}`;
+  if (digits.startsWith("+")) return `tel:${digits}`;
+  return `tel:${digits}`;
+}
+
 // Truncate text
 export function truncate(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;

@@ -35,6 +35,7 @@
     "smoke:harakapay": "node scripts/harakapay-smoke.mjs",
     "smoke:harakapay:live": "node scripts/harakapay-live.mjs",
     "smoke:bunny": "node scripts/verify-bunny.mjs",
+    "verify:referrers": "node scripts/verify-referrers.mjs",
     "admin:create": "node scripts/create-admin.mjs",
     "accounts:create": "node scripts/create-launch-accounts.mjs",
     "demo:wipe": "node scripts/demo-wipe.mjs",

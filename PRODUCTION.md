@@ -2042,6 +2042,22 @@ browser **straight** from the CDN (only the manifests come through
 `/api/videos/[id]/stream`), so no server-side change can authorise a request the
 browser makes.
 
+Ask the CDN per origin, rather than trusting a probe that asked about a host
+nobody types:
+
+```bash
+npm run verify:referrers                                   # the app URL, its www form, localhost
+npm run verify:referrers -- --origin https://genhub.co.tz   # one host, before its DNS exists
+```
+
+It signs a real manifest and requests it with no Referer (which proves the
+**token** works) and then once per origin, so a 403 from the referrer list cannot
+be mistaken for a wrong `BUNNY_TOKEN_SECRET` — Bunny answers both the same way and
+names neither. The list is matched as a string and never resolved, so this tells
+the truth about a domain that does not resolve yet, which is when the fix is
+still free. There is no API for the list on the Stream key this project holds
+(Bunny's account API answers 401 to it), so it stays a dashboard change.
+
 **What the player offers.** The ladder is whatever Bunny encoded, which is capped
 by the uploaded source — a 360x642 upload produces `240p` and `360p` and nothing
 higher, so "only two qualities" is a property of the file, not a bug. `lib/quality.ts`

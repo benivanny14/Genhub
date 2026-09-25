@@ -26,6 +26,16 @@
 // The self-heal is here too, for the same reason it existed in the video route:
 // a SUCCESS charge with no access row (legacy rows, an interrupted credit) must
 // never lock a paying customer out of what they bought.
+//
+// EXPIRY IS PART OF THE ANSWER, and it was not. `VideoAccess.expiresAt` is
+// nullable and documented as "Null = lifetime access" — so the column exists to
+// END access, and the lookup ignored it entirely: a row selected by
+// `viewerId_videoId` alone counted however old it was. Worse, an expired row read
+// as "no row", which is the condition the self-heal treats as a missing credit,
+// so the first reload after a rental ran out re-created it with no expiry at all
+// and made the rental permanent. A rental that never ends is not a rental, and
+// this service is the only thing standing between a 24-hour pass and the whole
+// catalogue.
 // =============================================================================
 
 import prisma from "@/lib/db";
@@ -63,9 +73,27 @@ export async function resolveVideoEntitlement(
   if (viewer.role === "ADMIN") return { entitled: true, source: "admin", healed: false };
   if (viewer.userId === video.creatorId) return { entitled: true, source: "owner", healed: false };
 
-  const [access, purchase, subscription] = await Promise.all([
-    prisma.videoAccess.findUnique({
-      where: { viewerId_videoId: { viewerId: viewer.userId, videoId: video.id } },
+  const now = new Date();
+
+  const [access, expiredAccess, purchase, subscription] = await Promise.all([
+    // Live access: a row with no expiry (lifetime) or one that has not passed.
+    prisma.videoAccess.findFirst({
+      where: {
+        viewerId: viewer.userId,
+        videoId: video.id,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      select: { id: true },
+    }),
+    // A row that exists and has run out — read separately so the self-heal below
+    // can tell "this viewer never got an access row" (a fault to repair) apart
+    // from "this viewer's access ended" (a fact to respect).
+    prisma.videoAccess.findFirst({
+      where: {
+        viewerId: viewer.userId,
+        videoId: video.id,
+        expiresAt: { lte: now },
+      },
       select: { id: true },
     }),
     prisma.transaction.findFirst({
@@ -90,7 +118,12 @@ export async function resolveVideoEntitlement(
 
   let healed = false;
 
-  if (!access && purchase) {
+  // A SUCCESS charge with NO access row is the case this repairs. An expired row
+  // is not: re-creating it would erase the expiry and hand over a permanent copy
+  // of a scene the viewer rented for a day.
+  const purchaseCounts = Boolean(purchase) && !expiredAccess;
+
+  if (!access && purchaseCounts) {
     // Access is a fact, not a counter: only the first one creates a row.
     await prisma.videoAccess.upsert({
       where: { viewerId_videoId: { viewerId: viewer.userId, videoId: video.id } },
@@ -100,7 +133,10 @@ export async function resolveVideoEntitlement(
     healed = true;
   }
 
-  if (access || purchase) return { entitled: true, source: "purchase", healed };
+  if (access || purchaseCounts) return { entitled: true, source: "purchase", healed };
+
+  // The monthly payment outlives a rental, so an expired access row does not
+  // take away what an active subscription already covers.
   if (subscription) return { entitled: true, source: "subscription", healed };
 
   return { entitled: false, source: null, healed: false };

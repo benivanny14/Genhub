@@ -106,6 +106,7 @@ export async function GET(_request: NextRequest) {
       groupCounts,
       totalVideos,
       creatorsRaw,
+      totalCreators,
     ] = await Promise.all([
       // Hero: newest featured video
       prisma.video.findMany({
@@ -167,6 +168,22 @@ export async function GET(_request: NextRequest) {
           },
         },
       }),
+      // Creators who actually have something published — the same rule the
+      // "Popular Creators" strip applies to its rows (activeCreators), so the
+      // number in the hero and the faces under it cannot disagree. A signed-up
+      // account with no videos is not a creator a visitor can go and watch, and
+      // counting those would put a number in the hero that no page can back up.
+      //
+      // LAST in the array on purpose: the destructuring above is positional, so
+      // a query inserted in the middle silently shifts every value after it
+      // (which is how the category counts briefly became a number).
+      prisma.user.count({
+        where: {
+          role: "CREATOR",
+          isBanned: false,
+          videos: { some: baseWhere },
+        },
+      }),
     ]);
 
     const now = Date.now();
@@ -195,6 +212,12 @@ export async function GET(_request: NextRequest) {
       },
       categories: counts,
       totalVideos,
+      // Real counts, straight from the database. The hero used to print a
+      // hardcoded "10K+ Creators · 50K+ Videos" no matter what was published,
+      // which on a catalogue of one is not an optimistic estimate but a claim
+      // about content that does not exist — and the first thing a visitor does
+      // is look for it.
+      totalCreators,
       creators: activeCreators(
         creatorsRaw.map((c) => ({
           id: c.id,

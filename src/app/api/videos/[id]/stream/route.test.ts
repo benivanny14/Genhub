@@ -29,7 +29,7 @@ const SECRET = "pull-zone-key";
 
 const mocks = vi.hoisted(() => ({
   videoFindFirst: vi.fn(),
-  accessFindUnique: vi.fn(),
+  accessFindFirst: vi.fn(),
   accessUpsert: vi.fn(),
   transactionFindFirst: vi.fn(),
   subscriptionFindFirst: vi.fn(),
@@ -48,7 +48,7 @@ const bunnyConfig = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({
   default: {
     video: { findFirst: mocks.videoFindFirst },
-    videoAccess: { findUnique: mocks.accessFindUnique, upsert: mocks.accessUpsert },
+    videoAccess: { findFirst: mocks.accessFindFirst, upsert: mocks.accessUpsert },
     transaction: { findFirst: mocks.transactionFindFirst },
     creatorSubscription: { findFirst: mocks.subscriptionFindFirst },
   },
@@ -91,6 +91,23 @@ const ROW = {
   teaserBunnyVideoId: null as string | null,
 };
 
+/**
+ * Answer the two access lookups this route makes through the shared entitlement
+ * service — one for a live row (lifetime, or not yet expired), one for a row that
+ * has run out. Which is which is entirely in the `expiresAt` clause, so the mock
+ * reads the query rather than depending on call order.
+ *
+ * An expired row being answered here (rather than as `live: null`) is the case
+ * that matters: the route must refuse a viewer whose rental ran out, and must not
+ * let the self-heal quietly re-issue it as a permanent purchase.
+ */
+function setAccessRows({ live = null, expired = null }: { live?: unknown; expired?: unknown } = {}) {
+  mocks.accessFindFirst.mockImplementation(
+    async (args: { where?: { expiresAt?: { lte?: Date } } }) =>
+      args?.where?.expiresAt?.lte ? expired : live
+  );
+}
+
 /** The signature the pull zone accepts: base64url(sha256(secret + path + expires)). */
 const expectedToken = (path: string, expires: number) =>
   createHash("sha256")
@@ -117,7 +134,7 @@ beforeEach(() => {
   bunnyConfig.cdnHostname = CDN;
   bunnyConfig.tokenSecret = SECRET;
   mocks.videoFindFirst.mockResolvedValue(ROW);
-  mocks.accessFindUnique.mockResolvedValue(null);
+  setAccessRows();
   mocks.accessUpsert.mockResolvedValue({ id: "access-1" });
   mocks.transactionFindFirst.mockResolvedValue(null);
   mocks.subscriptionFindFirst.mockResolvedValue(null);
@@ -170,7 +187,7 @@ describe("GET /api/videos/[id]/stream - what it returns", () => {
     expect(res.status).toBe(200);
     expect(urls[0]).toContain(`/${TEASER_GUID}/playlist.m3u8`);
     // A trailer is for people who have not paid, so no session is required...
-    expect(mocks.accessFindUnique).not.toHaveBeenCalled();
+    expect(mocks.accessFindFirst).not.toHaveBeenCalled();
     // ...but the nested playlists must stay teasers, not become the scene.
     expect(await res.text()).toContain("/api/videos/row-1/stream?path=360p%2Fvideo.m3u8&source=teaser");
   });
@@ -190,10 +207,35 @@ describe("GET /api/videos/[id]/stream - who gets it", () => {
     expect(urls).toEqual([]);
   });
 
+  it("refuses a viewer whose rental ran out, even though the charge is on record", async () => {
+    // The paywall that expires. `VideoAccess.expiresAt` is nullable and null
+    // means lifetime, so a past expiry has to end access — and the failed-lookup
+    // self-heal must not treat the dead row as a missing one and hand back a
+    // permanent copy of a scene that was rented for a day.
+    mocks.videoFindFirst.mockResolvedValue({ ...ROW, price: 5000 });
+    mocks.currentUser.mockResolvedValue({ userId: "viewer-1", role: "VIEWER" });
+    setAccessRows({ expired: { id: "access-expired" } });
+    mocks.transactionFindFirst.mockResolvedValue({ id: "txn-1" });
+
+    const res = await GET(request(), params());
+
+    expect(res.status).toBe(403);
+    expect(urls).toEqual([]);
+    expect(mocks.accessUpsert).not.toHaveBeenCalled();
+  });
+
+  it("refuses an anonymous visitor, so a copied link is not a purchase", async () => {
+    mocks.videoFindFirst.mockResolvedValue({ ...ROW, price: 5000 });
+    mocks.currentUser.mockResolvedValue(null);
+
+    expect((await GET(request(), params())).status).toBe(403);
+    expect(urls).toEqual([]);
+  });
+
   it("serves a paid video to a viewer who owns it", async () => {
     mocks.videoFindFirst.mockResolvedValue({ ...ROW, price: 5000 });
     mocks.currentUser.mockResolvedValue({ userId: "viewer-1", role: "VIEWER" });
-    mocks.accessFindUnique.mockResolvedValue({ id: "access-1" });
+    setAccessRows({ live: { id: "access-1" } });
 
     expect((await GET(request(), params())).status).toBe(200);
   });

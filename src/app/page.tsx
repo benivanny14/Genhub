@@ -21,6 +21,7 @@ import {
 } from "@/lib/demo-data";
 import { CATEGORIES, categoryHref } from "@/lib/categories";
 import { demoDataEnabled } from "@/lib/demo-mode";
+import { pickFreshRows } from "@/lib/home-rows";
 import { useInfiniteVideos, type InfiniteVideoQuery } from "@/hooks/useInfiniteVideos";
 
 interface HistoryItem {
@@ -81,6 +82,8 @@ interface HomeFeed {
   };
   categories: Record<string, number>;
   totalVideos: number;
+  /** Creators with at least one published video — the same rule the strip uses. */
+  totalCreators: number;
   creators: FeedCreator[];
 }
 
@@ -136,6 +139,9 @@ function buildDemoFeed(): HomeFeed {
     },
     categories,
     totalVideos: all.length,
+    totalCreators: DEMO_CREATORS.filter((c) =>
+      DEMO_VIDEOS.some((v) => v.creator.id === c.id)
+    ).length,
     creators: DEMO_CREATORS.map((c) => ({
       ...c,
       videoCount: DEMO_VIDEOS.filter((v) => v.creator.id === c.id).length,
@@ -156,6 +162,7 @@ function emptyFeed(): HomeFeed {
     rows: { new: [], popular: [], rated: [], free: [], trending: [] },
     categories: { "": 0 },
     totalVideos: 0,
+    totalCreators: 0,
     creators: [],
   };
 }
@@ -405,7 +412,17 @@ export default function HomePage() {
     document.getElementById("video-grid")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-
+  // What the shelves and the category grid are allowed to show.
+  //
+  // Two rules, both about a small catalogue: a shelf keeps only videos not
+  // already shown above it (lib/home-rows.ts), and a category with nothing in it
+  // is not offered. "All Videos" always stays — it is the way back.
+  const rows = feed ? pickFreshRows(feed.rows) : null;
+  const tiles = feed
+    ? CATEGORY_TILES.filter(
+        (tile) => tile.id === "" || (feed.categories[tile.id] ?? 0) > 0
+      )
+    : CATEGORY_TILES;
 
   return (
     <div className="min-h-screen page-enter">
@@ -466,8 +483,26 @@ export default function HomePage() {
               "flex items-center justify-center gap-6 mt-8 text-sm",
               isLight ? "text-gray-400" : "text-white/40"
             )}>
-              <span className="flex items-center gap-1.5"><Users className="w-4 h-4" /> 10K+ Creators</span>
-              <span className="flex items-center gap-1.5"><Play className="w-4 h-4" /> 50K+ Videos</span>
+              {/* Real counts or nothing. These two chips used to read
+                  "10K+ Creators" and "50K+ Videos" on every deployment, which
+                  on a catalogue of one is a claim the visitor can disprove in
+                  ten seconds by scrolling — and the number they then trust is
+                  neither. `feed === null` means "still loading", which is the
+                  one case where saying nothing is honest. */}
+              {feed && (
+                <>
+                  <span className="flex items-center gap-1.5">
+                    <Users className="w-4 h-4" />
+                    {feed.totalCreators.toLocaleString()}{" "}
+                    {feed.totalCreators === 1 ? "Creator" : "Creators"}
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <Play className="w-4 h-4" />
+                    {feed.totalVideos.toLocaleString()}{" "}
+                    {feed.totalVideos === 1 ? "Video" : "Videos"}
+                  </span>
+                </>
+              )}
               <span className="flex items-center gap-1.5"><Zap className="w-4 h-4" /> Instant Access</span>
             </div>
           </div>
@@ -490,7 +525,7 @@ export default function HomePage() {
           <TileSkeletons />
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-            {CATEGORY_TILES.map((tile) => {
+            {tiles.map((tile) => {
               const active = category === tile.id;
               return (
                 <Link
@@ -707,42 +742,42 @@ export default function HomePage() {
       )}
 
       {/* Brazzers-style video rows */}
-      {feed === null ? (
+      {feed === null || !rows ? (
         <RowsSkeleton />
       ) : (
         <div className="pt-4 space-y-2">
           <RowSection
             title="New Releases"
             icon={<Clock className="w-5 h-5 text-brand-400" />}
-            videos={feed.rows.new}
+            videos={rows.new}
             isLight={isLight}
             onSeeAll={() => goToGrid("newest")}
           />
           <RowSection
             title="Most Popular"
             icon={<TrendingUp className="w-5 h-5 text-accent-400" />}
-            videos={feed.rows.popular}
+            videos={rows.popular}
             isLight={isLight}
             onSeeAll={() => goToGrid("popular")}
           />
           <RowSection
             title="Top Rated"
             icon={<Star className="w-5 h-5 text-gold" />}
-            videos={feed.rows.rated}
+            videos={rows.rated}
             isLight={isLight}
             onSeeAll={() => goToGrid("rated")}
           />
           <RowSection
             title="Free to Watch"
             icon={<PlayCircle className="w-5 h-5 text-emerald-400" />}
-            videos={feed.rows.free}
+            videos={rows.free}
             isLight={isLight}
             onSeeAll={() => goToGrid("price_low")}
           />
           <RowSection
             title="🔥 Trending Now"
             icon={<Flame className="w-5 h-5 text-orange-400" />}
-            videos={feed.rows.trending}
+            videos={rows.trending}
             isLight={isLight}
             onSeeAll={() => goToGrid("trending")}
           />

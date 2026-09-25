@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { MessageCircle, Trash2, Flag, Reply, Send } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
+import { demoDataEnabled } from "@/lib/demo-mode";
 import { cn } from "@/lib/utils";
 
 interface CommentUser {
@@ -29,7 +30,11 @@ interface CommentsSectionProps {
   user: { id: string; role: string } | null;
 }
 
-// Shown when the database is unreachable so the section is never empty
+// Development scaffolding only, and only when a request FAILED — see
+// lib/demo-mode.ts. Invented comments on a launched site are not a placeholder,
+// they are fabricated user content: a creator reads a review nobody wrote and a
+// moderator investigates a report about it. `demoDataEnabled()` is inlined at
+// build time, so in a production bundle this constant is unreachable.
 const DEMO_COMMENTS: CommentItem[] = [
   {
     id: "demo-c1",
@@ -76,29 +81,59 @@ export default function CommentsSection({ videoId, user }: CommentsSectionProps)
   const { toast } = useToast();
   const isLight = theme === "light";
 
-  useEffect(() => {
-    fetchComments();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoId]);
+  /**
+   * What to show when the request failed.
+   *
+   * Invented comments are development scaffolding only (see lib/demo-mode.ts).
+   * On a launched site they are not a placeholder but fabricated user content —
+   * a creator reads a review nobody wrote, and a moderator acts on a report
+   * about it. In production an empty list is the honest answer, because "No
+   * comments yet" is at least true.
+   */
+  const fallbackComments = useCallback(() => {
+    if (!demoDataEnabled()) {
+      return { comments: [] as CommentItem[], total: 0, demo: false };
+    }
+    return {
+      comments: DEMO_COMMENTS,
+      total: DEMO_COMMENTS.reduce((n, c) => n + 1 + (c.replies?.length || 0), 0),
+      demo: true,
+    };
+  }, []);
 
-  async function fetchComments() {
+  /**
+   * Load the thread.
+   *
+   * `finally` is load-bearing, and it is the whole reason this is one function.
+   * The success path used to `return` early — before clearing `loading` — so the
+   * section sat on its shimmer rows forever while the heading read
+   * "Comments (1)". The count and the list come from the same response, so a
+   * correct total above an empty list was the tell: the rows were already in
+   * state, underneath a skeleton that could never be dismissed. Putting the
+   * clear in `finally` means no future branch can skip it.
+   */
+  const fetchComments = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/videos/${videoId}/comments`);
       const data = await res.json();
-      if (data.success) {
-        setComments(data.data.comments || []);
-        setTotal(data.data.total || 0);
-        setDemoMode(false);
-        return;
-      }
-    } catch {}
-    // Database unreachable — fall back to demo comments
-    setComments(DEMO_COMMENTS);
-    setTotal(DEMO_COMMENTS.reduce((n, c) => n + 1 + (c.replies?.length || 0), 0));
-    setDemoMode(true);
-    setLoading(false);
-  }
+      if (!data.success) throw new Error(data.error || "could not load comments");
+      setComments(data.data.comments || []);
+      setTotal(data.data.total || 0);
+      setDemoMode(false);
+    } catch {
+      const next = fallbackComments();
+      setComments(next.comments);
+      setTotal(next.total);
+      setDemoMode(next.demo);
+    } finally {
+      setLoading(false);
+    }
+  }, [videoId, fallbackComments]);
+
+  useEffect(() => {
+    void fetchComments();
+  }, [fetchComments]);
 
   async function submitComment(parentId: string | null, body: string) {
     if (!body.trim() || submitting) return;
