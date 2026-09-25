@@ -8,6 +8,7 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
+import { getPaidMessageEarnings } from "@/lib/services/paid-message.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -73,7 +74,9 @@ export async function GET(request: NextRequest) {
     // Total views
     const totalViews = videoStats.reduce((sum, v) => sum + v.viewsCount, 0);
 
-    // Recent transactions
+    // Recent transactions. `metadata` comes along so the dashboard can tell a
+    // paid message from a plain tip — both are TIP transactions, and only one of
+    // them came from the inbox.
     const recentTransactions = await prisma.transaction.findMany({
       where: {
         creatorId: auth.userId,
@@ -85,11 +88,29 @@ export async function GET(request: NextRequest) {
         creatorCut: true,
         type: true,
         createdAt: true,
+        metadata: true,
         video: { select: { title: true } },
       },
       orderBy: { createdAt: "desc" },
       take: 10,
     });
+
+    // Chat income, on the same 14-day clock as everything else. Its own service
+    // because the release job and this card have to agree about what is held.
+    //
+    // Null, not zeroes, if the read fails: an empty card would tell a creator
+    // nobody has messaged them, which is a different statement from "we could not
+    // read it". The balance and the videos on the same page are still answerable,
+    // so this one card degrading must not blank all of them.
+    let paidMessages = null;
+    try {
+      paidMessages = await getPaidMessageEarnings(auth.userId);
+    } catch (messageError) {
+      console.warn(
+        "[Creator Balance] Paid-message read failed:",
+        (messageError as Error)?.message
+      );
+    }
 
     return api.success({
       balance: balance || {
@@ -101,6 +122,7 @@ export async function GET(request: NextRequest) {
       totalViews,
       videoStats: enrichedVideos,
       recentTransactions,
+      paidMessages,
     });
   } catch (error) {
     if (error instanceof AuthError) {

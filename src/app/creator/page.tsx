@@ -31,6 +31,7 @@ import {
   ImageOff,
   Tag,
   Captions,
+  MessageSquare,
 } from "lucide-react";
 import { canOptimizeImage } from "@/lib/media";
 import { formatTZS, formatRelativeTime, formatCount } from "@/lib/utils";
@@ -61,8 +62,53 @@ interface CreatorData {
     creatorCut: number | null;
     type: string;
     createdAt: string;
+    /** `{ method: "pay_message" }` for a message; a plain tip has none. */
+    metadata?: { method?: string } | null;
     video?: { title: string } | null;
   }[];
+  /** Chat income: every message is paid, and it clears on the 14-day clock. */
+  paidMessages: {
+    messages: number;
+    earned: number;
+    heldMessages: number;
+    held: number;
+    cleared: number;
+    nextReleaseAt: string | null;
+    recent: {
+      id: string;
+      amount: number;
+      createdAt: string;
+      clearsAt: string;
+      held: boolean;
+      sender: { id: string; displayName: string | null; avatarUrl: string | null };
+    }[];
+  };
+}
+
+/** A day, year included, because a release date is a date and not a timestamp. */
+function formatDay(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+/**
+ * What to call a row in the money list.
+ *
+ * A TIP is two different things — a tip from /api/tips and a paid message from
+ * /api/messages — and the transaction type alone cannot tell them apart. The
+ * route that wrote the row says which in `metadata.method`, so "TIP" stops being
+ * the label a creator scans past.
+ */
+function transactionLabel(tx: CreatorData["recentTransactions"][number]): string {
+  if (tx.type === "PPV_PURCHASE") return `Sold: ${tx.video?.title || "Video"}`;
+  if (tx.type === "SUBSCRIPTION") return "Subscription";
+  if (tx.type === "TIP") {
+    return tx.metadata?.method === "pay_message" ? "Paid message" : "Tip";
+  }
+  return tx.type;
 }
 
 interface UserData {
@@ -498,6 +544,10 @@ export default function CreatorDashboard() {
   }
 
   const balance = creatorData?.balance;
+  // Null when the endpoint could not read the ledger, which is a different
+  // statement from "nobody has messaged you": a failed read renders zeros that
+  // look like the truth, so it renders an apology instead.
+  const paidMessages = creatorData?.paidMessages ?? null;
   const canRequestPayout =
     (balance?.availableBalance || 0) >= 30000 && user?.kycStatus === "APPROVED";
 
@@ -863,6 +913,106 @@ export default function CreatorDashboard() {
           </div>
         </div>
 
+        {/* Paid Messages — the inbox as a revenue line. Every message is paid,
+            and the money clears on the same 14-day schedule as a video sale, so
+            the held part is shown with the date it frees up instead of being
+            folded into one number that cannot be spent yet. */}
+        <div className="glass-card p-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
+                <MessageSquare className="w-5 h-5 text-brand-400" />
+              </div>
+              <div>
+                <h2 className="font-display font-bold">Paid Messages</h2>
+                <p className="text-xs text-white/40">
+                  Every message a fan sends you is worth what they chose to pay
+                </p>
+              </div>
+            </div>
+            <Link href="/inbox" className="text-xs text-brand-400 hover:underline">
+              Open inbox →
+            </Link>
+          </div>
+
+          {!paidMessages ? (
+            <p className="text-sm text-white/40">
+              Message earnings could not be loaded just now. Refresh to try again.
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="rounded-xl bg-surface-300/30 p-4">
+                  <p className="text-xs text-white/40">Messages received</p>
+                  <p className="text-xl font-bold mt-1">
+                    {formatCount(paidMessages.messages)}
+                  </p>
+                </div>
+                <div className="rounded-xl bg-surface-300/30 p-4">
+                  <p className="text-xs text-white/40">Earned from messages</p>
+                  <p className="text-xl font-bold mt-1 text-emerald-400">
+                    {formatTZS(paidMessages.earned)}
+                  </p>
+                  {paidMessages.cleared > 0 && (
+                    <p className="text-[11px] text-white/35 mt-1">
+                      {formatTZS(paidMessages.cleared)} cleared the holding
+                    </p>
+                  )}
+                </div>
+                <div className="rounded-xl bg-surface-300/30 p-4">
+                  <p className="text-xs text-white/40">In 14-day holding</p>
+                  <p className="text-xl font-bold mt-1 text-amber-400">
+                    {formatTZS(paidMessages.held)}
+                  </p>
+                  <p className="text-[11px] text-white/35 mt-1">
+                    {paidMessages.heldMessages === 0
+                      ? "Nothing held right now"
+                      : `${paidMessages.heldMessages} message${
+                          paidMessages.heldMessages === 1 ? "" : "s"
+                        }${
+                          paidMessages.nextReleaseAt
+                            ? ` — first frees up ${formatDay(paidMessages.nextReleaseAt)}`
+                            : ""
+                        }`}
+                  </p>
+                </div>
+              </div>
+
+              {paidMessages.recent.length > 0 ? (
+                <div className="mt-4 space-y-2">
+                  {paidMessages.recent.map((m) => (
+                    <div
+                      key={m.id}
+                      className="flex items-center gap-3 p-3 rounded-xl bg-surface-300/20"
+                    >
+                      <div className="w-9 h-9 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-bold text-sm shrink-0">
+                        {m.sender.displayName?.[0] || "U"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate">
+                          {m.sender.displayName || "A fan"}
+                        </p>
+                        <p className="text-xs text-white/40">
+                          {formatRelativeTime(new Date(m.createdAt))}
+                          {m.held ? ` · clears ${formatDay(m.clearsAt)}` : " · cleared"}
+                        </p>
+                      </div>
+                      <p className="font-bold text-sm text-emerald-400 shrink-0">
+                        +{formatTZS(m.amount)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-white/40 mt-4">
+                  No paid messages yet. A fan picks the amount when they write to you, and it
+                  shows up here — the one part of this dashboard that comes from your inbox.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+
         {/* Recent Transactions */}
         <div className="glass-card p-4">
           <h2 className="font-display font-bold mb-4">Recent Transactions</h2>
@@ -876,11 +1026,7 @@ export default function CreatorDashboard() {
                   <ArrowUpRight className="w-5 h-5 text-emerald-400" />
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm">
-                    {tx.type === "PPV_PURCHASE"
-                      ? `Sold: ${tx.video?.title || "Video"}`
-                      : tx.type}
-                  </p>
+                  <p className="text-sm">{transactionLabel(tx)}</p>
                   <p className="text-xs text-white/40">
                     {formatRelativeTime(new Date(tx.createdAt))}
                   </p>
