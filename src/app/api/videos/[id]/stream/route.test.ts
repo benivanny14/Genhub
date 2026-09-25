@@ -267,6 +267,18 @@ describe("GET /api/videos/[id]/stream - who gets it", () => {
     expect((await GET(request(), params())).status).toBe(200);
   });
 
+  // A signed-in creator watching somebody else's scene pays like everyone else.
+  // `creatorId` on the row is the whole test — the creator ROLE is not a pass.
+  it("refuses a creator a scene they do not own", async () => {
+    mocks.videoFindFirst.mockResolvedValue({ ...ROW, price: 5000 });
+    mocks.currentUser.mockResolvedValue({ userId: "creator-2", role: "CREATOR" });
+
+    const res = await GET(request(), params());
+
+    expect(res.status).toBe(403);
+    expect(urls).toEqual([]);
+  });
+
   // A monthly subscription is worth as much here as it is on the page that sold
   // it — the stream route and the paywall must not disagree about that.
   it("lets an active subscriber watch a paid scene", async () => {

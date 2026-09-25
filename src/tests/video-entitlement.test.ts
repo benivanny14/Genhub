@@ -109,6 +109,29 @@ describe("privileged viewers", () => {
     });
     expect(result).toEqual({ entitled: true, source: "owner", healed: false });
   });
+
+  // Being a creator is not a pass: the rule is OWNERSHIP of the row, so a creator
+  // browsing somebody else's scene is in exactly the position of any other
+  // viewer and has to buy or subscribe. Only ADMIN widens to the whole library,
+  // and only through the role, not through a creator's name on another row.
+  it("gives a creator nothing on a scene they do not own", async () => {
+    expect(
+      await resolveVideoEntitlement(VIDEO, { userId: "creator-2", role: "CREATOR" })
+    ).toEqual({ entitled: false, source: null, healed: false });
+  });
+
+  it("is decided by the ROW's creator, not by the role", async () => {
+    // The same signed-in creator, two different rows: their own is `owner`, and
+    // somebody else's is a plain viewer with no purchases (the mocks have none).
+    const theirs = { ...VIDEO, id: "row-2", creatorId: "creator-2" };
+
+    expect(
+      (await resolveVideoEntitlement(VIDEO, { userId: "creator-1", role: "CREATOR" })).source
+    ).toBe("owner");
+    expect(
+      await resolveVideoEntitlement(theirs, { userId: "creator-1", role: "CREATOR" })
+    ).toEqual({ entitled: false, source: null, healed: false });
+  });
 });
 
 describe("a purchase", () => {

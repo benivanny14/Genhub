@@ -677,12 +677,14 @@ export default function CreatorDashboard() {
   //
   // Why a withdrawal cannot be requested yet, in the creator's own words.
   //
-  // This is what replaced a `disabled` button. A greyed-out control with a
-  // parenthesis in it — "(Min: TZS 30,000 + KYC required)" — was the only thing
-  // on the page that mentioned payouts at all, and to somebody holding a balance
-  // of zero it read as "this platform cannot pay me", which is the report this
-  // section exists to answer. The reasons are now stated, and the KYC one is a
-  // link to the page that fixes it.
+  // The minimum stays where it always was — TZS 30,000 available, with an
+  // approved identity check — and the Withdraw button stays locked until both
+  // hold. What is new is that the REASONS are written out: a greyed-out control
+  // with a parenthesis in it ("(Min: TZS 30,000 + KYC required)") was the only
+  // mention of payouts on the page, and to somebody holding a balance of zero
+  // that reads as "this platform cannot pay me". Saying which condition is
+  // missing, with a link to the page that fixes it, costs nothing and answers
+  // the question the disabled button raises.
   const withdrawalBlockers: { text: string; href?: string; linkLabel?: string }[] = [];
   if (user?.kycStatus !== "APPROVED") {
     withdrawalBlockers.push({
@@ -853,9 +855,30 @@ export default function CreatorDashboard() {
               </div>
             </div>
 
-            <button onClick={openPayoutModal} className="btn-brand flex items-center gap-2">
-              <Banknote className="w-4 h-4" /> Withdraw
-            </button>
+            {/* Locked until the minimum is actually there, as it always was:
+                a withdrawal below TZS 30,000 is not something the platform can
+                send, so the button does not pretend otherwise. The blockers
+                below say which condition is missing, which is the part that used
+                to be missing — a greyed-out button and a parenthesis. */}
+            <div className="flex flex-col items-end gap-1">
+              <button
+                onClick={openPayoutModal}
+                disabled={!canRequestPayout}
+                title={
+                  canRequestPayout
+                    ? "Withdraw to M-Pesa, Tigo Pesa, Airtel Money or your bank"
+                    : "Unlocks at TZS 30,000 available with an approved identity check"
+                }
+                className="btn-brand flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Banknote className="w-4 h-4" /> Withdraw
+              </button>
+              {!canRequestPayout && (
+                <span className="text-[11px] text-white/45">
+                  Min TZS 30,000 + verified ID
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 text-sm">
