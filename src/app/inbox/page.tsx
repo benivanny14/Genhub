@@ -76,6 +76,10 @@ export default function InboxPage() {
   const [content, setContent] = useState("");
   const [amount, setAmount] = useState("100");
   const [sending, setSending] = useState(false);
+  // Where to send a signed-out visitor so the conversation survives the sign-in
+  // round trip. Set after mount (it is read from the URL), never during render,
+  // so the server and the first client render agree.
+  const [signInHref, setSignInHref] = useState("/login");
   const threadRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const { theme } = useTheme();
@@ -84,6 +88,13 @@ export default function InboxPage() {
 
   useEffect(() => {
     init();
+    // "Message" on a creator page is a link a signed-out visitor can follow, so
+    // the sign-in link has to bring them back here — otherwise they sign in and
+    // land on the home page, with the creator they wanted to write to gone.
+    const query = new URLSearchParams(window.location.search);
+    if (query.get("userId")) {
+      setSignInHref(`/login?redirect=${encodeURIComponent(`/inbox?${query.toString()}`)}`);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -270,7 +281,7 @@ export default function InboxPage() {
               Message creators directly and unlock paid replies.
             </p>
             <div className="flex items-center justify-center gap-3">
-              <Link href="/login" className="btn-ghost">Sign In</Link>
+              <Link href={signInHref} className="btn-ghost">Sign In</Link>
               <Link href="/register" className="btn-brand">Create Account</Link>
             </div>
           </div>
