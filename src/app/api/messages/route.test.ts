@@ -1,24 +1,19 @@
 // =============================================================================
-// GENHUB - Who pays to send a message
+// GENHUB - Every message is a paid message
 //
-// Chat used to be charged unconditionally: `amount` was required to be at least
-// TZS 100, the wallet was debited on every message, and the receiver's
-// CreatorBalance was credited whatever they were. Three things were wrong with
-// that, and all three are money:
+// Chat is charged on every send. The route used to ask the database three
+// questions before it would name a price — does the SENDER subscribe to the
+// receiver, does the RECEIVER subscribe to the sender, did the receiver write
+// first — and a yes on any of them made the message free. That is wrong twice
+// over: a subscription buys a creator's *videos* for a month, not their inbox,
+// and a creator answering a fan is not a reason to move money out of the
+// creator's own wallet and into a fake CreatorBalance row.
 //
-//   1. A subscriber was charged again. The monthly fee bought access to the
-//      creator's videos, and writing to the creator they had just paid cost extra
-//      — even though the same subscription is what lets them watch for free.
-//   2. A CREATOR answering a fan paid the fan. `creatorBalance.upsert` on the
-//      receiver invented a creator row for a viewer who can never request a
-//      payout, and parked the money in a 14-day holding to nobody's benefit.
-//   3. Every reply was charged, so the only way a creator could answer was to
-//      move their own money into a fake balance.
-//
-// These tests pin the rules: free for an active subscriber, free when the
-// receiver wrote first (the creator is answering), and the ledger that a paid
-// message writes — creator holding balance for a creator, wallet for anyone
-// else. Prisma, auth and the wallet service are mocked; no database, no money.
+// These tests pin the paid-every-message rules: the amount is required, floored
+// and capped by the same constants the composer renders, no sender is exempt,
+// and the ledger names the right recipient — a creator's 14-day holding balance,
+// or the wallet of anybody else. Prisma, auth and the wallet service are mocked;
+// no database, no money.
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -30,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   debitWallet: vi.fn(),
   findUser: vi.fn(),
   updateUser: vi.fn(),
+  // Not called by the route any more. Kept as spies so that re-introducing a
+  // free-chat exemption has to delete an assertion rather than slip in silently.
   findSubscription: vi.fn(),
   findMessage: vi.fn(),
   createMessage: vi.fn(),
@@ -72,7 +69,7 @@ vi.mock("@/lib/services/balance.service", () => ({
   debitWallet: (...a: unknown[]) => mocks.debitWallet(...a),
 }));
 
-import { MIN_PAID_MESSAGE } from "@/lib/pay-message";
+import { MAX_PAID_MESSAGE, MIN_PAID_MESSAGE } from "@/lib/pay-message";
 import { POST } from "./route";
 
 const VIEWER = "viewer-1";
@@ -95,187 +92,135 @@ function receiver(role: "CREATOR" | "VIEWER" = "CREATOR") {
   mocks.findUser.mockResolvedValue({ id: CREATOR, isBanned: false, role });
 }
 
-/**
- * The route asks `findFirst` twice — "does the SENDER subscribe to the receiver"
- * and "does the RECEIVER subscribe to the sender" — so the stub is keyed on the
- * pair. Keying on `viewerId` alone silently returns the wrong answer for the
- * second question, which is the direction a creator answering their own
- * subscriber depends on.
- */
-function subscriptions(byPair: Record<string, unknown> = {}) {
-  mocks.findSubscription.mockImplementation(
-    (args: { where: { viewerId: string; creatorId: string } }) =>
-      Promise.resolve(byPair[`${args.where.viewerId}:${args.where.creatorId}`] ?? null)
-  );
-}
-
-const HOLDING = { expiresAt: new Date("2026-10-25T00:00:00Z") };
-
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.checkRateLimit.mockResolvedValue({ allowed: true });
-  mocks.findMessage.mockResolvedValue(null);
   mocks.debitWallet.mockResolvedValue({ ok: true, balance: 4000 });
-  mocks.createMessage.mockResolvedValue({
-    id: "msg-1",
-    senderId: VIEWER,
-    receiverId: CREATOR,
-    amount: 0,
-    content: "hi",
-  });
-  subscriptions();
+  mocks.createMessage.mockImplementation((args: { data: Record<string, unknown> }) =>
+    Promise.resolve({ id: "msg-1", ...args.data })
+  );
   receiver();
 });
 
-describe("a subscriber writes to their creator for free", () => {
-  it("sends without touching the wallet", async () => {
+describe("what a message costs", () => {
+  it("refuses a message with no amount at all", async () => {
     asViewer();
-    subscriptions({ [`${VIEWER}:${CREATOR}`]: HOLDING });
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 0, content: "hi" }));
-    const body = await res.json();
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
-    expect(res.status).toBe(201);
-    expect(body.data.paid).toBe(false);
-    expect(body.data.freeReason).toBe("subscription");
-    expect(mocks.debitWallet).not.toHaveBeenCalled();
-    expect(mocks.createMessage).toHaveBeenCalledWith({
-      data: { senderId: VIEWER, receiverId: CREATOR, amount: 0, content: "hi" },
-    });
+    expect(res.status).toBe(422);
+    expect(mocks.createMessage).not.toHaveBeenCalled();
   });
 
-  it("does not charge a subscriber who still sends an amount", async () => {
-    // The client may keep sending the amount it had before the subscription was
-    // read. The database decides the charge, not the number in the request.
+  it("refuses zero — the amount a free composer used to send", async () => {
     asViewer();
-    subscriptions({ [`${VIEWER}:${CREATOR}`]: HOLDING });
-
-    const res = await POST(send({ receiverId: CREATOR, amount: 5000, content: "hi" }));
-
-    expect(res.status).toBe(201);
-    expect(mocks.debitWallet).not.toHaveBeenCalled();
-    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(0);
-  });
-
-  it("writes no money transaction at all", async () => {
-    asViewer();
-    subscriptions({ [`${VIEWER}:${CREATOR}`]: HOLDING });
-
-    await POST(send({ receiverId: CREATOR, amount: 0, content: "hi" }));
-
-    expect(mocks.createTransaction).not.toHaveBeenCalled();
-    expect(mocks.upsertBalance).not.toHaveBeenCalled();
-  });
-
-  it("tells the creator a subscriber wrote, not that they were paid", async () => {
-    asViewer();
-    subscriptions({ [`${VIEWER}:${CREATOR}`]: HOLDING });
-
-    await POST(send({ receiverId: CREATOR, amount: 0, content: "hi" }));
-
-    const note = mocks.createNotification.mock.calls[0][0].data;
-    expect(note.message).toMatch(/subscriber/i);
-    expect(note.message).not.toMatch(/TZS/);
-  });
-});
-
-describe("a lapsed subscriber pays again", () => {
-  it("refuses a free message and names the way out", async () => {
-    asViewer();
-    subscriptions(); // no active row: the membership lapsed
 
     const res = await POST(send({ receiverId: CREATOR, amount: 0, content: "hi" }));
     const body = await res.json();
 
     expect(res.status).toBe(422);
     expect(body.error).toContain(String(MIN_PAID_MESSAGE));
-    expect(body.error).toMatch(/subscribe/i);
     expect(mocks.createMessage).not.toHaveBeenCalled();
   });
 
   it("refuses an amount below the floor", async () => {
     asViewer();
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 50, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, amount: MIN_PAID_MESSAGE - 1, content: "hi" }));
 
     expect(res.status).toBe(422);
     expect(mocks.createMessage).not.toHaveBeenCalled();
   });
 
-  it("sends when the amount is paid, crediting the creator's holding balance", async () => {
+  it("refuses an amount above the ceiling, so a typo cannot drain a wallet", async () => {
     asViewer();
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
-    const body = await res.json();
+    const res = await POST(send({ receiverId: CREATOR, amount: MAX_PAID_MESSAGE + 1, content: "hi" }));
+
+    expect(res.status).toBe(422);
+    expect(mocks.debitWallet).not.toHaveBeenCalled();
+    expect(mocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("charges the full amount the composer offers by default", async () => {
+    asViewer();
+
+    const res = await POST(send({ receiverId: CREATOR, amount: MIN_PAID_MESSAGE, content: "hi" }));
 
     expect(res.status).toBe(201);
-    expect(body.data.paid).toBe(true);
-    expect(body.data.freeReason).toBeNull();
-    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, { userId: VIEWER, amount: 500 });
-    expect(mocks.upsertBalance.mock.calls[0][0].update.pendingBalance).toEqual({ increment: 500 });
-    expect(mocks.createTransaction.mock.calls[0][0].data).toMatchObject({
-      creatorId: CREATOR,
-      amount: 500,
-      creatorCut: 500,
-    });
-  });
-
-  it("records what actually left the wallet, not what was asked for", async () => {
-    asViewer();
-
-    await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
-
-    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(500);
-  });
-
-  it("reports an empty wallet instead of sending", async () => {
-    asViewer();
-    mocks.debitWallet.mockResolvedValue({ ok: false, balance: 120 });
-
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
-    const body = await res.json();
-
-    expect(res.status).toBe(400);
-    expect(body.error).toContain("120");
-    expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, { userId: VIEWER, amount: MIN_PAID_MESSAGE });
+    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(MIN_PAID_MESSAGE);
   });
 });
 
-describe("a creator answering their inbox", () => {
-  it("is free when the fan wrote first", async () => {
-    asCreator();
-    mocks.findMessage.mockResolvedValue({ id: "msg-from-fan" });
-    subscriptions();
-    mocks.findUser.mockResolvedValue({ id: VIEWER, isBanned: false, role: "VIEWER" });
+describe("nobody is exempt", () => {
+  it("never reads a subscription to decide the price", async () => {
+    // A live membership row, if the route asked for one. It must not: the price
+    // comes from the request, not from a relationship between the two accounts.
+    asViewer();
+    mocks.findSubscription.mockResolvedValue({ expiresAt: new Date("2026-10-25T00:00:00Z") });
 
-    const res = await POST(send({ receiverId: VIEWER, amount: 0, content: "thanks!" }));
-    const body = await res.json();
+    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
 
     expect(res.status).toBe(201);
-    expect(body.data.freeReason).toBe("reply");
-    expect(mocks.debitWallet).not.toHaveBeenCalled();
+    expect(mocks.findSubscription).not.toHaveBeenCalled();
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, { userId: VIEWER, amount: 500 });
   });
 
-  it("is free when the receiver is their own subscriber", async () => {
-    asCreator();
-    mocks.findMessage.mockResolvedValue(null);
-    // The fan holds the membership this time: viewer -> creator, read from the
-    // receiver's side of the conversation.
-    subscriptions({ [`${VIEWER}:${CREATOR}`]: { id: "sub-1" } });
-    mocks.findUser.mockResolvedValue({ id: VIEWER, isBanned: false, role: "VIEWER" });
+  it("never turns an existing thread into a free reply", async () => {
+    // An earlier message from the receiver would have been the "they wrote
+    // first" excuse. The route must not look for it either.
+    asViewer();
+    mocks.findMessage.mockResolvedValue({ id: "msg-from-receiver" });
 
-    const res = await POST(send({ receiverId: VIEWER, amount: 0, content: "hey" }));
-    const body = await res.json();
+    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
 
-    expect(body.data.freeReason).toBe("reply");
-    expect(mocks.debitWallet).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(mocks.findMessage).not.toHaveBeenCalled();
+    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(500);
   });
 
-  it("does not pay a viewer into a fake creator balance", async () => {
+  it("charges a creator answering a fan", async () => {
     asCreator();
-    mocks.findMessage.mockResolvedValue(null);
-    subscriptions();
-    mocks.findUser.mockResolvedValue({ id: VIEWER, isBanned: false, role: "VIEWER" });
+    receiver("VIEWER");
+
+    const res = await POST(send({ receiverId: VIEWER, amount: 900, content: "thanks!" }));
+
+    expect(res.status).toBe(201);
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, { userId: CREATOR, amount: 900 });
+  });
+});
+
+describe("the ledger a paid message writes", () => {
+  it("credits a creator's holding balance, not their wallet", async () => {
+    asViewer();
+
+    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+
+    expect(res.status).toBe(201);
+    expect(mocks.updateUser).not.toHaveBeenCalled();
+    expect(mocks.upsertBalance.mock.calls[0][0]).toMatchObject({
+      where: { creatorId: CREATOR },
+      create: { creatorId: CREATOR, pendingBalance: 500, availableBalance: 0, totalEarned: 500 },
+      update: {
+        pendingBalance: { increment: 500 },
+        totalEarned: { increment: 500 },
+      },
+    });
+    expect(mocks.createTransaction.mock.calls[0][0].data).toMatchObject({
+      userId: VIEWER,
+      creatorId: CREATOR,
+      amount: 500,
+      type: "TIP",
+      status: "SUCCESS",
+      creatorCut: 500,
+      metadata: { method: "pay_message", recipientId: CREATOR },
+    });
+  });
+
+  it("pays a plain account into their wallet instead of a fake creator balance", async () => {
+    asCreator();
+    receiver("VIEWER");
 
     const res = await POST(send({ receiverId: VIEWER, amount: 900, content: "cold dm" }));
 
@@ -289,5 +234,52 @@ describe("a creator answering their inbox", () => {
       creatorId: null,
       metadata: { method: "pay_message", recipientId: VIEWER },
     });
+  });
+
+  it("reports an empty wallet instead of sending", async () => {
+    asViewer();
+    mocks.debitWallet.mockResolvedValue({ ok: false, balance: 120 });
+
+    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("120");
+    expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(mocks.upsertBalance).not.toHaveBeenCalled();
+    expect(mocks.createTransaction).not.toHaveBeenCalled();
+  });
+
+  it("tells the receiver what the message was worth", async () => {
+    asViewer();
+
+    await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+
+    const note = mocks.createNotification.mock.calls[0][0].data;
+    expect(note.userId).toBe(CREATOR);
+    expect(note.message).toContain("500");
+    expect(note.message).toMatch(/TZS/);
+    expect(note.link).toBe("/inbox");
+  });
+});
+
+describe("guards", () => {
+  it("refuses a message to yourself", async () => {
+    asViewer();
+
+    const res = await POST(send({ receiverId: VIEWER, amount: 500, content: "hi" }));
+
+    expect(res.status).toBe(400);
+    expect(mocks.debitWallet).not.toHaveBeenCalled();
+  });
+
+  it("refuses a banned receiver", async () => {
+    asViewer();
+    mocks.findUser.mockResolvedValue({ id: CREATOR, isBanned: true, role: "CREATOR" });
+
+    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+
+    expect(res.status).toBe(404);
+    expect(mocks.debitWallet).not.toHaveBeenCalled();
   });
 });

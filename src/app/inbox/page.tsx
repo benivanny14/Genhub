@@ -10,7 +10,9 @@ import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { formatRelativeTime, cn, formatTZS } from "@/lib/utils";
 // The server enforces this floor; the composer renders it. One number, so the
-// form cannot offer an amount the API will refuse.
+// form cannot offer an amount the API will refuse. Every message is charged, so
+// the amount box is always on screen — there is no subscriber exemption to hide
+// it behind.
 import { MIN_PAID_MESSAGE } from "@/lib/pay-message";
 
 interface Partner {
@@ -79,14 +81,6 @@ export default function InboxPage() {
   const [content, setContent] = useState("");
   const [amount, setAmount] = useState(String(MIN_PAID_MESSAGE));
   const [sending, setSending] = useState(false);
-  // Whether this viewer holds an active subscription to the creator they are
-  // writing to. Included in the month they already paid for: chat with that
-  // creator costs nothing until it lapses. Fetched per conversation because it
-  // is per creator, and null until the answer arrives (so the composer never
-  // demands a payment it may not be owed).
-  const [partnerSubscription, setPartnerSubscription] = useState<
-    { subscribed: boolean; expiresAt: string | null } | null
-  >(null);
   // Where to send a signed-out visitor so the conversation survives the sign-in
   // round trip. Set after mount (it is read from the URL), never during render,
   // so the server and the first client render agree.
@@ -202,8 +196,6 @@ export default function InboxPage() {
       return;
     }
 
-    void loadSubscription(partner);
-
     setThreadLoading(true);
     try {
       const res = await fetch(`/api/messages?userId=${partner.id}`);
@@ -218,40 +210,10 @@ export default function InboxPage() {
     }
   }
 
-  /**
-   * Does this conversation cost anything?
-   *
-   * Read from the subscription route rather than inferred, because the answer
-   * changes what the composer asks for: a subscriber gets a free-message line, a
-   * non-subscriber gets the amount box. The server decides again on send — this
-   * is the UI telling the truth about what it already knows.
-   */
-  async function loadSubscription(partner: Partner) {
-    if (partner.role !== "CREATOR") {
-      setPartnerSubscription(null);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/subscriptions?creatorId=${partner.id}`);
-      const data = await res.json();
-      if (data?.success) {
-        setPartnerSubscription({
-          subscribed: Boolean(data.data.subscribed),
-          expiresAt: data.data.subscription?.expiresAt ?? null,
-        });
-        return;
-      }
-    } catch {}
-    // Unknown is not the same as "not subscribed": leaving it null keeps the
-    // amount box out of the way instead of silently charging a subscriber.
-    setPartnerSubscription(null);
-  }
-
   async function handleSend() {
     if (!activePartner || !content.trim() || sending) return;
-    const subscribed = partnerSubscription?.subscribed === true;
-    const amt = subscribed ? 0 : Math.max(0, parseInt(amount) || 0);
-    if (!subscribed && amt < MIN_PAID_MESSAGE) {
+    const amt = Math.max(0, parseInt(amount) || 0);
+    if (amt < MIN_PAID_MESSAGE) {
       toast("error", `Minimum paid message is TZS ${MIN_PAID_MESSAGE}`);
       return;
     }
@@ -306,7 +268,7 @@ export default function InboxPage() {
           <div>
             <h1 className="text-2xl font-display font-bold">Inbox</h1>
             <p className={cn("text-sm", isLight ? "text-gray-500" : "text-white/50")}>
-              Direct messages — free while your subscription to them is active, otherwise paid
+              Direct messages — every message is a paid message, and the amount you type goes to the other person
             </p>
           </div>
         </div>
@@ -482,17 +444,15 @@ export default function InboxPage() {
                         </p>
                       ) : (
                         <div className="flex flex-col sm:flex-row gap-2">
-                          {partnerSubscription?.subscribed !== true && (
-                            <input
-                              type="number"
-                              value={amount}
-                              onChange={(e) => setAmount(e.target.value)}
-                              min={MIN_PAID_MESSAGE}
-                              max={50000}
-                              className={cn("input-field sm:w-28 py-2.5 text-sm")}
-                              title="Amount (TZS)"
-                            />
-                          )}
+                          <input
+                            type="number"
+                            value={amount}
+                            onChange={(e) => setAmount(e.target.value)}
+                            min={MIN_PAID_MESSAGE}
+                            max={50000}
+                            className={cn("input-field sm:w-28 py-2.5 text-sm")}
+                            title="Amount (TZS)"
+                          />
                           <input
                             type="text"
                             value={content}
@@ -514,24 +474,16 @@ export default function InboxPage() {
                           </button>
                         </div>
                       )}
-                      {!demoMode && partnerSubscription?.subscribed === true && (
-                        <p className={cn("text-[10px] mt-2 font-medium", isLight ? "text-emerald-600" : "text-emerald-400")}>
-                          ✓ Included in your subscription — this conversation is free
-                          {partnerSubscription.expiresAt
-                            ? ` until ${new Date(partnerSubscription.expiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
-                            : ""}
-                          .
-                        </p>
-                      )}
-                      {!demoMode && partnerSubscription?.subscribed !== true && (
+                      {!demoMode && (
                         <p className={cn("text-[10px] mt-2", isLight ? "text-gray-400" : "text-white/30")}>
-                          A message costs the amount above (min TZS {MIN_PAID_MESSAGE}). {" "}
+                          Every message is a paid message — the amount above goes to the creator (min TZS{" "}
+                          {MIN_PAID_MESSAGE}). {" "}
                           {activePartner?.role === "CREATOR" && (
                             <Link
                               href={`/creator/${activePartner.id}`}
                               className="text-brand-400 hover:underline"
                             >
-                              Or subscribe to {activePartner.displayName || "this creator"} for a month of free messages
+                              Subscribe to {activePartner.displayName || "this creator"} to watch their videos
                             </Link>
                           )}
                         </p>
