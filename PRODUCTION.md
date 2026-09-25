@@ -2147,6 +2147,41 @@ Exit code 1 means a genuine leak; a PASS means the paywall holds.
    *no teaser*, `PATCH /api/videos/[id]` refuses to store it, and the stream route
    refuses to serve the scene through `?source=teaser`.
 
+### 8.0.3 JWT_SECRET must not be a shared secret
+
+`JWT_SECRET` signs every session. Whoever holds it can mint a token for any
+account — including an admin — and nothing server-side can tell that token apart
+from a real login. A value that is merely *copied* between environments is a valid
+key in both, so the rule is one secret per environment, and it is measurable:
+
+```bash
+npm run verify:jwt-separation                                        # the app URL
+npm run verify:jwt-separation -- --url https://genhub-two.vercel.app
+npm run verify:jwt-separation -- --url http://localhost:3000          # its own copy
+```
+
+It signs an HS256 token for a user id that does not exist, with role `ADMIN`, and
+asks the deployment whether it is an admin on a video that has a price — a
+question whose answer depends only on the signature (entitlement grants `admin`
+before any database lookup). Nothing is written and no real account is named.
+Refused is the healthy answer; **accepted means this checkout's secret is a key
+to that deployment**.
+
+Measured on this project, the live deployment **accepted** a token signed with the
+value in `.env.local`. Rotate it, and give development its own value:
+
+```bash
+npx vercel env rm JWT_SECRET production
+openssl rand -hex 32        # paste into the hosting dashboard
+openssl rand -hex 32        # a DIFFERENT value for .env.local
+```
+
+Rotating signs every user out once — that is the intended cost of a key change,
+and it is far smaller than the alternative. `.env.local` is gitignored and has
+never been committed, so the exposure is not the repository; it is the number of
+places a single shared value has been copied to (a laptop, a backup, a CI
+variable, a chat message).
+
 ### 8.1 Which routes are rate limited, and why
 
 Redis-backed, in one of four buckets from `config.rateLimit`:
