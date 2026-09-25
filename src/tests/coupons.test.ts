@@ -182,6 +182,39 @@ describe("applyCoupon", () => {
     expect(mocks.redemptionFindUnique).not.toHaveBeenCalled();
   });
 
+  it("still previews the coupon when the redemption table has not been migrated yet", async () => {
+    // Migrations are not applied by the deploy (PRODUCTION.md §5.4), so there is
+    // a window where this code is live and CouponRedemption is not. A 500 on a
+    // coupon checkout because one command has not been run is a worse outcome
+    // than the per-account rule starting a few minutes late; the global budget
+    // still holds, because consumption happens at settlement.
+    mocks.redemptionFindUnique.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("table does not exist", {
+        code: "P2021",
+        clientVersion: "5.19.0",
+      })
+    );
+
+    const outcome = await applyCoupon({
+      code: "WELCOME10",
+      amount: 5000,
+      context: "purchase",
+      userId: "u1",
+    });
+
+    expect(outcome).toMatchObject({ valid: true, finalAmount: 4500 });
+  });
+
+  it("does not swallow a real database failure", async () => {
+    // An outage is not a missing table: pretending the customer has never used
+    // the coupon is the wrong answer to it.
+    mocks.redemptionFindUnique.mockRejectedValue(new Error("connection refused"));
+
+    await expect(
+      applyCoupon({ code: "WELCOME10", amount: 5000, context: "purchase", userId: "u1" })
+    ).rejects.toThrow("connection refused");
+  });
+
   it("refuses an exhausted or expired coupon", async () => {
     mocks.couponFindUnique.mockResolvedValue({ ...COUPON, usedCount: 1 });
     await expect(

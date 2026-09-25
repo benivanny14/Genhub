@@ -38,6 +38,19 @@
 import prisma from "@/lib/db";
 import { Prisma } from "@prisma/client";
 
+/**
+ * Prisma's "the model's table is not in the database" error.
+ *
+ * P2021 is what a live deployment sees when a migration has not been run: the
+ * code is new and the schema is old. It is a distinct fault from an outage and
+ * deserves its own handling, because the two need opposite answers.
+ */
+function isMissingTableError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2021"
+  );
+}
+
 export interface CouponOutcome {
   valid: boolean;
   error?: string;
@@ -85,12 +98,32 @@ export async function applyCoupon(opts: {
   }
 
   if (opts.userId) {
-    const alreadyUsed = await prisma.couponRedemption.findUnique({
-      where: { couponId_userId: { couponId: coupon.id, userId: opts.userId } },
-      select: { id: true },
-    });
-    if (alreadyUsed) {
-      return { valid: false, error: "You have already used this coupon" };
+    // Fail open, but loudly, on one specific fault: the redemption table not
+    // existing yet. Migrations are not applied by the deploy (see PRODUCTION.md
+    // §5.4), so there is a window where this code is live and the table is not —
+    // and a coupon checkout answering 500 because the operator has not run one
+    // command is a worse outcome than the per-account rule applying a few
+    // minutes later. The global `maxUses` budget is unaffected either way: it is
+    // enforced by consumeCoupon() at settlement, where a missing table can only
+    // ever cost us a discount we already granted.
+    //
+    // Anything else — a connection failure, a timeout — is re-thrown: that is an
+    // outage, and pretending the customer has never used the coupon is the
+    // wrong way to answer one.
+    try {
+      const alreadyUsed = await prisma.couponRedemption.findUnique({
+        where: { couponId_userId: { couponId: coupon.id, userId: opts.userId } },
+        select: { id: true },
+      });
+      if (alreadyUsed) {
+        return { valid: false, error: "You have already used this coupon" };
+      }
+    } catch (error) {
+      if (!isMissingTableError(error)) throw error;
+      console.warn(
+        "[Coupon] CouponRedemption does not exist yet — the per-account rule is " +
+          "inactive until `npm run db:deploy` runs (see PRODUCTION.md §5.4)"
+      );
     }
   }
 
@@ -169,6 +202,16 @@ export async function consumeCoupon(params: {
     ) {
       return "ALREADY_USED";
     }
+    if (isMissingTableError(error)) {
+      // Named explicitly: this is the one failure here that an operator fixes in
+      // seconds, and the generic line sends them looking at the database.
+      console.error(
+        "[Coupon] CouponRedemption does not exist — run `npm run db:deploy`. " +
+          "The sale stands; the redemption was not recorded."
+      );
+      return "ERROR";
+    }
+
     console.error("[Coupon] Could not record the redemption", error);
     return "ERROR";
   }
