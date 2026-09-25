@@ -11,6 +11,7 @@ import { getCurrentUser, requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { updateVideoSchema } from "@/lib/validation";
 import { resolvePlaybackUrl, resolveTeaserUrl, deleteBunnyVideo } from "@/lib/bunny";
+import { resolveVideoEntitlement, type EntitlementSource } from "@/lib/services/video-entitlement.service";
 import { normalizeMediaUrl } from "@/lib/media";
 import config from "@/lib/config";
 import { describeEncoding } from "@/lib/services/video-encoding.service";
@@ -72,9 +73,11 @@ export async function GET(
     // "Free to Watch" row could never actually be watched in full.
     const isFree = video.price === 0;
 
-    // Where access comes from — lets the UI say "Full access" (free video /
-    // admin override) instead of "Purchased".
-    let accessSource: "free" | "purchase" | "entitlement" | null = null;
+    // Where access comes from — lets the UI say "Purchased", "Included in your
+    // subscription" or "Full access" instead of guessing. Resolved by the one
+    // shared service so this route cannot disagree with the stream and download
+    // routes about who is entitled to what.
+    let accessSource: EntitlementSource | null = null;
 
     // A charge for this video that is neither confirmed nor denied: the customer
     // approved the USSD prompt and the gateway never settled it. The paywall
@@ -91,47 +94,16 @@ export async function GET(
       accessSource = "free";
       playbackUrl = resolvePlaybackUrl(video, 10, authUser?.userId);
     } else if (authUser) {
-      let access = await prisma.videoAccess.findUnique({
-        where: {
-          viewerId_videoId: {
-            viewerId: authUser.userId,
-            videoId: video.id,
-          },
-        },
+      const entitlement = await resolveVideoEntitlement(video, {
+        userId: authUser.userId,
+        role: authUser.role,
       });
 
-      // SELF-HEAL: a successful purchase without an access row (legacy/seed
-      // data or an interrupted credit) must never lock a paying viewer out.
-      if (!access) {
-        const paid = await prisma.transaction.findFirst({
-          where: {
-            userId: authUser.userId,
-            videoId: video.id,
-            type: "PPV_PURCHASE",
-            status: "SUCCESS",
-          },
-          select: { id: true },
-        });
-        if (paid) {
-          access = await prisma.videoAccess.upsert({
-            where: {
-              viewerId_videoId: {
-                viewerId: authUser.userId,
-                videoId: video.id,
-              },
-            },
-            create: { viewerId: authUser.userId, videoId: video.id },
-            update: {},
-          });
-        }
-      }
-
-      hasAccess = !!access;
-      accessSource = hasAccess ? "purchase" : null;
+      hasAccess = entitlement.entitled;
+      accessSource = entitlement.source;
 
       // Generate full playback URL only if user has access
-      if (hasAccess || authUser.role === "ADMIN") {
-        accessSource = accessSource ?? "entitlement";
+      if (hasAccess) {
         playbackUrl = resolvePlaybackUrl(video, 10, authUser.userId);
       }
 

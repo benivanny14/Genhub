@@ -181,7 +181,23 @@ export default function VideoPlayer({
       hls.on(Hls.Events.ERROR, (_, data) => {
         console.error("[HLS Error]", data);
 
-        const httpStatus = (data as { response?: { code?: number } }).response?.code;
+        const response = (data as { response?: { code?: number; text?: string } }).response;
+        const httpStatus = response?.code;
+
+        // Our own stream route answers with a reason in the body when the video
+        // host refuses the stream or cannot be reached — and that reason (which
+        // variable is wrong, which host answered what) is exactly what the
+        // viewer needs to read back to whoever runs the deployment. Passing the
+        // raw status on would throw it away and leave "HTTP 502".
+        const reasonFromServer = (() => {
+          if (!response?.text) return null;
+          try {
+            const parsed = JSON.parse(response.text) as { error?: unknown };
+            return typeof parsed?.error === "string" ? parsed.error : null;
+          } catch {
+            return null;
+          }
+        })();
 
         // 401/403 is the CDN refusing the URL itself. Retrying sends the same
         // rejected request, so say so instead of looping.
@@ -205,9 +221,10 @@ export default function VideoPlayer({
                 clearTimeout(watchdog);
                 setIsLoading(false);
                 setFatalError(
-                  httpStatus
-                    ? `The stream could not be loaded (HTTP ${httpStatus}).`
-                    : "The stream could not be loaded after several attempts."
+                  reasonFromServer ??
+                    (httpStatus
+                      ? `The stream could not be loaded (HTTP ${httpStatus}).`
+                      : "The stream could not be loaded after several attempts.")
                 );
               }
               break;

@@ -326,9 +326,12 @@ describe("Bunny signing", () => {
 
       expect(result.state).toBe("fail");
       // The message has to name the fix, not just the symptom: this is read by
-      // whoever pasted the wrong value into BUNNY_TOKEN_SECRET.
-      expect(result.detail).toMatch(/URL Token Authentication Key/);
+      // whoever pasted the wrong value into BUNNY_TOKEN_SECRET — and it has to
+      // say WHICH value the deployment is using, because "the key is wrong" and
+      // "the key is right but the dashboard holds an older one" are the same 403.
+      expect(result.detail).toMatch(/Token Authentication Key/);
       expect(result.detail).toMatch(/403/);
+      expect(result.detail).toMatch(/fingerprints as [0-9a-f]{8}/);
       vi.unstubAllGlobals();
     });
 

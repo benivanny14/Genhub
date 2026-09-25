@@ -444,9 +444,16 @@ Checklist:
       ignores our tokens and anyone can hot-link paid video. Confirm it with
       `GET /library/<id>/videos/<guid>/play`, which reports
       `tokenAuthEnabled: true`.
-- [ ] `BUNNY_TOKEN_SECRET` is the pull zone's own **URL Token Authentication
-      Key** (CDN → your pull zone → Security → Token Authentication). It is
-      NOT a value you generate.
+- [ ] `BUNNY_TOKEN_SECRET` is the pull zone's own **Token Authentication Key**
+      (Stream library → Security). It is NOT a value you generate, and it must be
+      pasted **character for character** — this value is hashed byte for byte, so
+      one trailing space or a newline is signed into every URL and Bunny answers
+      **403** to all of them.
+      > Which value a deployment is actually holding is reported by the readiness
+      > probe: `BUNNY_TOKEN_SECRET … key <8 hex>` is a fingerprint of the loaded
+      > key. If playback fails and the fingerprint is not the key you pasted in
+      > the dashboard, the deployment has an older value; if it IS the fingerprint
+      > you pasted, the key is wrong (or the pull zone's key was rotated).
       > This is the trap that broke playback. `.env.example` used to say
       > `openssl rand -hex 24`, so a generated string was configured. Bunny then
       > answered **403 to every signed URL**, in a real browser as well as from

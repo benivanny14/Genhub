@@ -30,7 +30,9 @@ const SECRET = "pull-zone-key";
 const mocks = vi.hoisted(() => ({
   videoFindFirst: vi.fn(),
   accessFindUnique: vi.fn(),
+  accessUpsert: vi.fn(),
   transactionFindFirst: vi.fn(),
+  subscriptionFindFirst: vi.fn(),
   currentUser: vi.fn(),
 }));
 
@@ -46,8 +48,9 @@ const bunnyConfig = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({
   default: {
     video: { findFirst: mocks.videoFindFirst },
-    videoAccess: { findUnique: mocks.accessFindUnique },
+    videoAccess: { findUnique: mocks.accessFindUnique, upsert: mocks.accessUpsert },
     transaction: { findFirst: mocks.transactionFindFirst },
+    creatorSubscription: { findFirst: mocks.subscriptionFindFirst },
   },
 }));
 
@@ -115,7 +118,9 @@ beforeEach(() => {
   bunnyConfig.tokenSecret = SECRET;
   mocks.videoFindFirst.mockResolvedValue(ROW);
   mocks.accessFindUnique.mockResolvedValue(null);
+  mocks.accessUpsert.mockResolvedValue({ id: "access-1" });
   mocks.transactionFindFirst.mockResolvedValue(null);
+  mocks.subscriptionFindFirst.mockResolvedValue(null);
   mocks.currentUser.mockResolvedValue(null);
   vi.stubGlobal(
     "fetch",
@@ -219,6 +224,26 @@ describe("GET /api/videos/[id]/stream - who gets it", () => {
     expect((await GET(request(), params())).status).toBe(200);
   });
 
+  // A monthly subscription is worth as much here as it is on the page that sold
+  // it — the stream route and the paywall must not disagree about that.
+  it("lets an active subscriber watch a paid scene", async () => {
+    mocks.videoFindFirst.mockResolvedValue({ ...ROW, price: 5000 });
+    mocks.currentUser.mockResolvedValue({ userId: "viewer-1", role: "VIEWER" });
+    mocks.subscriptionFindFirst.mockResolvedValue({ id: "sub-1" });
+
+    expect((await GET(request(), params())).status).toBe(200);
+  });
+
+  it("still refuses a signed-out visitor with an expired subscription", async () => {
+    mocks.videoFindFirst.mockResolvedValue({ ...ROW, price: 5000 });
+    mocks.subscriptionFindFirst.mockResolvedValue(null);
+
+    const res = await GET(request(), params());
+
+    expect(res.status).toBe(403);
+    expect(urls).toEqual([]);
+  });
+
   it("404s an unknown or deleted video", async () => {
     mocks.videoFindFirst.mockResolvedValue(null);
     expect((await GET(request(), params())).status).toBe(404);
@@ -256,7 +281,12 @@ describe("GET /api/videos/[id]/stream - when the CDN says no", () => {
     const res = await GET(request(), params());
 
     expect(res.status).toBe(502);
-    expect((await res.json()).error).toMatch(/BUNNY_TOKEN_SECRET/);
+    const body = await res.json();
+    expect(body.error).toMatch(/BUNNY_TOKEN_SECRET/);
+    // The reader has to be able to tell "wrong key" from "unreachable host",
+    // so the answer names the host it asked and the status it got back.
+    expect(body.error).toContain(CDN);
+    expect(body.error).toContain("403");
   });
 
   it("reports a video with no rendition yet as 404, not as a broken site", async () => {

@@ -21,6 +21,7 @@ import {
 } from "@/lib/bunny";
 import config from "@/lib/config";
 import { checkRateLimit } from "@/lib/redis";
+import { resolveVideoEntitlement, type EntitlementSource } from "@/lib/services/video-entitlement.service";
 
 function fileSafe(title: string): string {
   return (
@@ -74,48 +75,15 @@ export async function GET(
     if (!video) return api.notFound("Video not found");
 
     // ---------------------------------------------------------------- Access
-    const isFree = video.price === 0;
-    let entitled = isFree || authUser.role === "ADMIN";
-    let entitlement: "free" | "purchase" | "subscription" | "admin" | null = isFree
-      ? "free"
-      : authUser.role === "ADMIN"
-        ? "admin"
-        : null;
-
-    if (!entitled) {
-      const [access, purchase, subscription] = await Promise.all([
-        prisma.videoAccess.findUnique({
-          where: { viewerId_videoId: { viewerId: authUser.userId, videoId: video.id } },
-          select: { id: true },
-        }),
-        prisma.transaction.findFirst({
-          where: {
-            userId: authUser.userId,
-            videoId: video.id,
-            type: "PPV_PURCHASE",
-            status: "SUCCESS",
-          },
-          select: { id: true },
-        }),
-        prisma.creatorSubscription.findFirst({
-          where: {
-            viewerId: authUser.userId,
-            creatorId: video.creatorId,
-            isActive: true,
-            expiresAt: { gt: new Date() },
-          },
-          select: { id: true },
-        }),
-      ]);
-
-      if (access || purchase) {
-        entitled = true;
-        entitlement = "purchase";
-      } else if (subscription) {
-        entitled = true;
-        entitlement = "subscription";
-      }
-    }
+    // Same service the watch page and the stream route use. A subscription IS
+    // an entitlement here, and on the stream route too — this route already
+    // treated it as one, which is how the two came to disagree.
+    const access = await resolveVideoEntitlement(video, {
+      userId: authUser.userId,
+      role: authUser.role,
+    });
+    const entitled = access.entitled;
+    const entitlement: EntitlementSource | null = access.source;
 
     if (!entitled) {
       return api.forbidden(

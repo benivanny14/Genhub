@@ -35,6 +35,7 @@ import {
   type StreamSource,
 } from "@/lib/bunny";
 import { rewriteHlsManifest } from "@/lib/hls";
+import { resolveVideoEntitlement } from "@/lib/services/video-entitlement.service";
 
 /** How long the CDN gets to answer before this route gives up on it. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
@@ -57,46 +58,6 @@ function safeManifestPath(raw: string | null): string | null {
   return path;
 }
 
-interface GateVideo {
-  id: string;
-  price: number;
-  creatorId: string;
-}
-
-/**
- * The same question GET /api/videos/[id] answers before it releases a playback
- * URL — free, purchased, or admin. Answered here again so that a URL copied out
- * of a page is not a bypass: this route never trusts that someone was once
- * allowed to have the link.
- */
-async function hasPlaybackAccess(
-  video: GateVideo,
-  authUser: { userId: string; role: string } | null
-): Promise<boolean> {
-  if (video.price === 0) return true;
-  if (!authUser) return false;
-  if (authUser.role === "ADMIN") return true;
-  // The owner watching their own upload, most often from "View as viewer".
-  if (authUser.userId === video.creatorId) return true;
-
-  const [access, purchase] = await Promise.all([
-    prisma.videoAccess.findUnique({
-      where: { viewerId_videoId: { viewerId: authUser.userId, videoId: video.id } },
-      select: { id: true },
-    }),
-    prisma.transaction.findFirst({
-      where: {
-        userId: authUser.userId,
-        videoId: video.id,
-        type: "PPV_PURCHASE",
-        status: "SUCCESS",
-      },
-      select: { id: true },
-    }),
-  ]);
-
-  return Boolean(access || purchase);
-}
 
 export async function GET(
   request: NextRequest,
@@ -134,6 +95,7 @@ export async function GET(
       },
     });
 
+
     if (!video) return api.notFound("Video not found");
 
     const authUser = await getCurrentUser();
@@ -145,8 +107,12 @@ export async function GET(
       // from the scene's own folder is what the `&&` above prevents.
       bunnyVideoId = video.teaserBunnyVideoId;
     } else {
-      const entitled = await hasPlaybackAccess(video, authUser);
-      if (!entitled) {
+      // The same question the watch page asked before it handed out a playback
+      // URL, asked again — a URL copied out of a page is not a bypass. Answered
+      // by the shared service, so a subscription is worth exactly as much here
+      // as it is on the page that sold it.
+      const entitlement = await resolveVideoEntitlement(video, authUser);
+      if (!entitlement.entitled) {
         return api.forbidden("You do not have access to this video");
       }
       bunnyVideoId = video.bunnyVideoId;
@@ -179,19 +145,33 @@ export async function GET(
       const name = (error as Error)?.name;
       const detail =
         name === "TimeoutError" || name === "AbortError"
-          ? `the video host did not answer within ${UPSTREAM_TIMEOUT_MS / 1000}s`
+          ? `did not answer within ${UPSTREAM_TIMEOUT_MS / 1000}s`
           : (error as Error)?.message || String(error);
-      console.error("[Stream Proxy Error]", detail);
-      return api.error("The video host could not be reached", 502, "UPSTREAM_UNREACHABLE");
+      console.error(`[Stream Proxy] ${config.bunny.cdnHostname} ${detail}`);
+      return api.error(
+        `The video host ${config.bunny.cdnHostname} could not be reached (${detail}) — ` +
+          "check BUNNY_CDN_HOSTNAME",
+        502,
+        "UPSTREAM_UNREACHABLE"
+      );
     }
 
     if (!upstream.ok) {
       // 403 here means the signature itself was refused, which is a deployment
-      // fault, not a viewer problem — name the variable, because the only
-      // symptom otherwise is a spinner.
+      // fault, not a viewer problem. Name the variable AND the host it was sent
+      // to, because "refused" has three causes that look identical from the
+      // outside — a wrong secret, a secret with a stray space or newline in it,
+      // and a pull zone whose key was rotated — and the diagnosis has to be
+      // readable by whoever is staring at the deployed site.
       if (upstream.status === 401 || upstream.status === 403) {
+        console.error(
+          `[Stream Proxy] ${config.bunny.cdnHostname} refused the signed manifest ` +
+            `(HTTP ${upstream.status}) for ${upstreamPath} — BUNNY_TOKEN_SECRET does not match ` +
+            "this pull zone's Token Authentication Key"
+        );
         return api.error(
-          "The video host refused the signature — BUNNY_TOKEN_SECRET must be this pull zone's Token Authentication Key",
+          `The video host refused the signature (HTTP ${upstream.status} from ${config.bunny.cdnHostname}) — ` +
+            "BUNNY_TOKEN_SECRET must be this pull zone's Token Authentication Key, copied exactly",
           502,
           "UPSTREAM_REFUSED"
         );
@@ -199,7 +179,11 @@ export async function GET(
       if (upstream.status === 404) {
         return api.notFound("This video has no playable rendition yet");
       }
-      return api.error(`The video host answered HTTP ${upstream.status}`, 502, "UPSTREAM_ERROR");
+      return api.error(
+        `The video host answered HTTP ${upstream.status} for ${manifestPath}`,
+        502,
+        "UPSTREAM_ERROR"
+      );
     }
 
     const body = await upstream.text();

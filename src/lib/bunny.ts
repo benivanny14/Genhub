@@ -667,6 +667,22 @@ export interface PlaybackProbe {
   detail: string;
 }
 
+/**
+ * A short, non-reversible fingerprint of the loaded token secret.
+ *
+ * 403 has two causes that look identical from the outside: the secret is the
+ * wrong string, or the secret is the right string with a stray space or newline
+ * pasted into the hosting dashboard. The person reading this message is holding
+ * a key in one hand and a dashboard in the other, and needs to know whether the
+ * value the app is USING is the one they think they set. A fingerprint answers
+ * that without ever printing the key — so it is safe in an admin-only response,
+ * and useless to anyone who has no way to guess a 36-character key from 32 bits.
+ */
+export function tokenSecretFingerprint(): string | null {
+  if (!config.bunny.tokenSecret) return null;
+  return createHash("sha256").update(config.bunny.tokenSecret).digest("hex").slice(0, 8);
+}
+
 /** How long the CDN gets to answer a manifest request before we call it a fail. */
 const PLAYBACK_PROBE_TIMEOUT_MS = 10_000;
 
@@ -696,7 +712,9 @@ export async function probeSignedPlayback(bunnyVideoId: string): Promise<Playbac
     if (res.ok) {
       return {
         state: "ok",
-        detail: `signed manifest accepted (HTTP ${res.status}) - BUNNY_TOKEN_SECRET matches the pull zone`,
+        detail:
+          `signed manifest accepted (HTTP ${res.status}) - BUNNY_TOKEN_SECRET matches the pull zone` +
+          ` · key ${tokenSecretFingerprint() ?? "?"}`,
       };
     }
 
@@ -706,9 +724,12 @@ export async function probeSignedPlayback(bunnyVideoId: string): Promise<Playbac
         detail:
           `unplayable: Bunny answered HTTP ${res.status} to a correctly-shaped signed manifest. ` +
           "The token is signed with BUNNY_TOKEN_SECRET, so the likely cause is that the value is not " +
-          "this pull zone's own URL Token Authentication Key (CDN -> Pull Zone -> Security -> Token " +
-          "Authentication): a generated string cannot match, and the only symptom is a player that " +
-          "spins forever. Copy the key, redeploy, and re-run this check.",
+          "this pull zone's own Token Authentication Key (Stream -> Security, or the pull zone's " +
+          "Token Authentication): a generated string cannot match, and the only symptom is a player " +
+          "that spins or stops with a 502. Copy the key, redeploy, and re-run this check. " +
+          `The key currently in use fingerprints as ${tokenSecretFingerprint() ?? "(empty)"} — if that ` +
+          "is not the key you pasted, the deployment is holding an older value (or one with a stray " +
+          "space or newline in it).",
       };
     }
 

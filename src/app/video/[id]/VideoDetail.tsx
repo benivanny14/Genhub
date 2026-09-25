@@ -41,6 +41,7 @@ import {
   Hourglass,
   ReceiptText,
   XCircle,
+  Check,
 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
@@ -72,7 +73,12 @@ interface VideoData {
   tags: string[];
   createdAt: string;
   hasAccess: boolean;
-  accessSource?: "free" | "purchase" | "entitlement" | null;
+  /**
+   * Why this viewer can watch. `subscription` is the one that changes the page:
+   * the scene is included in a monthly payment, so the paywall must not offer to
+   * sell it again.
+   */
+  accessSource?: "free" | "purchase" | "subscription" | "admin" | "owner" | null;
   /** Set when a charge for this video was approved but never settled. */
   paymentUnderInvestigation?: {
     transactionId: string;
@@ -1036,6 +1042,11 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             ) : video.accessSource === "purchase" ? (
               <span className="badge-success text-sm px-4 py-2">
                 ✓ Purchased
+              </span>
+            ) : video.accessSource === "subscription" ? (
+              <span className="badge-success text-sm px-4 py-2 flex items-center gap-2">
+                <Check className="w-4 h-4" />
+                Included in your subscription
               </span>
             ) : (
               <span className="badge-success text-sm px-4 py-2">
