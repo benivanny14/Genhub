@@ -95,6 +95,31 @@ export async function GET(request: NextRequest) {
       take: 10,
     });
 
+    // The creator's own withdrawal requests, so the dashboard can show where the
+    // money went — and, once a request is PAID, the receipt number the admin
+    // typed. Without this the creator is told "paid" by a notification with
+    // nothing to check it against, and the M-Pesa SMS is the only record they
+    // hold. Capped like the transaction list: the dashboard is a glance, not a
+    // statement.
+    const payouts = await prisma.payoutRequest.findMany({
+      where: { creatorId: auth.userId },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: {
+        id: true,
+        amount: true,
+        paymentMethod: true,
+        accountDetails: true,
+        status: true,
+        paymentReference: true,
+        // Shown when a request is rejected: the reason is already sent as a
+        // notification, but a notification is missed and a row is not.
+        adminNote: true,
+        createdAt: true,
+        processedAt: true,
+      },
+    });
+
     // Chat income, on the same 14-day clock as everything else. Its own service
     // because the release job and this card have to agree about what is held.
     //
@@ -122,6 +147,7 @@ export async function GET(request: NextRequest) {
       totalViews,
       videoStats: enrichedVideos,
       recentTransactions,
+      payouts,
       paidMessages,
     });
   } catch (error) {

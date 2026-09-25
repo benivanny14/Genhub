@@ -80,9 +80,16 @@ function requestPayout(amount: number) {
   );
 }
 
-function review(payoutId: string, action: "APPROVED" | "PAID" | "REJECTED", adminNote?: string) {
-  return reviewPayoutPost(post("/api/admin/payouts", { payoutId, action, adminNote }));
+function review(
+  payoutId: string,
+  action: "APPROVED" | "PAID" | "REJECTED",
+  extra: { adminNote?: string; paymentReference?: string } = {}
+) {
+  return reviewPayoutPost(post("/api/admin/payouts", { payoutId, action, ...extra }));
 }
+
+/** The M-Pesa code an admin reads off the confirmation SMS. */
+const RECEIPT = "QGR7X8Y2Z1";
 
 /**
  * The identity the whole cycle has to keep, asserted after every step:
@@ -205,7 +212,7 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
   });
 
   it("keeps the money earmarked when the request is approved", async () => {
-    const res = await review(paidRequestId, "APPROVED", "Verified the phone number");
+    const res = await review(paidRequestId, "APPROVED", { adminNote: "Verified the phone number" });
 
     expect(res.status).toBe(200);
     const payout = await prisma.payoutRequest.findUnique({ where: { id: paidRequestId } });
@@ -218,13 +225,16 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     expect(balance.pendingBalance).toBe(HELD);
   });
 
-  it("completes an approved request", async () => {
-    const res = await review(paidRequestId, "PAID", "MPESA ref 4471");
+  it("completes an approved request, recording the receipt", async () => {
+    const res = await review(paidRequestId, "PAID", { paymentReference: RECEIPT });
 
     expect(res.status).toBe(200);
     const payout = await prisma.payoutRequest.findUnique({ where: { id: paidRequestId } });
     expect(payout!.status).toBe("PAID");
     expect(payout!.processedBy).toBe(ctx.adminId);
+    // The creator's own record of the payment — the whole reason a payout can be
+    // marked paid rather than merely approved.
+    expect(payout!.paymentReference).toBe(RECEIPT);
 
     const balance = await balanceAndCheckIdentity();
     // The money is gone from both buckets, and only the paid-out total grew.
@@ -233,7 +243,9 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
   });
 
   it("refuses a second decision on a settled request", async () => {
-    const res = await review(paidRequestId, "PAID");
+    // A receipt is supplied deliberately: the point is that a settled request is
+    // refused for being settled, not for a missing field.
+    const res = await review(paidRequestId, "PAID", { paymentReference: RECEIPT });
     const body = await res.json();
 
     expect(res.status).toBe(409);
@@ -250,7 +262,9 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     const earmarked = await balanceAndCheckIdentity();
     expect(earmarked.availableBalance).toBe(OPENING_AVAILABLE - FIRST_REQUEST - SECOND_REQUEST);
 
-    const res = await review(requestId, "REJECTED", "Account name does not match KYC");
+    const res = await review(requestId, "REJECTED", {
+      adminNote: "Account name does not match KYC",
+    });
     expect(res.status).toBe(200);
 
     const refunded = await balanceAndCheckIdentity();
@@ -259,6 +273,8 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     expect(refunded.availableBalance).toBe(OPENING_AVAILABLE - FIRST_REQUEST);
     const payout = await prisma.payoutRequest.findUnique({ where: { id: requestId } });
     expect(payout!.status).toBe("REJECTED");
+    // Refusing returns money, it does not fabricate a payment: no receipt.
+    expect(payout!.paymentReference).toBeNull();
   });
 
   it("ends with the whole lifetime earned accounted for", async () => {

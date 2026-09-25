@@ -68,11 +68,30 @@ export async function GET(request: NextRequest) {
   }
 }
 
-const reviewPayoutSchema = z.object({
-  payoutId: z.string().min(1),
-  action: z.enum(["APPROVED", "PAID", "REJECTED"]),
-  adminNote: z.string().optional(),
-});
+const reviewPayoutSchema = z
+  .object({
+    payoutId: z.string().min(1),
+    action: z.enum(["APPROVED", "PAID", "REJECTED"]),
+    adminNote: z.string().optional(),
+    /**
+     * The M-Pesa / bank receipt (transaction code) the admin got when they sent
+     * the money. Refused as empty because "" is not a receipt, and required on
+     * PAID — see the check below.
+     */
+    paymentReference: z.string().trim().min(1).max(64).optional(),
+  })
+  .superRefine((value, ctx) => {
+    // Marking a payout paid used to be an assertion: the creator was told
+    // "paid" with nothing to check it against. The receipt is the whole proof,
+    // so it is not optional on the one action that claims money left.
+    if (value.action === "PAID" && !value.paymentReference) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["paymentReference"],
+        message: "A receipt or reference number is required to mark a payout paid",
+      });
+    }
+  });
 
 export async function POST(request: NextRequest) {
   try {
@@ -85,7 +104,7 @@ export async function POST(request: NextRequest) {
       return api.validation(result.error.errors[0].message);
     }
 
-    const { payoutId, action, adminNote } = result.data;
+    const { payoutId, action, adminNote, paymentReference } = result.data;
 
     const payout = await prisma.payoutRequest.findUnique({
       where: { id: payoutId },
@@ -120,18 +139,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // One decision payload for both branches. The receipt is written only for
+    // PAID: approving and rejecting never sent anything, so they have nothing to
+    // reference and must not overwrite a value they do not own.
+    const decision = {
+      status: action,
+      adminNote,
+      processedBy: auth.userId,
+      processedAt: new Date(),
+      paymentReference: action === "PAID" ? paymentReference : undefined,
+    };
+
     // If rejected, return funds to available balance
     if (action === "REJECTED") {
       await prisma.$transaction(async (tx) => {
-        await tx.payoutRequest.update({
-          where: { id: payoutId },
-          data: {
-            status: "REJECTED",
-            adminNote,
-            processedBy: auth.userId,
-            processedAt: new Date(),
-          },
-        });
+        await tx.payoutRequest.update({ where: { id: payoutId }, data: decision });
 
         await tx.creatorBalance.update({
           where: { creatorId: payout.creatorId },
@@ -139,15 +161,7 @@ export async function POST(request: NextRequest) {
         });
       });
     } else {
-      await prisma.payoutRequest.update({
-        where: { id: payoutId },
-        data: {
-          status: action,
-          adminNote,
-          processedBy: auth.userId,
-          processedAt: new Date(),
-        },
-      });
+      await prisma.payoutRequest.update({ where: { id: payoutId }, data: decision });
     }
 
     // Notify the creator about the decision
@@ -160,7 +174,12 @@ export async function POST(request: NextRequest) {
         },
         PAID: {
           title: "Payout completed 💸",
-          message: `TZS ${payout.amount.toLocaleString()} has been paid out. Thank you for creating on Genhub!`,
+          // The receipt is in the notification, not only on the dashboard: this
+          // is the message the creator reads next to the M-Pesa SMS, and it is
+          // what they quote if the money never arrived.
+          message: `TZS ${payout.amount.toLocaleString()} has been paid out. Receipt / reference: ${
+            paymentReference || "—"
+          }. Thank you for creating on Genhub!`,
           type: "success",
         },
         REJECTED: {
@@ -185,6 +204,17 @@ export async function POST(request: NextRequest) {
 
     const verb =
       action === "APPROVED" ? "Approved" : action === "PAID" ? "Paid out" : "Rejected";
+    // The receipt belongs in the sentence, not only in `detail`: "who moved this
+    // money, and against which transaction" is exactly what the log is read for
+    // during a dispute.
+    const summaryParts = [
+      `${verb} TZS ${payout.amount.toLocaleString()} for ${
+        payout.creator?.displayName || payout.creator?.email || payout.creatorId
+      }`,
+    ];
+    if (action === "PAID" && paymentReference) summaryParts.push(`receipt ${paymentReference}`);
+    if (adminNote) summaryParts.push(adminNote);
+
     await recordAudit({
       actorId: auth.userId,
       action:
@@ -195,14 +225,13 @@ export async function POST(request: NextRequest) {
             : AUDIT_ACTIONS.payoutReject,
       targetType: "PayoutRequest",
       targetId: payoutId,
-      summary: `${verb} TZS ${payout.amount.toLocaleString()} for ${
-        payout.creator?.displayName || payout.creator?.email || payout.creatorId
-      }${adminNote ? ` — ${adminNote}` : ""}`,
+      summary: summaryParts.join(" — "),
       detail: {
         amount: payout.amount,
         creatorId: payout.creatorId,
         paymentMethod: payout.paymentMethod,
         adminNote: adminNote ?? null,
+        paymentReference: action === "PAID" ? paymentReference ?? null : null,
         // Rejecting returns the money to the creator's available balance; the
         // log has to say so, because the balance itself will not explain it.
         fundsReturned: action === "REJECTED",

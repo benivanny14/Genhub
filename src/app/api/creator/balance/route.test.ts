@@ -9,6 +9,10 @@
 //      messaged rather than a broken endpoint.
 //   2. `recentTransactions` must carry `metadata`. Without it a paid message and
 //      a plain tip are the same row, and "TIP" is all the dashboard can say.
+//   3. `payouts` must carry `paymentReference`. It is the receipt the admin typed
+//      when the money was sent, and the dashboard is the only place the creator
+//      reads it — a dropped field leaves them with an M-Pesa SMS and no in-app
+//      record that the platform agrees.
 //
 // Prisma, auth and both services are mocked; no database.
 // =============================================================================
@@ -25,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   earningFindMany: vi.fn(),
   txAggregate: vi.fn(),
   txFindMany: vi.fn(),
+  payoutFindMany: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -36,6 +41,7 @@ vi.mock("@/lib/db", () => ({
       aggregate: (...a: unknown[]) => mocks.txAggregate(...a),
       findMany: (...a: unknown[]) => mocks.txFindMany(...a),
     },
+    payoutRequest: { findMany: (...a: unknown[]) => mocks.payoutFindMany(...a) },
   },
 }));
 
@@ -95,6 +101,7 @@ beforeEach(() => {
   mocks.earningFindMany.mockResolvedValue([]);
   mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 900 } });
   mocks.txFindMany.mockResolvedValue([]);
+  mocks.payoutFindMany.mockResolvedValue([]);
 });
 
 describe("GET /api/creator/balance", () => {
@@ -139,5 +146,30 @@ describe("GET /api/creator/balance", () => {
       availableBalance: 0,
       totalEarned: 0,
     });
+  });
+
+  it("carries the receipt number for a paid withdrawal", async () => {
+    mocks.payoutFindMany.mockResolvedValue([
+      {
+        id: "payout-1",
+        amount: 100_000,
+        paymentMethod: "MPESA",
+        accountDetails: "0754000000",
+        status: "PAID",
+        paymentReference: "QGR7X8Y2Z1",
+        adminNote: null,
+        createdAt: "2026-09-24T09:00:00.000Z",
+        processedAt: "2026-09-25T09:00:00.000Z",
+      },
+    ]);
+
+    const res = await get();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.payouts[0].paymentReference).toBe("QGR7X8Y2Z1");
+    // Scoped to this creator, and newest first — a payout list is not a public
+    // ledger.
+    expect(mocks.payoutFindMany.mock.calls[0][0].where).toEqual({ creatorId: CREATOR });
   });
 });

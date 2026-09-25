@@ -154,6 +154,8 @@ interface PayoutItem {
   paymentMethod: string;
   accountDetails: string;
   status: string;
+  /** The M-Pesa / bank receipt typed when the payout was marked paid. */
+  paymentReference?: string | null;
   createdAt: string;
   creator: {
     id: string;
@@ -579,6 +581,11 @@ export default function AdminDashboard() {
     placeholder: string;
     confirmLabel: string;
     tone: "danger" | "brand";
+    /**
+     * A reason is prose, but a receipt number is a short code — false renders a
+     * single-line input instead of a three-row textarea.
+     */
+    multiline?: boolean;
     onConfirm: (value: string) => void;
   } | null>(null);
   const [reasonValue, setReasonValue] = useState("");
@@ -1022,12 +1029,18 @@ export default function AdminDashboard() {
     }
   }
 
-  async function handlePayoutAction(payoutId: string, action: string, note?: string) {
+  async function handlePayoutAction(
+    payoutId: string,
+    action: string,
+    note?: string,
+    /** Required by the API when action is PAID; the receipt the admin was given. */
+    paymentReference?: string
+  ) {
     try {
       const res = await adminFetch("/api/admin/payouts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ payoutId, action, adminNote: note }),
+        body: JSON.stringify({ payoutId, action, adminNote: note, paymentReference }),
       });
       const data = await res.json();
       if (data.success) {
@@ -2064,6 +2077,11 @@ export default function AdminDashboard() {
                         <p className="text-xs text-white/40">
                           Requested: {new Date(payout.createdAt).toLocaleDateString("en-US")}
                         </p>
+                        {payout.paymentReference && (
+                          <p className="text-xs text-emerald-400/80 mt-1">
+                            Receipt: {payout.paymentReference}
+                          </p>
+                        )}
                       </div>
 
                       <div className="flex items-center gap-2">
@@ -2076,7 +2094,21 @@ export default function AdminDashboard() {
                           </button>
                         )}
                         <button
-                          onClick={() => handlePayoutAction(payout.id, "PAID", "Paid")}
+                          onClick={() =>
+                            // The receipt is captured here, at the moment the
+                            // admin is looking at the phone or the bank app. It
+                            // is required by the API, and the creator sees it.
+                            askReason({
+                              title: "Mark this payout as paid",
+                              label: "M-Pesa / bank receipt number",
+                              placeholder: "e.g. QGR7X8Y2Z1, or the bank reference",
+                              confirmLabel: "Mark paid",
+                              tone: "brand",
+                              multiline: false,
+                              onConfirm: (reference) =>
+                                handlePayoutAction(payout.id, "PAID", undefined, reference),
+                            })
+                          }
                           className="bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition"
                         >
                           Mark Paid
@@ -2872,16 +2904,29 @@ export default function AdminDashboard() {
             >
               {reasonDialog.label}
             </label>
-            <textarea
-              id="admin-reason"
-              value={reasonValue}
-              onChange={(e) => setReasonValue(e.target.value)}
-              rows={3}
-              maxLength={500}
-              placeholder={reasonDialog.placeholder}
-              className="input-field"
-              autoFocus
-            />
+            {reasonDialog.multiline === false ? (
+              <input
+                id="admin-reason"
+                type="text"
+                value={reasonValue}
+                onChange={(e) => setReasonValue(e.target.value)}
+                maxLength={64}
+                placeholder={reasonDialog.placeholder}
+                className="input-field"
+                autoFocus
+              />
+            ) : (
+              <textarea
+                id="admin-reason"
+                value={reasonValue}
+                onChange={(e) => setReasonValue(e.target.value)}
+                rows={3}
+                maxLength={500}
+                placeholder={reasonDialog.placeholder}
+                className="input-field"
+                autoFocus
+              />
+            )}
 
             <div className="flex gap-3 mt-5">
               <button onClick={() => setReasonDialog(null)} className="btn-ghost flex-1">

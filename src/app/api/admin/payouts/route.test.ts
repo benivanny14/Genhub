@@ -161,16 +161,47 @@ describe("POST /api/admin/payouts", () => {
     });
   }
 
-  it("completes an approved request, which is the whole point of approving", async () => {
+  it("completes an approved request, storing the receipt the admin was given", async () => {
     existing("APPROVED");
 
-    const res = await review({ payoutId: "payout-1", action: "PAID" });
+    const res = await review({
+      payoutId: "payout-1",
+      action: "PAID",
+      paymentReference: "QGR7X8Y2Z1",
+    });
 
     expect(res.status).toBe(200);
     expect(mocks.update.mock.calls[0][0].data.status).toBe("PAID");
+    // The receipt is the record the creator checks the money against, so it has
+    // to reach the row and the audit line, not just the request.
+    expect(mocks.update.mock.calls[0][0].data.paymentReference).toBe("QGR7X8Y2Z1");
+    expect(mocks.audit.mock.calls[0][0].detail.paymentReference).toBe("QGR7X8Y2Z1");
     // Sending money does not put any back: only a rejection credits the balance.
     expect(mocks.balanceUpdate).not.toHaveBeenCalled();
     expect(mocks.audit.mock.calls[0][0].action).toBe("payout.paid");
+  });
+
+  it("refuses to mark a payout paid without a receipt number", async () => {
+    existing("APPROVED");
+
+    const res = await review({ payoutId: "payout-1", action: "PAID" });
+    const body = await res.json();
+
+    // "Paid" with nothing to check it against is an assertion, not a record —
+    // which is what this whole field exists to stop.
+    expect(res.status).toBe(422);
+    expect(body.error).toContain("receipt");
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.balanceUpdate).not.toHaveBeenCalled();
+  });
+
+  it("treats a blank receipt as no receipt", async () => {
+    existing("APPROVED");
+
+    const res = await review({ payoutId: "payout-1", action: "PAID", paymentReference: "   " });
+
+    expect(res.status).toBe(422);
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it("returns the money and nothing else when a request is rejected", async () => {
@@ -183,6 +214,9 @@ describe("POST /api/admin/payouts", () => {
       where: { creatorId: "creator-1" },
       data: { availableBalance: { increment: 100_000 } },
     });
+    // Nothing was sent, so a rejection writes no receipt — it must not overwrite
+    // a reference it does not own with an empty string.
+    expect(mocks.update.mock.calls[0][0].data.paymentReference).toBeUndefined();
   });
 
   it("refuses a second decision on a settled request", async () => {

@@ -66,6 +66,22 @@ interface CreatorData {
     metadata?: { method?: string } | null;
     video?: { title: string } | null;
   }[];
+  /**
+   * The creator's own withdrawal requests. Optional because the endpoint may
+   * answer from a payload written before this field existed.
+   */
+  payouts?: {
+    id: string;
+    amount: number;
+    paymentMethod: string;
+    accountDetails: string;
+    status: string;
+    /** The receipt the admin entered when this was marked paid. */
+    paymentReference: string | null;
+    adminNote: string | null;
+    createdAt: string;
+    processedAt: string | null;
+  }[];
   /** Chat income: every message is paid, and it clears on the 14-day clock. */
   paidMessages: {
     messages: number;
@@ -105,6 +121,43 @@ function formatDay(iso: string): string {
  * route that wrote the row says which in `metadata.method`, so "TIP" stops being
  * the label a creator scans past.
  */
+/** How a payout method reads in the withdrawal list. */
+const PAYOUT_METHOD_LABEL: Record<string, string> = {
+  MPESA: "M-Pesa",
+  TIGO_PESA: "Tigo Pesa",
+  AIRTEL_MONEY: "Airtel Money",
+  BANK_TRANSFER: "Bank transfer",
+};
+
+/**
+ * Where one withdrawal stands. The wording is deliberate: APPROVED is a promise
+ * and says so, because "Approved" next to a missing payment reads as "we already
+ * sent it" to the person waiting.
+ */
+function PayoutStatus({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    PENDING: "bg-amber-500/15 text-amber-400",
+    APPROVED: "bg-blue-500/15 text-blue-400",
+    PAID: "bg-emerald-500/15 text-emerald-400",
+    REJECTED: "bg-red-500/15 text-red-400",
+  };
+  const labels: Record<string, string> = {
+    PENDING: "Pending",
+    APPROVED: "Approved — being sent",
+    PAID: "Paid",
+    REJECTED: "Rejected",
+  };
+  return (
+    <span
+      className={`text-[10px] px-2 py-0.5 rounded font-medium whitespace-nowrap ${
+        styles[status] || "bg-white/10 text-white/60"
+      }`}
+    >
+      {labels[status] || status}
+    </span>
+  );
+}
+
 function transactionLabel(tx: CreatorData["recentTransactions"][number]): string {
   if (tx.type === "PPV_PURCHASE") return `Sold: ${tx.video?.title || "Video"}`;
   if (tx.type === "SUBSCRIPTION") return "Subscription";
@@ -1046,6 +1099,59 @@ export default function CreatorDashboard() {
               </div>
             ))}
           </div>
+        </div>
+
+        {/*
+          Withdrawals — where the money went, and the one thing a creator
+          actually needs from a payout: the receipt number, so they can match it
+          against the M-Pesa SMS or the bank alert on their own phone. A paid row
+          without it is why this section exists.
+        */}
+        <div className="glass-card p-4">
+          <h2 className="font-display font-bold mb-4">Withdrawals</h2>
+          {(creatorData?.payouts || []).length === 0 ? (
+            <p className="text-sm text-white/40">
+              No withdrawal requests yet. When you request a payout it appears here,
+              with its status and, once paid, the receipt number.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {(creatorData?.payouts || []).map((payout) => (
+                <div
+                  key={payout.id}
+                  className="flex items-center gap-3 p-3 rounded-xl bg-surface-300/30"
+                >
+                  <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+                    <Banknote className="w-5 h-5 text-white/60" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm">
+                      {formatTZS(payout.amount)}
+                      <span className="text-white/40">
+                        {" "}
+                        • {PAYOUT_METHOD_LABEL[payout.paymentMethod] || payout.paymentMethod} •{" "}
+                        {payout.accountDetails}
+                      </span>
+                    </p>
+                    <p className="text-xs text-white/40">
+                      Requested {formatRelativeTime(new Date(payout.createdAt))}
+                    </p>
+                    {payout.status === "PAID" && payout.paymentReference && (
+                      <p className="text-xs text-emerald-400 mt-0.5">
+                        Receipt: {payout.paymentReference}
+                      </p>
+                    )}
+                    {payout.status === "REJECTED" && payout.adminNote && (
+                      <p className="text-xs text-red-400/80 mt-0.5">
+                        Reason: {payout.adminNote}
+                      </p>
+                    )}
+                  </div>
+                  <PayoutStatus status={payout.status} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </main>
 

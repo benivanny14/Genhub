@@ -1870,6 +1870,16 @@ live database. The one thing to watch for is a new UNIQUE index — it fails if
 rows already violate it, which is why the per-user coupon rule shipped with the
 new table's unique pair rather than as a constraint bolted onto `Coupon`.
 
+#### The payout receipt migration (`20260925140000`)
+
+| | |
+|---|---|
+| Adds | `PayoutRequest.paymentReference` (nullable) — the M-Pesa / bank receipt number |
+| Why | marking a payout PAID was an assertion with nothing behind it: the admin typed a free-text note and the creator was told "paid" with no way to check. The receipt is the one thing the sender actually holds, so it is now required to mark a payout paid and shown to the creator on `/creator` and in the notification. |
+| Safe on live data | yes — a nullable column; no backfill, no new index |
+| Rollback | `ALTER TABLE "PayoutRequest" DROP COLUMN "paymentReference"` |
+| Degrades safely | every existing payout reads a null reference; a settled payout is unaffected, and the creator's dashboard simply shows no receipt for the rows paid before this shipped |
+
 #### The audit log and captions migration (`20260925130000`)
 
 | | |

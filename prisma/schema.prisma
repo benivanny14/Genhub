@@ -368,6 +368,12 @@ model PayoutRequest {
   bankName       String?      // For bank transfers
   status         PayoutStatus @default(PENDING)
   adminNote      String?
+  /// The M-Pesa / bank receipt (transaction code) the admin typed when they
+  /// actually sent the money. Required to move a request to PAID and shown to the
+  /// creator on their dashboard — it is the only proof the payout left, and
+  /// without it "PAID" is just an admin's word. Null while a request is PENDING
+  /// or APPROVED.
+  paymentReference String?
   processedBy    String?
   processedAt    DateTime?
   createdAt      DateTime     @default(now())
