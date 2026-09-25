@@ -21,6 +21,59 @@
 import { describe, it, expect } from "vitest";
 import { createVideoSchema, updateVideoSchema } from "@/lib/validation";
 
+describe("updateVideoSchema captions", () => {
+  it("accepts an uploaded WebVTT file", () => {
+    const result = updateVideoSchema.safeParse({
+      captionsUrl: "/api/media/public/captions/2026-09/abc123.vtt",
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an https link to a .vtt", () => {
+    expect(
+      updateVideoSchema.safeParse({ captionsUrl: "https://cdn.example.com/scene.vtt" }).success
+    ).toBe(true);
+  });
+
+  it("refuses .srt with a message naming the problem", () => {
+    // A browser handed an .srt renders nothing and logs nothing, so a creator
+    // would believe the captions were live. This refusal is the only place they
+    // find out while they can still fix it.
+    const result = updateVideoSchema.safeParse({
+      captionsUrl: "https://cdn.example.com/scene.srt",
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.errors[0].message).toMatch(/\.vtt/);
+    }
+  });
+
+  it("refuses a plain http link", () => {
+    expect(
+      updateVideoSchema.safeParse({ captionsUrl: "http://cdn.example.com/scene.vtt" }).success
+    ).toBe(false);
+  });
+
+  it("refuses a javascript: URL dressed up as a caption file", () => {
+    expect(
+      updateVideoSchema.safeParse({ captionsUrl: "javascript:alert(1).vtt" }).success
+    ).toBe(false);
+  });
+
+  it("accepts \"\" as \"remove the captions\"", () => {
+    const result = updateVideoSchema.safeParse({ captionsUrl: "" });
+
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.captionsUrl).toBe("");
+  });
+
+  it("leaves captions alone when the field is absent", () => {
+    expect(updateVideoSchema.safeParse({ title: "Only a title" }).success).toBe(true);
+  });
+});
+
 describe("updateVideoSchema price", () => {
   it("accepts 0, so a creator can make a video free", () => {
     const result = updateVideoSchema.safeParse({ price: 0 });

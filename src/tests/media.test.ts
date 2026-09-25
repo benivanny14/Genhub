@@ -24,6 +24,7 @@ import { describe, it, expect } from "vitest";
 import {
   MEDIA_ROUTE_PREFIX,
   cacheControlFor,
+  canOptimizeImage,
   contentTypeForKey,
   isMediaPrivate,
   isSafeMediaKey,
@@ -175,6 +176,25 @@ describe("serving rules", () => {
     expect(contentTypeForKey("uploads/a.webp")).toBe("image/webp");
     expect(contentTypeForKey("uploads/a.heic")).toBe("image/heic");
     expect(contentTypeForKey("uploads/a.bin")).toBe("application/octet-stream");
+  });
+
+  it("serves captions as WebVTT, not as an opaque download", () => {
+    // A <track> whose response is application/octet-stream is ignored by every
+    // browser: the captions never appear and nothing reports an error.
+    expect(contentTypeForKey("public/captions/2026-09/a.vtt")).toBe("text/vtt");
+  });
+
+  it("lets the image optimiser near public files only", () => {
+    // A key the media route gates must not go through next/image: the optimiser
+    // fetches from our own route WITHOUT the session cookie, so a gated file
+    // comes back 401 and renders as a broken image.
+    expect(canOptimizeImage("/api/media/public/images/a.jpg")).toBe(true);
+    expect(canOptimizeImage("/api/media/public/captions/2026-09/a.vtt")).toBe(true);
+    expect(canOptimizeImage("/api/media/private/u1/kyc/id.png")).toBe(false);
+    // Legacy keys can be gated by a KYC row, so they are not optimised either.
+    expect(canOptimizeImage("/api/media/uploads/a.jpg")).toBe(false);
+    expect(canOptimizeImage("https://somewhere.example/a.jpg")).toBe(false);
+    expect(canOptimizeImage(null)).toBe(false);
   });
 
   it("makes a private key uncacheable and a public one immutable", () => {
