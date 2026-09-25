@@ -104,8 +104,11 @@ function videoRow(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function get() {
-  const response = await GET(new NextRequest("https://app.test/api/videos/video-1"), params);
+async function get(query = "") {
+  const response = await GET(
+    new NextRequest(`https://app.test/api/videos/video-1${query}`),
+    params
+  );
   const body = await response.json();
   return { status: response.status, body };
 }
@@ -169,6 +172,59 @@ describe("GET /api/videos/[id] — unpublished videos", () => {
       where: { id: "video-1" },
       data: { viewsCount: { increment: 1 } },
     });
+  });
+});
+
+// =============================================================================
+// GET ?asVisitor=1 — "View as visitor"
+//
+// A creator is entitled to their own scene and an admin to every scene, on
+// purpose. That is also why "the paywall is broken, I can watch for free" is the
+// report this flag answers: the person looking IS entitled. Asking the server
+// for the anonymous answer is the only way to see the paywall without signing
+// out, and it can only ever downgrade — there is no input that widens access.
+// =============================================================================
+
+describe("GET /api/videos/[id] — view as visitor", () => {
+  it("answers a creator's own paid video as a signed-out visitor", async () => {
+    mocks.currentUser.mockResolvedValue({ userId: CREATOR, role: "CREATOR" });
+    mocks.videoFindFirst.mockResolvedValue(videoRow({ isPublished: true, price: 5000 }));
+
+    const { status, body } = await get("?asVisitor=1");
+
+    expect(status).toBe(200);
+    expect(body.data.hasAccess).toBe(false);
+    expect(body.data.accessSource).toBeNull();
+    expect(body.data.playbackUrl).toBeNull();
+  });
+
+  it("does not hand an admin access either", async () => {
+    mocks.currentUser.mockResolvedValue({ userId: "admin-1", role: "ADMIN" });
+    mocks.videoFindFirst.mockResolvedValue(videoRow({ isPublished: true, price: 5000 }));
+
+    const { status, body } = await get("?asVisitor=1");
+
+    expect(status).toBe(200);
+    expect(body.data.hasAccess).toBe(false);
+    expect(body.data.playbackUrl).toBeNull();
+    // No charge can be "under investigation" for somebody who is not signed in.
+    expect(body.data.paymentUnderInvestigation).toBeNull();
+  });
+
+  it("still lets the creator preview their own UNPUBLISHED video through it", async () => {
+    mocks.currentUser.mockResolvedValue({ userId: CREATOR, role: "CREATOR" });
+
+    const { status, body } = await get("?asVisitor=1");
+
+    expect(status).toBe(200);
+    expect(body.data.hasAccess).toBe(false);
+  });
+
+  it("leaves the ordinary view untouched", async () => {
+    mocks.currentUser.mockResolvedValue({ userId: CREATOR, role: "CREATOR" });
+    mocks.videoFindFirst.mockResolvedValue(videoRow({ isPublished: true, price: 5000 }));
+
+    expect((await get()).body.data.hasAccess).toBe(true);
   });
 });
 

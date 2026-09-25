@@ -110,6 +110,10 @@ export async function GET(request: NextRequest) {
         amount: true,
         paymentMethod: true,
         accountDetails: true,
+        // The bank name belongs with the account details: it is half of where a
+        // bank transfer has to go, and without it the withdrawal form cannot be
+        // pre-filled from history and the history row cannot name the bank.
+        bankName: true,
         status: true,
         paymentReference: true,
         // Shown when a request is rejected: the reason is already sent as a

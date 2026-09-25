@@ -161,6 +161,18 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [video, setVideo] = useState<VideoData | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  /**
+   * "View as visitor": what a signed-out customer actually sees.
+   *
+   * A creator is entitled to their own scene and an admin to every scene, both
+   * on purpose (services/video-entitlement.service.ts), so this page plays for
+   * them no matter how well the paywall works — which makes a working paywall
+   * impossible to check by looking at it. The answer is asked of the SERVER
+   * (`?asVisitor=1`, see the detail route) rather than guessed here, so the
+   * preview cannot disagree with the real paywall and cannot hold a playback URL
+   * a visitor would never be given.
+   */
+  const [viewAsVisitor, setViewAsVisitor] = useState(false);
   const [purchasing, setPurchasing] = useState(false);
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState("");
@@ -196,7 +208,9 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   // ===========================================================================
 
   useEffect(() => {
-    if (!user || !video) return;
+    // A visitor has no library; asking for one would also write the owner's
+    // watch-later state while they are looking at somebody else's view.
+    if (!user || !video || viewAsVisitor) return;
     let cancelled = false;
 
     (async () => {
@@ -221,7 +235,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.id, video?.id]);
+  }, [user?.id, video?.id, viewAsVisitor]);
 
   async function toggleWatchLater() {
     if (!user) {
@@ -384,13 +398,13 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   }, [video?.id]);
 
   useEffect(() => {
-    if (video && !isDemo) fetchInteractions();
+    if (video && !isDemo && !viewAsVisitor) fetchInteractions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video?.id, isDemo]);
+  }, [video?.id, isDemo, viewAsVisitor]);
 
   // Resume position for partially watched videos
   useEffect(() => {
-    if (!video || !user || isDemo) return;
+    if (!video || !user || isDemo || viewAsVisitor) return;
     let cancelled = false;
     (async () => {
       try {
@@ -407,12 +421,12 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     // Only the ids matter: depending on the whole objects would refetch the
     // saved position every time the video object is replaced after a purchase.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video?.id, user?.id, isDemo]);
+  }, [video?.id, user?.id, isDemo, viewAsVisitor]);
 
   const fetchVideo = useCallback(async () => {
     let found = false;
     try {
-      const res = await fetch(`/api/videos/${id}`);
+      const res = await fetch(`/api/videos/${id}${viewAsVisitor ? "?asVisitor=1" : ""}`);
       const data = await res.json();
       if (data.success) {
         setVideo(data.data);
@@ -438,7 +452,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       }
     }
     setLoading(false);
-  }, [id]);
+  }, [id, viewAsVisitor]);
 
   const fetchUser = useCallback(async () => {
     try {
@@ -787,7 +801,19 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     );
   }
 
-  const canPlayFull = video.hasAccess || user?.role === "ADMIN";
+  // In visitor view the entitlement the server returned is already the
+  // anonymous one; `!viewAsVisitor` is the belt for the moment between the
+  // toggle and the refetch landing, so the player never runs on the owner's URL.
+  const canViewAsVisitor = video.accessSource === "owner" || video.accessSource === "admin";
+  // Visitor view switches off what is MINE — owner, admin — and nothing else,
+  // which is why a free video still plays (a visitor may watch it too) while a
+  // paid one falls back to the teaser the server handed out for a visitor.
+  const ownPrivilege =
+    video.accessSource === "owner" || video.accessSource === "admin" || user?.role === "ADMIN";
+  const canPlayFull = video.hasAccess && !(viewAsVisitor && ownPrivilege);
+  // What the page shows the buttons to. In visitor view this is nobody, which is
+  // exactly why the CTA reads "Sign in to Buy" instead of "Buy".
+  const effectiveUser = viewAsVisitor ? null : user;
 
   // A video Bunny has not finished transcoding has nothing to serve yet — not
   // the full scene, and not the teaser, since both are encoded the same way. On
@@ -844,13 +870,41 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex flex-col lg:flex-row gap-8 items-start">
           <div className="flex-1 min-w-0 w-full max-w-5xl">
-        {/* Back Button */}
-        <Link
-          href="/"
-          className="inline-flex items-center gap-2 text-white/60 hover:text-white text-sm mb-4 transition"
-        >
-          <ArrowLeft className="w-4 h-4" /> Back
-        </Link>
+        {/* Back Button + "View as visitor" */}
+        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+          <Link
+            href="/"
+            className="inline-flex items-center gap-2 text-white/60 hover:text-white text-sm transition"
+          >
+            <ArrowLeft className="w-4 h-4" /> Back
+          </Link>
+
+          {(canViewAsVisitor || viewAsVisitor) && (
+            <button
+              onClick={() => setViewAsVisitor((v) => !v)}
+              title={
+                viewAsVisitor
+                  ? "Go back to your own view"
+                  : "See this page the way a customer who has not paid sees it"
+              }
+              className={`inline-flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border transition ${
+                viewAsVisitor
+                  ? "border-brand-500/60 bg-brand-500/15 text-brand-300 hover:bg-brand-500/25"
+                  : "border-white/15 text-white/70 hover:border-brand-500/60 hover:text-brand-300"
+              }`}
+            >
+              <Eye className="w-3.5 h-3.5" />
+              {viewAsVisitor ? "Exit visitor view" : "View as visitor"}
+            </button>
+          )}
+        </div>
+
+        {viewAsVisitor && (
+          <p className="mb-4 rounded-xl border border-brand-500/25 bg-brand-500/10 px-3 py-2 text-xs text-brand-200">
+            Visitor view — this is exactly what someone who has not paid sees. Your
+            own access (creator or admin) is switched off for this preview.
+          </p>
+        )}
 
         {/* Video Player */}
         {notPlayable ? (
@@ -1006,7 +1060,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                     : "This video is still being processed. It becomes available to buy the moment it is ready."}
                 </p>
               </div>
-            ) : !canPlayFull && user && video.paymentUnderInvestigation ? (
+            ) : !canPlayFull && effectiveUser && video.paymentUnderInvestigation ? (
               /* A charge for this video was approved but never settled. Selling
                  it again could take the customer's money twice, so the button
                  becomes a status panel that points at support instead. */
@@ -1033,7 +1087,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                   </span>
                 </div>
               </div>
-            ) : !canPlayFull && user ? (
+            ) : !canPlayFull && effectiveUser ? (
               <button
                 onClick={() => setShowPurchaseModal(true)}
                 className="btn-brand flex items-center gap-2"
@@ -1041,7 +1095,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 <Shield className="w-4 h-4" />
                 Buy — {format(video.price)}
               </button>
-            ) : !user ? (
+            ) : !effectiveUser ? (
               <Link href="/login" className="btn-brand text-center">
                 Sign in to Buy
               </Link>

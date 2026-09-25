@@ -34,6 +34,13 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { canOptimizeImage } from "@/lib/media";
+import {
+  PAYOUT_METHODS,
+  PAYOUT_METHOD_LABEL,
+  describePayoutAccount,
+  isBankPayout,
+  lastPayoutAccount,
+} from "@/lib/payout-account";
 import { formatTZS, formatRelativeTime, formatCount } from "@/lib/utils";
 // The one list of categories — the same ids /browse/[category] serves, minus the
 // "all" pseudo-category, which is a filter and not something a video can be.
@@ -75,6 +82,8 @@ interface CreatorData {
     amount: number;
     paymentMethod: string;
     accountDetails: string;
+    /** Half of where a bank transfer has to go; null for mobile money. */
+    bankName?: string | null;
     status: string;
     /** The receipt the admin entered when this was marked paid. */
     paymentReference: string | null;
@@ -121,13 +130,9 @@ function formatDay(iso: string): string {
  * route that wrote the row says which in `metadata.method`, so "TIP" stops being
  * the label a creator scans past.
  */
-/** How a payout method reads in the withdrawal list. */
-const PAYOUT_METHOD_LABEL: Record<string, string> = {
-  MPESA: "M-Pesa",
-  TIGO_PESA: "Tigo Pesa",
-  AIRTEL_MONEY: "Airtel Money",
-  BANK_TRANSFER: "Bank transfer",
-};
+// Method labels and the "where did the money last go" rule live in
+// lib/payout-account.ts, so this screen, the history list and the admin queue
+// cannot call the same method three different things.
 
 /**
  * Where one withdrawal stands. The wording is deliberate: APPROVED is a promise
@@ -255,8 +260,9 @@ export default function CreatorDashboard() {
   const [loading, setLoading] = useState(true);
   const [showPayoutModal, setShowPayoutModal] = useState(false);
   const [payoutAmount, setPayoutAmount] = useState(0);
-  const [payoutMethod, setPayoutMethod] = useState("MPESA");
+  const [payoutMethod, setPayoutMethod] = useState<string>("MPESA");
   const [payoutAccount, setPayoutAccount] = useState("");
+  const [payoutBankName, setPayoutBankName] = useState("");
   const [requestingPayout, setRequestingPayout] = useState(false);
   const [videos, setVideos] = useState<CreatorVideo[]>([]);
   const [processingCount, setProcessingCount] = useState(0);
@@ -583,8 +589,31 @@ export default function CreatorDashboard() {
     }
   }
 
+  /**
+   * Open the withdrawal form, already filled in with where the last payout went.
+   *
+   * The account is registered once — it is the one thing every other platform
+   * does and a form that asks for it again every time does not — but it is read
+   * back from the payout history rather than stored twice, so "the account we
+   * paid to" cannot drift away from "the account we have on file".
+   */
+  function openPayoutModal() {
+    const last = lastPayoutAccount(creatorData?.payouts);
+    if (last) {
+      setPayoutMethod(last.paymentMethod);
+      setPayoutAccount(last.accountDetails);
+      setPayoutBankName(last.bankName || "");
+    }
+    setPayoutAmount(Math.max(0, balance?.availableBalance || 0));
+    setShowPayoutModal(true);
+  }
+
   async function handlePayout() {
     if (!payoutAmount || !payoutAccount) return;
+    if (isBankPayout(payoutMethod) && !payoutBankName.trim()) {
+      toast("error", "Which bank should it be sent to?");
+      return;
+    }
     setRequestingPayout(true);
 
     try {
@@ -595,6 +624,10 @@ export default function CreatorDashboard() {
           amount: payoutAmount,
           paymentMethod: payoutMethod,
           accountDetails: payoutAccount,
+          // Half of a bank transfer's destination. The API has always accepted
+          // it; the form never sent it, so the admin paying it out had a number
+          // and no bank.
+          ...(isBankPayout(payoutMethod) ? { bankName: payoutBankName.trim() } : {}),
         }),
       });
 
@@ -635,6 +668,45 @@ export default function CreatorDashboard() {
   const paidMessages = creatorData?.paidMessages ?? null;
   const canRequestPayout =
     (balance?.availableBalance || 0) >= 30000 && user?.kycStatus === "APPROVED";
+
+  // Where the money goes: read from the payout history, so the form asks once.
+  const savedPayoutAccount = lastPayoutAccount(creatorData?.payouts);
+  const pendingPayout = (creatorData?.payouts || []).find(
+    (p) => p.status === "PENDING" || p.status === "APPROVED"
+  );
+  //
+  // Why a withdrawal cannot be requested yet, in the creator's own words.
+  //
+  // This is what replaced a `disabled` button. A greyed-out control with a
+  // parenthesis in it — "(Min: TZS 30,000 + KYC required)" — was the only thing
+  // on the page that mentioned payouts at all, and to somebody holding a balance
+  // of zero it read as "this platform cannot pay me", which is the report this
+  // section exists to answer. The reasons are now stated, and the KYC one is a
+  // link to the page that fixes it.
+  const withdrawalBlockers: { text: string; href?: string; linkLabel?: string }[] = [];
+  if (user?.kycStatus !== "APPROVED") {
+    withdrawalBlockers.push({
+      text: "Your identity check (KYC) must be approved before money can leave — it is what protects your payout account from being changed by somebody else.",
+      href: "/creator/kyc",
+      linkLabel: "Finish verification",
+    });
+  }
+  if ((balance?.availableBalance || 0) < 30000) {
+    withdrawalBlockers.push({
+      text:
+        `Minimum per withdrawal is TZS 30,000 and your available balance is ${formatTZS(balance?.availableBalance || 0)}.` +
+        ((balance?.pendingBalance || 0) > 0
+          ? ` ${formatTZS(balance?.pendingBalance || 0)} is still clearing — sales become available after 14 days (the window a buyer can dispute one in).`
+          : " Earnings appear here as your videos sell."),
+    });
+  }
+  if (pendingPayout) {
+    withdrawalBlockers.push({
+      text: `A withdrawal of ${formatTZS(pendingPayout.amount)} is ${
+        pendingPayout.status === "PENDING" ? "waiting to be reviewed" : "approved and being sent"
+      }. One request at a time — it is listed under Withdrawals below.`,
+    });
+  }
 
   // The performance table is driven by the balance endpoint (money) and the
   // encoding column by /api/creator/videos (processing) — joined here so neither
@@ -760,23 +832,75 @@ export default function CreatorDashboard() {
           </div>
         </div>
 
-        {/* Request Payout Button */}
-        <button
-          onClick={() => {
-            setPayoutAmount(balance?.availableBalance || 0);
-            setShowPayoutModal(true);
-          }}
-          disabled={!canRequestPayout}
-          className="btn-brand w-full sm:w-auto flex items-center justify-center gap-2"
-        >
-          <Banknote className="w-5 h-5" />
-          Request Payout
-          {!canRequestPayout && (
-            <span className="text-xs opacity-60">
-              (Min: TZS 30,000 + KYC required)
-            </span>
+        {/*
+          Withdrawals — the money side, and the one thing a creator who has sold
+          something looks for. How much is theirs, where it will be sent, and what
+          is still holding it back, in one place that is always reachable.
+        */}
+        <div className="glass-card p-5">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
+                <Banknote className="w-5 h-5 text-emerald-400" />
+              </div>
+              <div>
+                <p className="font-display font-bold">Withdraw your money</p>
+                <p className="text-xs text-white/50">
+                  {savedPayoutAccount
+                    ? `Goes to ${describePayoutAccount(savedPayoutAccount)}`
+                    : "To M-Pesa, Tigo Pesa, Airtel Money or a bank account — you enter it once and it is remembered."}
+                </p>
+              </div>
+            </div>
+
+            <button onClick={openPayoutModal} className="btn-brand flex items-center gap-2">
+              <Banknote className="w-4 h-4" /> Withdraw
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 text-sm">
+            <div className="rounded-xl bg-surface-300/30 p-3">
+              <p className="text-xs text-white/50">Available to withdraw</p>
+              <p className="font-bold text-emerald-400">
+                {formatTZS(balance?.availableBalance || 0)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-surface-300/30 p-3">
+              <p className="text-xs text-white/50">Still clearing (14 days)</p>
+              <p className="font-bold text-amber-400">
+                {formatTZS(balance?.pendingBalance || 0)}
+              </p>
+            </div>
+            <div className="rounded-xl bg-surface-300/30 p-3">
+              <p className="text-xs text-white/50">Minimum per withdrawal</p>
+              <p className="font-bold">TZS 30,000</p>
+            </div>
+          </div>
+
+          {withdrawalBlockers.length > 0 && (
+            <ul className="mt-4 space-y-2">
+              {withdrawalBlockers.map((blocker) => (
+                <li
+                  key={blocker.text}
+                  className="flex items-start gap-2 text-xs text-white/60 leading-relaxed"
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-400/80 shrink-0 mt-0.5" />
+                  <span>
+                    {blocker.text}
+                    {blocker.href && (
+                      <Link
+                        href={blocker.href}
+                        className="text-brand-400 hover:underline ml-1 whitespace-nowrap"
+                      >
+                        {blocker.linkLabel}
+                      </Link>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
           )}
-        </button>
+        </div>
 
         {/* Videos still transcoding are held back from the public feed until
             they can actually play, so say so rather than letting a creator
@@ -1140,8 +1264,9 @@ export default function CreatorDashboard() {
           <h2 className="font-display font-bold mb-4">Withdrawals</h2>
           {(creatorData?.payouts || []).length === 0 ? (
             <p className="text-sm text-white/40">
-              No withdrawal requests yet. When you request a payout it appears here,
-              with its status and, once paid, the receipt number.
+              No withdrawal requests yet. Use <strong>Withdraw</strong> above when you
+              have at least TZS 30,000 available; the request appears here with its
+              status and, once paid, the receipt number.
             </p>
           ) : (
             <div className="space-y-3">
@@ -1157,9 +1282,8 @@ export default function CreatorDashboard() {
                     <p className="text-sm">
                       {formatTZS(payout.amount)}
                       <span className="text-white/40">
-                        {" "}
-                        • {PAYOUT_METHOD_LABEL[payout.paymentMethod] || payout.paymentMethod} •{" "}
-                        {payout.accountDetails}
+                        {" • "}
+                        {describePayoutAccount(payout)}
                       </span>
                     </p>
                     <p className="text-xs text-white/40">
@@ -1437,14 +1561,33 @@ export default function CreatorDashboard() {
         </div>
       )}
 
-      {/* Payout Modal */}
+      {/* Payout Modal — withdraw to a phone number or a bank account. */}
       {showPayoutModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
           <div className="glass-card w-full max-w-md p-6 animate-slide-up">
-            <h2 className="text-xl font-display font-bold mb-2">Request Payout</h2>
+            <h2 className="text-xl font-display font-bold mb-2">Withdraw money</h2>
             <p className="text-sm text-white/50 mb-4">
-              Available balance: {formatTZS(balance?.availableBalance || 0)}
+              Available balance: {formatTZS(balance?.availableBalance || 0)} · minimum
+              TZS 30,000 per request.
             </p>
+
+            {savedPayoutAccount && (
+              <p className="mb-4 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70">
+                Filled in from your last withdrawal:{" "}
+                <span className="text-white/90">{describePayoutAccount(savedPayoutAccount)}</span>.
+                Change it below and the new account is used from then on.
+              </p>
+            )}
+
+            {!canRequestPayout && withdrawalBlockers.length > 0 && (
+              <ul className="mb-4 space-y-1.5 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2">
+                {withdrawalBlockers.map((blocker) => (
+                  <li key={blocker.text} className="text-xs text-amber-200/90 leading-relaxed">
+                    {blocker.text}
+                  </li>
+                ))}
+              </ul>
+            )}
 
             <div className="space-y-4">
               <div>
@@ -1466,22 +1609,47 @@ export default function CreatorDashboard() {
                   onChange={(e) => setPayoutMethod(e.target.value)}
                   className="input-field"
                 >
-                  <option value="MPESA">M-Pesa</option>
-                  <option value="TIGO_PESA">Tigo Pesa</option>
-                  <option value="AIRTEL_MONEY">Airtel Money</option>
-                  <option value="BANK_TRANSFER">Bank Transfer</option>
+                  {PAYOUT_METHODS.map((method) => (
+                    <option key={method} value={method}>
+                      {PAYOUT_METHOD_LABEL[method]}
+                    </option>
+                  ))}
                 </select>
               </div>
 
+              {/* A bank needs to know WHICH bank: the account number alone is not
+                  a destination. The API has always accepted this; the form never
+                  sent it, so the admin paying it out had a number and no bank. */}
+              {isBankPayout(payoutMethod) && (
+                <div>
+                  <label className="text-sm text-white/60 mb-2 block">Bank name</label>
+                  <input
+                    type="text"
+                    value={payoutBankName}
+                    onChange={(e) => setPayoutBankName(e.target.value)}
+                    placeholder="e.g. CRDB, NMB, NBC"
+                    className="input-field"
+                  />
+                </div>
+              )}
+
               <div>
-                <label className="text-sm text-white/60 mb-2 block">Account Details</label>
+                <label className="text-sm text-white/60 mb-2 block">
+                  {isBankPayout(payoutMethod) ? "Account number" : "Phone number"}
+                </label>
                 <input
                   type="text"
                   value={payoutAccount}
                   onChange={(e) => setPayoutAccount(e.target.value)}
-                  placeholder="Phone number or bank account"
+                  placeholder={
+                    isBankPayout(payoutMethod) ? "Account number" : "07XX XXX XXX"
+                  }
                   className="input-field"
                 />
+                <p className="text-xs text-white/40 mt-1">
+                  The money is sent here, so double-check it — a wrong number cannot be
+                  recalled once it is sent.
+                </p>
               </div>
 
               <div className="flex gap-3">
@@ -1490,10 +1658,16 @@ export default function CreatorDashboard() {
                 </button>
                 <button
                   onClick={handlePayout}
-                  disabled={requestingPayout || payoutAmount < 30000 || !payoutAccount}
+                  disabled={
+                    requestingPayout ||
+                    !canRequestPayout ||
+                    payoutAmount < 30000 ||
+                    !payoutAccount ||
+                    (isBankPayout(payoutMethod) && !payoutBankName.trim())
+                  }
                   className="btn-brand flex-1"
                 >
-                  {requestingPayout ? "Submitting..." : "Submit Request"}
+                  {requestingPayout ? "Submitting..." : "Withdraw"}
                 </button>
               </div>
             </div>

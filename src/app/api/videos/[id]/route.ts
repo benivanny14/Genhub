@@ -30,6 +30,20 @@ export async function GET(
     const { id } = await params;
     const authUser = await getCurrentUser();
 
+    // "View as visitor" — a creator or an admin asking what a customer would
+    // get. It DOWNGRADES the request and can never escalate one: every access
+    // decision below is made as if nobody were signed in, so the answer is the
+    // anonymous answer (no `hasAccess`, no playback URL, no teaser that only a
+    // buyer or a trailer would produce).
+    //
+    // It exists because of a report that is impossible to settle by reading the
+    // screen: the creator and an admin ARE entitled to the video on purpose
+    // (services/video-entitlement.service.ts), so every page plays for them and
+    // a working paywall looks broken. Asking the server for the visitor's answer
+    // is the only way to see it without signing out.
+    const asVisitor = request.nextUrl.searchParams.get("asVisitor") === "1";
+    const viewer = asVisitor ? null : authUser;
+
     const video = await prisma.video.findFirst({
       where: {
         OR: [{ id }, { slug: id }],
@@ -123,10 +137,10 @@ export async function GET(
       hasAccess = true;
       accessSource = "free";
       playbackUrl = resolvePlaybackUrl(video, 10, authUser?.userId);
-    } else if (authUser) {
+    } else if (viewer) {
       const entitlement = await resolveVideoEntitlement(video, {
-        userId: authUser.userId,
-        role: authUser.role,
+        userId: viewer.userId,
+        role: viewer.role,
       });
 
       hasAccess = entitlement.entitled;
@@ -134,7 +148,7 @@ export async function GET(
 
       // Generate full playback URL only if user has access
       if (hasAccess) {
-        playbackUrl = resolvePlaybackUrl(video, 10, authUser.userId);
+        playbackUrl = resolvePlaybackUrl(video, 10, viewer.userId);
       }
 
       // No access yet — but is a charge for THIS video stuck in limbo? A USSD
@@ -145,7 +159,7 @@ export async function GET(
       if (!hasAccess) {
         const unresolved = await prisma.transaction.findFirst({
           where: {
-            userId: authUser.userId,
+            userId: viewer.userId,
             videoId: video.id,
             type: "PPV_PURCHASE",
             status: "UNDER_INVESTIGATION",
