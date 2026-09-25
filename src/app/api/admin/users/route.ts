@@ -9,6 +9,7 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { invalidateAccountStatus } from "@/lib/services/account-status.service";
+import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -78,7 +79,17 @@ export async function POST(request: NextRequest) {
 
     const target = await prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, role: true, isVerified: true, isBanned: true },
+      // displayName/email are here for the audit line: "Banned Ivanny" is worth
+      // reading, "Banned cmug2mvrs…" is a lookup, and the person reading the log
+      // is usually in a hurry.
+      select: {
+        id: true,
+        role: true,
+        isVerified: true,
+        isBanned: true,
+        displayName: true,
+        email: true,
+      },
     });
     if (!target) return api.notFound("User not found");
     if (target.id === auth.userId && (action === "BAN" || action === "UNVERIFY")) {
@@ -102,6 +113,16 @@ export async function POST(request: NextRequest) {
           link: "/profile",
         },
       });
+      await recordAudit({
+        actorId: auth.userId,
+        action: isVerified ? AUDIT_ACTIONS.userVerify : AUDIT_ACTIONS.userUnverify,
+        targetType: "User",
+        targetId: userId,
+        summary: `${isVerified ? "Verified" : "Removed verification from"} ${
+          target.displayName || target.email || userId
+        }`,
+        detail: { wasVerified: target.isVerified },
+      });
       return api.success({ isVerified }, isVerified ? "User verified" : "Verification removed");
     }
 
@@ -114,12 +135,33 @@ export async function POST(request: NextRequest) {
     invalidateAccountStatus(userId);
 
     const isBanned = action === "BAN";
+    const reason = body?.reason?.toString() || "Terms violation";
     await prisma.user.update({
       where: { id: userId },
       data: {
         isBanned,
-        banReason: isBanned ? (body?.reason?.toString() || "Terms violation") : null,
+        banReason: isBanned ? reason : null,
         strikes: isBanned ? 3 : 0,
+      },
+    });
+
+    // The only durable record that this happened. `banReason` is NULLed by an
+    // unban and `isBanned` is a boolean with no author, so without this line the
+    // answer to "who suspended this creator, and why" exists nowhere.
+    await recordAudit({
+      actorId: auth.userId,
+      action: isBanned ? AUDIT_ACTIONS.userBan : AUDIT_ACTIONS.userUnban,
+      targetType: "User",
+      targetId: userId,
+      summary: `${isBanned ? "Suspended" : "Reinstated"} ${
+        target.displayName || target.email || userId
+      }${isBanned ? ` — reason: ${reason}` : ""}`,
+      detail: {
+        reason: isBanned ? reason : null,
+        wasBanned: target.isBanned,
+        // The ban unpublishes everything this creator had live; say how much, so
+        // the log answers the first question asked afterwards.
+        ...(isBanned ? { videosUnpublished: true } : {}),
       },
     });
 

@@ -60,11 +60,12 @@ export async function GET(request: NextRequest) {
         thumbnailUrl: true,
         duration: true,
         teaserDuration: true,
-        // The edit form owns title, price, description, cover, category, tags
-        // and preview length; a field the API does not return is a field the
-        // creator cannot edit without retyping it from memory.
+        // The edit form owns title, price, description, cover, category, tags,
+        // preview length and captions; a field the API does not return is a
+        // field the creator cannot edit without retyping it from memory.
         category: true,
         tags: true,
+        captionsUrl: true,
         encodingStatus: true,
         encodeProgress: true,
         encodingError: true,

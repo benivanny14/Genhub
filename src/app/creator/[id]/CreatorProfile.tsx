@@ -12,8 +12,10 @@ import VideoCard from "@/components/VideoCard";
 import { Play, Users, Eye, Heart, Star, ArrowLeft, Smartphone, Wallet, MessageCircle } from "lucide-react";
 import { formatTZS, formatCount } from "@/lib/utils";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
+import { canOptimizeImage } from "@/lib/media";
 
 interface CreatorProfile {
   id: string;
@@ -265,13 +267,18 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
       {/* Cover / Banner */}
       <div className="relative h-48 md:h-64 bg-gradient-to-br from-brand-500/20 via-surface-300 to-surface-500 overflow-hidden">
         {creator.creatorProfile?.coverImageUrl && (
-          // Creator-supplied URL on an arbitrary host, so next/image cannot
-          // optimise it (an unconfigured remotePattern throws).
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          // The cover is creator-supplied and may live on any host, so it is
+          // optimised only when it is a public file we host (canOptimizeImage).
+          // `fill` because the banner's height is set by the container, not by
+          // the picture — the old <img> stretched whatever aspect it was given.
+          <Image
             src={creator.creatorProfile.coverImageUrl}
             alt=""
-            className="w-full h-full object-cover"
+            fill
+            priority
+            sizes="100vw"
+            unoptimized={!canOptimizeImage(creator.creatorProfile.coverImageUrl)}
+            className="object-cover"
           />
         )}
         <Link
@@ -288,8 +295,14 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
           {/* Avatar */}
           <div className="w-24 h-24 rounded-full bg-surface-300 border-4 border-surface-500 flex items-center justify-center text-3xl font-bold text-brand-400 overflow-hidden">
             {creator.avatarUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={creator.avatarUrl} alt="" className="w-full h-full object-cover" />
+              <Image
+                src={creator.avatarUrl}
+                alt=""
+                width={96}
+                height={96}
+                unoptimized={!canOptimizeImage(creator.avatarUrl)}
+                className="w-full h-full object-cover"
+              />
             ) : (
               creator.displayName?.[0] || "C"
             )}

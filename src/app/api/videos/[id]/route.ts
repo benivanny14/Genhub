@@ -256,6 +256,12 @@ export async function PATCH(
         ...(result.data.thumbnailUrl !== undefined
           ? { thumbnailUrl: normalizeMediaUrl(result.data.thumbnailUrl, config.bunny.cdnHostname) }
           : {}),
+        // "" is the form's way of saying "remove them". Storing the empty string
+        // would leave a <track> whose src is the current page, so the removal is
+        // written as NULL — one value that means "no captions", not two.
+        ...(result.data.captionsUrl !== undefined
+          ? { captionsUrl: result.data.captionsUrl === "" ? null : result.data.captionsUrl }
+          : {}),
       },
       select: {
         id: true,
@@ -263,6 +269,7 @@ export async function PATCH(
         description: true,
         price: true,
         isPublished: true,
+        captionsUrl: true,
         updatedAt: true,
       },
     });

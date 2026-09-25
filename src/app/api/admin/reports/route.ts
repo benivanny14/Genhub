@@ -9,6 +9,7 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { moderateVideoSchema } from "@/lib/validation";
+import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -61,7 +62,9 @@ export async function POST(request: NextRequest) {
 
     const report = await prisma.videoReport.findUnique({
       where: { id: reportId },
-      include: { video: true },
+      include: {
+        video: { include: { creator: { select: { displayName: true, email: true } } } },
+      },
     });
 
     if (!report) return api.notFound("Report not found");
@@ -123,6 +126,28 @@ export async function POST(request: NextRequest) {
           });
         }
       }
+    });
+
+    // A moderation decision is a strike against a creator's account and can ban
+    // them outright. Both the action and the reason belong in the log, next to
+    // whoever issued it — StrikeLog records that a strike happened, never who
+    // decided it or why the report was upheld.
+    await recordAudit({
+      actorId: auth.userId,
+      action: action === "DISMISSED" ? AUDIT_ACTIONS.reportDismiss : AUDIT_ACTIONS.reportResolve,
+      targetType: "VideoReport",
+      targetId: reportId,
+      summary: `${action === "DISMISSED" ? "Dismissed" : action} — "${
+        report.video?.title || report.videoId
+      }" by ${
+        report.video?.creator?.displayName || report.video?.creator?.email || report.video?.creatorId
+      } — reason: ${reason}`,
+      detail: {
+        action,
+        reason,
+        videoId: report.videoId,
+        creatorId: report.video?.creatorId ?? null,
+      },
     });
 
     return api.success(null, "Kitendo kimefanyika");

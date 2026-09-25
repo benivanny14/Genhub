@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { fetchCurrentUser, forgetCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
+import Image from "next/image";
 import ImageCropper from "@/components/ImageCropper";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -23,6 +24,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
+import { canOptimizeImage } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
 interface UserData {
@@ -320,8 +322,14 @@ export default function ProfilePage() {
           <div className="flex items-center gap-4">
             <div className="relative w-20 h-20 shrink-0 rounded-full overflow-hidden bg-surface-300/50 flex items-center justify-center">
               {avatarUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={avatarUrl} alt="Your profile picture" className="w-full h-full object-cover" />
+                <Image
+                  src={avatarUrl}
+                  alt="Your profile picture"
+                  width={80}
+                  height={80}
+                  unoptimized={!canOptimizeImage(avatarUrl)}
+                  className="w-full h-full object-cover"
+                />
               ) : (
                 <span className={cn("text-2xl font-bold", isLight ? "text-gray-400" : "text-white/40")}>
                   {(displayName || user?.phone || "U")[0]?.toUpperCase()}

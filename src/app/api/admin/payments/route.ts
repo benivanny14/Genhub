@@ -32,6 +32,7 @@ import {
   resolveInvestigation,
 } from "@/lib/services/payment-reconcile.service";
 import { reverseCollectedCharge } from "@/lib/services/payment-reversal.service";
+import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import { z } from "zod";
 
 // A USSD prompt answered normally settles in a couple of minutes; past this the
@@ -181,6 +182,31 @@ export async function POST(request: NextRequest) {
             : `TZS ${outcome.amount.toLocaleString("en-US")} marked as returned to the customer's phone`;
 
         const clawedBack = outcome.clawedBackPending + outcome.clawedBackAvailable;
+
+        // The refund service already stamps `actorId` onto the transaction's
+        // metadata, which answers "who" for anyone reading that row. This entry
+        // exists for the other direction: the audit list is where an operator
+        // looks to see every decision an admin made, and a refund that only
+        // appears on the payment it reversed is invisible from there.
+        await recordAudit({
+          actorId: auth.userId,
+          action: AUDIT_ACTIONS.paymentRefund,
+          targetType: "Transaction",
+          targetId: transactionId,
+          summary: `Refunded TZS ${outcome.amount.toLocaleString("en-US")} to ${
+            outcome.destination === "WALLET" ? "the customer's wallet" : "the customer's phone"
+          }${reason ? ` — ${reason}` : ""}${gatewayRef ? ` (ref ${gatewayRef})` : ""}`,
+          detail: {
+            amount: outcome.amount,
+            destination: outcome.destination,
+            settledBefore: outcome.settledBefore,
+            creatorShareClawedBack: clawedBack,
+            shortfall: outcome.shortfall,
+            reason: reason ?? null,
+            gatewayRef: gatewayRef ?? null,
+          },
+        });
+
         const creatorLeg = !outcome.settledBefore
           ? "The creator's share was left alone: this charge never settled in our books, so they were never credited for it."
           : outcome.shortfall > 0
@@ -255,6 +281,17 @@ export async function POST(request: NextRequest) {
             "NOT_UNDER_INVESTIGATION"
           );
         }
+        await recordAudit({
+          actorId: auth.userId,
+          action: AUDIT_ACTIONS.paymentGrant,
+          targetType: "Transaction",
+          targetId: transactionId,
+          summary: `Marked a TZS ${outcome.amount.toLocaleString("en-US")} charge as PAID after investigation${
+            note ? ` — ${note}` : ""
+          }`,
+          detail: { amount: outcome.amount, note: note ?? null },
+        });
+
         return api.success({
           transactionId,
           amount: outcome.amount,
@@ -278,6 +315,17 @@ export async function POST(request: NextRequest) {
             "NOT_UNDER_INVESTIGATION"
           );
         }
+        await recordAudit({
+          actorId: auth.userId,
+          action: AUDIT_ACTIONS.paymentMarkUnpaid,
+          targetType: "Transaction",
+          targetId: transactionId,
+          summary: `Marked a TZS ${outcome.amount.toLocaleString("en-US")} charge as NOT PAID${
+            note ? ` — ${note}` : ""
+          }`,
+          detail: { amount: outcome.amount, note: note ?? null },
+        });
+
         return api.success({
           transactionId,
           amount: outcome.amount,
@@ -301,6 +349,17 @@ export async function POST(request: NextRequest) {
             "NOT_PENDING"
           );
         }
+
+        await recordAudit({
+          actorId: auth.userId,
+          action: AUDIT_ACTIONS.paymentExpire,
+          targetType: "Transaction",
+          targetId: transactionId,
+          summary: `Released a TZS ${outcome.amount.toLocaleString("en-US")} checkout lock — ${
+            reason || "admin_force_expire"
+          }`,
+          detail: { amount: outcome.amount, reason: reason || "admin_force_expire" },
+        });
 
         return api.success({
           transactionId,

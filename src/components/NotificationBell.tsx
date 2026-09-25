@@ -25,6 +25,9 @@ export default function NotificationBell() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  // Known-signed-in, so the background refresh below does not run for everybody
+  // who is merely looking at the site.
+  const signedIn = useRef(false);
   const { theme } = useTheme();
   const isLight = theme === "light";
 
@@ -38,21 +41,53 @@ export default function NotificationBell() {
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
-  async function fetchNotifications() {
-    setLoading(true);
+  async function fetchNotifications({ spinner = true } = {}) {
+    if (spinner) setLoading(true);
     try {
       const res = await fetch("/api/notifications");
       const data = await res.json();
       if (data.success) {
+        signedIn.current = true;
         setNotifications(data.data.notifications || []);
         setUnreadCount(data.data.unreadCount || 0);
       }
     } catch {
       // Not logged in or API unavailable
     } finally {
-      setLoading(false);
+      if (spinner) setLoading(false);
     }
   }
+
+  /**
+   * Keep the unread badge honest.
+   *
+   * It used to be filled in only when the bell was opened — so the dot was
+   * whatever it was when the page first loaded, and "no notifications" was the
+   * state a viewer saw until they clicked to check, which is exactly backwards
+   * for a badge. A creator's sale, a payout decision and a video going ready all
+   * arrive while they are on another page.
+   *
+   * 60 seconds, not 2: this is one small count, and every open tab asking for it
+   * every couple of seconds is a worse problem than a slightly old number. Paused
+   * while the tab is hidden, refreshed the moment it is looked at again. Signed-out
+   * visitors never poll at all — the first read tells us there is nothing to read.
+   */
+  useEffect(() => {
+    void fetchNotifications({ spinner: false });
+
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      if (!signedIn.current) return;
+      void fetchNotifications({ spinner: false });
+    };
+    const timer = setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function toggleOpen() {
     const next = !open;

@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import { z } from "zod";
 
 export async function GET(request: NextRequest) {
@@ -74,6 +75,9 @@ export async function POST(request: NextRequest) {
 
     const payout = await prisma.payoutRequest.findUnique({
       where: { id: payoutId },
+      // The creator's name is for the audit line: "paid TZS 120,000 to Ivanny" is
+      // the sentence the person reading the log needs, not a cuid.
+      include: { creator: { select: { displayName: true, email: true } } },
     });
 
     if (!payout) return api.notFound("Withdrawal request not found");
@@ -150,6 +154,32 @@ export async function POST(request: NextRequest) {
     } catch (notifyError) {
       console.warn("[Admin Payout] Notification failed:", (notifyError as Error)?.message);
     }
+
+    const verb =
+      action === "APPROVED" ? "Approved" : action === "PAID" ? "Paid out" : "Rejected";
+    await recordAudit({
+      actorId: auth.userId,
+      action:
+        action === "APPROVED"
+          ? AUDIT_ACTIONS.payoutApprove
+          : action === "PAID"
+            ? AUDIT_ACTIONS.payoutPaid
+            : AUDIT_ACTIONS.payoutReject,
+      targetType: "PayoutRequest",
+      targetId: payoutId,
+      summary: `${verb} TZS ${payout.amount.toLocaleString()} for ${
+        payout.creator?.displayName || payout.creator?.email || payout.creatorId
+      }${adminNote ? ` — ${adminNote}` : ""}`,
+      detail: {
+        amount: payout.amount,
+        creatorId: payout.creatorId,
+        paymentMethod: payout.paymentMethod,
+        adminNote: adminNote ?? null,
+        // Rejecting returns the money to the creator's available balance; the
+        // log has to say so, because the balance itself will not explain it.
+        fundsReturned: action === "REJECTED",
+      },
+    });
 
     return api.success(null, `Withdrawal request ${action === "APPROVED" ? "approved" : action === "PAID" ? "paid" : "rejected"}`);
   } catch (error) {

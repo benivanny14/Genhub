@@ -49,6 +49,11 @@ const CONTENT_TYPES: Record<string, string> = {
   heif: "image/heif",
   gif: "image/gif",
   avif: "image/avif",
+  // Captions. The media proxy serves whatever Content-Type the key implies, and
+  // a browser refuses to parse a <track> whose response is
+  // application/octet-stream — the captions would simply never appear, with no
+  // error anywhere. This entry is what makes an uploaded .vtt playable.
+  vtt: "text/vtt",
 };
 
 /**
@@ -91,6 +96,30 @@ export function ownerOfPrivateKey(key: string): string | null {
 /** The in-app URL a browser should use for a storage key. */
 export function mediaUrlFor(key: string): string {
   return `${MEDIA_ROUTE_PREFIX}${key}`;
+}
+
+/**
+ * May this URL be handed to next/image's optimiser?
+ *
+ * Two kinds of source must NOT be, and both fail by showing nothing at all:
+ *
+ *   * a host that is not listed in next.config.js `images.remotePatterns` — a
+ *     creator who pasted an image URL, a legacy external avatar. The optimiser
+ *     answers 400 and the picture silently disappears;
+ *   * ANY key the media route gates behind a session — `private/…` (KYC
+ *     documents) and the legacy `uploads/…` keys a KYC row still points at. The
+ *     optimiser fetches from our own media route WITHOUT cookies, so the route
+ *     answers 401 and the picture renders broken.
+ *
+ * So the rule is the narrow one: a key under `public/` was put there by the
+ * upload route and is readable by anyone. Those — the common case, an avatar or
+ * a thumbnail — go through the optimiser, and that is where the bytes are saved:
+ * a 512×512 upload rendered at 32px costs a phone on mobile data sixteen times
+ * what it should. Everything else is used as-is.
+ */
+export function canOptimizeImage(src: string | null | undefined): boolean {
+  if (!src) return false;
+  return src.startsWith(`${MEDIA_ROUTE_PREFIX}public/`);
 }
 
 /**

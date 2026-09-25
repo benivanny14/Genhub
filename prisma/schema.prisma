@@ -217,6 +217,14 @@ model Video {
   /// teaserBunnyVideoId is set.
   teaserClipUrl   String?
   thumbnailUrl    String?
+  /// WebVTT captions for this scene, as a URL the browser can fetch.
+  ///
+  /// Stored, because it cannot be derived: a subtitle file is not inside the
+  /// video, and Bunny's transcoder does not produce one. Without somewhere to
+  /// put it there was no way to attach captions at all — which for a deaf
+  /// viewer is not a missing feature but a missing door, and for everyone else
+  /// is the difference between watching on a noisy bus and not watching.
+  captionsUrl     String?
   price           Int      @default(1000) // Price in TZS
   teaserDuration  Int      @default(15) // Seconds of free preview (UI: badge + hover length)
   duration        Int?     // Total duration in seconds
@@ -759,6 +767,53 @@ model GalleryImage {
   video Video @relation(fields: [videoId], references: [id], onDelete: Cascade)
 
   @@index([videoId])
+}
+
+// =============================================================================
+// ADMIN AUDIT LOG
+//
+// Every action an admin takes that changes somebody else's account, money or
+// content, recorded once, in one table, with who did it and when.
+//
+// Until this existed, the only trace of a ban, a coupon, a KYC decision or a
+// payout approval was the CONSEQUENCE: `User.isBanned` true, a payout row in
+// PAID, a notification the customer received. None of them says who decided, or
+// why, and several of them destroy the previous value as they write (`banReason`
+// is overwritten by the next ban/unban, `adminNote` by the next decision). So
+// "who banned this creator?" had no answer anywhere in the system — which is a
+// question a platform taking money has to be able to answer, both for the
+// creator who asks and for whoever is investigating an abuse of admin access.
+//
+// `summary` is stored, not derived, and it is a sentence rather than a code.
+// The reason is the difference between a log an operator reads during an
+// incident and a table that is only ever queried by machine: "Banned Ivanny
+// (3 strikes) — reason: Terms violation" answers the question at a glance.
+// Codes live in `action` for filtering; the sentence is for the human.
+//
+// No relation to User on purpose. `actorId` and `targetId` are ids, not foreign
+// keys: deleting an account must not delete the record of what was done to it,
+// and Prisma would cascade or refuse.
+// =============================================================================
+
+model AdminAuditLog {
+  id         String   @id @default(cuid())
+  /// The admin who acted. Not a relation — see the note above.
+  actorId    String
+  /// Dotted code for filtering, e.g. user.ban, coupon.create, payout.paid.
+  action     String
+  /// What kind of thing was acted on: User, Coupon, PayoutRequest, KycVerification…
+  targetType String?
+  targetId   String?
+  /// One human sentence describing what happened.
+  summary    String
+  /// Anything else worth keeping: previous value, amount, reason.
+  detail     Json?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([action])
+  @@index([targetId])
+  @@index([createdAt])
 }
 
 // =============================================================================

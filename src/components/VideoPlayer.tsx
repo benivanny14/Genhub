@@ -33,6 +33,15 @@ interface VideoPlayerProps {
   /** Members only: resolves a signed download URL and saves the file */
   onDownload?: () => void;
   downloading?: boolean;
+  /**
+   * WebVTT captions for this scene, when the creator attached them.
+   *
+   * Rendered as a <track> on the video element rather than fed through hls.js:
+   * a side-loaded caption file is not part of the HLS manifest, and hls.js's
+   * subtitleTrack only drives in-manifest WebVTT. A <track> is handled by the
+   * browser's own text-track machinery, which works with any source.
+   */
+  captionsUrl?: string | null;
 }
 
 export default function VideoPlayer({
@@ -48,6 +57,7 @@ export default function VideoPlayer({
   onEnded,
   onDownload,
   downloading = false,
+  captionsUrl,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -502,7 +512,27 @@ export default function VideoPlayer({
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
         onEnded={onEnded}
-      />
+      >
+        {/*
+          Captions are NOT default-on. Turning them on by default puts text over
+          every scene for viewers who never asked for it, and on a platform like
+          this the picture is the product. The browser's own CC button in the
+          controls turns them on, and a creator who wants them burned on can
+          attach a file and say so in the description.
+
+          `key` on the src: changing the URL must reload the track. A <track>
+          whose src changes without remounting keeps the old cue list.
+        */}
+        {captionsUrl ? (
+          <track
+            key={captionsUrl}
+            kind="captions"
+            src={captionsUrl}
+            srcLang="sw"
+            label="Captions (Kiswahili)"
+          />
+        ) : null}
+      </video>
 
       {/* Loading State */}
       {isLoading && !fatalError && (

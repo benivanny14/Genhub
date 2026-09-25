@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import Image from "next/image";
 import ImageCropper from "@/components/ImageCropper";
 import {
   Wallet,
@@ -29,7 +30,9 @@ import {
   EyeOff,
   ImageOff,
   Tag,
+  Captions,
 } from "lucide-react";
+import { canOptimizeImage } from "@/lib/media";
 import { formatTZS, formatRelativeTime, formatCount } from "@/lib/utils";
 // The one list of categories — the same ids /browse/[category] serves, minus the
 // "all" pseudo-category, which is a filter and not something a video can be.
@@ -91,6 +94,7 @@ interface CreatorVideo {
   teaserDuration: number;
   category: string | null;
   tags: string[];
+  captionsUrl: string | null;
   createdAt: string;
   encoding: EncodingState;
 }
@@ -169,6 +173,8 @@ export default function CreatorDashboard() {
   const [editTags, setEditTags] = useState("");
   const [editTeaserDuration, setEditTeaserDuration] = useState(15);
   const [editCoverUrl, setEditCoverUrl] = useState<string | null>(null);
+  const [editCaptionsUrl, setEditCaptionsUrl] = useState("");
+  const [uploadingCaptions, setUploadingCaptions] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   // The cover waiting to be framed — a 16:9 crop of the picture just picked.
   const [coverCropFile, setCoverCropFile] = useState<File | null>(null);
@@ -210,10 +216,40 @@ export default function CreatorDashboard() {
   // While anything is still transcoding, re-read so the progress the creator is
   // watching actually moves. Stops on its own once everything is settled, so an
   // idle dashboard makes no requests at all.
+  //
+  // And it stops while the tab is in the background. A creator leaves this page
+  // open and goes to do something else — for minutes or for the night — and the
+  // old timer kept asking every 8 seconds the whole time, four requests a minute
+  // per open tab, on the phone's data. Coming back refreshes immediately, so the
+  // number is current the instant it is looked at.
   useEffect(() => {
     if (processingCount === 0) return;
-    const timer = setInterval(fetchData, 8000);
-    return () => clearInterval(timer);
+
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const start = () => {
+      if (!timer) timer = setInterval(fetchData, 8000);
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void fetchData();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, [processingCount, fetchData]);
 
   /**
@@ -266,6 +302,7 @@ export default function CreatorDashboard() {
     setEditTags((video.tags || []).join(", "));
     setEditTeaserDuration(video.teaserDuration || 15);
     setEditCoverUrl(video.thumbnailUrl);
+    setEditCaptionsUrl(video.captionsUrl || "");
     setOpenMenuId(null);
   }
 
@@ -294,6 +331,30 @@ export default function CreatorDashboard() {
     }
   }
 
+  /**
+   * Attach a captions file to the video being edited.
+   *
+   * Uploaded immediately (it is a file, and there is nothing to crop), but like
+   * the cover it is only written to the video row on Save — a cancelled edit
+   * leaves the scene exactly as it was.
+   */
+  async function uploadCaptions(file: File) {
+    setUploadingCaptions(true);
+    try {
+      const { uploadCaptions: upload } = await import("@/lib/upload-client");
+      const url = await upload(file);
+      setEditCaptionsUrl(url);
+      toast("success", "Captions ready — press Save to attach them");
+    } catch (error) {
+      toast(
+        "error",
+        error instanceof Error ? error.message : "The captions file could not be uploaded"
+      );
+    } finally {
+      setUploadingCaptions(false);
+    }
+  }
+
   async function saveEdit() {
     if (!editing) return;
     const title = editTitle.trim();
@@ -307,6 +368,13 @@ export default function CreatorDashboard() {
     }
     if (editTeaserDuration < 15 || editTeaserDuration > 30) {
       toast("error", "The preview must be between 15 and 30 seconds");
+      return;
+    }
+    // Checked here as well as in the schema so the creator gets an answer in the
+    // form they are looking at, naming the file that will not work.
+    const captionsUrl = editCaptionsUrl.trim();
+    if (captionsUrl && !/\.vtt(\?.*)?$/i.test(captionsUrl)) {
+      toast("error", "Captions must be a .vtt (WebVTT) file — .srt will not play");
       return;
     }
 
@@ -329,6 +397,9 @@ export default function CreatorDashboard() {
           tags,
           teaserDuration: editTeaserDuration,
           ...(editCoverUrl ? { thumbnailUrl: editCoverUrl } : {}),
+          // Always sent, empty included: clearing the field is how a creator
+          // removes captions, and an omitted field could not mean that.
+          captionsUrl,
         }),
       });
       const data = await res.json();
@@ -618,11 +689,12 @@ export default function CreatorDashboard() {
                     from the creator's side both mean "post has no cover". */}
                 <div className="w-24 h-16 shrink-0 rounded-lg overflow-hidden bg-surface-300/40 flex items-center justify-center">
                   {video.thumbnailUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
+                    <Image
                       src={video.thumbnailUrl}
                       alt=""
-                      loading="lazy"
+                      width={96}
+                      height={64}
+                      unoptimized={!canOptimizeImage(video.thumbnailUrl)}
                       className="w-full h-full object-cover"
                     />
                   ) : (
@@ -855,8 +927,14 @@ export default function CreatorDashboard() {
                 <div className="flex items-start gap-4">
                   <div className="w-40 h-24 shrink-0 rounded-xl overflow-hidden bg-surface-300/40 flex items-center justify-center">
                     {editCoverUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={editCoverUrl} alt="" className="w-full h-full object-cover" />
+                      <Image
+                        src={editCoverUrl}
+                        alt=""
+                        width={160}
+                        height={96}
+                        unoptimized={!canOptimizeImage(editCoverUrl)}
+                        className="w-full h-full object-cover"
+                      />
                     ) : (
                       <ImageOff className="w-5 h-5 text-white/30" />
                     )}
@@ -1001,6 +1079,50 @@ export default function CreatorDashboard() {
                     {editTags.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 10).length}/10 tags
                   </p>
                 </div>
+              </div>
+
+              {/* Captions */}
+              <div>
+                <label
+                  className="text-sm text-white/60 mb-2 block flex items-center gap-2"
+                  htmlFor="edit-captions"
+                >
+                  <Captions className="w-4 h-4" /> Captions (.vtt)
+                </label>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    id="edit-captions"
+                    value={editCaptionsUrl}
+                    onChange={(e) => setEditCaptionsUrl(e.target.value)}
+                    maxLength={2048}
+                    placeholder="https://… or upload a file"
+                    className="input-field flex-1"
+                  />
+                  <label className="btn-ghost inline-flex items-center justify-center gap-1.5 text-xs cursor-pointer whitespace-nowrap">
+                    {uploadingCaptions ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Upload className="w-3.5 h-3.5" />
+                    )}
+                    {uploadingCaptions ? "Uploading…" : "Upload .vtt"}
+                    <input
+                      type="file"
+                      accept=".vtt,text/vtt"
+                      className="hidden"
+                      disabled={uploadingCaptions}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (file) void uploadCaptions(file);
+                      }}
+                    />
+                  </label>
+                </div>
+                <p className="text-xs text-white/40 mt-1">
+                  A WebVTT file, so deaf and hard-of-hearing viewers can follow the
+                  scene and anyone can watch with the sound off. Leave it empty for no
+                  captions. Viewers turn them on with the CC button.
+                </p>
               </div>
             </div>
 

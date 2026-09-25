@@ -88,6 +88,8 @@ interface VideoData {
   } | null;
   playbackUrl: string | null;
   teaserUrl: string | null;
+  /** Attached WebVTT captions, when the creator added them. */
+  captionsUrl?: string | null;
   /**
    * Bunny's processing state. `ready` and `untracked` mean nothing blocks
    * playback; `pending`/`processing` mean the bytes are not servable yet, and
@@ -905,6 +907,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             startAt={canPlayFull ? startAt : 0}
             onDownload={canPlayFull ? () => handleDownload() : undefined}
             downloading={downloading}
+            // Captions belong to the scene, so a viewer previewing the teaser
+            // does not get the full scene's captions over a clip they may not be
+            // entitled to hear.
+            captionsUrl={canPlayFull ? video.captionsUrl : null}
           />
         ) : (
           // No playable source. For a paid scene without a teaser clip that is

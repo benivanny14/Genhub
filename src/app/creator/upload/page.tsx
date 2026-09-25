@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
+import Image from "next/image";
+import { canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
@@ -418,12 +420,15 @@ export default function UploadPage() {
               />
             </label>
             {thumbnailUrl && (
-              // Creator-supplied URL on an arbitrary host, so next/image cannot
-              // optimise it (an unconfigured remotePattern throws).
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              // Creator-supplied URL on an arbitrary host, so it is optimised
+              // only when it is a public file we host (canOptimizeImage);
+              // otherwise the raw source is used and the preview never breaks.
+              <Image
                 src={thumbnailUrl}
                 alt="Thumbnail preview"
+                width={320}
+                height={96}
+                unoptimized={!canOptimizeImage(thumbnailUrl)}
                 className="mt-2 h-24 w-full max-w-xs object-cover rounded-lg"
               />
             )}

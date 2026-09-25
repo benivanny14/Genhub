@@ -10,6 +10,7 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { createCouponSchema } from "@/lib/validation";
+import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    await requireRole("ADMIN");
+    const auth = await requireRole("ADMIN");
 
     const body = await request.json();
     const result = createCouponSchema.safeParse(body);
@@ -60,6 +61,19 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // A coupon is a discount with no customer attached: whoever created it can
+    // hand it to anyone, so the log entry names the admin, not just the code.
+    await recordAudit({
+      actorId: auth.userId,
+      action: AUDIT_ACTIONS.couponCreate,
+      targetType: "Coupon",
+      targetId: coupon.id,
+      summary: `Created coupon ${coupon.code} (${
+        type === "PERCENT" ? `${value}%` : `TZS ${value.toLocaleString()}`
+      }${maxUses ? `, max ${maxUses} uses` : ""})`,
+      detail: { code: coupon.code, type, value, maxUses: maxUses ?? null, expiresAt },
+    });
+
     return api.success(coupon, "Coupon created", 201);
   } catch (error) {
     if (error instanceof AuthError) {
@@ -72,7 +86,7 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   try {
-    await requireRole("ADMIN");
+    const auth = await requireRole("ADMIN");
 
     const id = request.nextUrl.searchParams.get("id");
     if (!id) return api.validation("id is required");
@@ -84,6 +98,15 @@ export async function DELETE(request: NextRequest) {
     const updated = await prisma.coupon.update({
       where: { id },
       data: { isActive: !coupon.isActive },
+    });
+
+    await recordAudit({
+      actorId: auth.userId,
+      action: AUDIT_ACTIONS.couponToggle,
+      targetType: "Coupon",
+      targetId: id,
+      summary: `${updated.isActive ? "Enabled" : "Disabled"} coupon ${coupon.code}`,
+      detail: { code: coupon.code, wasActive: coupon.isActive, usedCount: coupon.usedCount },
     });
 
     return api.success(updated, updated.isActive ? "Coupon updated" : "Kuzimwa");

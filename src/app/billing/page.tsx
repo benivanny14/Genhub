@@ -15,6 +15,8 @@ import BottomNav from "@/components/BottomNav";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/lib/currency";
+import Image from "next/image";
+import { canOptimizeImage } from "@/lib/media";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import {
   CreditCard,
@@ -234,10 +236,12 @@ export default function BillingPage() {
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-medium overflow-hidden">
                       {sub.creator.avatarUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
+                        <Image
                           src={sub.creator.avatarUrl}
                           alt={sub.creator.displayName || "Creator"}
+                          width={40}
+                          height={40}
+                          unoptimized={!canOptimizeImage(sub.creator.avatarUrl)}
                           className="w-full h-full object-cover"
                         />
                       ) : (

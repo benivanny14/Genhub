@@ -19,7 +19,7 @@
 //   public  (default) — thumbnails, avatars, gallery photos
 //   private           — KYC documents, readable only by their owner and admins
 //
-// Guardrails: auth required, 5 uploads / 5 min, images only, 5 MB max.
+// Guardrails: auth required, 5 uploads / 5 min, images or .vtt captions, 5 MB.
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -39,7 +39,29 @@ const ALLOWED_TYPES: Record<string, string> = {
   "image/webp": ".webp",
   "image/heic": ".heic",
   "image/heif": ".heif",
+  // WebVTT captions. Same route, same key shape, different bucket folder — a
+  // creator should not need a second upload path to add subtitles to a scene.
+  "text/vtt": ".vtt",
 };
+
+/**
+ * The extension to store a file under, or null if it is not something we accept.
+ *
+ * `.vtt` is also accepted from the FILENAME when the browser sends no type. Some
+ * browsers (and every drag-and-drop from a file manager) hand over an empty or
+ * `application/octet-stream` type for a caption file, and refusing those would
+ * make the feature work on one machine and not the next. Nothing else about the
+ * rule moves: the stored extension is still the app's own, and the file still
+ * has to be named .vtt.
+ */
+function extensionFor(file: File): string | null {
+  const byType = ALLOWED_TYPES[file.type];
+  if (byType) return byType;
+  if (/\.vtt$/i.test(file.name) && /^(|application\/octet-stream|application\/x-subrip|text\/plain)$/.test(file.type)) {
+    return ".vtt";
+  }
+  return null;
+}
 
 const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 
@@ -64,7 +86,7 @@ export async function POST(request: NextRequest) {
       config.rateLimit.upload.windowMs
     );
     if (!allowed) {
-      return api.rateLimited("Images too many — wait a few minutes.");
+      return api.rateLimited("Too many uploads — wait a few minutes.");
     }
 
     const form = await request.formData().catch(() => null);
@@ -72,11 +94,14 @@ export async function POST(request: NextRequest) {
     if (!(file instanceof File)) {
       return api.validation('Send multipart form-data with field "file"');
     }
-    if (!ALLOWED_TYPES[file.type]) {
-      return api.validation("Only JPEG, PNG, WebP, HEIC or HEIF images are allowed");
+    const ext = extensionFor(file);
+    if (!ext) {
+      return api.validation(
+        "Only JPEG, PNG, WebP, HEIC or HEIF images, or a .vtt captions file, are allowed"
+      );
     }
     if (file.size > MAX_BYTES) {
-      return api.validation("Image is too large (max 5 MB)");
+      return api.validation("File is too large (max 5 MB)");
     }
 
     const kind = parseKind(form?.get("kind") ?? null);
@@ -84,7 +109,13 @@ export async function POST(request: NextRequest) {
       return api.validation('kind must be "public" or "private"');
     }
 
-    const ext = ALLOWED_TYPES[file.type];
+    // Captions cannot be private: the <track> element fetches them as the
+    // browser, with no way to attach a session, so a private file would be
+    // invisible to every viewer while looking perfectly uploaded to the creator.
+    if (ext === ".vtt" && kind !== "public") {
+      return api.validation("Captions must be uploaded as public");
+    }
+
     const stamp = new Date().toISOString().slice(0, 7); // yyyy-mm
     const name = `${randomBytes(10).toString("hex")}${ext}`;
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -97,7 +128,9 @@ export async function POST(request: NextRequest) {
       const key =
         kind === "private"
           ? `private/${auth.userId}/${stamp}/${name}`
-          : `public/images/${stamp}/${name}`;
+          : ext === ".vtt"
+            ? `public/captions/${stamp}/${name}`
+            : `public/images/${stamp}/${name}`;
       const res = await fetch(
         `https://storage.bunnycdn.com/${storageZone}/${key}`,
         {
@@ -140,7 +173,9 @@ export async function POST(request: NextRequest) {
     const key =
       kind === "private"
         ? `private/${auth.userId}/${stamp}/${name}`
-        : `public/images/${stamp}/${name}`;
+        : ext === ".vtt"
+          ? `public/captions/${stamp}/${name}`
+          : `public/images/${stamp}/${name}`;
     const root = kind === "private" ? ".media" : path.join("public", "uploads");
     const filePath = path.join(process.cwd(), root, key);
     await mkdir(path.dirname(filePath), { recursive: true });

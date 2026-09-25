@@ -100,6 +100,39 @@ export const createVideoSchema = z.object({
     path: ["teaserBunnyVideoId"],
   });
 
+/**
+ * A WebVTT captions file the player can hand to a <track> element.
+ *
+ * Accepts three shapes and nothing else:
+ *   ""                        remove the captions that were attached
+ *   /api/media/...vtt         a file uploaded through our own upload route
+ *   https://...vtt            a file hosted elsewhere (Bunny Storage, a CDN)
+ *
+ * `.vtt` is REQUIRED, not cosmetic. A browser given an .srt file plays nothing
+ * and reports no error, so a creator who attached subtitles would believe they
+ * had published them — the failure mode is silence, and silence is the one thing
+ * captions exist to fix. Rejecting it here is the only place the creator finds
+ * out while they can still do something about it.
+ */
+export const captionsUrlSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine(
+    (value) => {
+      if (value === "") return true;
+      const isVtt = /\.vtt(\?.*)?$/i.test(value);
+      if (!isVtt) return false;
+      return value.startsWith(MEDIA_ROUTE_PREFIX)
+        ? isSafeMediaKey(value.slice(MEDIA_ROUTE_PREFIX.length).split("?")[0])
+        : /^https:\/\//i.test(value);
+    },
+    {
+      message:
+        "Captions must be a .vtt (WebVTT) file — upload one, or paste an https:// link that ends in .vtt",
+    }
+  );
+
 export const updateVideoSchema = z.object({
   title: z.string().min(3).max(200).optional(),
   description: z.string().max(5000).optional(),
@@ -120,6 +153,9 @@ export const updateVideoSchema = z.object({
   isPublished: z.boolean().optional(),
   teaserBunnyVideoId: z.string().min(1).optional(),
   thumbnailUrl: mediaOrExternalUrl("thumbnail URL").optional(),
+  // Edit-only, like the price: the upload flow has no captions step, and
+  // captions are usually written after a scene is already live. "" clears them.
+  captionsUrl: captionsUrlSchema.optional(),
 });
 
 // =============================================================================

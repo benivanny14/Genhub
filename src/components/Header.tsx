@@ -32,7 +32,9 @@ import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
 import { useCurrency } from "@/lib/currency";
+import Image from "next/image";
 import NotificationBell from "@/components/NotificationBell";
+import { canOptimizeImage } from "@/lib/media";
 
 interface UserData {
   id: string;
@@ -330,10 +332,16 @@ export default function Header() {
                     {/* The picture the user uploaded, not just an initial — the
                         letter is the fallback for anyone who has not set one. */}
                     {user.avatarUrl ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
+                      // An uploaded avatar is a 512×512 file shown at 32px, so it
+                      // only costs what it should when it goes through the
+                      // optimiser. An external URL cannot (see canOptimizeImage)
+                      // and falls back to the raw source.
+                      <Image
                         src={user.avatarUrl}
                         alt=""
+                        width={32}
+                        height={32}
+                        unoptimized={!canOptimizeImage(user.avatarUrl)}
                         className="w-8 h-8 rounded-full object-cover"
                       />
                     ) : (
@@ -490,10 +498,12 @@ export default function Header() {
               <>
                 <div className="flex items-center gap-3 px-3 py-3 glass-card">
                   {user.avatarUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
+                    <Image
                       src={user.avatarUrl}
                       alt=""
+                      width={40}
+                      height={40}
+                      unoptimized={!canOptimizeImage(user.avatarUrl)}
                       className="w-10 h-10 rounded-full object-cover"
                     />
                   ) : (

@@ -10,6 +10,7 @@ import {
   Shield,
   HelpCircle,
   RotateCcw,
+  ScrollText,
   Smartphone,
   Users,
   AlertTriangle,
@@ -199,6 +200,23 @@ interface CouponItem {
   usedCount: number;
   expiresAt: string | null;
   createdAt: string;
+}
+
+/**
+ * One recorded admin action. Read-only by design: the log is written by the
+ * routes that perform the action, never by this page.
+ */
+interface AuditItem {
+  id: string;
+  action: string;
+  summary: string;
+  targetType: string | null;
+  targetId: string | null;
+  detail: Record<string, unknown> | null;
+  createdAt: string;
+  actorId: string;
+  actorName: string | null;
+  actorEmail: string | null;
 }
 
 interface EarningsCreator {
@@ -458,7 +476,16 @@ export default function AdminDashboard() {
   const router = useRouter();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<
-    "overview" | "kyc" | "reports" | "payouts" | "creators" | "coupons" | "earnings" | "payments" | "setup"
+    | "overview"
+    | "kyc"
+    | "reports"
+    | "payouts"
+    | "creators"
+    | "coupons"
+    | "earnings"
+    | "payments"
+    | "audit"
+    | "setup"
   >("overview");
   const [loading, setLoading] = useState(true);
   const [kycList, setKycList] = useState<KycItem[]>([]);
@@ -466,6 +493,9 @@ export default function AdminDashboard() {
   const [payoutList, setPayoutList] = useState<PayoutItem[]>([]);
   const [creatorList, setCreatorList] = useState<CreatorItem[]>([]);
   const [couponList, setCouponList] = useState<CouponItem[]>([]);
+  const [auditList, setAuditList] = useState<AuditItem[]>([]);
+  // Empty = every action code. Set to "user." or "payout." to narrow it.
+  const [auditFilter, setAuditFilter] = useState("");
   const [stats, setStats] = useState<OverviewData | null>(null);
   const [newCoupon, setNewCoupon] = useState({ code: "", type: "PERCENT", value: 10, maxUses: "", expiresInDays: "" });
   const [creatingCoupon, setCreatingCoupon] = useState(false);
@@ -630,6 +660,7 @@ export default function AdminDashboard() {
     if (activeTab === "payouts") fetchPayouts();
     if (activeTab === "creators") fetchCreators();
     if (activeTab === "coupons") fetchCoupons();
+    if (activeTab === "audit") fetchAudit();
     if (activeTab === "earnings") fetchEarnings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -833,6 +864,21 @@ export default function AdminDashboard() {
       const res = await adminFetch("/api/admin/coupons");
       const data = await res.json();
       if (data.success) setCouponList(data.data.coupons);
+    } catch {}
+  }
+
+  async function fetchAudit(filter = auditFilter) {
+    try {
+      // Two literal paths rather than one template: `npm run audit:endpoints`
+      // matches a call site to the route file by its path, and a `${}` in a PATH
+      // SEGMENT is unnameable to it (it reports the route as missing). The filter
+      // belongs in the query string anyway — it narrows the list, it is not part
+      // of where the list lives.
+      const res = filter
+        ? await adminFetch(`/api/admin/audit?action=${encodeURIComponent(filter)}&take=200`)
+        : await adminFetch("/api/admin/audit?take=200");
+      const data = await res.json();
+      if (data.success) setAuditList(data.data.entries);
     } catch {}
   }
 
@@ -1176,6 +1222,11 @@ export default function AdminDashboard() {
       // Investigations come first: that badge means real customers who may have
       // been charged for something they never received.
       badge: (paymentSummary?.investigating || 0) + (paymentSummary?.stuck || 0),
+    },
+    {
+      id: "audit" as const,
+      label: "Audit",
+      icon: ScrollText,
     },
     {
       id: "setup" as const,
@@ -2387,6 +2438,78 @@ export default function AdminDashboard() {
                           {refunding === p.id ? "Reversing…" : "Refund"}
                         </button>
                       )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Audit Tab — every decision an admin made, who made it, and why */}
+        {activeTab === "audit" && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="font-display font-bold text-lg flex items-center gap-2">
+                  <ScrollText className="w-5 h-5 text-brand-400" /> Admin audit log
+                </h2>
+                <p className="text-white/50 text-sm mt-1 max-w-2xl">
+                  Every admin decision that changed an account, an amount of money or a
+                  piece of content: who made it, what it did, and the reason given. Rows
+                  are written by the action itself and cannot be edited from here.
+                </p>
+              </div>
+              <select
+                value={auditFilter}
+                onChange={(e) => {
+                  setAuditFilter(e.target.value);
+                  fetchAudit(e.target.value);
+                }}
+                className="input-field w-auto text-sm"
+              >
+                <option value="">All actions</option>
+                <option value="user.">Users (verify / ban)</option>
+                <option value="kyc.">KYC decisions</option>
+                <option value="report.">Moderation</option>
+                <option value="payout.">Payouts</option>
+                <option value="payment.">Payment operations</option>
+                <option value="coupon.">Coupons</option>
+              </select>
+            </div>
+
+            {auditList.length === 0 ? (
+              <div className="glass-card p-12 text-center">
+                <ScrollText className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
+                <p className="text-white/50">
+                  No entries yet — decisions appear here as they are made.
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-2">
+                {auditList.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className="glass-card p-4 flex flex-col sm:flex-row sm:items-start gap-3"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-brand-500/20 flex items-center justify-center shrink-0">
+                      <ScrollText className="w-4 h-4 text-brand-400" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm">{entry.summary}</p>
+                      <p className="text-xs text-white/40 mt-1 break-words">
+                        <code className="text-brand-300/80">{entry.action}</code>
+                        {" • "}
+                        {entry.actorName || entry.actorEmail || entry.actorId}
+                        {" • "}
+                        {new Date(entry.createdAt).toLocaleString("en-GB")}
+                        {entry.targetId && (
+                          <>
+                            {" • "}
+                            <span className="text-white/25">{entry.targetId}</span>
+                          </>
+                        )}
+                      </p>
                     </div>
                   </div>
                 ))}

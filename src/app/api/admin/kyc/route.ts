@@ -9,6 +9,7 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { reviewKycSchema } from "@/lib/validation";
+import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -68,6 +69,7 @@ export async function POST(request: NextRequest) {
 
     const kyc = await prisma.kycVerification.findUnique({
       where: { id: kycId },
+      include: { user: { select: { displayName: true, email: true } } },
     });
 
     if (!kyc) return api.notFound("KYC submission not found");
@@ -87,6 +89,25 @@ export async function POST(request: NextRequest) {
         where: { id: kyc.userId },
         data: { kycStatus: status },
       });
+    });
+
+    // Identity decisions are the ones a platform is asked to justify. The
+    // document URLs are deliberately NOT copied into the log: the entry says who
+    // was approved and on what basis, it does not become a second copy of
+    // somebody's NIDA card.
+    await recordAudit({
+      actorId: auth.userId,
+      action: status === "APPROVED" ? AUDIT_ACTIONS.kycApprove : AUDIT_ACTIONS.kycReject,
+      targetType: "KycVerification",
+      targetId: kycId,
+      summary: `${status === "APPROVED" ? "Approved" : "Rejected"} KYC for ${
+        kyc.user?.displayName || kyc.user?.email || kyc.userId
+      }${rejectionReason ? ` — ${rejectionReason}` : ""}`,
+      detail: {
+        userId: kyc.userId,
+        rejectionReason: rejectionReason ?? null,
+        idDocumentType: kyc.idDocumentType,
+      },
     });
 
     return api.success(
