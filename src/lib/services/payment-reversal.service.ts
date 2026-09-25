@@ -190,8 +190,11 @@ export async function reverseCollectedCharge(
   // `videoEarning` and `purchaseCount` moved, and only then can they be reversed.
   const wasSettled = tx.status === "SUCCESS";
 
-  // The creator's share of THIS charge. For a tip the creator keeps 100%, which
-  // is why this reads creatorCut and only falls back to the amount.
+  // The creator's share of THIS charge — never what the customer paid. The
+  // platform's 30% is not the creator's to give back, so a reversal claws back
+  // exactly what was credited to them and absorbs its own fee as a loss.
+  // The `?? tx.amount` fallback is for rows written before the split was
+  // recorded (an old 100%-to-creator tip), which are still in the ledger.
   const creatorShare = isTopUp || !wasSettled ? 0 : tx.creatorCut ?? tx.amount;
 
   // What the customer must pay back when we reverse a top-up they already hold.

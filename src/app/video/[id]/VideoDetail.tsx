@@ -1394,7 +1394,8 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               <Gift className="w-5 h-5 text-amber-400" /> Send a Tip
             </h2>
             <p className="text-white/60 text-sm mb-6">
-              Support {video.creator.displayName || "this creator"} — 100% of tips go directly to them.
+              Support {video.creator.displayName || "this creator"} — they keep 70% of every tip,
+              the same share they get from a sale.
             </p>
 
             <div className="grid grid-cols-4 gap-2 mb-4">

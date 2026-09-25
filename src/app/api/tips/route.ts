@@ -7,7 +7,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
-import { debitWallet } from "@/lib/services/balance.service";
+import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 import { z } from "zod";
@@ -46,9 +46,15 @@ export async function POST(request: NextRequest) {
     });
     if (!creator || creator.isBanned) return api.notFound("This creator does not exist");
 
-    // Create tip transaction — 100% to creator. The balance check IS the
-    // deduction (debitWallet): reading first and decrementing after let several
-    // tips start on one balance and all be accepted.
+    // The same 70/30 split as a video, a membership and a paid message. A tip
+    // used to pay the creator in full, which made /about ("70% of every shilling
+    // goes to the creator") untrue and gave the platform two different prices for
+    // the same shilling depending on which button a fan pressed.
+    const { platformFee, creatorCut } = splitRevenue(amount);
+
+    // The balance check IS the deduction (debitWallet): reading first and
+    // decrementing after let several tips start on one balance and all be
+    // accepted.
     const transaction = await prisma.$transaction(async (tx) => {
       const debited = await debitWallet(tx, { userId: auth.userId, amount });
       if (!debited.ok) {
@@ -58,39 +64,42 @@ export async function POST(request: NextRequest) {
         };
       }
 
-      // Create transaction
+      // Create transaction, with the fee breakdown recorded the way every other
+      // sale records it.
       const txRecord = await tx.transaction.create({
         data: {
           userId: auth.userId,
           creatorId,
           amount,
+          platformFee,
           type: "TIP",
           status: "SUCCESS",
-          creatorCut: amount, // Tips are 100% to creator
+          creatorCut,
         },
       });
 
-      // Credit creator pending balance
+      // Credit creator pending balance (14-day holding)
       await tx.creatorBalance.upsert({
         where: { creatorId },
         create: {
           creatorId,
-          pendingBalance: amount,
+          pendingBalance: creatorCut,
           availableBalance: 0,
-          totalEarned: amount,
+          totalEarned: creatorCut,
         },
         update: {
-          pendingBalance: { increment: amount },
-          totalEarned: { increment: amount },
+          pendingBalance: { increment: creatorCut },
+          totalEarned: { increment: creatorCut },
         },
       });
 
-      // Create notification for creator
+      // Create notification for creator. Both figures: the fan sent one and the
+      // creator is only ever paid the other.
       await tx.notification.create({
         data: {
           userId: creatorId,
           title: "New tip! 🎁",
-          message: `A viewer tipped you TZS ${amount.toLocaleString()}${message ? `: "${message}"` : ""}`,
+          message: `A viewer tipped you TZS ${amount.toLocaleString()} — your share is TZS ${creatorCut.toLocaleString()}${message ? `: "${message}"` : ""}`,
           type: "success",
         },
       });

@@ -5,7 +5,7 @@
 // =============================================================================
 
 import prisma from "../db";
-import { creditCreatorForPurchase, creditWallet } from "./balance.service";
+import { creditCreatorForPurchase, creditWallet, splitRevenue } from "./balance.service";
 import { cacheDel } from "../redis";
 import { assertSupportedSettlementProvider } from "../payments/gateway";
 import { notifyPaymentResult } from "./payment-notify.service";
@@ -117,35 +117,42 @@ export async function processPaymentWebhook(params: {
       break;
     }
 
-    case "TIP":
-      if (transaction.creatorId) {
-        await prisma.$transaction(async (tx) => {
-          // Credit creator's pending balance (tips go 100% to creator)
-          await tx.transaction.update({
-            where: { id: orderId },
-            data: {
-              status: "SUCCESS",
-              providerRef: transactionId,
-              creatorCut: amount,
-            },
-          });
+    case "TIP": {
+      // A tip that settles through the gateway, not the wallet path in
+      // /api/tips. No route creates one today, but if one ever does it has to
+      // split like everything else — paying 100% here would be the only place in
+      // the codebase that does.
+      if (!transaction.creatorId) break;
+      const tipCreatorId = transaction.creatorId;
+      const { platformFee: tipFee, creatorCut: tipCut } = splitRevenue(amount);
 
-          await tx.creatorBalance.upsert({
-            where: { creatorId: transaction.creatorId! },
-            create: {
-              creatorId: transaction.creatorId!,
-              pendingBalance: amount,
-              availableBalance: 0,
-              totalEarned: amount,
-            },
-            update: {
-              pendingBalance: { increment: amount },
-              totalEarned: { increment: amount },
-            },
-          });
+      await prisma.$transaction(async (tx) => {
+        await tx.transaction.update({
+          where: { id: orderId },
+          data: {
+            status: "SUCCESS",
+            providerRef: transactionId,
+            platformFee: tipFee,
+            creatorCut: tipCut,
+          },
         });
-      }
+
+        await tx.creatorBalance.upsert({
+          where: { creatorId: tipCreatorId },
+          create: {
+            creatorId: tipCreatorId,
+            pendingBalance: tipCut,
+            availableBalance: 0,
+            totalEarned: tipCut,
+          },
+          update: {
+            pendingBalance: { increment: tipCut },
+            totalEarned: { increment: tipCut },
+          },
+        });
+      });
       break;
+    }
 
     case "SUBSCRIPTION": {
       // Gateway-funded subscription (first subscribe OR an automatic renewal):

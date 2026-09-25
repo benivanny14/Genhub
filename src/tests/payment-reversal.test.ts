@@ -817,12 +817,14 @@ describeDb("Reversing a collected charge", () => {
     expect(balance!.pendingBalance).toBe(0);
   });
 
-  it("claws back the full amount of a reversed tip", async () => {
+  it("claws back a tip written before the split in full", async () => {
     await reset();
     await prisma.creatorBalance.create({
       data: { creatorId, pendingBalance: 2_000, availableBalance: 0, totalEarned: 2_000 },
     });
-    // Tips go 100% to the creator.
+    // A tip row from before the 70/30 split was recorded: creatorCut === amount
+    // and no platformFee. Those rows are still in the ledger, and reversing one
+    // has to take back everything the creator was given.
     const tx = await prisma.transaction.create({
       data: {
         userId: viewerId,
@@ -846,6 +848,46 @@ describeDb("Reversing a collected charge", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.clawedBackPending).toBe(2_000);
+
+    const balance = await prisma.creatorBalance.findUnique({ where: { creatorId } });
+    expect(balance!.pendingBalance).toBe(0);
+  });
+
+  it("claws back only the creator's 70% of a tip written after the split", async () => {
+    await reset();
+    await prisma.creatorBalance.create({
+      data: { creatorId, pendingBalance: 1_400, availableBalance: 0, totalEarned: 1_400 },
+    });
+    // What /api/tips writes now: the customer pays 2,000, the platform takes 600
+    // and the creator's holding holds 1,400.
+    const tx = await prisma.transaction.create({
+      data: {
+        userId: viewerId,
+        creatorId,
+        amount: 2_000,
+        platformFee: 600,
+        creatorCut: 1_400,
+        type: "TIP",
+        status: "SUCCESS",
+        gateway: "HARAKAPAY",
+        providerRef: "hp_rev_tip_split",
+      },
+    });
+
+    const result = await reverseCollectedCharge({
+      transactionId: tx.id,
+      destination: "WALLET",
+      actorId: ctx.adminId,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The customer gets the whole 2,000 back; the creator gives back exactly what
+    // they were credited, and the platform's 600 is its own loss — the same
+    // treatment a refunded video purchase gets.
+    expect(result.walletCredited).toBe(2_000);
+    expect(result.clawedBackPending).toBe(1_400);
+    expect(result.shortfall).toBe(0);
 
     const balance = await prisma.creatorBalance.findUnique({ where: { creatorId } });
     expect(balance!.pendingBalance).toBe(0);
