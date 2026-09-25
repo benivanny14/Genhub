@@ -90,6 +90,7 @@ export async function GET(
         id: true,
         price: true,
         creatorId: true,
+        isPublished: true,
         bunnyVideoId: true,
         teaserBunnyVideoId: true,
       },
@@ -100,8 +101,27 @@ export async function GET(
 
     const authUser = await getCurrentUser();
 
+    // Unpublished is private here for the same reason it is private on
+    // GET /api/videos/[id]: the row id is guessable and this route is reachable
+    // on its own. "Take it out of the feed" and "Bunny has not finished with it
+    // yet" both leave a row unpublished, and the point of that state is that
+    // nobody may watch it — including through a manifest URL copied while it was
+    // live. The creator's own preview and an admin's check are the exceptions.
+    const isOwnerOrAdmin =
+      !!authUser && (authUser.userId === video.creatorId || authUser.role === "ADMIN");
+    if (!video.isPublished && !isOwnerOrAdmin) {
+      return api.notFound("Video not found");
+    }
+
     let bunnyVideoId: string | null;
-    if (source === "teaser" && video.teaserBunnyVideoId) {
+    // A trailer that IS the scene is not a trailer: the teaser door skips the
+    // entitlement check, so a row pointing its teaser column at its own video
+    // would serve the whole scene to anybody. Treated as "no teaser" — the
+    // request then has to pass entitlement like any other playback request.
+    const hasTeaser =
+      !!video.teaserBunnyVideoId && video.teaserBunnyVideoId !== video.bunnyVideoId;
+
+    if (source === "teaser" && hasTeaser) {
       // A trailer is meant for people who have NOT paid, so it needs no
       // entitlement check — but it must be a trailer. Serving `?source=teaser`
       // from the scene's own folder is what the `&&` above prevents.

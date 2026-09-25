@@ -247,6 +247,16 @@ export async function PATCH(
       return api.validation(result.error.errors[0].message);
     }
 
+    // The same rule the upload schema enforces, checked against the row that is
+    // actually stored. It matters more here than it does at upload time, because
+    // this is the route that can point the teaser column of an ALREADY LIVE
+    // video at the video itself — and the teaser door serves without asking for
+    // entitlement, so the result would be a paid scene playable by anyone,
+    // signed in or not.
+    if (result.data.teaserBunnyVideoId && result.data.teaserBunnyVideoId === video.bunnyVideoId) {
+      return api.validation("The teaser must be a different video from the main video");
+    }
+
     const updated = await prisma.video.update({
       where: { id },
       data: {

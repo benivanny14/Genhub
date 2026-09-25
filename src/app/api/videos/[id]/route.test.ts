@@ -20,18 +20,24 @@ import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
   videoFindFirst: vi.fn(),
+  videoFindUnique: vi.fn(),
   videoUpdate: vi.fn(),
   accessFindUnique: vi.fn(),
   accessUpsert: vi.fn(),
   transactionFindFirst: vi.fn(),
   subscriptionFindFirst: vi.fn(),
   currentUser: vi.fn(),
+  requireAuth: vi.fn(),
   claimOnce: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   default: {
-    video: { findFirst: mocks.videoFindFirst, update: mocks.videoUpdate },
+    video: {
+      findFirst: mocks.videoFindFirst,
+      findUnique: mocks.videoFindUnique,
+      update: mocks.videoUpdate,
+    },
     videoAccess: { findUnique: mocks.accessFindUnique, upsert: mocks.accessUpsert },
     transaction: { findFirst: mocks.transactionFindFirst },
     creatorSubscription: { findFirst: mocks.subscriptionFindFirst },
@@ -40,7 +46,11 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
-  return { ...actual, getCurrentUser: () => mocks.currentUser() };
+  return {
+    ...actual,
+    getCurrentUser: () => mocks.currentUser(),
+    requireAuth: () => mocks.requireAuth(),
+  };
 });
 
 vi.mock("@/lib/redis", () => ({
@@ -48,7 +58,7 @@ vi.mock("@/lib/redis", () => ({
   cacheDel: vi.fn(),
 }));
 
-import { GET } from "./route";
+import { GET, PATCH } from "./route";
 
 const CREATOR = "creator-1";
 const VIEWER = "viewer-9";
@@ -105,6 +115,8 @@ beforeEach(() => {
   mocks.claimOnce.mockResolvedValue(true);
   mocks.currentUser.mockResolvedValue(null);
   mocks.videoFindFirst.mockResolvedValue(videoRow());
+  mocks.videoFindUnique.mockResolvedValue(videoRow());
+  mocks.requireAuth.mockResolvedValue({ userId: CREATOR, role: "CREATOR" });
   mocks.accessFindUnique.mockResolvedValue(null);
   mocks.transactionFindFirst.mockResolvedValue(null);
   mocks.subscriptionFindFirst.mockResolvedValue(null);
@@ -157,5 +169,71 @@ describe("GET /api/videos/[id] — unpublished videos", () => {
       where: { id: "video-1" },
       data: { viewsCount: { increment: 1 } },
     });
+  });
+});
+
+// =============================================================================
+// PATCH — the teaser column may never hold the video itself
+//
+// The upload schema has refused this all along, and this route is the one that
+// can do it to a video that is ALREADY live: point the teaser at the scene, and
+// `?source=teaser` — which serves without an entitlement check, because a trailer
+// is for people who have not paid — hands the whole video to anybody, signed in
+// or not. The check is against the stored row, not against the request body, so
+// it cannot be dodged by omitting the main id.
+// =============================================================================
+
+describe("PATCH /api/videos/[id] — a teaser may not be the scene", () => {
+  const SCENE = "scene-guid-1111";
+
+  async function patch(body: unknown) {
+    const response = await PATCH(
+      new NextRequest("https://app.test/api/videos/video-1", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+        headers: { "Content-Type": "application/json" },
+      }),
+      params
+    );
+    return { status: response.status, body: await response.json() };
+  }
+
+  it("refuses to point the teaser at the video's own Bunny id", async () => {
+    mocks.videoFindUnique.mockResolvedValue(videoRow({ bunnyVideoId: SCENE }));
+
+    const { status, body } = await patch({ teaserBunnyVideoId: SCENE });
+
+    expect(status).toBe(422);
+    expect(body.error).toMatch(/different video from the main video/);
+    expect(mocks.videoUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts a genuinely separate trailer clip", async () => {
+    mocks.videoFindUnique.mockResolvedValue(videoRow({ bunnyVideoId: SCENE }));
+    mocks.videoUpdate.mockResolvedValue({ id: "video-1", title: "x" });
+
+    const { status } = await patch({ teaserBunnyVideoId: "trailer-guid-2222" });
+
+    expect(status).toBe(200);
+  });
+
+  it("still lets a creator edit their own video", async () => {
+    mocks.videoUpdate.mockResolvedValue({ id: "video-1", title: "x" });
+
+    const { status } = await patch({ price: 1500 });
+
+    expect(status).toBe(200);
+    expect(mocks.videoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ price: 1500 }) })
+    );
+  });
+
+  it("refuses a creator editing somebody else's video", async () => {
+    mocks.requireAuth.mockResolvedValue({ userId: VIEWER, role: "VIEWER" });
+
+    const { status } = await patch({ price: 0 });
+
+    expect(status).toBe(403);
+    expect(mocks.videoUpdate).not.toHaveBeenCalled();
   });
 });

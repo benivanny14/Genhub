@@ -269,7 +269,9 @@ export default function CreatorDashboard() {
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [editing, setEditing] = useState<CreatorVideo | null>(null);
   const [editTitle, setEditTitle] = useState("");
-  const [editPrice, setEditPrice] = useState(0);
+  // A STRING, not a number. The price box used to be a number that an empty
+  // field silently became 0 — and 0 means "free to everyone". See saveEdit.
+  const [editPrice, setEditPrice] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editCategory, setEditCategory] = useState("");
   const [editTags, setEditTags] = useState("");
@@ -398,7 +400,7 @@ export default function CreatorDashboard() {
   function openEditor(video: CreatorVideo) {
     setEditing(video);
     setEditTitle(video.title);
-    setEditPrice(video.price);
+    setEditPrice(String(video.price));
     setEditDescription(video.description || "");
     setEditCategory(video.category || "");
     setEditTags((video.tags || []).join(", "));
@@ -464,10 +466,37 @@ export default function CreatorDashboard() {
       toast("error", "The title must be at least 3 characters");
       return;
     }
-    if (!Number.isFinite(editPrice) || editPrice < 0 || editPrice > 1000000) {
-      toast("error", "The price must be between TZS 0 and TZS 1,000,000");
+    // The price is read from what the creator TYPED, never from a number an empty
+    // field quietly turned into. `parseInt("") || 0` is how clearing this box
+    // used to save the video as FREE: the paywall disappeared, anyone — signed in
+    // or not — could watch the whole scene, and nothing on the way to the server
+    // said so. An empty box is now refused instead of being guessed at.
+    const editPriceNum = Number(editPrice.trim());
+    if (editPrice.trim() === "" || !Number.isFinite(editPriceNum)) {
+      toast("error", "Enter a price in TZS — use 0 only if you mean free to watch");
       return;
     }
+    if (editPriceNum < 0 || editPriceNum > 1000000) {
+      toast("error", "Enter a price between TZS 0 and TZS 1,000,000");
+      return;
+    }
+    // Turning a paid video free is a one-way door for everybody who has not
+    // bought it yet: from that moment on the whole scene is public. Asked once,
+    // in the form where the decision is made, because the server cannot tell the
+    // difference between this and a typo.
+    if (editing.price > 0 && editPriceNum === 0) {
+      const goAhead = await confirmDialog({
+        title: "Make this video free?",
+        message:
+          `"${editing.title}" sells for ${formatTZS(editing.price)} right now. ` +
+          "Setting the price to 0 takes the paywall off: anybody, including people " +
+          "who are not signed in, will be able to watch the whole video. " +
+          "You can put a price back at any time.",
+        confirmLabel: "Make it free",
+      });
+      if (!goAhead) return;
+    }
+
     if (editTeaserDuration < 15 || editTeaserDuration > 30) {
       toast("error", "The preview must be between 15 and 30 seconds");
       return;
@@ -493,7 +522,7 @@ export default function CreatorDashboard() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title,
-          price: editPrice,
+          price: editPriceNum,
           description: editDescription.trim(),
           category: editCategory,
           tags,
@@ -1277,13 +1306,15 @@ export default function CreatorDashboard() {
                     min={0}
                     max={1000000}
                     value={editPrice}
-                    onChange={(e) => setEditPrice(parseInt(e.target.value) || 0)}
+                    onChange={(e) => setEditPrice(e.target.value)}
                     className="input-field"
                   />
                   <p className="text-xs text-white/40 mt-1">
-                    {editPrice === 0
-                      ? "Free to watch — anyone can see the whole video."
-                      : `You keep ${formatTZS(Math.round(editPrice * 0.7))} of each sale (70%); 0 makes it free to watch.`}
+                    {editPrice.trim() === ""
+                      ? "Enter a price — an empty box is not a price, and it is not free either."
+                      : Number(editPrice) === 0
+                        ? "Free to watch — anyone, signed in or not, can see the whole video."
+                        : `You keep ${formatTZS(Math.round(Number(editPrice) * 0.7))} of each sale (70%); 0 makes it free to watch.`}
                   </p>
                 </div>
                 <div>
@@ -1300,7 +1331,9 @@ export default function CreatorDashboard() {
                     className="input-field"
                   />
                   <p className="text-xs text-white/40 mt-1">
-                    How much a viewer sees before paying. 15-30 seconds.
+                    How much a viewer sees before paying. 15-30 seconds. This is the
+                    duration badge; it does not unlock part of the video — a paid scene
+                    with no trailer clip shows no preview at all.
                   </p>
                 </div>
               </div>

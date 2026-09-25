@@ -2109,6 +2109,44 @@ and refetches at that rendition (verified in a real browser against the live
 manifest: the `<video>` element's decoded size changes `359x640` ⇄ `198x353` while
 playback continues), and choosing **Auto** sets `-1`, which hands ABR back.
 
+### 8.0.2 "The paywall is broken — everyone can watch for free"
+
+Settle it with one command instead of an argument about the code:
+
+```bash
+npm run verify:paywall                                        # the live domain
+npm run verify:paywall -- --url http://localhost:3000          # a local build
+npm run verify:paywall -- --url https://genhub-two.vercel.app --limit 5
+```
+
+It makes **no request with a cookie at all** and asks, per published video, the
+only question that matters: is anything playable handed out to a visitor who has
+not paid? For each row it checks that `GET /api/videos/<id>` answers
+`hasAccess: false` with no `playbackUrl`, that neither the feed nor the front
+page carries `previewUrl` / `bunnyVideoId` / `teaserBunnyVideoId` /
+`teaserClipUrl`, and that `GET /api/videos/<id>/stream` and `/download` refuse.
+Exit code 1 means a genuine leak; a PASS means the paywall holds.
+
+**The three ways this report is usually wrong, in order of how often they happen:**
+
+1. **You tested signed in as the video's creator, or as an admin.** Both are
+   entitled on purpose (`services/video-entitlement.service.ts`: `owner`, `admin`)
+   so every page plays — and the paywall is working. The watch page now names the
+   reason under the CTA ("Your video — you can always watch it") precisely so this
+   cannot be mistaken for a hole.
+2. **The video's price is 0.** A free video is open to everyone, by design;
+   `verify:paywall` reports it as "free video, open to everyone (expected)" rather
+   than as a leak. Worth checking before anything else, because the creator edit
+   form used to do this by accident: `parseInt("") || 0` meant merely *clearing*
+   the price box saved the video as free, and nothing said so. An empty price is
+   now refused and `0` on a paid row asks for confirmation.
+3. **A real leak** — the case the script exits 1 for. The one configuration that
+   has ever caused it is a row whose teaser points at the scene itself: the teaser
+   door serves without an entitlement check (a trailer is for people who have not
+   paid), so `resolveTeaserUrl()` treats `teaserBunnyVideoId === bunnyVideoId` as
+   *no teaser*, `PATCH /api/videos/[id]` refuses to store it, and the stream route
+   refuses to serve the scene through `?source=teaser`.
+
 ### 8.1 Which routes are rate limited, and why
 
 Redis-backed, in one of four buckets from `config.rateLimit`:

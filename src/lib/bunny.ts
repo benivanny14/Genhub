@@ -589,7 +589,19 @@ export function resolvePlaybackUrl(
  * free video with a trailer should still show the trailer, not the full scene.
  */
 export function resolveTeaserUrl(video: VideoSourceLocation): string | null {
-  if (video.teaserBunnyVideoId) {
+  // A "trailer" that IS the scene is not a trailer.
+  //
+  // `teaserBunnyVideoId` is treated as public here — the teaser door skips the
+  // entitlement check by design — so a row whose teaser column holds the scene's
+  // own id would hand the whole video to anyone, signed in or not. That is
+  // rejected where the value is written (createVideoSchema, PATCH
+  // /api/videos/[id]), and this is the last line of defence for a row written
+  // before the rule existed or by something that does not go through the schema.
+  // The only safe reading of "the teaser is the scene" is "there is no teaser".
+  const teaserIsTheScene =
+    !!video.teaserBunnyVideoId && video.teaserBunnyVideoId === video.bunnyVideoId;
+
+  if (video.teaserBunnyVideoId && !teaserIsTheScene) {
     // The trailer is a separate Bunny video with its own folder and its own
     // token, so it gets its own proxy URL — and it stays public, because a
     // trailer that only buyers can watch is not a trailer.
@@ -600,7 +612,9 @@ export function resolveTeaserUrl(video: VideoSourceLocation): string | null {
     if (signed) return signed;
   }
 
-  if (video.teaserClipUrl) {
+  // Same rule for a side-loaded trailer: pointing it at the row's own stored
+  // stream is pointing it at the scene.
+  if (video.teaserClipUrl && video.teaserClipUrl !== video.previewUrl) {
     return video.teaserClipUrl;
   }
 

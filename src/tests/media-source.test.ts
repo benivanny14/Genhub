@@ -166,6 +166,50 @@ describe("resolveTeaserUrl", () => {
     expect(bunny.resolveTeaserUrl({ bunnyVideoId: null, previewUrl: PREVIEW, price: 5000 })).toBeNull();
   });
 
+  // A teaser that points at the scene is the one configuration that hands the
+  // whole video to everybody: the teaser door is public on purpose. It is
+  // rejected where the value is written (createVideoSchema, PATCH), and refused
+  // here as well — a row written before that rule, or by a tool that skipped the
+  // schema, must not become a public full-length stream.
+  it("treats a teaser that IS the scene as no teaser at all", async () => {
+    const bunny = await loadBunny(CONFIGURED);
+
+    expect(
+      bunny.resolveTeaserUrl({
+        bunnyVideoId: BUNNY_ID,
+        teaserBunnyVideoId: BUNNY_ID,
+        previewUrl: PREVIEW,
+        price: 5000,
+      })
+    ).toBeNull();
+  });
+
+  it("refuses a stored trailer that points at the scene's own stream", async () => {
+    const bunny = await loadBunny(CONFIGURED);
+
+    expect(
+      bunny.resolveTeaserUrl({
+        bunnyVideoId: null,
+        previewUrl: PREVIEW,
+        teaserClipUrl: PREVIEW,
+        price: 5000,
+      })
+    ).toBeNull();
+  });
+
+  // On a free video the same misconfiguration is harmless, and the answer is the
+  // free-video rule rather than a teaser-shaped URL that pretends to be a clip.
+  it("falls through to the free-video rule when the teaser is the scene", async () => {
+    const bunny = await loadBunny(CONFIGURED);
+    const url = bunny.resolveTeaserUrl({
+      bunnyVideoId: BUNNY_ID,
+      teaserBunnyVideoId: BUNNY_ID,
+      price: 0,
+    });
+
+    expect(url).toContain(`/${BUNNY_ID}/playlist.m3u8`);
+  });
+
   // Side-loaded rows have no Bunny id, so they need their own way to offer a
   // trailer — otherwise demo and migrated content can only show the whole scene
   // or nothing at all.

@@ -1054,6 +1054,18 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 <Check className="w-4 h-4" />
                 Included in your subscription
               </span>
+            ) : video.accessSource === "owner" ? (
+              /* The creator's own preview. Spelled out, because a generic
+                 "✓ Full access" here reads as "everyone has full access" to the
+                 one person most likely to check this page — the creator — while
+                 the paywall it sits on is working exactly as intended. */
+              <span className="badge-success text-sm px-4 py-2">
+                Your video — you can always watch it
+              </span>
+            ) : video.accessSource === "admin" ? (
+              <span className="badge-success text-sm px-4 py-2">Admin access</span>
+            ) : video.accessSource === "free" ? (
+              <span className="badge-success text-sm px-4 py-2">Free to watch</span>
             ) : (
               <span className="badge-success text-sm px-4 py-2">
                 ✓ Full access

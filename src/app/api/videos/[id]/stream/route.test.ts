@@ -87,6 +87,7 @@ const ROW = {
   id: "row-1",
   price: 0,
   creatorId: "creator-1",
+  isPublished: true,
   bunnyVideoId: GUID,
   teaserBunnyVideoId: null as string | null,
 };
@@ -284,6 +285,54 @@ describe("GET /api/videos/[id]/stream - who gets it", () => {
 
     expect(res.status).toBe(403);
     expect(urls).toEqual([]);
+  });
+
+  // Unpublished is private here for the same reason it is private on
+  // GET /api/videos/[id]: a row held back while Bunny transcodes, or taken out of
+  // the feed on purpose, must not be watchable through a manifest URL — even a
+  // free one, where there is no charge to refuse it on.
+  it("refuses an unpublished video to anyone but its creator and an admin", async () => {
+    mocks.videoFindFirst.mockResolvedValue({ ...ROW, isPublished: false });
+
+    expect((await GET(request(), params())).status).toBe(404);
+    expect(urls).toEqual([]);
+
+    mocks.currentUser.mockResolvedValue({ userId: "viewer-1", role: "VIEWER" });
+    expect((await GET(request(), params())).status).toBe(404);
+
+    mocks.currentUser.mockResolvedValue({ userId: "creator-1", role: "CREATOR" });
+    expect((await GET(request(), params())).status).toBe(200);
+  });
+
+  // The one configuration that would turn the teaser door into a public scene:
+  // the row's teaser column holding the scene's own id. The teaser branch serves
+  // without an entitlement check by design, so it must refuse to serve at all.
+  it("does not serve the scene through ?source=teaser when the teaser IS the scene", async () => {
+    mocks.videoFindFirst.mockResolvedValue({
+      ...ROW,
+      price: 5000,
+      teaserBunnyVideoId: GUID,
+    });
+
+    const res = await GET(request("?source=teaser"), params());
+
+    expect(res.status).toBe(403);
+    expect(urls).toEqual([]);
+  });
+
+  it("still serves it through the normal door to a viewer who is entitled", async () => {
+    mocks.videoFindFirst.mockResolvedValue({
+      ...ROW,
+      price: 5000,
+      teaserBunnyVideoId: GUID,
+    });
+    mocks.currentUser.mockResolvedValue({ userId: "viewer-1", role: "VIEWER" });
+    setAccessRows({ live: { id: "access-1" } });
+
+    const res = await GET(request("?source=teaser"), params());
+
+    expect(res.status).toBe(200);
+    expect(urls[0]).toContain(`/${GUID}/playlist.m3u8`);
   });
 
   it("404s an unknown or deleted video", async () => {
