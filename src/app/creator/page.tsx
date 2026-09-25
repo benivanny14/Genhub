@@ -21,6 +21,11 @@ import {
   Banknote,
   XCircle,
   Loader2,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  EyeOff,
+  ImageOff,
 } from "lucide-react";
 import { formatTZS, formatRelativeTime, formatCount } from "@/lib/utils";
 
@@ -69,11 +74,14 @@ interface EncodingState {
 interface CreatorVideo {
   id: string;
   title: string;
+  description: string | null;
   slug: string | null;
   price: number;
   isPublished: boolean;
   viewsCount: number;
   purchaseCount: number;
+  thumbnailUrl: string | null;
+  duration: number | null;
   createdAt: string;
   encoding: EncodingState;
 }
@@ -138,6 +146,16 @@ export default function CreatorDashboard() {
   const [processingCount, setProcessingCount] = useState(0);
   const [awaitingPublish, setAwaitingPublish] = useState(0);
   const [publishingId, setPublishingId] = useState<string | null>(null);
+  // "My videos" management: the creator's own list, with the actions they asked
+  // for. The performance table below is money-driven and cannot show an
+  // unpublished video at all (it has no sales), which is why "I cannot see the
+  // video I just posted" had no answer on this page.
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [editing, setEditing] = useState<CreatorVideo | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editPrice, setEditPrice] = useState(0);
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
@@ -216,6 +234,79 @@ export default function CreatorDashboard() {
       toast("error", "Network error");
     } finally {
       setPublishingId(null);
+    }
+  }
+
+  /** Open the edit form for one of the creator's own videos. */
+  function openEditor(video: CreatorVideo) {
+    setEditing(video);
+    setEditTitle(video.title);
+    setEditPrice(video.price);
+    setOpenMenuId(null);
+  }
+
+  async function saveEdit() {
+    if (!editing) return;
+    const title = editTitle.trim();
+    if (title.length < 3) {
+      toast("error", "The title must be at least 3 characters");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const res = await fetch(`/api/videos/${editing.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, price: editPrice }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast("error", data.error || "Could not save the changes");
+        return;
+      }
+      toast("success", "Video updated");
+      setEditing(null);
+      await fetchData();
+    } catch {
+      toast("error", "Network error");
+    } finally {
+      setSavingEdit(false);
+    }
+  }
+
+  /**
+   * Delete one of the creator's own videos.
+   *
+   * The confirmation names what actually happens — this is not an undoable hide:
+   * the row is retired and the file is removed from Bunny, so a customer's
+   * purchase link will never resolve again. Saying so once is the difference
+   * between a deliberate delete and an accident.
+   */
+  async function removeVideo(video: CreatorVideo) {
+    if (
+      !confirm(
+        `Delete "${video.title}" permanently?\n\n` +
+          "It disappears from your dashboard and from the feed, and the video file " +
+          "is removed from the video host. This cannot be undone."
+      )
+    ) {
+      return;
+    }
+    setDeletingId(video.id);
+    setOpenMenuId(null);
+    try {
+      const res = await fetch(`/api/videos/${video.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!data.success) {
+        toast("error", data.error || "Could not delete the video");
+        return;
+      }
+      toast("success", "Video deleted");
+      await fetchData();
+    } catch {
+      toast("error", "Network error");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -430,6 +521,139 @@ export default function CreatorDashboard() {
           </div>
         )}
 
+        {/* My Videos — everything this creator has posted, including the ones
+            the public feed cannot show yet, with the actions they need on it. */}
+        <div className="glass-card overflow-hidden">
+          <div className="p-4 border-b border-white/10 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display font-bold">My Videos</h2>
+              <p className="text-xs text-white/40 mt-0.5">
+                {videos.length === 0
+                  ? "Nothing posted yet"
+                  : `${videos.length} posted · ` +
+                    `${videos.filter((v) => !v.isPublished).length} not live`}
+              </p>
+            </div>
+            <Link href="/creator/upload" className="btn-ghost text-xs flex items-center gap-1.5">
+              <Upload className="w-3.5 h-3.5" /> Upload
+            </Link>
+          </div>
+
+          <div className="divide-y divide-white/5">
+            {videos.map((video) => (
+              <div key={video.id} className="flex items-center gap-3 p-4 hover:bg-white/5 transition">
+                {/* Thumbnail — the picture the viewer will see on the feed. A
+                    missing one gets the same treatment as a broken one, because
+                    from the creator's side both mean "post has no cover". */}
+                <div className="w-24 h-16 shrink-0 rounded-lg overflow-hidden bg-surface-300/40 flex items-center justify-center">
+                  {video.thumbnailUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={video.thumbnailUrl}
+                      alt=""
+                      loading="lazy"
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <ImageOff className="w-5 h-5 text-white/30" />
+                  )}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium truncate">{video.title}</p>
+                    {!video.isPublished && (
+                      <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
+                        Not live
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-white/40 mt-0.5">
+                    {formatTZS(video.price)} · {formatCount(video.viewsCount)} views ·{" "}
+                    {video.purchaseCount} sales · {formatRelativeTime(new Date(video.createdAt))}
+                  </p>
+                  <div className="mt-1">
+                    <EncodingBadge encoding={video.encoding} />
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="relative shrink-0">
+                  <button
+                    type="button"
+                    aria-label={`Actions for ${video.title}`}
+                    aria-expanded={openMenuId === video.id}
+                    onClick={() => setOpenMenuId(openMenuId === video.id ? null : video.id)}
+                    disabled={deletingId === video.id}
+                    className="p-2 rounded-lg hover:bg-white/10 transition disabled:opacity-50"
+                  >
+                    {deletingId === video.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <MoreVertical className="w-4 h-4" />
+                    )}
+                  </button>
+
+                  {openMenuId === video.id && (
+                    <div className="absolute right-0 top-10 z-20 min-w-[180px] rounded-xl border border-white/10 bg-surface-200 py-1 shadow-xl">
+                      <button
+                        type="button"
+                        onClick={() => openEditor(video)}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition"
+                      >
+                        <Pencil className="w-3.5 h-3.5" /> Edit title & price
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          void togglePublished(video);
+                        }}
+                        disabled={publishingId === video.id}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition disabled:opacity-50"
+                      >
+                        {video.isPublished ? (
+                          <>
+                            <EyeOff className="w-3.5 h-3.5" /> Take out of the feed
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-3.5 h-3.5" /> Publish now
+                          </>
+                        )}
+                      </button>
+                      <Link
+                        href={`/video/${video.slug || video.id}`}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition"
+                        onClick={() => setOpenMenuId(null)}
+                      >
+                        <Eye className="w-3.5 h-3.5" /> View as a viewer
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => void removeVideo(video)}
+                        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> Delete video
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {videos.length === 0 && (
+              <div className="px-4 py-12 text-center">
+                <Film className="w-8 h-8 mx-auto text-white/20 mb-3" />
+                <p className="text-white/50 text-sm">You have not posted a video yet</p>
+                <Link href="/creator/upload" className="btn-brand inline-flex items-center gap-2 mt-4">
+                  <Upload className="w-4 h-4" /> Upload your first video
+                </Link>
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Video Performance Table */}
         <div className="glass-card overflow-hidden">
           <div className="p-4 border-b border-white/10">
@@ -526,6 +750,66 @@ export default function CreatorDashboard() {
           </div>
         </div>
       </main>
+
+      {/* Edit Video Modal */}
+      {editing && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="glass-card w-full max-w-md p-6">
+            <h2 className="text-xl font-display font-bold mb-1">Edit video</h2>
+            <p className="text-xs text-white/40 mb-4">
+              The cover image and the video file itself are replaced by uploading
+              again — the title and price are what buyers see.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-white/60 mb-2 block" htmlFor="edit-title">
+                  Title
+                </label>
+                <input
+                  id="edit-title"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  maxLength={200}
+                  className="input-field"
+                />
+              </div>
+              <div>
+                <label className="text-sm text-white/60 mb-2 block" htmlFor="edit-price">
+                  Price (TZS)
+                </label>
+                <input
+                  id="edit-price"
+                  type="number"
+                  min={100}
+                  max={1000000}
+                  value={editPrice}
+                  onChange={(e) => setEditPrice(parseInt(e.target.value) || 0)}
+                  className="input-field"
+                />
+                <p className="text-xs text-white/40 mt-1">
+                  You keep {formatTZS(Math.round(editPrice * 0.7))} of each sale
+                  (70%); 0 makes it free to watch.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button onClick={() => setEditing(null)} className="btn-ghost flex-1">
+                Cancel
+              </button>
+              <button
+                onClick={saveEdit}
+                disabled={savingEdit}
+                className="btn-brand flex-1 flex items-center justify-center gap-2"
+              >
+                {savingEdit && <Loader2 className="w-4 h-4 animate-spin" />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Payout Modal */}
       {showPayoutModal && (

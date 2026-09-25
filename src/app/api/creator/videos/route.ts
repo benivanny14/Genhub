@@ -49,11 +49,17 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         title: true,
+        description: true,
         slug: true,
         price: true,
         isPublished: true,
         viewsCount: true,
         purchaseCount: true,
+        // Without this the creator's own list had no image to show, which is how
+        // a broken thumbnail stayed invisible to the one person who could fix it.
+        thumbnailUrl: true,
+        duration: true,
+        teaserDuration: true,
         encodingStatus: true,
         encodeProgress: true,
         encodingError: true,

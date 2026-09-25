@@ -9,6 +9,9 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { cacheDel } from "@/lib/redis";
+import { mediaOrExternalUrl } from "@/lib/validation";
+import { normalizeMediaUrl } from "@/lib/media";
+import config from "@/lib/config";
 
 export async function PATCH(request: NextRequest) {
   try {
@@ -44,7 +47,21 @@ export async function PATCH(request: NextRequest) {
     const updates: Record<string, unknown> = {};
     if (body.displayName !== undefined) updates.displayName = body.displayName;
     if (body.locale !== undefined) updates.locale = body.locale;
-    if (body.avatarUrl !== undefined) updates.avatarUrl = body.avatarUrl;
+    if (body.avatarUrl !== undefined) {
+      // `avatarUrl: string` was taken straight from the request body, so any
+      // string at all could be stored and then rendered as an <img src>. An
+      // empty value clears the picture; anything else must be one of our media
+      // paths or a real external URL.
+      if (body.avatarUrl === null || body.avatarUrl === "") {
+        updates.avatarUrl = null;
+      } else {
+        const parsed = mediaOrExternalUrl("avatar URL").safeParse(body.avatarUrl);
+        if (!parsed.success) {
+          return api.validation(parsed.error.errors[0].message);
+        }
+        updates.avatarUrl = normalizeMediaUrl(parsed.data, config.bunny.cdnHostname);
+      }
+    }
 
     if (Object.keys(updates).length === 0) {
       return api.validation("Nothing to update");

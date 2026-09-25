@@ -1700,21 +1700,47 @@ export default function AdminDashboard() {
                       </div>
 
                       <div className="flex items-center gap-2">
+                        {/* Seen, not linked. Approving an identity means LOOKING at
+                            the document, and a link that navigates away from the
+                            queue is how a review turns into a click. Served by
+                            /api/media/private/..., which returns the bytes only to
+                            this user or an admin — the picture stays private while
+                            still being visible here. */}
                         <a
                           href={kyc.idDocumentUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="btn-ghost text-xs flex items-center gap-1"
+                          title="Open the ID document full size"
+                          className="group relative block w-16 h-12 rounded-lg overflow-hidden bg-surface-300/40 border border-white/10"
                         >
-                          <FileText className="w-3 h-3" /> ID Document
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={kyc.idDocumentUrl}
+                            alt="ID document"
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                          />
+                          <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] text-center py-0.5 flex items-center justify-center gap-0.5">
+                            <FileText className="w-2.5 h-2.5" /> ID
+                          </span>
                         </a>
                         <a
                           href={kyc.selfieUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="btn-ghost text-xs flex items-center gap-1"
+                          title="Open the selfie full size"
+                          className="group relative block w-16 h-12 rounded-lg overflow-hidden bg-surface-300/40 border border-white/10"
                         >
-                          <Eye className="w-3 h-3" /> Selfie
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={kyc.selfieUrl}
+                            alt="Selfie"
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                          />
+                          <span className="absolute bottom-0 inset-x-0 bg-black/70 text-[9px] text-center py-0.5 flex items-center justify-center gap-0.5">
+                            <Eye className="w-2.5 h-2.5" /> Selfie
+                          </span>
                         </a>
                         <button
                           onClick={() => handleKycReview(kyc.id, "APPROVED")}
