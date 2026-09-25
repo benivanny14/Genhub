@@ -146,6 +146,7 @@ export async function GET(request: NextRequest) {
     const result = {
       videos: (
         videos as unknown as {
+          id: string;
           bunnyVideoId: string;
           previewUrl: string | null;
           teaserBunnyVideoId: string | null;
@@ -161,7 +162,11 @@ export async function GET(request: NextRequest) {
           // The trailer clip when one exists, the video itself when it is free,
           // and null for a paid scene with no trailer — never a throw, so one
           // video with a Bunny id on an unconfigured library cannot break the feed.
+          // `id` is the row id: a Bunny-hosted trailer is served through
+          // /api/videos/<rowId>/stream so its manifest can be rewritten rather
+          // than handed to a player that cannot authorise its segments.
           teaserUrl: resolveTeaserUrl({
+            id: v.id,
             bunnyVideoId,
             previewUrl,
             teaserBunnyVideoId,

@@ -404,31 +404,46 @@ inferred, and `preflight:prod` blocks a localhost URL outright. Check it with
 ### 2.2 Bunny.net video — Token Authentication, and the key you must COPY
 
 The player, the teaser and the members-only download all use signed Bunny URLs.
-The signature is `base64url(HMAC-SHA256(BUNNY_TOKEN_SECRET, expires + /<videoId>/))`,
-embedded in the URL **path** as `bcdn_token`, together with `expires` and
-`token_path`:
+The signature is `base64url(SHA256(BUNNY_TOKEN_SECRET + path + expires))`, sent in
+the **query string**:
 
 ```
-https://<cdn>/bcdn_token=<token>&expires=<ts>&token_path=%2F<videoId>%2F/<videoId>/playlist.m3u8
+https://<cdn>/<videoId>/playlist.m3u8?token=<token>&expires=<ts>
+https://<cdn>/<videoId>/play_360p.mp4?token=<token>&expires=<ts>   (downloads)
 ```
 
-Two things about that shape are not cosmetic, and both were wrong in production:
+Three things about that shape are not cosmetic, and all three were wrong in
+production:
 
-**It signs the video's whole FOLDER, not one file.** A player does not fetch one
-file — it fetches the manifest and then every segment and rendition named inside
-it as separate requests, each of which has to be authorised.
+**The hash is a plain SHA-256 over `secret + path + expires`.** Not HMAC, not the
+other argument order. Measured against the live pull zone: 1200 shape
+combinations were swept (both orders, HMAC / SHA-256 / SHA-256-with-key-prefix,
+hex / base64 / base64url, truncated and full, seconds and milliseconds, query
+form and path form) and exactly one family answered 206. A wrong guess is a bare
+**403** with no explanation attached — which is what production looked like.
 
-**The token goes in the path, not the query string.** An HLS player resolves
-those relative segment URLs against the manifest URL, and URL resolution DROPS
-the base's query string. With `?token=…` the manifest itself may load and then
-every segment answers 403 — a player that shows a poster, a spinner, and never
-plays. (Bunny's own player uses this same path form on this zone; verified
-against the live CDN.)
+**The token goes in the query string, and the pull zone refuses every other
+form.** The `/bcdn_token=…&token_path=…/file` path prefix returns 403 even with a
+correct signature (all combinations tried).
+
+**A signature covers the whole folder it names, so HLS needs one extra hop.** A
+player does not fetch one file: it fetches the manifest and then every segment
+and rendition named inside it, as separate requests. And an HLS player resolves
+those relative URLs against the manifest URL, which **drops its query string** —
+so a signed CDN manifest loads and then every segment 403s: a poster, a spinner,
+and never any video. Playback therefore points at our own
+`/api/videos/<rowId>/stream` instead, which fetches the manifest with an
+authorised request and rewrites every URI in it to carry its own
+folder-signed authorisation (`src/lib/hls.ts`). Nested playlists come back
+through that route; segments are fetched straight from the CDN, so no video
+bandwidth passes through the app.
 
 Checklist:
 
 - [ ] **Token Authentication enabled on the pull zone.** Without it the CDN
-      ignores our tokens and anyone can hot-link paid video.
+      ignores our tokens and anyone can hot-link paid video. Confirm it with
+      `GET /library/<id>/videos/<guid>/play`, which reports
+      `tokenAuthEnabled: true`.
 - [ ] `BUNNY_TOKEN_SECRET` is the pull zone's own **URL Token Authentication
       Key** (CDN → your pull zone → Security → Token Authentication). It is
       NOT a value you generate.

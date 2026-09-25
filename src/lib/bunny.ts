@@ -3,7 +3,7 @@
 // Handles video upload signatures, HLS URL generation with signed tokens
 // =============================================================================
 
-import { createHash, createHmac } from "node:crypto";
+import { createHash } from "node:crypto";
 import config from "./config";
 import { reportCredentialFault } from "./credential-alert";
 
@@ -107,25 +107,37 @@ export class BunnyNotConfiguredError extends Error {
 }
 
 /**
- * Bunny token signature: base64url(HMAC-SHA256(tokenSecret, expires + path)).
- * Only the first 16 characters are echoed by Bunny, but the full digest is
- * accepted, so no truncation is applied here.
+ * Bunny token signature: base64url( SHA256(tokenSecret + path + expires) ).
+ *
+ * The ORDER IS part of the protocol, and so is the choice of primitive. This
+ * function used to compute HMAC-SHA256 over `expires + path`, which is what
+ * Bunny's *embed* player documentation describes — and this zone refuses every
+ * one of those tokens with a bare 403. Verified against the live pull zone by
+ * sweeping 1200 shape combinations (both orders, HMAC / SHA256 /
+ * SHA256-with-key-prefix, hex / base64 / base64url, truncated and full, seconds
+ * and milliseconds, query and path forms): exactly one family answered 206, and it is
+ * this one — a plain SHA-256 over `secret + path + expires`, base64url encoded,
+ * with nothing truncated.
+ *
+ * 403 is the only symptom of getting this wrong. Bunny does not say whether the
+ * key or the hash was at fault, the player spins, and no log line names the
+ * cause — which is what production looked like for two days.
  *
  * MUST NOT be computed with an empty secret: that produces a "signed" URL that
  * anybody can forge, which is worse than no protection at all.
  *
- * `tokenSecret` must be the pull zone's OWN "URL Token Authentication Key"
- * (CDN -> Pull Zone -> Security). A value generated with `openssl rand` cannot
- * match, and the failure is silent: Bunny answers 403, the player spins, and no
- * log line anywhere says why. .env.example said to generate one, which is how
- * production ended up signing URLs nobody would accept.
+ * `tokenSecret` must be the pull zone's OWN "Token Authentication Key" (the
+ * value under the pull zone / Stream library security settings). A value
+ * generated with `openssl rand` cannot match, and the failure is the same
+ * silent 403 — see probeSignedPlayback, which is the only check that can tell
+ * "the secret is set" apart from "the secret works".
  */
 function signBunnyPath(path: string, expiresAt: number): string {
   if (!config.bunny.tokenSecret) {
     throw new BunnyNotConfiguredError("Signed playback / download");
   }
-  return createHmac("sha256", config.bunny.tokenSecret)
-    .update(`${expiresAt}${path}`)
+  return createHash("sha256")
+    .update(`${config.bunny.tokenSecret}${path}${expiresAt}`)
     .digest("base64")
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
@@ -133,59 +145,48 @@ function signBunnyPath(path: string, expiresAt: number): string {
 }
 
 /**
- * A directory token, embedded in the URL PATH — the only form that works for
- * HLS.
+ * The token pair for a path, as Bunny accepts it.
  *
- * The signature covers the video's whole folder (`/<guid>/`), not one file,
- * because a player does not fetch one file: it fetches the manifest and then
- * every segment and rendition named inside it (`240p/video.m3u8`,
- * `240p/video0.ts`, ...) as SEPARATE requests that each have to be authorised.
- *
- * And it goes in the path, not the query string, for exactly that reason. An
- * HLS player resolves those relative segment URLs against the manifest URL, and
- * URL resolution DROPS the base's query string: with `?token=...` the manifest
- * itself may load and then every segment comes back 403, which is a player that
- * shows a poster, a spinner, and never plays. Bunny's own player uses this
- * `bcdn_token`/`token_path` path form for the same reason (verified against the
- * live CDN).
+ * The signature covers a path and — measured against the live zone — every path
+ * UNDER it: a token signed for `/abc-123/` opens `/abc-123/playlist.m3u8` if
+ * that request carries it, and a token signed for one file opens nothing else.
+ * The folder is therefore what we sign: an HLS video is not one request but the
+ * manifest plus every rendition and segment named inside it, and one folder
+ * token authorises all of them (asserted in tests/bunny.test.ts).
  */
 interface BunnyTokenParams {
   token: string;
   expires: number;
-  /** The URL-encoded folder the token authorises. */
-  tokenPath: string;
 }
 
-function directoryToken(bunnyVideoId: string, expiresAt: number): BunnyTokenParams {
-  const directory = `/${bunnyVideoId}/`;
-  return {
-    token: signBunnyPath(directory, expiresAt),
-    expires: expiresAt,
-    tokenPath: encodeURIComponent(directory),
-  };
+function tokenFor(path: string, expiresAt: number): BunnyTokenParams {
+  return { token: signBunnyPath(path, expiresAt), expires: expiresAt };
 }
 
 /**
- * `https://<cdn>/bcdn_token=…&expires=…&token_path=…/<path>`
+ * `token=…&expires=…` — the authorisation Bunny reads from the QUERY STRING.
  *
- * The token parameters are injected as a path PREFIX in front of the real path,
- * which is the shape Bunny serves and the shape that makes the segments inherit
- * authentication.
+ * The path-prefix form (`/bcdn_token=…&token_path=…/file`) that this module used
+ * to emit is refused by this pull zone even with a correct signature (403 on all
+ * four combinations tried against the live CDN), and it is not what Bunny's own
+ * player uses here. Query strings it is — with one consequence the HLS route has
+ * to handle: an HLS player resolves the relative URLs inside a manifest against
+ * the manifest URL and DROPS its query string, so a `?token=` authorises the
+ * manifest and nothing after it. Segments therefore cannot inherit anything by
+ * being relative; they need the authorisation written INTO their URL, which is
+ * what lib/hls.ts does (it signs the folder and rewrites every child URI).
  */
-function signedBunnyUrl(
-  path: string,
-  expiresAt: number,
-  bunnyVideoId: string
-): string {
+export function signedCdnQuery(path: string, expiresAt: number): string {
+  const { token, expires } = tokenFor(path, expiresAt);
+  return `token=${token}&expires=${expires}`;
+}
+
+/** `https://<cdn>/<path>?token=…&expires=…` */
+function signedBunnyUrl(path: string, expiresAt: number): string {
   if (!config.bunny.cdnHostname) {
     throw new BunnyNotConfiguredError("Playback");
   }
-  const { token, expires, tokenPath } = directoryToken(bunnyVideoId, expiresAt);
-  return (
-    `https://${config.bunny.cdnHostname}` +
-    `/bcdn_token=${token}&expires=${expires}&token_path=${tokenPath}` +
-    path
-  );
+  return `https://${config.bunny.cdnHostname}${path}?${signedCdnQuery(path, expiresAt)}`;
 }
 
 // =============================================================================
@@ -322,7 +323,7 @@ export function generateSignedVideoUrl(
   _viewerId?: string
 ): string {
   const expiresAt = Math.floor(Date.now() / 1000) + expirationMinutes * 60;
-  return signedBunnyUrl(`/${bunnyVideoId}/playlist.m3u8`, expiresAt, bunnyVideoId);
+  return signedBunnyUrl(`/${bunnyVideoId}/playlist.m3u8`, expiresAt);
 }
 
 // =============================================================================
@@ -340,8 +341,48 @@ export function generateTeaserUrl(bunnyVideoId: string): string {
 // ...). They use the same token authentication as the HLS manifest, so a member
 // who already has access can download the file instead of only streaming it.
 
-export const DOWNLOAD_QUALITIES = ["1080p", "720p", "480p", "360p"] as const;
+// Ordered best-first, and 240p is included on purpose: Bunny produces an MP4
+// fallback for every resolution a video has (verified against the live CDN — a
+// 360x640 upload has play_240p.mp4 and play_360p.mp4), and a phone-only audience
+// on metered data is exactly who wants the smallest file.
+export const DOWNLOAD_QUALITIES = ["1080p", "720p", "480p", "360p", "240p"] as const;
 export type DownloadQuality = (typeof DOWNLOAD_QUALITIES)[number];
+
+/**
+ * The rendition to actually serve, when the requested one does not exist.
+ *
+ * Bunny only produces an MP4 fallback for the resolutions a video really has:
+ * `availableResolutions` on a 360x640 upload reads `240p,360p`, and
+ * `play_1080p.mp4` for it is a guaranteed 404. The download menu offers
+ * 1080p/720p/480p regardless, so every download in the library failed with
+ * "Video not found" — a dead button that looks like a broken video.
+ *
+ * So: the requested quality when it exists, otherwise the best one below it,
+ * otherwise the best one there is. Never nothing, because the viewer asked for a
+ * file and a smaller file is a better answer than an error.
+ */
+export function pickAvailableQuality(
+  availableResolutions: string | null | undefined,
+  requested: DownloadQuality
+): DownloadQuality {
+  const available = (availableResolutions || "")
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter((entry): entry is DownloadQuality =>
+      (DOWNLOAD_QUALITIES as readonly string[]).includes(entry)
+    );
+
+  // Bunny said nothing useful — do not invent a downgrade.
+  if (available.length === 0) return requested;
+  if (available.includes(requested)) return requested;
+
+  // Best-first order, so "below the request" is a larger index.
+  const rank = (quality: DownloadQuality) => DOWNLOAD_QUALITIES.indexOf(quality);
+  const below = available.filter((quality) => rank(quality) > rank(requested));
+  const pool = below.length > 0 ? below : available;
+
+  return pool.sort((a, b) => rank(a) - rank(b))[0];
+}
 
 export function generateDownloadUrl(
   bunnyVideoId: string,
@@ -350,9 +391,11 @@ export function generateDownloadUrl(
   _viewerId?: string
 ): string {
   const expiresAt = Math.floor(Date.now() / 1000) + expirationMinutes * 60;
-  // Same directory token as playback: one shape, one thing to reason about, and
-  // the file is inside the folder the token already authorises.
-  return signedBunnyUrl(`/${bunnyVideoId}/play_${quality}.mp4`, expiresAt, bunnyVideoId);
+  // Same folder token as playback: one shape, one thing to reason about, and the
+  // file is inside the folder the token already authorises. A download is a
+  // single request, so nothing needs rewriting for it — the query string is
+  // enough (verified: HTTP 206).
+  return signedBunnyUrl(`/${bunnyVideoId}/play_${quality}.mp4`, expiresAt);
 }// =============================================================================
 // Non-throwing variants
 // =============================================================================
@@ -428,6 +471,13 @@ export function safeDownloadUrl(
 // -----------------------------------------------------------------------------
 
 export interface VideoSourceLocation {
+  /**
+   * The video ROW's id — not the Bunny GUID. Playback is served by our own
+   * /api/videos/[id]/stream endpoint, which needs the row id to look up the
+   * viewer's entitlement and the row's Bunny id. Rows in tests and seeds may
+   * omit it, in which case the direct signed CDN URL is used instead.
+   */
+  id?: string | null;
   bunnyVideoId?: string | null;
   previewUrl?: string | null;
   /** Bunny id of a separate short clip to show non-buyers. */
@@ -439,6 +489,56 @@ export interface VideoSourceLocation {
 }
 
 /**
+ * Which media a stream request is for. A row can name two different Bunny
+ * videos — the scene and its trailer — and they are two different folders with
+ * two different tokens, so the route has to be told which one it is serving.
+ */
+export const STREAM_SOURCES = ["playback", "teaser"] as const;
+export type StreamSource = (typeof STREAM_SOURCES)[number];
+
+/** How long one rewritten manifest's authorisation stays valid. */
+export const PLAYBACK_SESSION_MINUTES = 120;
+
+/**
+ * The in-app HLS endpoint for a video row:
+ * `/api/videos/<rowId>/stream[?source=teaser]`.
+ *
+ * Playback no longer points the player straight at the CDN. It points at us,
+ * and we hand back a manifest whose every child URL carries its own
+ * authorisation (see lib/hls.ts for why that is unavoidable). The viewer's
+ * cookie travels with the request, so entitlement is re-derived on our side
+ * exactly as the detail route derived it before handing the URL over — and the
+ * token secret itself never reaches the browser.
+ */
+export function streamSourceUrl(videoId: string, source: StreamSource = "playback"): string {
+  // ROOT-RELATIVE on purpose. This string is handed to a <video> element and to
+  // hls.js, both of which resolve it against the page that embedded it, so it
+  // stays correct on the production domain, on a preview deployment and on
+  // localhost — and a cached feed payload stays valid across all of them. An
+  // absolute URL built from NEXT_PUBLIC_APP_URL would put a second copy of the
+  // app's own address on the critical path to playback, which is exactly the
+  // sort of configuration that breaks it silently.
+  const base = `/api/videos/${encodeURIComponent(videoId)}/stream`;
+  return source === "playback" ? base : `${base}?source=${source}`;
+}
+
+/**
+ * The proxy URL for a row, or null when the row cannot be served this way.
+ *
+ * Null means "fall back" — a demo row (no Bunny id), an unconfigured library
+ * (nothing can be signed, so the proxy could only fail), or a caller that did
+ * not pass the row id at all.
+ */
+function streamProxyUrl(
+  video: VideoSourceLocation,
+  source: StreamSource = "playback"
+): string | null {
+  if (!video.id || !video.bunnyVideoId) return null;
+  if (!isBunnyPlaybackConfigured()) return null;
+  return streamSourceUrl(video.id, source);
+}
+
+/**
  * Full-length playback URL. Call this ONLY once entitlement is established
  * (free video, purchase, active subscription, or admin).
  */
@@ -447,8 +547,17 @@ export function resolvePlaybackUrl(
   expirationMinutes = 10,
   viewerId?: string
 ): string | null {
-  // Signed first: tokens are the whole anti-piracy story, so they must never be
-  // skipped in favour of a static URL just because one happens to be stored.
+  // The proxy wins whenever it is possible: it is the only form that can serve
+  // HLS end to end (the CDN refuses every token that is not in the query string,
+  // and a query string does not survive an HLS player's relative-URL
+  // resolution). Tokens are still the whole anti-piracy story — the route
+  // decides entitlement and the rewritten URLs carry expiring signatures — so
+  // this branch is not allowed to skip signing for a stored URL.
+  const proxied = streamProxyUrl(video);
+  if (proxied) return proxied;
+
+  // No row id, or an unconfigured library: the direct signed URL is still the
+  // right answer for a single-file source (and the only one for downloads).
   return (
     safeSignedVideoUrl(video.bunnyVideoId, expirationMinutes, viewerId) ??
     video.previewUrl ??
@@ -481,6 +590,12 @@ export function resolvePlaybackUrl(
  */
 export function resolveTeaserUrl(video: VideoSourceLocation): string | null {
   if (video.teaserBunnyVideoId) {
+    // The trailer is a separate Bunny video with its own folder and its own
+    // token, so it gets its own proxy URL — and it stays public, because a
+    // trailer that only buyers can watch is not a trailer.
+    const proxied = streamProxyUrl(video, "teaser");
+    if (proxied) return proxied;
+
     const signed = safeTeaserUrl(video.teaserBunnyVideoId);
     if (signed) return signed;
   }

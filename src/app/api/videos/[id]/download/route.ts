@@ -11,7 +11,14 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { getCurrentUser, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
-import { resolveDownloadUrl, DOWNLOAD_QUALITIES, type DownloadQuality } from "@/lib/bunny";
+import {
+  resolveDownloadUrl,
+  pickAvailableQuality,
+  getBunnyVideoDetails,
+  isBunnyVideoId,
+  DOWNLOAD_QUALITIES,
+  type DownloadQuality,
+} from "@/lib/bunny";
 import config from "@/lib/config";
 import { checkRateLimit } from "@/lib/redis";
 
@@ -46,9 +53,9 @@ export async function GET(
     }
 
     const { id } = await params;
-    const requested = (request.nextUrl.searchParams.get("quality") || "1080p") as DownloadQuality;
-    const quality: DownloadQuality = DOWNLOAD_QUALITIES.includes(requested)
-      ? requested
+    const requestedRaw = (request.nextUrl.searchParams.get("quality") || "1080p") as DownloadQuality;
+    const requested: DownloadQuality = DOWNLOAD_QUALITIES.includes(requestedRaw)
+      ? requestedRaw
       : "1080p";
 
     const video = await prisma.video.findFirst({
@@ -114,6 +121,28 @@ export async function GET(
       return api.forbidden(
         "Downloads are for members — buy the video or subscribe to the creator first"
       );
+    }
+
+    // --------------------------------------------------------- Which rendition
+    // Bunny only keeps MP4 fallbacks for the resolutions a video actually has,
+    // so `play_1080p.mp4` on a 360p upload is a 404 — and the download menu
+    // offers 1080p/720p/480p to every video, which is how "Download" became a
+    // button that always failed. The row does not record which renditions Bunny
+    // produced, so ask Bunny — one bounded management call, on a route that is
+    // already rate-limited per member.
+    let quality: DownloadQuality = requested;
+    if (isBunnyVideoId(video.bunnyVideoId)) {
+      try {
+        const details = await getBunnyVideoDetails(video.bunnyVideoId);
+        quality = pickAvailableQuality(
+          (details as { availableResolutions?: string })?.availableResolutions,
+          requested
+        );
+      } catch (error) {
+        // Bunny unreachable: fall through with the requested quality rather than
+        // turn a download into an error the viewer cannot act on.
+        console.error("[Download Quality Lookup Error]", error);
+      }
     }
 
     // ------------------------------------------------------------ Download URL

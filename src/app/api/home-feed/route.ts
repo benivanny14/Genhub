@@ -41,6 +41,7 @@ const videoSelect = {
 } as const;
 
 type RawVideo = {
+  id: string;
   previewUrl: string | null;
   bunnyVideoId: string;
   teaserBunnyVideoId: string | null;
@@ -68,7 +69,11 @@ function mapVideos(raw: RawVideo[]) {
       // the UI cannot tell a free scene from a paid one.
       price,
       createdAt: createdAt.toISOString(),
+      // `id` is the row id, and the resolver needs it: a Bunny-hosted trailer is
+      // served through /api/videos/<rowId>/stream so its manifest can be
+      // rewritten (see lib/hls.ts) instead of handed over unusable.
       teaserUrl: resolveTeaserUrl({
+        id: v.id,
         bunnyVideoId,
         previewUrl,
         teaserBunnyVideoId,

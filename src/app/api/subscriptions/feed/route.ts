@@ -84,7 +84,11 @@ export async function GET(request: NextRequest) {
           ...v,
           // Destructured out only for the resolver — the client needs it back.
           price,
+          // `id` is the row id: a Bunny-hosted trailer is served through
+          // /api/videos/<rowId>/stream so its manifest can be rewritten rather
+          // than handed to a player that cannot authorise its segments.
           teaserUrl: resolveTeaserUrl({
+            id: v.id,
             bunnyVideoId,
             previewUrl,
             teaserBunnyVideoId,

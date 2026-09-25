@@ -57,7 +57,10 @@ const CONFIGURED = {
 const BUNNY_ID = "abc-123-def";
 const TEASER_ID = "teaser-999-xyz";
 const TEASER_CLIP = "https://example.test/trailer-clip.m3u8";
+const ROW_ID = "row-1";
 const BOTH = { bunnyVideoId: BUNNY_ID, previewUrl: PREVIEW, price: 5000 };
+/** The same row, with the id that makes the in-app HLS proxy reachable. */
+const BOTH_WITH_ID = { ...BOTH, id: ROW_ID };
 
 afterEach(() => vi.resetModules());
 
@@ -144,8 +147,8 @@ describe("resolveTeaserUrl", () => {
     expect(url).not.toContain("example.test");
   });
 
-  /** The `expires` value out of the path-based token form. */
-  const expiresOf = (url: URL) => Number(url.pathname.match(/expires=(\d+)/)?.[1] ?? 0);
+  /** The `expires` value out of the signed query string. */
+  const expiresOf = (url: URL) => Number(url.searchParams.get("expires") ?? 0);
 
   it("signs the teaser with a shorter expiry than playback", async () => {
     const bunny = await loadBunny(CONFIGURED);
@@ -286,18 +289,65 @@ describe("signed URLs are actually signed", () => {
     const bunny = await loadBunny(CONFIGURED);
     const url = new URL(bunny.resolvePlaybackUrl(BOTH, 10, "viewer-1")!);
 
-    // The token lives in the PATH, with the folder it authorises — not in the
-    // query string, which the HLS player would drop for every segment request.
-    const match = url.pathname.match(
-      /^\/bcdn_token=([^&]+)&expires=(\d+)&token_path=([^/]+)\//
+    // The token lives in the query string, which is the only place this pull
+    // zone reads one from (the `bcdn_token` path prefix is refused with a 403).
+    expect(url.searchParams.get("token")).toBeTruthy();
+    expect(Number(url.searchParams.get("expires"))).toBeGreaterThan(
+      Math.floor(Date.now() / 1000)
     );
-    expect(match).not.toBeNull();
-    expect(match![1]).toBeTruthy();
-    expect(Number(match![2])).toBeGreaterThan(Math.floor(Date.now() / 1000));
-    expect(decodeURIComponent(match![3])).toBe(`/${BUNNY_ID}/`);
-    // No query string at all: Bunny folds every query parameter into the
-    // signature, so an extra one (the old `uid` fingerprint) would invalidate it.
-    expect(url.search).toBe("");
+    expect(url.pathname).toBe(`/${BUNNY_ID}/playlist.m3u8`);
+    // No stray parameters: Bunny folds the query into the signature, so an extra
+    // one (the old `uid` fingerprint) invalidates the whole URL.
+    expect(url.search.replace(/^\?/, "").split("&").map((pair) => pair.split("=")[0]).sort()).toEqual([
+      "expires",
+      "token",
+    ]);
+  });
+
+  // ===========================================================================
+  // The in-app HLS proxy.
+  //
+  // A signed CDN URL is not enough for HLS on this pull zone: the token has to
+  // be in the query string, and an HLS player drops the query string when it
+  // resolves the segment URLs inside a manifest. So when the row id is known,
+  // playback points at /api/videos/<rowId>/stream, which fetches the manifest
+  // and rewrites every child URL with its own authorisation.
+  // ===========================================================================
+  it("routes a Bunny-hosted row through the in-app HLS proxy when the id is known", async () => {
+    const bunny = await loadBunny(CONFIGURED);
+    expect(bunny.resolvePlaybackUrl(BOTH_WITH_ID, 10, "viewer-1")).toBe(
+      `/api/videos/${ROW_ID}/stream`
+    );
+  });
+
+  it("routes a Bunny-hosted trailer through the proxy, marked as a teaser", async () => {
+    const bunny = await loadBunny(CONFIGURED);
+    expect(
+      bunny.resolveTeaserUrl({ ...BOTH_WITH_ID, teaserBunnyVideoId: TEASER_ID })
+    ).toBe(`/api/videos/${ROW_ID}/stream?source=teaser`);
+  });
+
+  // Root-relative on purpose: the browser resolves it against whichever host the
+  // viewer is on, so playback never depends on NEXT_PUBLIC_APP_URL being right.
+  it("emits a root-relative proxy URL", async () => {
+    const bunny = await loadBunny(CONFIGURED);
+    expect(bunny.resolvePlaybackUrl(BOTH_WITH_ID)!.startsWith("/api/")).toBe(true);
+  });
+
+  it("keeps the stored stream for a row with no id, so demo playback still works", async () => {
+    const bunny = await loadBunny(CONFIGURED);
+    // No `id`: the proxy cannot be addressed, and the signed CDN URL is still a
+    // valid single-file source... but this row has none, so previewUrl answers.
+    expect(bunny.resolvePlaybackUrl({ bunnyVideoId: null, previewUrl: PREVIEW })).toBe(PREVIEW);
+  });
+
+  it("does not route through the proxy when the library cannot sign", async () => {
+    const bunny = await loadBunny({
+      BUNNY_CDN_HOSTNAME: undefined,
+      BUNNY_TOKEN_SECRET: undefined,
+    });
+    // The proxy would only 503; the stored stream is the honest answer.
+    expect(bunny.resolvePlaybackUrl(BOTH_WITH_ID, 10, "viewer-1")).toBe(PREVIEW);
   });
 
   // Without BUNNY_TOKEN_SECRET the old code signed with an empty key, producing

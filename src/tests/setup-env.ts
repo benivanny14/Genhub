@@ -83,6 +83,17 @@ if (!process.env.HARAKAPAY_WEBHOOK_TOKEN) {
 //
 // Deliberate override: ALLOW_TESTS_ON_EXTERNAL_DB=1. Only ever point that at a
 // database you are willing to have rewritten.
+//
+// DO NOT PUT DATABASE_URL IN A PLAIN `.env` FILE.
+//
+// This file reads .env.local, so clearing DATABASE_URL here really does clear it
+// — but **Prisma Client loads a `.env` file on its own**, and nothing is left to
+// stop it: deleting the variable here just means Prisma re-reads it from `.env`
+// a moment later, and the suites run against whatever that file names. Measured,
+// not theorised: adding a `.env` containing the production URL turned this rail
+// off, and twenty money-moving tests started running against the live database.
+// Database credentials belong in .env.local, which only Next.js and this setup
+// file read.
 // =============================================================================
 
 const LOCAL_HOSTS = ["localhost", "127.0.0.1", "::1", "[::1]", "host.docker.internal"];

@@ -47,12 +47,25 @@ import {
   getBunnyVideoDetails,
   deleteBunnyVideo,
   probeSignedPlayback,
+  signedCdnQuery,
+  pickAvailableQuality,
   BunnyNotConfiguredError,
 } from "@/lib/bunny";
 
+/**
+ * base64url( SHA256(secret + path + expires) ) — the signature this pull zone
+ * actually accepts.
+ *
+ * The old helper computed HMAC-SHA256 over `expires + path`, which Bunny answers
+ * with a bare 403: the manifest never loaded, the player spun, and no log line
+ * named the cause. Verified against the live CDN by sweeping 1200 shape
+ * combinations (both orders, HMAC / SHA256 / SHA256-with-key-prefix, hex /
+ * base64 / base64url, truncated and full, seconds and milliseconds, query and
+ * path forms) — exactly one family answered 206, and it is this one.
+ */
 const expectedToken = (path: string, expires: number, secret: string) =>
-  createHmac("sha256", secret)
-    .update(`${expires}${path}`)
+  createHash("sha256")
+    .update(`${secret}${path}${expires}`)
     .digest("base64")
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
@@ -216,53 +229,77 @@ describe("Bunny management calls are bounded", () => {
 });
 
 describe("Bunny signing", () => {
-  /** Pull the token parameters out of the path-based URL form. */
-  function readDirectoryToken(url: URL, videoId: string) {
-    const match = url.pathname.match(
-      /^\/bcdn_token=([^&]+)&expires=(\d+)&token_path=([^/]+)(\/.*)$/
-    );
-    if (!match) throw new Error(`not a path-based token URL: ${url.pathname}`);
+  /** The token parameters Bunny reads: the query string, nowhere else. */
+  function readSignedUrl(url: URL) {
     return {
-      token: match[1],
-      expires: Number(match[2]),
-      tokenPath: decodeURIComponent(match[3]),
-      path: match[4],
-      directory: `/${videoId}/`,
+      token: url.searchParams.get("token") ?? "",
+      expires: Number(url.searchParams.get("expires") ?? 0),
+      path: url.pathname,
     };
   }
 
-  it("signs the video's whole folder, and puts the token in the PATH", () => {
+  it("signs the file path and puts the token in the QUERY STRING", () => {
     const url = new URL(generateSignedVideoUrl("abc-123", 10, "viewer-9"));
-    const signed = readDirectoryToken(url, "abc-123");
+    const signed = readSignedUrl(url);
 
     expect(url.hostname).toBe("genhub-test.b-cdn.net");
-    // The token authorises the folder, not one file: the manifest and every
-    // segment it names are separate requests that each have to pass.
-    expect(signed.tokenPath).toBe("/abc-123/");
-    expect(signed.token).toBe(
-      expectedToken("/abc-123/", signed.expires, "test-token-secret")
-    );
-    // ...and it lives in the path, because an HLS player resolves relative
-    // segment URLs against the manifest and URL resolution drops the query
-    // string — a `?token=` would authorise the manifest and nothing after it.
     expect(signed.path).toBe("/abc-123/playlist.m3u8");
-    expect(url.search).toBe("");
+    expect(signed.token).toBe(
+      expectedToken("/abc-123/playlist.m3u8", signed.expires, "test-token-secret")
+    );
+  });
+
+  // The regression that cost two days of "the spinner never stops": Bunny takes
+  // a plain SHA-256 over `secret + path + expires`, and refuses an HMAC over
+  // `expires + path` with a 403 that names neither the key nor the hash.
+  it("hashes secret + path + expires, and is not the HMAC this used to emit", () => {
+    const url = new URL(generateSignedVideoUrl("abc-123", 10));
+    const { token, expires } = readSignedUrl(url);
+
+    const oldShape = createHmac("sha256", "test-token-secret")
+      .update(`${expires}/abc-123/playlist.m3u8`)
+      .digest("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+
+    expect(token).toBe(expectedToken("/abc-123/playlist.m3u8", expires, "test-token-secret"));
+    expect(token).not.toBe(oldShape);
+  });
+
+  // The `bcdn_token`/`token_path` path-prefix form is refused by this pull zone
+  // even with a correct signature, so it must not come back.
+  it("never emits the path-prefix token form", () => {
+    const url = new URL(generateSignedVideoUrl("abc-123"));
+    expect(url.pathname).not.toContain("bcdn_token");
+    expect(url.pathname).not.toContain("token_path");
+    expect(url.pathname).toBe("/abc-123/playlist.m3u8");
   });
 
   it("expires roughly `expirationMinutes` from now", () => {
     const before = Math.floor(Date.now() / 1000);
     const url = new URL(generateSignedVideoUrl("abc-123", 10));
-    const expires = Number(readDirectoryToken(url, "abc-123").expires);
+    const expires = readSignedUrl(url).expires;
     expect(expires).toBeGreaterThanOrEqual(before + 10 * 60);
     expect(expires).toBeLessThanOrEqual(before + 10 * 60 + 2);
   });
 
-  it("signs each download rendition with the same folder token", () => {
+  it("signs each download rendition for its own file path", () => {
     const url = new URL(generateDownloadUrl("abc-123", "720p", 10));
-    const signed = readDirectoryToken(url, "abc-123");
+    const signed = readSignedUrl(url);
     expect(signed.path).toBe("/abc-123/play_720p.mp4");
     expect(signed.token).toBe(
-      expectedToken("/abc-123/", signed.expires, "test-token-secret")
+      expectedToken("/abc-123/play_720p.mp4", signed.expires, "test-token-secret")
+    );
+  });
+
+  // The HLS proxy signs the video's FOLDER, because a folder token is honoured
+  // for every child request (manifest, renditions, segments) — measured against
+  // the live zone, and the whole reason a rewritten manifest is playable.
+  it("can authorise a whole folder, for exactly that folder", () => {
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    expect(signedCdnQuery("/abc-123/", expires)).toBe(
+      `token=${expectedToken("/abc-123/", expires, "test-token-secret")}&expires=${expires}`
     );
   });
 
@@ -325,6 +362,40 @@ describe("Bunny signing", () => {
       expect(result.state).toBe("fail");
       expect(result.detail).toMatch(/did not answer/);
       vi.unstubAllGlobals();
+    });
+  });
+
+  // The download menu offers 1080p / 720p / 480p to every video, but Bunny only
+  // keeps MP4 fallbacks for the resolutions an upload actually has
+  // (`availableResolutions` on a 360x640 upload reads "240p,360p"). Signing
+  // `play_1080p.mp4` for it is a 404, which is what made the Download button
+  // fail on every video in the library.
+  describe("pickAvailableQuality", () => {
+    it("serves the requested quality when the video has it", () => {
+      expect(pickAvailableQuality("240p,360p,480p,720p", "480p")).toBe("480p");
+    });
+
+    it("steps down to the best resolution at or below the request", () => {
+      expect(pickAvailableQuality("240p,360p", "1080p")).toBe("360p");
+      expect(pickAvailableQuality("480p,720p", "720p")).toBe("720p");
+    });
+
+    it("never invents a resolution Bunny did not list", () => {
+      expect(pickAvailableQuality("240p,360p,480p", "480p")).toBe("480p");
+      expect(pickAvailableQuality("360p", "1080p")).toBe("360p");
+    });
+
+    it("ignores values that are not downloadable renditions", () => {
+      // 361p and `original` are not renditions; 240p is, and it is the best one
+      // on offer here, so it is what gets served.
+      expect(pickAvailableQuality("240p, 361p, original", "720p")).toBe("240p");
+    });
+
+    // Better to ask for the requested file than to guess: Bunny is silent about
+    // a video it has not finished encoding, and that is not a downgrade.
+    it("keeps the requested quality when Bunny says nothing", () => {
+      expect(pickAvailableQuality(null, "1080p")).toBe("1080p");
+      expect(pickAvailableQuality("", "720p")).toBe("720p");
     });
   });
 
