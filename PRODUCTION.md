@@ -1945,6 +1945,11 @@ Manual checks:
   (`checks.sms` in `/api/health`; Africa's Talking sandbox works with
   `AT_USERNAME=sandbox` for a dry run).
 - Sign up a fresh account → welcome email arrives.
+- **Play one video all the way through** on the live domain, and switch quality in
+  the player. Bunny's pull zone decides this by **Referer**, so a host that is not
+  on its *Allowed Referrers* list gets a 403 for the manifest **and** for every
+  segment — the player only spins, on every video, while the CDN reports healthy
+  to a server-side probe. See §8.0.1.
 - Run `npm run smoke:harakapay` from your machine against the live key.
 
 
@@ -2013,6 +2018,41 @@ trailers for the top-performing scenes first. Do **not** "fix" it by pointing
 
 The signed `uid` viewer fingerprint is still carried on every signed URL, so a
 leaked stream remains traceable to the account that requested it.
+
+### 8.0.1 The quality ladder, and the Referer gate that can hide it
+
+**Two ways the pull zone can refuse a viewer whose token is valid:**
+
+| Gate | Symptom | Where it is set |
+|---|---|---|
+| Token Authentication key wrong | Every signed request 403s, server-side probe included | Library -> Security -> Token Authentication Key |
+| **Allowed Referrers** does not name the domain | Server-to-server requests succeed, **every browser** 403s | Pull Zone -> Security -> Allowed Referrers |
+
+The second one is invisible to a probe that fetches without a `Referer`, which is
+how it went unnoticed: measured against the live zone, one correctly-signed
+manifest answers **206** with no `Referer`, **200** for `*.vercel.app`, and
+**403** for `genhub.co.tz`, `www.genhub.co.tz` and `http://localhost:3000`.
+`probeSignedPlayback()` therefore asks twice — once bare, once with the app's own
+origin as `Origin`/`Referer` — and fails loudly when the two disagree. Whatever
+domain the site is launched on, plus `http://localhost:3000`, must be listed or
+video playback is dead on that host and works on the other one.
+
+The segments are the part that cannot be worked around: they are fetched by the
+browser **straight** from the CDN (only the manifests come through
+`/api/videos/[id]/stream`), so no server-side change can authorise a request the
+browser makes.
+
+**What the player offers.** The ladder is whatever Bunny encoded, which is capped
+by the uploaded source — a 360x642 upload produces `240p` and `360p` and nothing
+higher, so "only two qualities" is a property of the file, not a bug. `lib/quality.ts`
+names each rendition by its **shorter side** snapped to the standard ladder
+(`358x640` is *360p*, `198x352` is *240p*) and lists them **best first**, because
+hls.js reports raw pixel dimensions and sorts its own levels by ascending
+bitrate — the raw array labelled the same video "640p" and "352p" with the worst
+rendition at the top. Selecting a tier sets `hls.currentLevel`, which disables ABR
+and refetches at that rendition (verified in a real browser against the live
+manifest: the `<video>` element's decoded size changes `359x640` ⇄ `198x353` while
+playback continues), and choosing **Auto** sets `-1`, which hands ABR back.
 
 ### 8.1 Which routes are rate limited, and why
 

@@ -64,9 +64,16 @@ describe("checklist integrity", () => {
 
     expect(SETUP_GROUPS.length).toBeGreaterThan(0);
     expect(itemsWithKeys.length).toBe(17);
-    // The HarakaPay float is work in someone else's dashboard, not a variable.
-    expect(manual).toHaveLength(1);
-    expect(manual[0].title).toMatch(/float/i);
+    // Two steps are work in someone else's dashboard, not a variable: the
+    // HarakaPay float, and the Bunny pull zone's Allowed Referrers list — which
+    // refuses the manifest and every segment of any host it does not name, so a
+    // missing entry there is a video that only spins (see probeSignedPlayback).
+    expect(manual).toHaveLength(2);
+    const manualText = manual
+      .map((i) => [i.title, ...(i.steps || [])].join(" "))
+      .join(" ");
+    expect(manualText).toMatch(/float/i);
+    expect(manualText).toMatch(/Referrers/i);
   });
 
   it("never lists the same variable twice", () => {

@@ -686,6 +686,32 @@ export function tokenSecretFingerprint(): string | null {
 /** How long the CDN gets to answer a manifest request before we call it a fail. */
 const PLAYBACK_PROBE_TIMEOUT_MS = 10_000;
 
+/**
+ * One manifest request, optionally dressed the way a BROWSER sends it.
+ *
+ * The `Origin` / `Referer` pair is not decoration. A pull zone can be gated by
+ * "Allowed Referrers" as well as by token authentication, and that gate reads the
+ * REFERER: measured against the live zone, the same correctly-signed URL answers
+ * 206 with no Referer, 200 for an allowed host, and 403 for a host that is not on
+ * the list — localhost and the custom domain were both refused while
+ * `*.vercel.app` was allowed. A server-to-server probe therefore reports a
+ * perfectly healthy CDN while every real viewer's browser (which always sends its
+ * own origin) is refused, and the only symptom inside the app is a spinner.
+ * Asking twice is what tells those two apart.
+ */
+async function manifestStatus(url: string, appOrigin?: string): Promise<number> {
+  const res = await fetch(url, {
+    // A manifest is a few hundred bytes; no need for the whole stream.
+    headers: {
+      Range: "bytes=0-2047",
+      ...(appOrigin ? { Origin: appOrigin, Referer: `${appOrigin}/` } : {}),
+    },
+    signal: AbortSignal.timeout(PLAYBACK_PROBE_TIMEOUT_MS),
+    cache: "no-store",
+  });
+  return res.status;
+}
+
 export async function probeSignedPlayback(bunnyVideoId: string): Promise<PlaybackProbe> {
   if (!isBunnyPlaybackConfigured()) {
     return {
@@ -701,28 +727,18 @@ export async function probeSignedPlayback(bunnyVideoId: string): Promise<Playbac
     return { state: "skip", detail: String((error as Error)?.message || error) };
   }
 
+  // A trailing slash would make the Referer `https://host//`, which is not the
+  // string a browser sends.
+  const appOrigin = (config.appUrl || "").replace(/\/+$/, "");
+
   try {
-    const res = await fetch(url, {
-      // A manifest is a few hundred bytes; no need for the whole stream.
-      headers: { Range: "bytes=0-2047" },
-      signal: AbortSignal.timeout(PLAYBACK_PROBE_TIMEOUT_MS),
-      cache: "no-store",
-    });
+    const status = await manifestStatus(url);
 
-    if (res.ok) {
-      return {
-        state: "ok",
-        detail:
-          `signed manifest accepted (HTTP ${res.status}) - BUNNY_TOKEN_SECRET matches the pull zone` +
-          ` · key ${tokenSecretFingerprint() ?? "?"}`,
-      };
-    }
-
-    if (res.status === 403 || res.status === 401) {
+    if (status === 403 || status === 401) {
       return {
         state: "fail",
         detail:
-          `unplayable: Bunny answered HTTP ${res.status} to a correctly-shaped signed manifest. ` +
+          `unplayable: Bunny answered HTTP ${status} to a correctly-shaped signed manifest. ` +
           "The token is signed with BUNNY_TOKEN_SECRET, so the likely cause is that the value is not " +
           "this pull zone's own Token Authentication Key (Stream -> Security, or the pull zone's " +
           "Token Authentication): a generated string cannot match, and the only symptom is a player " +
@@ -733,9 +749,39 @@ export async function probeSignedPlayback(bunnyVideoId: string): Promise<Playbac
       };
     }
 
+    if (status < 200 || status >= 300) {
+      return {
+        state: "fail",
+        detail: `signed manifest answered HTTP ${status}`,
+      };
+    }
+
+    // The signature works. Now the question the viewer actually asks: does the
+    // CDN accept a request that comes FROM this deployment?
+    if (appOrigin) {
+      const browserStatus = await manifestStatus(url, appOrigin);
+      if (browserStatus < 200 || browserStatus >= 300) {
+        return {
+          state: "fail",
+          detail:
+            `playback is blocked for real viewers: the signed manifest is accepted server-to-server ` +
+            `(HTTP ${status}) but answered HTTP ${browserStatus} when the request came from ` +
+            `${appOrigin}. The pull zone's Allowed Referrers list does not include this address, and ` +
+            "every browser request — the manifest AND each segment fetched straight from the CDN — " +
+            "carries it. Add this domain to the pull zone's Allowed Referrers (Bunny -> Pull Zone -> " +
+            "Security / Referrer restrictions), and add http://localhost:3000 too so playback can be " +
+            "tested locally. Nothing in the app can work around it: the browser has to fetch media " +
+            `from ${config.bunny.cdnHostname} directly.`,
+        };
+      }
+    }
+
     return {
-      state: "fail",
-      detail: `signed manifest answered HTTP ${res.status}`,
+      state: "ok",
+      detail:
+        `signed manifest accepted (HTTP ${status}) - BUNNY_TOKEN_SECRET matches the pull zone` +
+        (appOrigin ? ` and ${appOrigin} may play it` : "") +
+        ` · key ${tokenSecretFingerprint() ?? "?"}`,
     };
   } catch (error) {
     const name = error instanceof Error ? error.name : "";

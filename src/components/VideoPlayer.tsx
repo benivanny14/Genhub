@@ -17,6 +17,11 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { formatDuration } from "@/lib/utils";
+import {
+  buildQualityMenu,
+  qualityLabelFor,
+  type QualityOption,
+} from "@/lib/quality";
 
 interface VideoPlayerProps {
   src: string; // HLS stream URL
@@ -74,7 +79,10 @@ export default function VideoPlayer({
 
   // Quality selector state (HLS levels)
   const hlsRef = useRef<Hls | null>(null);
-  const [levels, setLevels] = useState<{ index: number; label: string }[]>([]);
+  // Labelled and ordered by lib/quality: hls.js reports PIXEL dimensions and
+  // sorts its levels ascending by bitrate, so the raw array offered a portrait
+  // upload as "640p" and "352p" with the worst rendition at the top.
+  const [levels, setLevels] = useState<QualityOption[]>([]);
   const [selectedLevel, setSelectedLevel] = useState(-1); // -1 = Auto
   const [activeLevel, setActiveLevel] = useState(-1);
   const [showQuality, setShowQuality] = useState(false);
@@ -171,13 +179,11 @@ export default function VideoPlayer({
       hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
         clearTimeout(watchdog);
         setFatalError(null);
-        // Expose every rendition the CDN offers (1080p / 720p / 480p / 360p …)
-        setLevels(
-          (data?.levels || []).map((level, index) => ({
-            index,
-            label: level.height ? `${level.height}p` : `Level ${index + 1}`,
-          }))
-        );
+        // Every rendition the CDN offers (1080p / 720p / 480p / 360p …), named
+        // the way viewers read them and listed best first. The level COUNT is
+        // still the manifest's, so the menu appears exactly when there is
+        // something to switch between.
+        setLevels(buildQualityMenu(data?.levels || []));
         setIsLoading(false);
         video.play().catch(() => {
           // Autoplay blocked - show play button
@@ -287,12 +293,15 @@ export default function VideoPlayer({
     setShowQuality(false);
   };
 
-  const activeLabel =
-    selectedLevel === -1
-      ? activeLevel >= 0 && levels[activeLevel]
-        ? `Auto (${levels[activeLevel].label})`
-        : "Auto"
-      : levels[selectedLevel]?.label || "Auto";
+  // "Auto" names the rendition ABR is on right now, the way every other player
+  // shows it — the tier next to Auto is not a promise, it is what is playing.
+  const activeLabel = (() => {
+    if (selectedLevel !== -1) {
+      return qualityLabelFor(levels, selectedLevel) ?? "Auto";
+    }
+    const playing = qualityLabelFor(levels, activeLevel);
+    return playing ? `Auto (${playing})` : "Auto";
+  })();
 
   // =============================================================================
   // Watch Progress — feeds Continue Watching / resume

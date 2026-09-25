@@ -225,6 +225,18 @@
           "example": "BUNNY_TOKEN_SECRET=a1b2c3d4e5f6..."
         },
         {
+          "id": "bunny_referrers",
+          "title": "Allow your own domain to play video",
+          "site": "https://bunny.net",
+          "steps": [
+            "Pull Zone -> Security -> Allowed Referrers (referrer / hotlink protection)",
+            "Add your live domain, e.g. https://genhub.co.tz",
+            "Add http://localhost:3000 as well, or video cannot be tested locally",
+            "Any host NOT on this list gets a 403 for the manifest and for every segment, so the player only spins"
+          ],
+          "example": "Allowed Referrers: https://genhub.co.tz, https://genhub-two.vercel.app, http://localhost:3000"
+        },
+        {
           "id": "bunny_storage_zone",
           "key": "BUNNY_STORAGE_ZONE",
           "title": "Storage zone",

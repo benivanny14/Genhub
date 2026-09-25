@@ -34,6 +34,10 @@ vi.mock("@/lib/config", async (importOriginal) => {
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+// Mocked above with only `bunny` replaced, so `appUrl` here is whatever the app
+// itself resolves — which is exactly what the probe has to send as a Referer.
+import config from "@/lib/config";
+
 import {
   generateSignedVideoUrl,
   generateDownloadUrl,
@@ -342,6 +346,52 @@ describe("Bunny signing", () => {
 
       expect(result.state).toBe("ok");
       expect(result.detail).toMatch(/matches the pull zone/);
+      vi.unstubAllGlobals();
+    });
+
+    // The pull zone can also be gated by "Allowed Referrers", and that gate reads
+    // the Referer — so a bare server-to-server probe passed while every browser
+    // from the app's own domain was refused with 403 (measured against the live
+    // zone: no Referer 206, an allowed host 200, localhost and the custom domain
+    // 403). Playback was broken for every viewer and this check called it healthy.
+    it("fails when the CDN accepts the signature but blocks our own origin", async () => {
+      const seen: { url: string; referer?: string; origin?: string }[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          const headers = (init?.headers || {}) as Record<string, string>;
+          seen.push({ url, referer: headers.Referer, origin: headers.Origin });
+          // Server-to-server: accepted. With a Referer: refused.
+          return { ok: !headers.Referer, status: headers.Referer ? 403 : 206 } as Response;
+        })
+      );
+
+      const result = await probeSignedPlayback("abc-123");
+
+      expect(result.state).toBe("fail");
+      expect(result.detail).toMatch(/Allowed Referrers/);
+      expect(result.detail).toMatch(/server-to-server/);
+      // The second request has to carry the app's real origin, or it proves
+      // nothing about what a browser on our site experiences.
+      expect(seen).toHaveLength(2);
+      expect(seen[1].referer).toBe(`${config.appUrl.replace(/\/+$/, "")}/`);
+      expect(seen[1].origin).toBe(config.appUrl.replace(/\/+$/, ""));
+      vi.unstubAllGlobals();
+    });
+
+    it("does not ask the referrer question when the signature already failed", async () => {
+      const calls: string[] = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          calls.push(url);
+          return { ok: false, status: 403 } as Response;
+        })
+      );
+
+      await probeSignedPlayback("abc-123");
+
+      expect(calls).toHaveLength(1);
       vi.unstubAllGlobals();
     });
 
