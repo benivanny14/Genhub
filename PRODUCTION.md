@@ -401,21 +401,116 @@ they are a safety net, not the design: `/api/health` warns whenever the URL was
 inferred, and `preflight:prod` blocks a localhost URL outright. Check it with
 `Admin → Overview → System readiness` ("App URL … (from NEXT_PUBLIC_APP_URL)").
 
-### 2.2 Bunny.net — Token Authentication must be ON
+### 2.2 Bunny.net video — Token Authentication, and the key you must COPY
 
 The player, the teaser and the members-only download all use signed Bunny URLs.
-The signature is `HMAC-SHA256(BUNNY_TOKEN_SECRET, expires + path)`, so:
+The signature is `base64url(HMAC-SHA256(BUNNY_TOKEN_SECRET, expires + /<videoId>/))`,
+embedded in the URL **path** as `bcdn_token`, together with `expires` and
+`token_path`:
 
-- [ ] **Token Authentication enabled on the pull zone**, and the same key in
-      `BUNNY_TOKEN_SECRET`. Without it the CDN ignores our tokens and anyone can
-      hot-link paid video.
+```
+https://<cdn>/bcdn_token=<token>&expires=<ts>&token_path=%2F<videoId>%2F/<videoId>/playlist.m3u8
+```
+
+Two things about that shape are not cosmetic, and both were wrong in production:
+
+**It signs the video's whole FOLDER, not one file.** A player does not fetch one
+file — it fetches the manifest and then every segment and rendition named inside
+it as separate requests, each of which has to be authorised.
+
+**The token goes in the path, not the query string.** An HLS player resolves
+those relative segment URLs against the manifest URL, and URL resolution DROPS
+the base's query string. With `?token=…` the manifest itself may load and then
+every segment answers 403 — a player that shows a poster, a spinner, and never
+plays. (Bunny's own player uses this same path form on this zone; verified
+against the live CDN.)
+
+Checklist:
+
+- [ ] **Token Authentication enabled on the pull zone.** Without it the CDN
+      ignores our tokens and anyone can hot-link paid video.
+- [ ] `BUNNY_TOKEN_SECRET` is the pull zone's own **URL Token Authentication
+      Key** (CDN → your pull zone → Security → Token Authentication). It is
+      NOT a value you generate.
+      > This is the trap that broke playback. `.env.example` used to say
+      > `openssl rand -hex 24`, so a generated string was configured. Bunny then
+      > answered **403 to every signed URL**, in a real browser as well as from
+      > the server, and there is no error anywhere: the player just spins. The
+      > only symptom is customers saying the video never loads.
+- [ ] `BUNNY_CDN_HOSTNAME` is the library's real CDN host — copy it from
+      `GET video.bunnycdn.com/library/<libraryId>/videos/<guid>/play`
+      (`thumbnailUrl` starts with it). A Stream host serves the video library
+      and nothing else.
 - [ ] `npm run smoke:bunny` returns the library name (proves the key + id).
-- [ ] `npm run smoke:bunny -- --storage` if you want thumbnails stored in Bunny.
-- [ ] Play one **paid** video end to end: the `<video>` source must contain
-      `?token=…&expires=…`. If it does not, playback is unsigned.
+- [ ] Play one **paid** video end to end with the browser's network tab open:
+      `playlist.m3u8` **and** a `…/240p/video0.ts` segment must both be `200`. A
+      200 manifest with 403 segments means the token is in the query string.
+- [ ] `/api/health/services` shows `Bunny Stream … signed manifest accepted`.
+      It signs a real manifest and fetches it, because "the secret is set" and
+      "the secret works" are different questions — and only the second one is
+      worth reporting.
 
 The signing code throws rather than emitting an URL signed with an empty secret
 — an unsigned-but-labelled-signed URL is worse than none, because it looks safe.
+
+### 2.3 Bunny.net images — served by `/api/media`, not by a CDN hostname
+
+Thumbnails, avatars, gallery photos and **KYC documents** are objects in a Bunny
+**storage zone** — a different product from Stream. The zone has no working CDN
+hostname (`genhub-thumbs.b-cdn.net` answers "Domain suspended or not
+configured"), and the old code built every image URL from `BUNNY_CDN_HOSTNAME`,
+which is the *Stream* pull zone: it serves the video library and answers 403 for
+storage objects. Nothing else. That is why no thumbnail, avatar or KYC photo
+ever appeared anywhere in the UI.
+
+Images are now served by the app itself:
+
+```
+GET /api/media/<key>        -> reads the object with BUNNY_STORAGE_ACCESS_KEY
+```
+
+and the key's first segment decides who may read it:
+
+| Key | Who can read it |
+| --- | --- |
+| `public/…` | anyone — thumbnails, avatars, gallery |
+| `private/<userId>/…` | that user, or an admin — KYC documents |
+| `uploads/…` | the pre-fix layout: public, unless a KYC row still points at the key |
+
+Checklist:
+
+- [ ] `BUNNY_STORAGE_ZONE` + `BUNNY_STORAGE_ACCESS_KEY` are set (no CDN hostname
+      is needed for images any more).
+- [ ] Run the one-off healing **once per environment**, after deploying this
+      version:
+      ```bash
+      node scripts/normalize-media-urls.mjs            # report
+      node scripts/normalize-media-urls.mjs --apply    # write
+      ```
+      It rewrites stored `https://<cdn>/…` image URLs to `/api/media/…`, and moves
+      every KYC document from the public `uploads/` prefix into
+      `private/<userId>/kyc/` (copy → verify → update the row → delete the
+      original), because identity documents were being uploaded into the same
+      path as public thumbnails. Idempotent; run it again any time.
+- [ ] Confirm the result: a thumbnail or avatar renders, and an ID document
+      renders **only** for its owner or an admin.
+
+### 2.4 Erasing an account
+
+`DELETE /api/account` is the only irreversible action in the product, so it asks
+for the password and a typed `DELETE`, and it refuses when the caller is the last
+admin (a site with no admin cannot approve creators or release payouts).
+
+What it removes, in order: the videos from Bunny, the private document folder,
+the avatar and the thumbnails — then, in one transaction, the videos, the reports
+on them, the user's transactions, the payouts, the messages, and finally the
+account row. Purchases *by other people* that credited this creator are kept (the
+buyer's receipt is theirs) with the creator link cut.
+
+Nothing about it depends on Prisma's cascade list alone: most relations to `User`
+are not declared `onDelete: Cascade`, so a bare `user.delete()` fails on a
+foreign key — after the user has already been told their account is gone. See
+`src/lib/services/account-erasure.service.ts`.
 
 ## 3. Payments go-live (HarakaPay)
 

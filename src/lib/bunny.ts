@@ -113,6 +113,12 @@ export class BunnyNotConfiguredError extends Error {
  *
  * MUST NOT be computed with an empty secret: that produces a "signed" URL that
  * anybody can forge, which is worse than no protection at all.
+ *
+ * `tokenSecret` must be the pull zone's OWN "URL Token Authentication Key"
+ * (CDN -> Pull Zone -> Security). A value generated with `openssl rand` cannot
+ * match, and the failure is silent: Bunny answers 403, the player spins, and no
+ * log line anywhere says why. .env.example said to generate one, which is how
+ * production ended up signing URLs nobody would accept.
  */
 function signBunnyPath(path: string, expiresAt: number): string {
   if (!config.bunny.tokenSecret) {
@@ -124,6 +130,62 @@ function signBunnyPath(path: string, expiresAt: number): string {
     .replace(/\+/g, "-")
     .replace(/\//g, "_")
     .replace(/=+$/, "");
+}
+
+/**
+ * A directory token, embedded in the URL PATH — the only form that works for
+ * HLS.
+ *
+ * The signature covers the video's whole folder (`/<guid>/`), not one file,
+ * because a player does not fetch one file: it fetches the manifest and then
+ * every segment and rendition named inside it (`240p/video.m3u8`,
+ * `240p/video0.ts`, ...) as SEPARATE requests that each have to be authorised.
+ *
+ * And it goes in the path, not the query string, for exactly that reason. An
+ * HLS player resolves those relative segment URLs against the manifest URL, and
+ * URL resolution DROPS the base's query string: with `?token=...` the manifest
+ * itself may load and then every segment comes back 403, which is a player that
+ * shows a poster, a spinner, and never plays. Bunny's own player uses this
+ * `bcdn_token`/`token_path` path form for the same reason (verified against the
+ * live CDN).
+ */
+interface BunnyTokenParams {
+  token: string;
+  expires: number;
+  /** The URL-encoded folder the token authorises. */
+  tokenPath: string;
+}
+
+function directoryToken(bunnyVideoId: string, expiresAt: number): BunnyTokenParams {
+  const directory = `/${bunnyVideoId}/`;
+  return {
+    token: signBunnyPath(directory, expiresAt),
+    expires: expiresAt,
+    tokenPath: encodeURIComponent(directory),
+  };
+}
+
+/**
+ * `https://<cdn>/bcdn_token=…&expires=…&token_path=…/<path>`
+ *
+ * The token parameters are injected as a path PREFIX in front of the real path,
+ * which is the shape Bunny serves and the shape that makes the segments inherit
+ * authentication.
+ */
+function signedBunnyUrl(
+  path: string,
+  expiresAt: number,
+  bunnyVideoId: string
+): string {
+  if (!config.bunny.cdnHostname) {
+    throw new BunnyNotConfiguredError("Playback");
+  }
+  const { token, expires, tokenPath } = directoryToken(bunnyVideoId, expiresAt);
+  return (
+    `https://${config.bunny.cdnHostname}` +
+    `/bcdn_token=${token}&expires=${expires}&token_path=${tokenPath}` +
+    path
+  );
 }
 
 // =============================================================================
@@ -248,30 +310,19 @@ export async function createVideoUpload(
 // Generate Signed HLS Playback URL (Anti-Piracy)
 // =============================================================================
 
+// The old `viewerId` fingerprint is deliberately no longer appended to the URL
+// as `?uid=`: Bunny folds every query parameter into the token signature, so an
+// extra one invalidates the URL, and the HLS player drops the query string
+// entirely for segment requests. The parameter is kept so callers do not have to
+// change, and the viewer identity reaches the player by other means (the moving
+// watermark in VideoPlayer).
 export function generateSignedVideoUrl(
   bunnyVideoId: string,
   expirationMinutes: number = 10,
-  viewerId?: string
+  _viewerId?: string
 ): string {
-  if (!config.bunny.cdnHostname) {
-    throw new BunnyNotConfiguredError("Playback");
-  }
-
-  // Bunny signs the PATH (including the leading slash), not just the video id.
-  const path = `/${bunnyVideoId}/playlist.m3u8`;
   const expiresAt = Math.floor(Date.now() / 1000) + expirationMinutes * 60;
-
-  const params = new URLSearchParams({
-    token: signBunnyPath(path, expiresAt),
-    expires: expiresAt.toString(),
-  });
-
-  if (viewerId) {
-    // Add viewer fingerprint for tracking
-    params.set("uid", viewerId);
-  }
-
-  return `https://${config.bunny.cdnHostname}${path}?${params.toString()}`;
+  return signedBunnyUrl(`/${bunnyVideoId}/playlist.m3u8`, expiresAt, bunnyVideoId);
 }
 
 // =============================================================================
@@ -296,23 +347,12 @@ export function generateDownloadUrl(
   bunnyVideoId: string,
   quality: DownloadQuality = "1080p",
   expirationMinutes: number = 10,
-  viewerId?: string
+  _viewerId?: string
 ): string {
-  if (!config.bunny.cdnHostname) {
-    throw new BunnyNotConfiguredError("Download");
-  }
-
-  const path = `/${bunnyVideoId}/play_${quality}.mp4`;
   const expiresAt = Math.floor(Date.now() / 1000) + expirationMinutes * 60;
-
-  const params = new URLSearchParams({
-    token: signBunnyPath(path, expiresAt),
-    expires: expiresAt.toString(),
-  });
-
-  if (viewerId) params.set("uid", viewerId);
-
-  return `https://${config.bunny.cdnHostname}${path}?${params.toString()}`;
+  // Same directory token as playback: one shape, one thing to reason about, and
+  // the file is inside the folder the token already authorises.
+  return signedBunnyUrl(`/${bunnyVideoId}/play_${quality}.mp4`, expiresAt, bunnyVideoId);
 }// =============================================================================
 // Non-throwing variants
 // =============================================================================
@@ -486,6 +526,114 @@ export function resolveDownloadUrl(
 }
 
 
+
+// =============================================================================
+// Does our signature actually work?
+// =============================================================================
+// Every other Bunny check asks whether the *credentials* are present. This one
+// asks whether Bunny accepts them, because the two are not the same and the gap
+// between them is invisible in the UI:
+//
+//   BUNNY_TOKEN_SECRET is a random value the operator generates (`openssl rand`)
+//   BUNNY_TOKEN_SECRET is the pull zone's URL Token Authentication Key (Bunny's)
+//
+// Only the second produces a token Bunny will honour. With the first, the library
+// reports healthy, the upload succeeds, the encoding finishes — and every signed
+// playback URL answers 403, so the player sits on its spinner forever with no
+// error anywhere. That was the real state of production playback: 40 sign/ verify
+// variants against the live CDN all returned 403, including a freshly signed
+// manifest for a video Bunny itself reports as `isPlayable: true`.
+//
+// So: sign one real manifest and fetch it. Nothing else distinguishes "configured"
+// from "working".
+
+export interface PlaybackProbe {
+  state: "ok" | "fail" | "skip";
+  detail: string;
+}
+
+/** How long the CDN gets to answer a manifest request before we call it a fail. */
+const PLAYBACK_PROBE_TIMEOUT_MS = 10_000;
+
+export async function probeSignedPlayback(
+  bunnyVideoId: string
+): Promise<PlaybackProbe> {
+  if (!isBunnyPlaybackConfigured()) {
+    return {
+      state: "skip",
+      detail: "BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET not set",
+    };
+  }
+
+  let url: string;
+  try {
+    url = generateSignedVideoUrl(bunnyVideoId, 5);
+  } catch (error) {
+    return { state: "skip", detail: String((error as Error)?.message || error) };
+  }
+
+  try {
+    const res = await fetch(url, {
+      // A manifest is a few hundred bytes; no need for the whole stream.
+      headers: { Range: "bytes=0-2047" },
+      signal: AbortSignal.timeout(PLAYBACK_PROBE_TIMEOUT_MS),
+      cache: "no-store",
+    });
+
+    if (res.ok) {
+      return {
+        state: "ok",
+        detail: `signed manifest accepted (HTTP ${res.status}) - BUNNY_TOKEN_SECRET matches the pull zone`,
+      };
+    }
+
+    if (res.status === 403 || res.status === 401) {
+      return {
+        state: "fail",
+        detail:
+          `unplayable: Bunny answered HTTP ${res.status} to a correctly-shaped signed manifest. ` +
+          "The token is signed with BUNNY_TOKEN_SECRET, so the likely cause is that the value is not " +
+          "this pull zone's own URL Token Authentication Key (CDN -> Pull Zone -> Security -> Token " +
+          "Authentication): a generated string cannot match, and the only symptom is a player that " +
+          "spins forever. Copy the key, redeploy, and re-run this check.",
+      };
+    }
+
+    return {
+      state: "fail",
+      detail: `signed manifest answered HTTP ${res.status}`,
+    };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "";
+    return {
+      state: "fail",
+      detail:
+        name === "TimeoutError" || name === "AbortError"
+          ? `the CDN did not answer within ${PLAYBACK_PROBE_TIMEOUT_MS / 1000}s`
+          : String((error as Error)?.message || error).slice(0, 160),
+    };
+  }
+}
+
+/**
+ * One real video id from the library, for the probe above. Returns null when the
+ * library is empty or unreachable — an empty library is a skip, not a failure.
+ */
+export async function sampleBunnyVideoId(): Promise<string | null> {
+  if (!isBunnyConfigured()) return null;
+  try {
+    const res = await bunnyFetch(
+      `${BUNNY_STREAM_API}/library/${config.bunny.libraryId}/videos?page=1&itemsPerPage=1`,
+      { headers: { AccessKey: config.bunny.apiKey } },
+      "probe video lookup"
+    );
+    if (!res.ok) return null;
+    const body = (await res.json()) as { items?: { guid?: string }[] };
+    return body.items?.[0]?.guid ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // =============================================================================
 // Delete Video from Bunny.net

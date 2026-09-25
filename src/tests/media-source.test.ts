@@ -144,14 +144,15 @@ describe("resolveTeaserUrl", () => {
     expect(url).not.toContain("example.test");
   });
 
+  /** The `expires` value out of the path-based token form. */
+  const expiresOf = (url: URL) => Number(url.pathname.match(/expires=(\d+)/)?.[1] ?? 0);
+
   it("signs the teaser with a shorter expiry than playback", async () => {
     const bunny = await loadBunny(CONFIGURED);
     const teaser = new URL(bunny.resolveTeaserUrl({ teaserBunnyVideoId: TEASER_ID })!);
     const playback = new URL(bunny.resolvePlaybackUrl({ bunnyVideoId: BUNNY_ID })!);
 
-    const teaserExpiry = Number(teaser.searchParams.get("expires"));
-    const playbackExpiry = Number(playback.searchParams.get("expires"));
-    expect(teaserExpiry).toBeLessThan(playbackExpiry);
+    expect(expiresOf(teaser)).toBeLessThan(expiresOf(playback));
   });
 
   it("withholds a PAID scene that has no teaser clip rather than previewing it", async () => {
@@ -285,12 +286,18 @@ describe("signed URLs are actually signed", () => {
     const bunny = await loadBunny(CONFIGURED);
     const url = new URL(bunny.resolvePlaybackUrl(BOTH, 10, "viewer-1")!);
 
-    expect(url.searchParams.get("token")).toBeTruthy();
-    expect(Number(url.searchParams.get("expires"))).toBeGreaterThan(
-      Math.floor(Date.now() / 1000)
+    // The token lives in the PATH, with the folder it authorises — not in the
+    // query string, which the HLS player would drop for every segment request.
+    const match = url.pathname.match(
+      /^\/bcdn_token=([^&]+)&expires=(\d+)&token_path=([^/]+)\//
     );
-    // Viewer fingerprint is carried through for leak tracing.
-    expect(url.searchParams.get("uid")).toBe("viewer-1");
+    expect(match).not.toBeNull();
+    expect(match![1]).toBeTruthy();
+    expect(Number(match![2])).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    expect(decodeURIComponent(match![3])).toBe(`/${BUNNY_ID}/`);
+    // No query string at all: Bunny folds every query parameter into the
+    // signature, so an extra one (the old `uid` fingerprint) would invalidate it.
+    expect(url.search).toBe("");
   });
 
   // Without BUNNY_TOKEN_SECRET the old code signed with an empty key, producing

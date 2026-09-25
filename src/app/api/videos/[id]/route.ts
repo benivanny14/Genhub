@@ -11,6 +11,8 @@ import { getCurrentUser, requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { updateVideoSchema } from "@/lib/validation";
 import { resolvePlaybackUrl, resolveTeaserUrl, deleteBunnyVideo } from "@/lib/bunny";
+import { normalizeMediaUrl } from "@/lib/media";
+import config from "@/lib/config";
 import { describeEncoding } from "@/lib/services/video-encoding.service";
 import { cacheDel } from "@/lib/redis";
 
@@ -245,7 +247,14 @@ export async function PATCH(
 
     const updated = await prisma.video.update({
       where: { id },
-      data: result.data,
+      data: {
+        ...result.data,
+        // Same healing as create: a stored Bunny CDN URL is rewritten to the
+        // in-app path that actually serves the file.
+        ...(result.data.thumbnailUrl !== undefined
+          ? { thumbnailUrl: normalizeMediaUrl(result.data.thumbnailUrl, config.bunny.cdnHostname) }
+          : {}),
+      },
       select: {
         id: true,
         title: true,

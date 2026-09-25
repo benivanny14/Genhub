@@ -39,7 +39,8 @@
     "accounts:create": "node scripts/create-launch-accounts.mjs",
     "demo:wipe": "node scripts/demo-wipe.mjs",
     "audit:endpoints": "node scripts/audit-endpoints.mjs",
-    "audit:balances": "node scripts/audit-balances.mjs"
+    "audit:balances": "node scripts/audit-balances.mjs",
+    "media:normalize": "node scripts/normalize-media-urls.mjs"
   },
   "dependencies": {
     "@prisma/client": "^5.19.0",

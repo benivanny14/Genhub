@@ -4,6 +4,33 @@
 // =============================================================================
 
 import { z } from "zod";
+import { MEDIA_ROUTE_PREFIX, isSafeMediaKey } from "./media";
+
+/**
+ * A URL that we uploaded ourselves, or a plain external one.
+ *
+ * Uploads come back as an in-app path (`/api/media/...`), which `z.string().url()`
+ * rejects — so a form could upload an image successfully and then be refused by
+ * its own schema. Paths are still constrained: they must start with
+ * `/api/media/` and the rest must be a safe media key, so this is not a licence
+ * to store `javascript:` or a protocol-relative `//evil.example`.
+ *
+ * Declared above the schemas that use it: `z.object({...})` runs at module
+ * evaluation, so a helper defined lower down would throw a TDZ error on import.
+ */
+export function mediaOrExternalUrl(label: string) {
+  return z
+    .string()
+    .trim()
+    .min(1, `${label} is required`)
+    .refine(
+      (value) =>
+        value.startsWith(MEDIA_ROUTE_PREFIX)
+          ? isSafeMediaKey(value.slice(MEDIA_ROUTE_PREFIX.length))
+          : z.string().url().safeParse(value).success,
+      { message: `Enter a valid ${label}` }
+    );
+}
 
 // =============================================================================
 // Auth Schemas
@@ -52,7 +79,7 @@ export const createVideoSchema = z.object({
   // of a playable preview, because a Bunny token cannot limit how much of the
   // main video it unlocks (see resolveTeaserUrl).
   teaserBunnyVideoId: z.string().min(1, "The teaser ID cannot be empty").optional(),
-  thumbnailUrl: z.string().url().optional(),
+  thumbnailUrl: mediaOrExternalUrl("thumbnail URL").optional(),
   // 18 U.S.C. § 2257 — the uploader must affirm this before content is stored.
   complianceAttested: z
     .boolean({
@@ -82,7 +109,7 @@ export const updateVideoSchema = z.object({
   tags: z.array(z.string()).max(10).optional(),
   isPublished: z.boolean().optional(),
   teaserBunnyVideoId: z.string().min(1).optional(),
-  thumbnailUrl: z.string().url().optional(),
+  thumbnailUrl: mediaOrExternalUrl("thumbnail URL").optional(),
 });
 
 // =============================================================================
@@ -130,8 +157,8 @@ export const tipCreatorSchema = z.object({
 // =============================================================================
 
 export const submitKycSchema = z.object({
-  idDocumentUrl: z.string().url("Enter a valid ID document URL"),
-  selfieUrl: z.string().url("Enter a valid selfie URL"),
+  idDocumentUrl: mediaOrExternalUrl("ID document URL"),
+  selfieUrl: mediaOrExternalUrl("selfie URL"),
   idDocumentType: z.enum(["NIDA", "PASSPORT", "DRIVING_LICENSE"]).optional(),
 });
 

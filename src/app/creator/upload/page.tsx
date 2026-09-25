@@ -404,7 +404,8 @@ export default function UploadPage() {
                   setUploadingThumb(true);
                   try {
                     const { uploadImage } = await import("@/lib/upload-client");
-                    setThumbnailUrl(await uploadImage(file));
+                    // Public: a thumbnail is shown to every visitor on the feed.
+                    setThumbnailUrl(await uploadImage(file, { kind: "public" }));
                   } catch (err) {
                     toast(
                       "error",

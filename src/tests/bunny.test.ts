@@ -215,33 +215,53 @@ describe("Bunny management calls are bounded", () => {
 });
 
 describe("Bunny signing", () => {
-  it("signs the full path, leading slash included", () => {
-    const url = new URL(generateSignedVideoUrl("abc-123", 10, "viewer-9"));
-    const expires = Number(url.searchParams.get("expires"));
-
-    // The exact path Bunny will receive
-    expect(url.pathname).toBe("/abc-123/playlist.m3u8");
-    expect(url.searchParams.get("token")).toBe(
-      expectedToken(`/${"abc-123"}/playlist.m3u8`, expires, "test-token-secret")
+  /** Pull the token parameters out of the path-based URL form. */
+  function readDirectoryToken(url: URL, videoId: string) {
+    const match = url.pathname.match(
+      /^\/bcdn_token=([^&]+)&expires=(\d+)&token_path=([^/]+)(\/.*)$/
     );
-    expect(url.searchParams.get("uid")).toBe("viewer-9");
+    if (!match) throw new Error(`not a path-based token URL: ${url.pathname}`);
+    return {
+      token: match[1],
+      expires: Number(match[2]),
+      tokenPath: decodeURIComponent(match[3]),
+      path: match[4],
+      directory: `/${videoId}/`,
+    };
+  }
+
+  it("signs the video's whole folder, and puts the token in the PATH", () => {
+    const url = new URL(generateSignedVideoUrl("abc-123", 10, "viewer-9"));
+    const signed = readDirectoryToken(url, "abc-123");
+
     expect(url.hostname).toBe("genhub-test.b-cdn.net");
+    // The token authorises the folder, not one file: the manifest and every
+    // segment it names are separate requests that each have to pass.
+    expect(signed.tokenPath).toBe("/abc-123/");
+    expect(signed.token).toBe(
+      expectedToken("/abc-123/", signed.expires, "test-token-secret")
+    );
+    // ...and it lives in the path, because an HLS player resolves relative
+    // segment URLs against the manifest and URL resolution drops the query
+    // string — a `?token=` would authorise the manifest and nothing after it.
+    expect(signed.path).toBe("/abc-123/playlist.m3u8");
+    expect(url.search).toBe("");
   });
 
   it("expires roughly `expirationMinutes` from now", () => {
     const before = Math.floor(Date.now() / 1000);
     const url = new URL(generateSignedVideoUrl("abc-123", 10));
-    const expires = Number(url.searchParams.get("expires"));
+    const expires = Number(readDirectoryToken(url, "abc-123").expires);
     expect(expires).toBeGreaterThanOrEqual(before + 10 * 60);
     expect(expires).toBeLessThanOrEqual(before + 10 * 60 + 2);
   });
 
-  it("signs each download rendition with its own path", () => {
+  it("signs each download rendition with the same folder token", () => {
     const url = new URL(generateDownloadUrl("abc-123", "720p", 10));
-    const expires = Number(url.searchParams.get("expires"));
-    expect(url.pathname).toBe("/abc-123/play_720p.mp4");
-    expect(url.searchParams.get("token")).toBe(
-      expectedToken("/abc-123/play_720p.mp4", expires, "test-token-secret")
+    const signed = readDirectoryToken(url, "abc-123");
+    expect(signed.path).toBe("/abc-123/play_720p.mp4");
+    expect(signed.token).toBe(
+      expectedToken("/abc-123/", signed.expires, "test-token-secret")
     );
   });
 

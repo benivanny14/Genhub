@@ -27,7 +27,9 @@ export default function KycPage() {
     setUploadingField(field);
     try {
       const { uploadImage } = await import("@/lib/upload-client");
-      const url = await uploadImage(file);
+      // An ID document and a selfie are private: the key lands in the owner-only
+      // bucket, so the URL cannot be handed to anyone else by copying it.
+      const url = await uploadImage(file, { kind: "private" });
       if (field === "id") setIdDocUrl(url);
       else setSelfieUrl(url);
     } catch (err) {

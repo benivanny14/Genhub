@@ -13,6 +13,8 @@ import { generateSlug } from "@/lib/utils";
 import { isBunnyConfigured, isBunnyVideoId, resolveTeaserUrl } from "@/lib/bunny";
 import { cacheGet, cacheSet } from "@/lib/redis";
 import { rankTrending, type TrendingItem } from "@/lib/trending";
+import { normalizeMediaUrl } from "@/lib/media";
+import config from "@/lib/config";
 
 // =============================================================================
 // GET /api/videos - Public feed with optional search
@@ -250,7 +252,11 @@ export async function POST(request: NextRequest) {
         slug,
         bunnyVideoId,
         teaserBunnyVideoId: teaserBunnyVideoId ?? null,
-        thumbnailUrl,
+        // Healed on write: a creator pasting the old Bunny CDN URL (or a value
+        // copied from an older video) is stored as /api/media/<key> instead, so
+        // the site never again publishes a link that 403s.
+        thumbnailUrl: normalizeMediaUrl(thumbnailUrl, config.bunny.cdnHostname),
+
         price,
         teaserDuration,
         category,

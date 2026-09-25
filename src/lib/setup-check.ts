@@ -423,10 +423,37 @@ async function probeBunny(): Promise<ProbeResult> {
         detail: "Token Authentication is ON but BUNNY_TOKEN_SECRET is empty - signed URLs would be rejected",
       };
     }
+
+    // Present is not the same as accepted. When token auth is on, the ONLY way
+    // to know playback will work is to sign a real manifest and fetch it: a
+    // generated secret (rather than the pull zone's own key) signs URLs Bunny
+    // refuses, and every other check here still reports healthy while the player
+    // spins forever. See probeSignedPlayback in lib/bunny.ts.
+    if (tokenAuth === true) {
+      const { probeSignedPlayback, sampleBunnyVideoId } = await import("./bunny");
+      const sample = await sampleBunnyVideoId();
+      if (!sample) {
+        return {
+          ...base,
+          state: "warn",
+          detail: `library "${body.name || library}" · Token Auth ON · no video to test playback with yet`,
+        };
+      }
+      const playback = await probeSignedPlayback(sample);
+      if (playback.state !== "ok") {
+        return { ...base, state: "fail", detail: playback.detail };
+      }
+      return {
+        ...base,
+        state: "ok",
+        detail: `library "${body.name || library}" · Token Auth ON · ${playback.detail}`,
+      };
+    }
+
     return {
       ...base,
       state: "ok",
-      detail: `library "${body.name || library}" · videos ${body.totalVideos ?? "?"}${tokenAuth === true ? " · Token Auth ON" : ""}`,
+      detail: `library "${body.name || library}" · videos ${body.totalVideos ?? "?"}`,
     };
   } catch (error) {
     return { ...base, state: "fail", detail: String((error as Error)?.message || error).slice(0, 160) };

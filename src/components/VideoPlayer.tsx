@@ -14,6 +14,7 @@ import {
   Download,
   Loader2,
   Check,
+  AlertTriangle,
 } from "lucide-react";
 import { formatDuration } from "@/lib/utils";
 
@@ -68,6 +69,21 @@ export default function VideoPlayer({
   const [activeLevel, setActiveLevel] = useState(-1);
   const [showQuality, setShowQuality] = useState(false);
 
+  // ===========================================================================
+  // Failure is a state, not a spinner
+  // ===========================================================================
+  // The player used to load forever when the CDN refused the stream: hls.js
+  // reported a fatal error, the handler called startLoad() again, and the only
+  // thing the viewer saw was a spinning circle with no reason and no end. A 403
+  // on the manifest is exactly this case (Bunny rejecting an unsigned URL — see
+  // probeSignedPlayback), and it is not retryable: the same request will always
+  // fail. So the viewer is told what happened, and a retry button is offered for
+  // the failures that ARE transient (a dropped connection, a stale token).
+  const [fatalError, setFatalError] = useState<string | null>(null);
+  /** Bumped by the retry button — re-runs the source-loading effect. */
+  const [attempt, setAttempt] = useState(0);
+  const networkRetries = useRef(0);
+
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resumedRef = useRef(false);
 
@@ -109,6 +125,18 @@ export default function VideoPlayer({
     const video = videoRef.current;
     if (!video) return;
 
+    // A manifest that never arrives is the silent-failure case. Bunny answers in
+    // well under a second, so 20s of nothing means something is wrong (offline,
+    // blocked, a token the CDN will never accept) and the viewer deserves to
+    // hear it instead of watching a spinner.
+    const watchdog = setTimeout(() => {
+      setFatalError((current) =>
+        current ||
+        "The stream did not start. Check your connection, then try again."
+      );
+      setIsLoading(false);
+    }, 20_000);
+
     let hls: Hls | null = null;
 
     if (Hls.isSupported()) {
@@ -128,7 +156,11 @@ export default function VideoPlayer({
 
       hlsRef.current = hls;
 
+      networkRetries.current = 0;
+
       hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+        clearTimeout(watchdog);
+        setFatalError(null);
         // Expose every rendition the CDN offers (1080p / 720p / 480p / 360p …)
         setLevels(
           (data?.levels || []).map((level, index) => ({
@@ -148,13 +180,46 @@ export default function VideoPlayer({
 
       hls.on(Hls.Events.ERROR, (_, data) => {
         console.error("[HLS Error]", data);
+
+        const httpStatus = (data as { response?: { code?: number } }).response?.code;
+
+        // 401/403 is the CDN refusing the URL itself. Retrying sends the same
+        // rejected request, so say so instead of looping.
+        if (httpStatus === 401 || httpStatus === 403) {
+          clearTimeout(watchdog);
+          setIsLoading(false);
+          setFatalError(
+            `This video was refused by the video host (HTTP ${httpStatus}). ` +
+              "It is a server-side fault, not your connection — the team has been told."
+          );
+          return;
+        }
+
         if (data.fatal) {
           switch (data.type) {
             case Hls.ErrorTypes.NETWORK_ERROR:
-              hls?.startLoad();
+              networkRetries.current += 1;
+              if (networkRetries.current <= 3) {
+                hls?.startLoad();
+              } else {
+                clearTimeout(watchdog);
+                setIsLoading(false);
+                setFatalError(
+                  httpStatus
+                    ? `The stream could not be loaded (HTTP ${httpStatus}).`
+                    : "The stream could not be loaded after several attempts."
+                );
+              }
               break;
             case Hls.ErrorTypes.MEDIA_ERROR:
-              hls?.recoverMediaError();
+              // One recovery attempt; a second failure is a broken encode.
+              if (networkRetries.current++ === 0) {
+                hls?.recoverMediaError();
+              } else {
+                clearTimeout(watchdog);
+                setIsLoading(false);
+                setFatalError("This video could not be decoded. Try again later.");
+              }
               break;
           }
         }
@@ -163,16 +228,24 @@ export default function VideoPlayer({
       // Native HLS support (Safari)
       video.src = src;
       video.addEventListener("loadedmetadata", () => {
+        clearTimeout(watchdog);
+        setFatalError(null);
         setIsLoading(false);
         video.play().catch(() => {});
+      });
+      video.addEventListener("error", () => {
+        clearTimeout(watchdog);
+        setIsLoading(false);
+        setFatalError("This video could not be loaded by your browser.");
       });
     }
 
     return () => {
+      clearTimeout(watchdog);
       hls?.destroy();
       hlsRef.current = null;
     };
-  }, [src]);
+  }, [src, attempt]);
 
   // =============================================================================
   // Quality selector
@@ -415,9 +488,29 @@ export default function VideoPlayer({
       />
 
       {/* Loading State */}
-      {isLoading && (
+      {isLoading && !fatalError && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/60">
           <div className="w-12 h-12 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      )}
+
+      {/* Failure State — an explanation and a way out, never a spinner forever */}
+      {fatalError && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 px-6 text-center">
+          <AlertTriangle className="w-9 h-9 text-amber-400" />
+          <p className="text-sm text-white/90 max-w-sm">{fatalError}</p>
+          <button
+            type="button"
+            onClick={() => {
+              setFatalError(null);
+              setIsLoading(true);
+              networkRetries.current = 0;
+              setAttempt((n) => n + 1);
+            }}
+            className="rounded-full bg-brand-500 px-4 py-1.5 text-xs font-semibold text-white hover:bg-brand-600 transition"
+          >
+            Try again
+          </button>
         </div>
       )}
 
@@ -429,7 +522,7 @@ export default function VideoPlayer({
       )}
 
       {/* Big Play Button (when paused) */}
-      {!isPlaying && !isLoading && (
+      {!isPlaying && !isLoading && !fatalError && (
         <button
           onClick={togglePlay}
           className="absolute inset-0 flex items-center justify-center"
