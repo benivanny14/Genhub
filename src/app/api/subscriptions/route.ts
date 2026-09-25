@@ -14,7 +14,11 @@ import config from "@/lib/config";
 import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
 import { generateOrderId } from "@/lib/utils";
 import { checkRateLimit } from "@/lib/redis";
-import { grantSubscription, resyncSubscriberCount } from "@/lib/services/subscription.service";
+import {
+  grantSubscription,
+  resyncSubscriberCount,
+  splitSubscriptionAmount,
+} from "@/lib/services/subscription.service";
 import { debitWallet } from "@/lib/services/balance.service";
 
 const subscribeSchema = z.object({
@@ -188,6 +192,12 @@ export async function POST(request: NextRequest) {
     // access) are one transaction via the shared grantSubscription(), so a
     // wallet subscribe, a gateway settlement and an auto-renewal can never
     // disagree about the price, the split or the expiry date.
+    //
+    // The split is computed by the one function that owns it — the same one
+    // grantSubscription credits the creator with — so the row that records the
+    // fee and the balance that receives the cut cannot round differently.
+    const { platformFee, creatorCut } = splitSubscriptionAmount(price);
+
     const subscription = await prisma.$transaction(async (tx) => {
       // The debit is the check (debitWallet): it refuses rather than overdrawing
       // when someone spent the balance first — a video purchase, a tip, or the
@@ -204,8 +214,8 @@ export async function POST(request: NextRequest) {
           status: "SUCCESS",
           gateway: null, // paid from the wallet, not a gateway charge
           metadata: { method: "wallet" },
-          platformFee: Math.round(price * (config.business.platformFeePercent / 100)),
-          creatorCut: price - Math.round(price * (config.business.platformFeePercent / 100)),
+          platformFee,
+          creatorCut,
         },
       });
 
