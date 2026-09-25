@@ -8,6 +8,7 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { cacheGet, cacheSet } from "@/lib/redis";
+import { getChatRevenue } from "@/lib/services/paid-message.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -38,6 +39,7 @@ export async function GET(request: NextRequest) {
       topCreators,
       usersByRole,
       transactionsByType,
+      chatRevenue,
     ] = await Promise.all([
       prisma.user.count(),
       prisma.user.count({ where: { role: "CREATOR" } }),
@@ -99,6 +101,10 @@ export async function GET(request: NextRequest) {
         _sum: { amount: true },
         where: { status: "SUCCESS" },
       }),
+      // Chat revenue comes from the ledger, not from the transaction-type totals
+      // above: a paid message and a plain tip are both TIP transactions, and this
+      // card is about messages only.
+      getChatRevenue(),
     ]);
 
     // Active subscriptions count
@@ -148,6 +154,7 @@ export async function GET(request: NextRequest) {
         pendingBalance: b.pendingBalance,
         availableBalance: b.availableBalance,
       })),
+      chatRevenue,
       overview: {
         platformRevenue: revenueAgg._sum.platformFee || 0,
         creatorEarnings: revenueAgg._sum.creatorCut || 0,

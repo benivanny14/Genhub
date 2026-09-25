@@ -18,6 +18,20 @@ import config from "../config";
 /** The `metadata.method` value POST /api/messages stamps on its transaction. */
 export const PAY_MESSAGE_METHOD = "pay_message";
 
+/**
+ * One definition of "a paid message", shared by every read in this file.
+ *
+ * All three clauses matter. SUCCESS excludes a charge that failed or was
+ * refunded; `creatorCut` excludes a message paid to an ordinary account, whose
+ * money never entered a creator balance; and the metadata path keeps plain tips
+ * out — /api/tips writes the same TIP transaction type.
+ */
+const PAID_MESSAGE_LEDGER = {
+  status: "SUCCESS" as const,
+  creatorCut: { not: null },
+  metadata: { path: ["method"], equals: PAY_MESSAGE_METHOD },
+};
+
 export interface PaidMessageRow {
   id: string;
   amount: number;
@@ -59,14 +73,7 @@ export async function getPaidMessageEarnings(
   const holdingMs = config.business.holdingPeriodDays * 86_400_000;
   const cutoff = new Date(Date.now() - holdingMs);
 
-  // One definition of "a paid message", so the lifetime total, the holding split
-  // and the list below cannot disagree about which rows they are counting.
-  const paidMessage = {
-    creatorId,
-    status: "SUCCESS" as const,
-    creatorCut: { not: null },
-    metadata: { path: ["method"], equals: PAY_MESSAGE_METHOD },
-  };
+  const paidMessage = { ...PAID_MESSAGE_LEDGER, creatorId };
 
   const [lifetime, held, oldestHeld, recent] = await Promise.all([
     prisma.transaction.aggregate({
@@ -123,5 +130,134 @@ export async function getPaidMessageEarnings(
         sender: m.sender,
       };
     }),
+  };
+}
+
+/** How many creators the admin card lists before it says "and N more". */
+export const CHAT_REVENUE_LIMIT = 20;
+
+export interface ChatRevenueRow {
+  creatorId: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  /** Lifetime paid messages received. */
+  messages: number;
+  /** Lifetime value of those messages. */
+  earned: number;
+  /** How many of them are still inside the holding period. */
+  heldMessages: number;
+  /** The part of `earned` still inside the 14-day holding. */
+  held: number;
+}
+
+export interface ChatRevenue {
+  totals: {
+    /** Creators paid at least once for a message — not every creator on the site. */
+    creators: number;
+    messages: number;
+    earned: number;
+    heldMessages: number;
+    held: number;
+  };
+  /** Highest earning first, at most `limit` of them. */
+  creators: ChatRevenueRow[];
+  /** True when `creators` is a prefix of the full list, so the card can say so. */
+  truncated: boolean;
+}
+
+/**
+ * Platform-wide chat revenue, broken down per creator.
+ *
+ * Read-only. The read is complete rather than paged — one row per creator who has
+ * ever been paid for a message, which is the only way "N creators" above the list
+ * can be a fact instead of an estimate — and the LIST is capped, so a small screen
+ * does not have to render every creator. The totals come from separate aggregate
+ * queries over the whole ledger, so the cap can never change them.
+ *
+ * `held` is the same 14-day window `getPaidMessageEarnings` uses — the release
+ * job and both cards have to agree about what is still held.
+ */
+export async function getChatRevenue(
+  limit: number = CHAT_REVENUE_LIMIT
+): Promise<ChatRevenue> {
+  const holdingMs = config.business.holdingPeriodDays * 86_400_000;
+  const cutoff = new Date(Date.now() - holdingMs);
+  // Messages to an ordinary account credit a wallet, not a creator balance, so
+  // they are not creator revenue and carry no `creatorId` on the ledger row.
+  const filter = { ...PAID_MESSAGE_LEDGER, creatorId: { not: null } };
+
+  const perCreator = await prisma.transaction.groupBy({
+    by: ["creatorId"],
+    where: filter,
+    _sum: { creatorCut: true },
+    _count: { _all: true },
+  });
+
+  if (perCreator.length === 0) {
+    return {
+      totals: { creators: 0, messages: 0, earned: 0, heldMessages: 0, held: 0 },
+      creators: [],
+      truncated: false,
+    };
+  }
+
+  // Ranked here rather than in the query: `take` before the sort would make the
+  // "top N" depend on whatever order the database happened to return.
+  const ranked = [...perCreator].sort(
+    (a, b) => (b._sum.creatorCut ?? 0) - (a._sum.creatorCut ?? 0)
+  );
+  const listed = ranked.slice(0, limit);
+  const ids = listed.map((row) => row.creatorId as string);
+
+  const [held, totals, totalsHeld, users] = await Promise.all([
+    // Only the displayed creators: the held split is a property of the rows being
+    // shown, and the platform-wide split has its own query below.
+    prisma.transaction.groupBy({
+      by: ["creatorId"],
+      where: { ...filter, creatorId: { in: ids }, createdAt: { gt: cutoff } },
+      _sum: { creatorCut: true },
+      _count: { _all: true },
+    }),
+    prisma.transaction.aggregate({
+      where: filter,
+      _sum: { creatorCut: true },
+      _count: { _all: true },
+    }),
+    prisma.transaction.aggregate({
+      where: { ...filter, createdAt: { gt: cutoff } },
+      _sum: { creatorCut: true },
+      _count: { _all: true },
+    }),
+    prisma.user.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, displayName: true, avatarUrl: true },
+    }),
+  ]);
+
+  const heldByCreator = new Map(held.map((row) => [row.creatorId as string, row]));
+  const usersById = new Map(users.map((u) => [u.id, u]));
+
+  return {
+    totals: {
+      creators: ranked.length,
+      messages: totals._count._all,
+      earned: totals._sum.creatorCut ?? 0,
+      heldMessages: totalsHeld._count._all,
+      held: totalsHeld._sum.creatorCut ?? 0,
+    },
+    creators: listed.map((row) => {
+      const creatorId = row.creatorId as string;
+      const heldRow = heldByCreator.get(creatorId);
+      return {
+        creatorId,
+        displayName: usersById.get(creatorId)?.displayName ?? null,
+        avatarUrl: usersById.get(creatorId)?.avatarUrl ?? null,
+        messages: row._count._all,
+        earned: row._sum.creatorCut ?? 0,
+        heldMessages: heldRow?._count._all ?? 0,
+        held: heldRow?._sum.creatorCut ?? 0,
+      };
+    }),
+    truncated: ranked.length > limit,
   };
 }

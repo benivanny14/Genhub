@@ -36,6 +36,7 @@ import {
   Play,
   Rocket,
   Upload,
+  MessageSquare,
 } from "lucide-react";
 
 /**
@@ -188,6 +189,24 @@ interface OverviewData {
   kyc: { pending: number };
   payouts: { pending: number };
   topCreators: { id: string; displayName: string | null; totalEarned: number; availableBalance: number; pendingBalance: number; strikes: number }[];
+  /**
+   * Chat income, per creator. Optional because the endpoint caches its answer for
+   * two minutes: a page loaded either side of a deploy can hold a payload written
+   * before this card existed.
+   */
+  chatRevenue?: {
+    totals: { creators: number; messages: number; earned: number; heldMessages: number; held: number };
+    creators: {
+      creatorId: string;
+      displayName: string | null;
+      avatarUrl: string | null;
+      messages: number;
+      earned: number;
+      heldMessages: number;
+      held: number;
+    }[];
+    truncated: boolean;
+  };
 }
 
 interface CouponItem {
@@ -1717,6 +1736,104 @@ export default function AdminDashboard() {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* Chat revenue — every message is paid, so the inbox is a revenue line
+                and this is the only place the platform sees what it is worth per
+                creator. The held column is the part still inside the 14-day
+                holding, so an earned total that cannot be paid out yet is not
+                read as spendable. */}
+            {stats?.chatRevenue && (
+              <div className="glass-card p-5">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
+                    <MessageSquare className="w-5 h-5 text-brand-400" />
+                  </div>
+                  <div>
+                    <span className="text-sm text-white/60">Chat Revenue — Paid Messages</span>
+                    <p className="text-xs text-white/40">
+                      The amount a fan pays for a message goes to the creator in full
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                  <div className="rounded-xl bg-surface-300/30 p-3">
+                    <p className="text-xs text-white/40">Messages paid</p>
+                    <p className="text-lg font-bold">
+                      {stats.chatRevenue.totals.messages.toLocaleString()}
+                    </p>
+                    <p className="text-[11px] text-white/35 mt-0.5">
+                      by {stats.chatRevenue.totals.creators} creator
+                      {stats.chatRevenue.totals.creators === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-surface-300/30 p-3">
+                    <p className="text-xs text-white/40">Paid to creators</p>
+                    <p className="text-lg font-bold text-emerald-400">
+                      TZS {stats.chatRevenue.totals.earned.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="rounded-xl bg-surface-300/30 p-3">
+                    <p className="text-xs text-white/40">In 14-day holding</p>
+                    <p className="text-lg font-bold text-amber-400">
+                      TZS {stats.chatRevenue.totals.held.toLocaleString()}
+                    </p>
+                    <p className="text-[11px] text-white/35 mt-0.5">
+                      {stats.chatRevenue.totals.heldMessages} message
+                      {stats.chatRevenue.totals.heldMessages === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                </div>
+
+                {stats.chatRevenue.creators.length === 0 ? (
+                  <p className="text-sm text-white/50">
+                    No paid messages yet. Once fans start paying to write, each creator&apos;s share
+                    appears here.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {stats.chatRevenue.creators.map((c, index) => (
+                      <div
+                        key={c.creatorId}
+                        className="flex items-center gap-3 text-sm"
+                      >
+                        <span className="w-6 h-6 rounded-lg bg-surface-400 flex items-center justify-center text-xs font-bold text-white/60 shrink-0">
+                          {index + 1}
+                        </span>
+                        <span className="truncate flex-1 min-w-0">
+                          {c.displayName || "Creator"}
+                        </span>
+                        <span className="text-xs text-white/40 shrink-0">
+                          {c.messages} message{c.messages === 1 ? "" : "s"}
+                        </span>
+                        <span className="text-right shrink-0 w-32">
+                          <span className="font-medium text-emerald-400">
+                            TZS {c.earned.toLocaleString()}
+                          </span>
+                          <span className="block text-xs text-amber-400/80">
+                            {c.held > 0 ? `TZS ${c.held.toLocaleString()} held` : "cleared"}
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {stats.chatRevenue.truncated && (
+                  <p className="text-xs text-white/40 mt-3">
+                    Showing the top {stats.chatRevenue.creators.length} of{" "}
+                    {stats.chatRevenue.totals.creators} creators with chat income. The totals above
+                    cover all of them.
+                  </p>
+                )}
+
+                <p className="text-xs text-white/35 mt-3">
+                  A message counts once its creator was credited — a paid message to an ordinary
+                  account goes to that account&apos;s wallet instead. Nothing here is a platform cut,
+                  so none of it appears in Platform Revenue (30%) above.
+                </p>
               </div>
             )}
           </div>

@@ -27,7 +27,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   transactionAggregate: vi.fn(),
   transactionFindFirst: vi.fn(),
+  transactionGroupBy: vi.fn(),
   messageFindMany: vi.fn(),
+  userFindMany: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -35,8 +37,10 @@ vi.mock("@/lib/db", () => ({
     transaction: {
       aggregate: (...a: unknown[]) => mocks.transactionAggregate(...a),
       findFirst: (...a: unknown[]) => mocks.transactionFindFirst(...a),
+      groupBy: (...a: unknown[]) => mocks.transactionGroupBy(...a),
     },
     payMessage: { findMany: (...a: unknown[]) => mocks.messageFindMany(...a) },
+    user: { findMany: (...a: unknown[]) => mocks.userFindMany(...a) },
   },
 }));
 
@@ -44,7 +48,7 @@ vi.mock("@/lib/config", () => ({
   default: { business: { holdingPeriodDays: 14 } },
 }));
 
-import { getPaidMessageEarnings } from "@/lib/services/paid-message.service";
+import { getChatRevenue, getPaidMessageEarnings } from "@/lib/services/paid-message.service";
 
 const DAY = 86_400_000;
 const CREATOR = "creator-1";
@@ -67,6 +71,8 @@ beforeEach(() => {
   });
   mocks.transactionFindFirst.mockResolvedValue(null);
   mocks.messageFindMany.mockResolvedValue([]);
+  mocks.transactionGroupBy.mockResolvedValue([]);
+  mocks.userFindMany.mockResolvedValue([]);
 });
 
 describe("what the card counts", () => {
@@ -183,5 +189,130 @@ describe("the recent list", () => {
       sender: { displayName: "Asha" },
     });
     expect(result.recent[1]).toMatchObject({ id: "m-old", held: false });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The platform-wide view, which is the same ledger grouped by creator.
+// -----------------------------------------------------------------------------
+describe("chat revenue per creator", () => {
+  const row = (id: string, earned: number, messages: number) => ({
+    creatorId: id,
+    _sum: { creatorCut: earned },
+    _count: { _all: messages },
+  });
+
+  /**
+   * The two platform-wide aggregates of the pair: the held totals are the ones
+   * asking for `createdAt`, so the stub answers by shape instead of by call order
+   * — order would break the moment one query joins a Promise.all earlier.
+   */
+  function platformTotals(
+    lifetime: { amount: number; count: number },
+    held: { amount: number; count: number }
+  ) {
+    mocks.transactionAggregate.mockImplementation(
+      (args: { where: { createdAt?: unknown } }) =>
+        Promise.resolve(
+          args.where.createdAt
+            ? { _sum: { creatorCut: held.amount }, _count: { _all: held.count } }
+            : { _sum: { creatorCut: lifetime.amount }, _count: { _all: lifetime.count } }
+        )
+    );
+  }
+
+  it("counts every creator with chat income while listing only the top earners", async () => {
+    mocks.transactionGroupBy.mockResolvedValueOnce([
+      row("c-mid", 500, 2),
+      row("c-top", 900, 3),
+      row("c-low", 100, 1),
+    ]);
+    platformTotals({ amount: 1500, count: 6 }, { amount: 700, count: 2 });
+    mocks.userFindMany.mockResolvedValue([
+      { id: "c-top", displayName: "Asha", avatarUrl: null },
+      { id: "c-mid", displayName: "Neema", avatarUrl: null },
+    ]);
+
+    const result = await getChatRevenue(2);
+
+    // Totals are platform-wide, so the cap on the list cannot change them.
+    expect(result.totals).toEqual({
+      creators: 3,
+      messages: 6,
+      earned: 1500,
+      heldMessages: 2,
+      held: 700,
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.creators.map((c) => c.creatorId)).toEqual(["c-top", "c-mid"]);
+    expect(result.creators[0]).toMatchObject({ displayName: "Asha", earned: 900, messages: 3 });
+    // Nobody returned a held row for c-mid, so its held part is zero rather than
+    // the platform total leaking into it.
+    expect(result.creators[1]).toMatchObject({ earned: 500, held: 0, heldMessages: 0 });
+  });
+
+  it("reads the same ledger the creator card reads", async () => {
+    mocks.transactionGroupBy.mockResolvedValueOnce([row("c1", 500, 1)]);
+
+    await getChatRevenue();
+
+    expect(mocks.transactionGroupBy.mock.calls[0][0].where).toEqual({
+      status: "SUCCESS",
+      creatorCut: { not: null },
+      metadata: { path: ["method"], equals: "pay_message" },
+      // A message paid to an ordinary account never reaches a creator balance.
+      creatorId: { not: null },
+    });
+  });
+
+  it("splits the holding per listed creator, against the same 14 days", async () => {
+    const before = Date.now();
+    mocks.transactionGroupBy
+      .mockResolvedValueOnce([row("c1", 500, 1)])
+      .mockResolvedValueOnce([
+        { creatorId: "c1", _sum: { creatorCut: 500 }, _count: { _all: 1 } },
+      ]);
+
+    const result = await getChatRevenue();
+
+    const heldQuery = mocks.transactionGroupBy.mock.calls[1][0];
+    expect(heldQuery.where.creatorId).toEqual({ in: ["c1"] });
+    const heldForDays = (before - (heldQuery.where.createdAt.gt as Date).getTime()) / DAY;
+    expect(heldForDays).toBeGreaterThan(13.99);
+    expect(heldForDays).toBeLessThan(14.01);
+    expect(result.creators[0]).toMatchObject({ held: 500, heldMessages: 1 });
+  });
+
+  it("takes the platform-wide held total from the whole ledger", async () => {
+    mocks.transactionGroupBy.mockResolvedValueOnce([row("c1", 500, 1)]);
+    platformTotals({ amount: 500, count: 1 }, { amount: 500, count: 1 });
+
+    const result = await getChatRevenue();
+
+    const heldAggregate = mocks.transactionAggregate.mock.calls.find(
+      (call) => call[0].where.createdAt
+    );
+    expect(heldAggregate?.[0].where.creatorId).toEqual({ not: null });
+    expect(result.totals.held).toBe(500);
+  });
+
+  it("asks nothing else when no message has ever been paid for", async () => {
+    const result = await getChatRevenue();
+
+    expect(result).toEqual({
+      totals: { creators: 0, messages: 0, earned: 0, heldMessages: 0, held: 0 },
+      creators: [],
+      truncated: false,
+    });
+    expect(mocks.transactionAggregate).not.toHaveBeenCalled();
+    expect(mocks.userFindMany).not.toHaveBeenCalled();
+  });
+
+  it("names nobody when the account behind a ledger row is gone", async () => {
+    mocks.transactionGroupBy.mockResolvedValueOnce([row("c-gone", 500, 1)]);
+
+    const result = await getChatRevenue();
+
+    expect(result.creators[0]).toMatchObject({ displayName: null, avatarUrl: null });
   });
 });
