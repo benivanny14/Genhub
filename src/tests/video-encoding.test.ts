@@ -286,6 +286,12 @@ describeDB("refreshVideoEncoding (real database)", () => {
     bunnyState.details = { status: 2, encodeProgress: 42 };
     await refreshVideoEncoding(videoId);
 
+    // Live, because the route refuses an unpublished video to anyone but its
+    // creator or an admin, and this call is a signed-out visitor. What is under
+    // test is which COLUMNS reach the client, so the video has to be reachable
+    // at all — otherwise every assertion below reads a 404.
+    await prisma.video.update({ where: { id: videoId }, data: { isPublished: true } });
+
     const response = await videoDetailGet(
       new NextRequest(`http://localhost/api/videos/${videoId}`),
       { params: Promise.resolve({ id: videoId }) } as never

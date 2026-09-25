@@ -94,6 +94,12 @@ describeDb("Payment under investigation", () => {
         previewUrl: "https://scene.test/full-scene.m3u8",
         teaserClipUrl: "https://scene.test/trailer.m3u8",
         creatorId,
+        // Live, because every assertion below is about what a VIEWER sees on
+        // the paywall. The detail route refuses an unpublished video to anyone
+        // but its creator and an admin (a viewer cannot reach a scene nobody
+        // published), so leaving this at the database default would test the
+        // 404 instead of the paywall.
+        isPublished: true,
       },
     });
 
