@@ -16,13 +16,27 @@ export async function GET(request: NextRequest) {
     await requireRole("ADMIN");
 
     const searchParams = request.nextUrl.searchParams;
-    const status = searchParams.get("status") || "PENDING";
+    // A comma-separated list, so the queue can hold every request that is still
+    // open — PENDING and APPROVED — in one read. `status=PENDING` alone is how
+    // an approved request vanished from the only screen that could finish it.
+    //
+    // Unknown values are dropped rather than passed through: this used to be a
+    // bare `as any`, so a typo in the query string reached Prisma as an invalid
+    // enum and came back as a 500 instead of a list.
+    const ALL_STATUSES = ["PENDING", "APPROVED", "PAID", "REJECTED"] as const;
+    const requested = (searchParams.get("status") || "PENDING")
+      .split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter((s): s is (typeof ALL_STATUSES)[number] =>
+        (ALL_STATUSES as readonly string[]).includes(s)
+      );
+    const statuses = requested.length ? requested : ["PENDING" as const];
     const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
     const limit = Math.min(50, parseInt(searchParams.get("limit") || "20"));
 
     const [payouts, total] = await Promise.all([
       prisma.payoutRequest.findMany({
-        where: { status: status as any },
+        where: { status: { in: statuses } },
         orderBy: { createdAt: "asc" },
         skip: (page - 1) * limit,
         take: limit,
@@ -38,7 +52,7 @@ export async function GET(request: NextRequest) {
           },
         },
       }),
-      prisma.payoutRequest.count({ where: { status: status as any } }),
+      prisma.payoutRequest.count({ where: { status: { in: statuses } } }),
     ]);
 
     return api.success({
@@ -82,9 +96,23 @@ export async function POST(request: NextRequest) {
 
     if (!payout) return api.notFound("Withdrawal request not found");
 
-    // Only PENDING requests may be reviewed — prevents double refunds when
-    // the same request is rejected twice.
-    if (payout.status !== "PENDING") {
+    // Which decisions are still available on this request.
+    //
+    // Approving says "we will send this"; marking it paid says "we sent it" — so
+    // PAID has to be reachable from APPROVED. Requiring PENDING for every action
+    // made the Approve button a dead end: the request left the queue, could never
+    // be completed, and the creator's money stayed earmarked — neither available
+    // to them nor paid out.
+    //
+    // A decision on a request that is already PAID or REJECTED is still refused,
+    // which is what would double-refund a rejection.
+    const allowedFrom: Record<string, string[]> = {
+      APPROVED: ["PENDING"],
+      PAID: ["PENDING", "APPROVED"],
+      REJECTED: ["PENDING", "APPROVED"],
+    };
+
+    if (!allowedFrom[action].includes(payout.status)) {
       return api.error(
         `This request has already been processed: ${payout.status}`,
         409,

@@ -872,7 +872,10 @@ export default function AdminDashboard() {
 
   async function fetchPayouts() {
     try {
-      const res = await adminFetch("/api/admin/payouts?status=PENDING");
+      // Both open statuses. Approving used to be the end of the line: the row
+      // left this list, and the screen that could mark it paid never saw it
+      // again — so the creator's money stayed earmarked indefinitely.
+      const res = await adminFetch("/api/admin/payouts?status=PENDING,APPROVED");
       const data = await res.json();
       if (data.success) setPayoutList(data.data.payouts);
     } catch {}
@@ -2037,7 +2040,9 @@ export default function AdminDashboard() {
             {payoutList.length === 0 ? (
               <div className="glass-card p-12 text-center">
                 <CheckCircle className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
-                <p className="text-white/50">No pending payout requests</p>
+                <p className="text-white/50">
+                  No open payout requests — nothing is waiting to be paid or refused.
+                </p>
               </div>
             ) : (
               <div className="grid gap-4">
@@ -2047,6 +2052,11 @@ export default function AdminDashboard() {
                       <div>
                         <p className="font-medium">
                           {payout.creator.displayName || "Creator"} — TZS {payout.amount.toLocaleString()}
+                          {payout.status === "APPROVED" && (
+                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 align-middle">
+                              Approved — send the money, then mark it paid
+                            </span>
+                          )}
                         </p>
                         <p className="text-xs text-white/50 mt-1">
                           Method: {payout.paymentMethod} • Account: {payout.accountDetails}
@@ -2057,12 +2067,14 @@ export default function AdminDashboard() {
                       </div>
 
                       <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => handlePayoutAction(payout.id, "APPROVED", "Approved")}
-                          className="bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition"
-                        >
-                          <CheckCircle className="w-3 h-3 inline mr-1" /> Approve
-                        </button>
+                        {payout.status === "PENDING" && (
+                          <button
+                            onClick={() => handlePayoutAction(payout.id, "APPROVED", "Approved")}
+                            className="bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+                          >
+                            <CheckCircle className="w-3 h-3 inline mr-1" /> Approve
+                          </button>
+                        )}
                         <button
                           onClick={() => handlePayoutAction(payout.id, "PAID", "Paid")}
                           className="bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition"
