@@ -306,9 +306,17 @@ PIN, lakini **HarakaPay inashindwa kusettle** kwa sababu akaunti haina salio.
 Order inabaki `processing` milele. Kwa mteja hisia ni "nimelipa" — lakini pesa
 haifiki.
 
-1. Ingia **dashboard ya HarakaPay** → ongeza **float** (salio la kutosha
-   collections zako). Ni akaunti ile ile ya merchant uliyonayo sasa — hakuna
-   sehemu nyingine ya mfumo wetu inayoshikilia pesa hii.
+Dashboard ya HarakaPay (`harakapay.net/dashboard`) ina kadi moja — **Jumla
+(Wallet + Float)** — ndani yake **Wallet (94%)** na **Float**, na kwenye akaunti
+hii **hakuna kitufe cha kuweka pesa**. Kwa hivyo float haipandishwi kwa kuweka
+deposit: inaingizwa upande wa HarakaPay (au kwa sehemu wanayoshikilia kwa kila
+collection). Kwa hivyo:
+
+1. **Maliza uanzishaji wa akaunti kwanza.** Kama dashboard ina *“Anza
+   Kutengeneza Pesa — Bonyeza hapa kuanza kupokea malipo”*, bonyeza na ukamilishe
+   kinachoulizwa (KYC, taarifa za biashara, akaunti ya kutolea pesa). Akaunti
+   ambayo haijaanzishwa inakubali collect kisha inaiacha ife — dalili yake
+   inafanana kabisa na float 0 (`success: true` halafu `failed`).
 
    > **Muhimu: `float_balance` ndiyo inapaswa kupanda, sio `wallet_balance`.**
    > `GET /api/v1/balance` inarudi namba mbili: `wallet_balance` ni salio la
@@ -319,21 +327,24 @@ haifiki.
    > ataona ujumbe wa ukweli badala ya “USSD push sent” ya uongo. Deposit
    > ikionekana kwenye wallet pekee, waambie support wa HarakaPay
    > kuihamishia kwenye float.
-2. Kama baada ya kufadhili bado haifanyi kazi, tuma ujumbe huu kwa support wao
-   (*Dashboard → Support*, au barua pepe yao). Order ids hizi ni ushahidi:
+2. **Omba float kwa support wa HarakaPay kwa maandishi** (*Dashboard → Support*,
+   au barua pepe yao) — swali kuu: *float inaingizwa vipi kwenye akaunti hii, na
+   je live collections zimewashwa?* Tuma reference zilizoshindwa kama ushahidi:
 
-> **Subject: Collections accepted on handset but never settle — float funded, still `processing`**
+> **Subject: Float is 0 and there is no top-up in my dashboard — how is the float funded?**
 >
-> Our USSD prompts reach customers' handsets and they enter their PIN
-> successfully, but orders stay `processing` and never complete.
+> Our account (`hpk_57aa7c25…`, phone 0682642219) shows Wallet 0 / Float 0, and
+> the dashboard has no control that credits either balance. Collections do not
+> settle: `POST /api/v1/collect` answers `success: true` ("USSD push sent") with an
+> order id, then the order stays `processing` and finally `failed`.
 >
-> Orders (phone 0682642219, PIN entered and accepted on all):
-> `HP1790111346987` (1,000) · `HP1790100970675` (1,000) · `HP1790105732304` (5,000)
-> · `HP1790105891649` (1,000) · `HP1790101516082/522484/530434` (1,000 each)
+> Orders: `HP1790282912529` (1,000, 2026-09-24T20:48:32Z) ·
+> `HP1790361890397` (1,000, 2026-09-25T18:44:50Z) — both `failed`, `completed_at null`.
 >
-> Please confirm: (1) is my merchant account activated for **live collections**?
-> (2) is my key a **production** key? (3) is any pending settlement now blocked?
-> (4) where is the customers' money right now?
+> Please confirm: (1) how is the float funded on this account if the dashboard
+> has no top-up? (2) is my merchant account **activated for live collections**?
+> (3) is my key a **production** key? (4) did any money leave the customers'
+> handsets on those orders?
 
 3. Thibitisha kwa simu yako mwenyewe:
 

@@ -608,7 +608,11 @@ node scripts/preflight.mjs --production --gateway
 ```
 
 A zero `float_balance` is the single most common cause and the one thing no code
-change can fix: it is funded in the HarakaPay dashboard. You should not have to
+change can fix: HarakaPay has to credit it. Use the dashboard top-up if your
+account has one — and if it does not (a real dashboard shows only the *Wallet
+(94%)* and *Float* balances under one total, with no control that credits either),
+then their support is the only route, in writing, together with confirming that
+live collections are activated (§4.0.6). You should not have to
 read this section to find out — the app tells you on the way down (§4.0.6: a
 notification and an email when the float crosses `HARAKAPAY_FLOAT_FLOOR_TZS`,
 before it reaches 0). Everything below is the
@@ -1510,6 +1514,19 @@ float. Nothing in the app can, and the gate keeps refusing until it is there —
 which is deliberate: a sale taken on an unfunded account is a customer who pays
 and gets nothing.
 
+**Some accounts have no top-up at all.** Measured on this deployment: the
+dashboard at `harakapay.net/dashboard` shows one total split into *Wallet (94%)*
+and *Float*, plus a *"Anza Kutengeneza Pesa — kuanza kupokea malipo"* (start
+receiving payments) prompt, and no control that puts money into either balance.
+On an account like that the float is credited on HarakaPay's side — which is why
+the alarm ends in *"ask their support"* rather than in a menu path. Two things to
+put in that message, both of which we have seen go wrong on this account: how the
+float is funded here at all, and whether the merchant account is actually
+activated for live collections (an unactivated account accepts a collect and then
+lets it die, exactly like a zero float, and the 94/6 wallet/float split in that
+card is consistent with the `net_amount`/`fee_amount` we already see on a TZS
+1,000 collect: 941 / 59).
+
 Topping the float up means moving money onto the merchant account, so the alarm
 has to arrive on the way down. `src/lib/services/harakapay-float-alert.service.ts`
 reads `GET /api/v1/balance` on every supervisor poke and, under
@@ -1577,6 +1594,11 @@ Three rules worth keeping when this is changed again:
       (`describeRenewals` says `held (the HarakaPay float is empty…)`).
 - [ ] Prove the recovery: top the float up and confirm a checkout pushes again
       within about a minute — no redeploy, no restart, no cache to clear.
+- [ ] If the dashboard offers no way to credit the float, ask HarakaPay support
+      in writing for (a) how the float is funded on this account, (b) confirmation
+      that live collections are activated, (c) the outcome of the orders you send
+      as evidence. Watch `GET /api/v1/balance`: the gate opens on the reading
+      alone, so `float_balance > 0` is the acceptance test for their answer.
 
 ### 4.1 Charges nobody can classify yet (`UNDER_INVESTIGATION`)
 

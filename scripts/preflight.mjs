@@ -388,7 +388,10 @@ if (wantGateway && env("HARAKAPAY_API_KEY")) {
         "Merchant float is funded — collections can settle",
         `Merchant float is ${float} — HarakaPay accepts our request and reports "USSD push sent", ` +
           "but the prompt does not reach the customer and the order stays `processing` forever. " +
-          "Fund the float in the HarakaPay dashboard. (Your order ids are the evidence to send their support.)"
+          "HarakaPay has to credit the float: use the dashboard top-up if your account has one, " +
+          "and if it does not (the card only shows Wallet/Float balances), ask their support in " +
+          "writing how the float is funded here. Activation for live collections is the other " +
+          "thing to confirm in the same email. Your order ids are the evidence to include."
       );
     }
   } catch (error) {

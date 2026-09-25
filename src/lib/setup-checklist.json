@@ -260,7 +260,7 @@
       "title": "Money",
       "cost": "Real money",
       "time": "Dashboard action",
-      "blurb": "This is the one that made your own payments fail. HarakaPay accepts the request and reports \"USSD push sent\", but with a zero float the prompt never settles and the order stays processing forever. It is a balance in their dashboard, not a variable in a file.",
+      "blurb": "This is the one that made your own payments fail. HarakaPay accepts the request and reports \"USSD push sent\", but with a zero float the prompt never settles and the order stays processing forever. It is a balance on their side, not a variable in a file - and on some accounts there is no button that credits it, so their support has to.",
       "items": [
         {
           "id": "harakapay_float",
@@ -268,8 +268,10 @@
           "title": "Fund the merchant float",
           "site": "HarakaPay dashboard",
           "steps": [
-            "Sign in to the HarakaPay dashboard and fund the float (the balance used to settle collections)",
-            "If collections still do not settle, email their support with your order ids - those are the evidence",
+            "Sign in to https://harakapay.net/dashboard and finish any \"start receiving payments\" / activation prompt - live collections will not settle until the account itself is activated",
+            "Look for a top-up on the Wallet/Float card. Many accounts have none: Float and Wallet (94%) are balances that HarakaPay credits, so if there is nothing to click, ask their support in writing how the float is funded on your account",
+            "Ask them which balance a deposit lands in, and send your order ids (and the order where the customer approved but nothing settled) as the evidence",
+            "It is funded when GET /api/v1/balance reports float_balance above 0 - the app refuses USSD collects until then",
             "Prove it from your own phone: npm run smoke:harakapay:live"
           ]
         }
