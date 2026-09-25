@@ -43,7 +43,13 @@ export async function GET(request: NextRequest) {
     });
 
     if (!user) {
-      return api.notFound("This user no longer exists");
+      // 401, not 404. This endpoint answers exactly one question — "who is signed
+      // in?" — and for a token naming a user who no longer exists the answer is
+      // "nobody". A 404 described it as a missing resource, so a client had to
+      // read a status that means "wrong URL" as "signed out", and every page's
+      // guard treated the two the same by accident rather than on purpose.
+      // It matters more now that erasing an account leaves its token behind.
+      return api.unauthorized("This session is no longer valid — please sign in again");
     }
 
     return api.success(user);

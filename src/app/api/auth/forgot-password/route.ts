@@ -8,6 +8,7 @@ import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
+import { hashResetToken } from "@/lib/token-hash";
 import crypto from "crypto";
 
 export async function POST(request: NextRequest) {
@@ -48,10 +49,12 @@ export async function POST(request: NextRequest) {
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + 1); // Expires in 1 hour
 
+    // Only the hash is stored — see lib/token-hash.ts. The token itself travels
+    // in the email/SMS below and is never readable from the database again.
     await prisma.passwordReset.create({
       data: {
         userId: user.id,
-        token,
+        token: hashResetToken(token),
         expiresAt,
       },
     });

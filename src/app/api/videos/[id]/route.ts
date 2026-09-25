@@ -15,7 +15,8 @@ import { resolveVideoEntitlement, type EntitlementSource } from "@/lib/services/
 import { normalizeMediaUrl } from "@/lib/media";
 import config from "@/lib/config";
 import { describeEncoding } from "@/lib/services/video-encoding.service";
-import { cacheDel } from "@/lib/redis";
+import { cacheDel, claimOnce } from "@/lib/redis";
+import { clientIp } from "@/lib/utils";
 
 // =============================================================================
 // GET /api/videos/[id]
@@ -51,11 +52,27 @@ export async function GET(
       return api.notFound("Video not found");
     }
 
-    // Increment view count
-    await prisma.video.update({
-      where: { id: video.id },
-      data: { viewsCount: { increment: 1 } },
-    });
+    // Count the view, once per viewer per hour.
+    //
+    // This used to be an unconditional increment on every GET, which made
+    // `viewsCount` a number anybody could raise by refreshing — and it is not a
+    // vanity metric, it is the ranking input for /most-viewed and the
+    // `viewsCount` sort on the feed. So the ranking was for sale to whoever was
+    // willing to hold F5, and a page load that never reached the paywall counted
+    // as a view of a scene nobody watched.
+    //
+    // Keyed on the account when there is one (a person and their phone are one
+    // viewer) and on the address otherwise, so a signed-out visitor still counts
+    // — just not sixty times a minute.
+    const viewerKey = authUser?.userId ?? `ip:${clientIp(request.headers)}`;
+    const counted = await claimOnce(`view:${video.id}:${viewerKey}`, 3_600);
+
+    if (counted) {
+      await prisma.video.update({
+        where: { id: video.id },
+        data: { viewsCount: { increment: 1 } },
+      });
+    }
 
     // Check if user has access (purchased)
     let hasAccess = false;

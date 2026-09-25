@@ -21,12 +21,22 @@ import { assertSupportedGateway } from "@/lib/payments/gateway";
 import { generateOrderId } from "@/lib/utils";
 import config from "@/lib/config";
 import { checkRateLimit } from "@/lib/redis";
-import { applyCoupon, markCouponUsed } from "@/lib/coupons";
+import { applyCoupon, consumeCoupon } from "@/lib/coupons";
 
 // How long an unpaid checkout keeps the video locked for that customer. A USSD
 // prompt is usually answered in a minute or two; after this window we reconcile
 // with the gateway, then release the lock so they can try again.
 const PENDING_PAYMENT_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * The smallest amount the gateway will collect.
+ *
+ * A coupon that covers the whole price produces a TZS 0 checkout, and a collect
+ * for 0 is not a free sale — it is a request the gateway rejects, after the
+ * customer has been told a prompt is coming. A 100% coupon is therefore refused
+ * with the reason, rather than turning into a checkout that cannot succeed.
+ */
+const MIN_GATEWAY_AMOUNT_TZS = 100;
 
 export async function POST(request: NextRequest) {
   try {
@@ -190,6 +200,16 @@ export async function POST(request: NextRequest) {
       }
       finalAmount = outcome.finalAmount ?? video.price;
       couponId = outcome.couponId;
+
+      if (method === "PHONE" && finalAmount < MIN_GATEWAY_AMOUNT_TZS) {
+        return api.error(
+          `This coupon covers the whole price, and the mobile-money gateway cannot collect ` +
+            `less than TZS ${MIN_GATEWAY_AMOUNT_TZS}. Pay from your wallet instead, or use the ` +
+            `coupon on a different video.`,
+          400,
+          "COUPON_COVERS_TOTAL"
+        );
+      }
     }
 
     // ----------------------------------------------------------------- Wallet
@@ -214,8 +234,22 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Count the coupon only once the purchase actually happened
-      if (couponId) await markCouponUsed(couponId);
+      // Count the coupon only now that money actually moved, and atomically —
+      // this is a settlement path, not a checkout.
+      if (couponId) {
+        const consumed = await consumeCoupon({
+          couponId,
+          userId: auth.userId,
+          transactionId: outcome.transactionId,
+        });
+        if (consumed !== "OK") {
+          // The customer paid the discounted price either way; a coupon that ran
+          // out in the meantime is our over-issue to absorb, not theirs.
+          console.warn(
+            `[Coupon] ${consumed} after a wallet purchase (user=${auth.userId}, coupon=${couponId}) — the sale stands`
+          );
+        }
+      }
 
       await notifyPaymentResult({
         transactionId: outcome.transactionId,
@@ -258,8 +292,9 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Count the coupon use once the payment attempt exists
-    if (couponId) await markCouponUsed(couponId);
+    // The coupon is recorded in the transaction metadata and spent later, at
+    // settlement — see lib/coupons.ts. Counting it here is what burned a limited
+    // coupon for every customer who never approved the USSD prompt.
 
     // ------------------------------------------------------------- Sandbox mode
     // PAYMENT_SANDBOX=true in local dev skips the real USSD push; the client

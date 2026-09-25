@@ -95,11 +95,16 @@ export default function Header() {
     return () => clearTimeout(timer);
   }, [query]);
 
+  // The header used to push `/?q=…`; the home page filters its feed for that
+  // parameter, so a search did work — but it rendered as the front page with a
+  // filter, with no result count, no matched creators, and the top five
+  // suggestions left as the only place most matches were ever visible.
+  // /search is a page whose whole job is answering the query.
   function submitSearch() {
     const q = query.trim();
     if (!q) return;
     setShowSuggest(false);
-    router.push(`/?q=${encodeURIComponent(q)}`);
+    router.push(`/search?q=${encodeURIComponent(q)}`);
   }
 
   function goVideo(v: SuggestVideo) {
@@ -117,7 +122,7 @@ export default function Header() {
   function goTag(tag: string) {
     setShowSuggest(false);
     setQuery(tag);
-    router.push(`/?q=${encodeURIComponent(tag)}`);
+    router.push(`/search?q=${encodeURIComponent(tag)}`);
   }
 
   useEffect(() => {

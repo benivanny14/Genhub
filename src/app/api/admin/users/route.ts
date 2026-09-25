@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { invalidateAccountStatus } from "@/lib/services/account-status.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -105,6 +106,13 @@ export async function POST(request: NextRequest) {
     }
 
     // BAN / UNBAN
+    //
+    // The verdict requireAuth keeps for a minute is dropped here, so the ban is
+    // in force on the target's very next request rather than at the end of the
+    // cache window — an admin who bans somebody and then checks is the exact
+    // case the stale minute would look like the check not working.
+    invalidateAccountStatus(userId);
+
     const isBanned = action === "BAN";
     await prisma.user.update({
       where: { id: userId },

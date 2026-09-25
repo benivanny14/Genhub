@@ -390,6 +390,24 @@ export async function cacheSet(
 }
 
 /**
+ * Claim a one-off action for a while, and say whether this caller got it.
+ *
+ * Used for "count this view once per viewer per hour". The read-then-write is
+ * not atomic, which is the right trade here: a duplicated count is a cosmetic
+ * error, and a real lock would put the cost of the whole endpoint on a cache
+ * that is allowed to be down. When the cache is unreachable every caller is
+ * told `true`, so the behaviour degrades to what it was before rather than
+ * silently stopping all counting.
+ */
+export async function claimOnce(key: string, ttlSeconds: number): Promise<boolean> {
+  const seen = await dataCall.run(() => redisBackend.get(key));
+  if (seen.ok && seen.value) return false;
+
+  await dataCall.run(() => redisBackend.setex(key, ttlSeconds, "1"));
+  return true;
+}
+
+/**
  * Drop every key matching a pattern.
  *
  * Called at the end of a settlement, which is why it is bounded: a cache

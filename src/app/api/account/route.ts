@@ -33,7 +33,10 @@ const CONFIRMATION = "DELETE";
 
 export async function DELETE(request: NextRequest) {
   try {
-    const auth = await requireAuth();
+    // `allowBanned`: a suspended user must still be able to erase their own
+    // account. The ban check lives in requireAuth, and refusing here would turn
+    // moderation into a reason somebody cannot delete their data.
+    const auth = await requireAuth({ allowBanned: true });
 
     // Cheap guard against somebody hammering the password check with a script.
     const { allowed } = await checkRateLimit(`erase:${auth.userId}`, 5, 60_000);

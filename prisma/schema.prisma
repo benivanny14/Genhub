@@ -160,6 +160,7 @@ model User {
   referrals           User[]   @relation("Referrals")
   posts               CreatorPost[]
   playlists           Playlist[]
+  couponRedemptions   CouponRedemption[]
 
   @@index([email])
   @@index([referralCode])
@@ -637,8 +638,40 @@ model Coupon {
   expiresAt DateTime?
   createdAt DateTime  @default(now())
 
+  redemptions CouponRedemption[]
+
   @@index([code])
   @@index([isActive])
+}
+
+// =============================================================================
+// COUPON REDEMPTION (who already spent it)
+//
+// `maxUses` is a global budget and says nothing about one account: without this
+// table a single user could spend the whole of it, and a coupon created with no
+// `maxUses` was unlimited per person as well as in total. The unique pair is the
+// rule — one redemption per user per coupon — and it is what makes the write in
+// consumeCoupon() safe to race against itself.
+//
+// The row is written in the same transaction that increments usedCount, and only
+// from a settlement path, so a checkout nobody ever paid for does not consume a
+// coupon.
+// =============================================================================
+
+model CouponRedemption {
+  id            String   @id @default(cuid())
+  couponId      String
+  userId        String
+  /// The settled charge this coupon was spent on, when there was one.
+  transactionId String?
+  createdAt     DateTime @default(now())
+
+  coupon Coupon @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([couponId, userId])
+  @@index([couponId])
+  @@index([userId])
 }
 
 // =============================================================================

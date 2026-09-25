@@ -12,6 +12,7 @@ import { NextRequest } from "next/server";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { createVideoUpload } from "@/lib/bunny";
+import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 
 export async function POST(request: NextRequest) {
@@ -32,6 +33,29 @@ export async function POST(request: NextRequest) {
 
     if (user.isBanned) {
       return api.forbidden("Your account is blocked");
+    }
+
+    // Every call here creates a real object in the Bunny library, and Bunny
+    // charges for the storage and the transcode. Approved KYC says who a creator
+    // is; it says nothing about how much of the library one account may consume,
+    // so the only limit used to be the internet. Same ceiling as an image
+    // upload, which is far above a human picking a file and far below a script.
+    const { allowed } = await checkRateLimit(
+      `videoslot:${auth.userId}`,
+      config.rateLimit.upload.max,
+      config.rateLimit.upload.windowMs
+    );
+    if (!allowed) {
+      return api.rateLimited("Too many uploads at once — wait a few minutes and try again");
+    }
+
+    const held = await prisma.video.count({
+      where: { creatorId: auth.userId, isDeleted: false },
+    });
+    if (held >= config.business.maxVideosPerCreator) {
+      return api.forbidden(
+        `This account already holds ${held} videos, which is the limit. Delete something you no longer publish, or contact support.`
+      );
     }
 
     // Bunny Stream must be configured before we can create an upload target;

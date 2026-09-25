@@ -130,6 +130,12 @@ const config = {
     maxStrikes: 3,             // 3 strikes = ban
     teaserMinDuration: 15,     // Minimum preview seconds
     teaserMaxDuration: 30,     // Maximum preview seconds
+    // How many videos one creator may hold. Bunny charges for storage and
+    // transcoding, and a creator could previously reserve library slots without
+    // limit — the only gate was approved KYC, which says who somebody is and
+    // nothing about how much they may consume. Generous on purpose: this is a
+    // ceiling against runaway use, not a business limit.
+    maxVideosPerCreator: 500,
   },
 
   // Background jobs (Vercel cron / external schedulers call our cron routes)

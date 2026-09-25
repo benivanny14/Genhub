@@ -10,6 +10,7 @@ import { cacheDel } from "../redis";
 import { assertSupportedSettlementProvider } from "../payments/gateway";
 import { notifyPaymentResult } from "./payment-notify.service";
 import { grantSubscription } from "./subscription.service";
+import { consumeCoupon } from "../coupons";
 
 // =============================================================================
 // Process Successful Payment Webhook
@@ -200,6 +201,33 @@ export async function processPaymentWebhook(params: {
         where: { id: orderId },
         data: { status: "SUCCESS", providerRef: transactionId },
       });
+  }
+
+  // --------------------------------------------------------------- The coupon
+  //
+  // Spent here, where the money lands, and not at checkout — a checkout counts
+  // a coupon the moment a USSD prompt is requested, and the common outcome of
+  // that prompt is that nobody approves it. Counting it there burned a limited
+  // coupon for a sale that never happened.
+  //
+  // One call for every settled type, because the coupon rides in the metadata:
+  // this is the single choke point a payment passes through, so a future type
+  // cannot quietly skip it. `consumeCoupon` never throws, and a refusal is
+  // logged rather than raised: the customer has already paid the discounted
+  // price, so a coupon that ran out in the meantime is ours to absorb, not
+  // theirs to be told about after the fact.
+  const couponId = (transaction.metadata as { couponId?: unknown } | null)?.couponId;
+  if (typeof couponId === "string" && couponId) {
+    const consumed = await consumeCoupon({
+      couponId,
+      userId: transaction.userId,
+      transactionId: transaction.id,
+    });
+    if (consumed !== "OK") {
+      console.warn(
+        `[Webhook] Coupon ${consumed} at settlement (order=${orderId}, coupon=${couponId}) — the sale stands`
+      );
+    }
   }
 
   // Invalidate relevant caches

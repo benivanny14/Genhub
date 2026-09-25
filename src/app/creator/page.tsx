@@ -6,6 +6,7 @@ import Header from "@/components/Header";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 import {
   Wallet,
   Eye,
@@ -134,6 +135,7 @@ function EncodingBadge({ encoding }: { encoding?: EncodingState }) {
 export default function CreatorDashboard() {
   const router = useRouter();
   const { toast } = useToast();
+  const confirmDialog = useConfirm();
   const [creatorData, setCreatorData] = useState<CreatorData | null>(null);
   const [user, setUser] = useState<UserData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -204,15 +206,16 @@ export default function CreatorDashboard() {
    */
   async function togglePublished(video: CreatorVideo) {
     const next = !video.isPublished;
-    if (
-      next &&
-      video.encoding.state !== "ready" &&
-      !confirm(
-        `This video is still ${video.encoding.label.toLowerCase()}. ` +
-          "Publishing now may show viewers a video that will not play. Publish anyway?"
-      )
-    ) {
-      return;
+
+    if (next && video.encoding.state !== "ready") {
+      const goAhead = await confirmDialog({
+        title: "Publish before it is ready?",
+        message:
+          `This video is still ${video.encoding.label.toLowerCase()}. ` +
+          "Publishing now may show viewers a video that will not play.",
+        confirmLabel: "Publish anyway",
+      });
+      if (!goAhead) return;
     }
 
     setPublishingId(video.id);
@@ -283,15 +286,14 @@ export default function CreatorDashboard() {
    * between a deliberate delete and an accident.
    */
   async function removeVideo(video: CreatorVideo) {
-    if (
-      !confirm(
-        `Delete "${video.title}" permanently?\n\n` +
-          "It disappears from your dashboard and from the feed, and the video file " +
-          "is removed from the video host. This cannot be undone."
-      )
-    ) {
-      return;
-    }
+    const goAhead = await confirmDialog({
+      title: `Delete "${video.title}" permanently?`,
+      message:
+        "It disappears from your dashboard and from the feed, and the video file " +
+        "is removed from the video host. This cannot be undone.",
+      confirmLabel: "Delete permanently",
+    });
+    if (!goAhead) return;
     setDeletingId(video.id);
     setOpenMenuId(null);
     try {

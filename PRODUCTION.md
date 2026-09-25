@@ -1831,6 +1831,51 @@ reporting about a page — that combination means Prisma, not the page.
 - [ ] `src/tests/build-generates-client.test.ts` fails if the generate step is
       dropped from `build`, because no local check can see this otherwise.
 
+### 5.4 Migrations this repository expects you to run by hand
+
+**Nothing in the deploy applies migrations.** Vercel runs `prisma generate &&
+next build` and nothing else (`vercel.json` sets no build command beyond the
+lockfile install), so a migration reaches production only when somebody runs:
+
+```bash
+npm run db:deploy        # prisma migrate deploy
+```
+
+The CI workflow applies them to a throwaway Postgres on every push, which proves
+they are valid and in order — it does not prove they ran anywhere real. A deploy
+that ships code expecting a column the database does not have fails at the first
+query, and `/api/health` reports `database: up` the whole time because
+`SELECT 1` still works.
+
+So: **run `npm run db:deploy` before, or immediately after, every deploy that
+adds a migration.** `npm run db:status` says whether anything is outstanding.
+
+Migrations in this repository are additive. That is a rule, not a coincidence:
+adding a column or a table cannot fail on a table with rows in it, so the deploy
+never needs a maintenance window, and `prisma migrate deploy` is safe to run on a
+live database. The one thing to watch for is a new UNIQUE index — it fails if
+rows already violate it, which is why the per-user coupon rule shipped with the
+new table's unique pair rather than as a constraint bolted onto `Coupon`.
+
+#### The `CouponRedemption` migration (`20260925010000`)
+
+| | |
+|---|---|
+| Adds | one table, `CouponRedemption` |
+| Touches | nothing — no existing row is read or written |
+| Why | `Coupon.maxUses` is a global budget and said nothing about a person |
+
+Before it, one account could spend a limited coupon's entire budget, and a coupon
+created without `maxUses` was unlimited per person as well as in total. The
+unique pair `(couponId, userId)` is the rule, and it is also what makes the write
+in `consumeCoupon()` safe when two settlements race: the transaction that loses
+rolls back completely, so the counter cannot be incremented twice.
+
+Who has already used what is not reconstructable — nothing recorded it — so every
+customer starts with a clean slate on the per-account rule. Inventing redemption
+rows would be guessing at history, and a guess here re-opens a coupon somebody
+has already spent.
+
 ## 6. SEO & discoverability
 
 - [ ] `NEXT_PUBLIC_APP_URL` = canonical domain (it feeds `sitemap.xml`,
@@ -1944,7 +1989,7 @@ Redis-backed, in one of four buckets from `config.rateLimit`:
 |---|---|---|
 | `auth` | 10/min | login, register, forgot/reset password, demo login, **coupon validation** |
 | `payment` | 20/min | purchase, top-up, subscriptions, tips |
-| `upload` | 5 / 5min | video upload, image upload, **download link minting** |
+| `upload` | 5 / 5min | image upload, **video slot reservation** (`/api/videos/upload-signature`), **download link minting** |
 | `general` | 100/min | comments, reports (video + comment), messages, search suggestions |
 
 Keying is deliberate and differs by route:
@@ -1968,6 +2013,65 @@ rather than passing the client's value through.
 - [ ] Admin accounts: MFA/strong passwords, minimal admin roster, KYC for
       creator payouts before any real money moves.
 - [ ] Content moderation flow (reports → strikes) staffed before launch.
+
+### 8.1.1 When a ban actually takes effect
+
+A session token is a statement about the past — "this person proved who they were,
+up to seven days ago" — and the app used to read it as a statement about the
+present. Banning somebody therefore stopped their *next* sign-in and nothing else:
+an account with a live cookie kept buying videos, sending tips, requesting
+payouts, submitting KYC, uploading thumbnails, posting comments and writing
+posts, for up to seven days.
+
+The check now lives in `requireAuth()` (and therefore `requireRole()`, which calls
+it), because that is the one guard every write route already funnels through —
+one insertion point rather than thirty-one. Three properties are deliberate:
+
+- **It is cached for a minute.** One indexed lookup per authenticated request
+  would be honest and expensive. `invalidateAccountStatus()` is called by the
+  admin ban/unban action, so the case where the stale minute is most visible — an
+  admin bans somebody and then looks at the account — is immediate.
+- **A database error reads as "allowed".** A blip must not sign out every user on
+  the platform. The failure mode is a banned account getting through during an
+  outage, which is recoverable; the alternative is everybody locked out.
+- **A missing user is enforced at once, and answers 401.** `DELETE /api/account`
+  removes the row and leaves the token behind; a token naming a user that no
+  longer exists must stop working immediately rather than outliving the deletion
+  by a week. `/api/auth/me` returns 401 for the same reason — "nobody is signed
+  in" is the honest answer, and every page guard already reads 401 as signed out.
+
+The one exception is erasure itself: `DELETE /api/account` calls
+`requireAuth({ allowBanned: true })`, because refusing to let a suspended user
+delete their own data turns moderation into a reason somebody cannot be forgotten.
+
+### 8.1.2 Response headers and cross-site writes
+
+Every response now carries `Content-Security-Policy`, `Strict-Transport-Security`,
+`Permissions-Policy`, `X-Content-Type-Options`, `X-Frame-Options` and
+`Referrer-Policy` (`next.config.js`; previously the four older headers reached
+only the pages the middleware matcher did not skip).
+
+The CSP keeps `'unsafe-inline'` for scripts and styles — Next.js ships its
+hydration payload as an inline script, and a nonce-based policy needs plumbing
+this app does not have yet. It is still a real gain: it names where code may be
+loaded from, so injected markup cannot pull a script off somebody else's origin.
+`'unsafe-eval'` is added in development only.
+
+`Origin` checks cover the requests `sameSite: "lax"` cannot: the ones that need
+no session at all (`/api/auth/login`, `register`, `forgot-password`,
+`reset-password`). Login CSRF — where a victim is signed into the attacker's
+account and then browses inside a profile somebody else controls — is the case
+lax does not touch. See `src/lib/request-origin.ts` for the decision table:
+
+| `Origin` | Result |
+|---|---|
+| absent | allowed — curl, cron, the gateway's callback; a web page cannot produce one |
+| matches `Host` or the configured app URL | allowed |
+| anything else, including `null` | **403** |
+
+The matcher watches `/api/auth/*` only. Running an edge invocation on every API
+request would put this in front of the video-segment proxy, where one manifest
+has hundreds of children.
 
 ### 8.2 One balance, two writers
 

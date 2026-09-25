@@ -6,6 +6,7 @@
 import { SignJWT, jwtVerify, type JWTPayload } from "jose";
 import { cookies } from "next/headers";
 import config from "./config";
+import { accountStatusFor } from "./services/account-status.service";
 
 // JWT Payload type
 export interface AuthPayload extends JWTPayload {
@@ -103,11 +104,37 @@ export async function getCurrentUser(): Promise<AuthPayload | null> {
 }
 
 // Require authenticated user - throws if not
-export async function requireAuth(): Promise<AuthPayload> {
+//
+// This is also where a ban and a deleted account are enforced, because it is the
+// one guard every write route already funnels through. A token says who somebody
+// was up to seven days ago; it says nothing about whether they are still welcome,
+// and until this check existed a banned account kept full use of the site merely
+// by not signing in again. See services/account-status.service.ts for the cache
+// and for why a database outage reads as "allowed" while a missing row does not.
+//
+// `allowBanned` exists for exactly one caller: erasing your own account. Taking
+// away somebody's ability to delete their data is not a moderation tool, and a
+// banned user asking to be forgotten should be able to be.
+export async function requireAuth(options?: { allowBanned?: boolean }): Promise<AuthPayload> {
   const user = await getCurrentUser();
   if (!user) {
     throw new AuthError("Authentication required", 401);
   }
+
+  const status = await accountStatusFor(user.userId);
+
+  if (!status.exists) {
+    // The account was erased. The cookie is now a credential for nobody.
+    throw new AuthError("This session is no longer valid — please sign in again", 401);
+  }
+
+  if (status.banned && !options?.allowBanned) {
+    throw new AuthError(
+      "Your account has been suspended. Contact support if you believe this is a mistake.",
+      403
+    );
+  }
+
   return user;
 }
 

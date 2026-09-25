@@ -11,12 +11,25 @@ import { topUpWalletSchema } from "@/lib/validation";
 import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
 import { assertSupportedGateway } from "@/lib/payments/gateway";
 import { generateOrderId } from "@/lib/utils";
+import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
-import { applyCoupon, markCouponUsed } from "@/lib/coupons";
+import { applyCoupon } from "@/lib/coupons";
 
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
+
+    // Same ceiling as a video purchase, and for the same reason: every call here
+    // is a real USSD push to somebody's handset, so an unrestricted caller is
+    // one script away from filling a phone with payment prompts — and the
+    // purchase route has had this guard all along, which made the top-up route
+    // the cheapest way to do it.
+    const { allowed } = await checkRateLimit(
+      `topup:${auth.userId}`,
+      config.rateLimit.payment.max,
+      config.rateLimit.payment.windowMs
+    );
+    if (!allowed) return api.rateLimited("Wait for the prompt before trying again");
 
     const body = await request.json();
     const result = topUpWalletSchema.safeParse(body);
@@ -38,6 +51,7 @@ export async function POST(request: NextRequest) {
         code: couponCode,
         amount,
         context: "topup",
+        userId: auth.userId,
       });
       if (!outcome.valid) {
         return api.error(outcome.error || "This coupon is not valid", 400, "INVALID_COUPON");
@@ -59,7 +73,9 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (couponId) await markCouponUsed(couponId);
+    // Spent at settlement, not here: the bonus rides in metadata and the shared
+    // payment webhook records the redemption when the money lands. Counting it at
+    // checkout burned a limited coupon on every prompt nobody approved.
 
     // ------------------------------------------------------------ Sandbox mode
     const harakaSandbox =

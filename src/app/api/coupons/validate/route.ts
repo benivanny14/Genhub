@@ -14,6 +14,7 @@ import { NextRequest } from "next/server";
 import { api } from "@/lib/api-response";
 import { validateCouponSchema } from "@/lib/validation";
 import { applyCoupon } from "@/lib/coupons";
+import { getCurrentUser } from "@/lib/auth";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
@@ -34,7 +35,18 @@ export async function POST(request: NextRequest) {
     }
 
     const { code, amount, context } = result.data;
-    const outcome = await applyCoupon({ code, amount, context });
+
+    // Still open to signed-out visitors (the paywall previews a code before
+    // anyone signs in), but when there IS a session the per-account rule is
+    // applied here too — so a customer who already spent the coupon is told
+    // while typing it, not after paying.
+    const viewer = await getCurrentUser();
+    const outcome = await applyCoupon({
+      code,
+      amount,
+      context,
+      userId: viewer?.userId,
+    });
 
     if (!outcome.valid) {
       return api.error(outcome.error || "This coupon is not valid", 400, "INVALID_COUPON");
