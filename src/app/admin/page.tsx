@@ -195,7 +195,15 @@ interface OverviewData {
    * before this card existed.
    */
   chatRevenue?: {
-    totals: { creators: number; messages: number; earned: number; heldMessages: number; held: number };
+    totals: {
+      creators: number;
+      messages: number;
+      gross: number;
+      earned: number;
+      platformFee: number;
+      heldMessages: number;
+      held: number;
+    };
     creators: {
       creatorId: string;
       displayName: string | null;
@@ -1753,12 +1761,12 @@ export default function AdminDashboard() {
                   <div>
                     <span className="text-sm text-white/60">Chat Revenue — Paid Messages</span>
                     <p className="text-xs text-white/40">
-                      The amount a fan pays for a message goes to the creator in full
+                      The same 70/30 split as every other sale, on every message
                     </p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
                   <div className="rounded-xl bg-surface-300/30 p-3">
                     <p className="text-xs text-white/40">Messages paid</p>
                     <p className="text-lg font-bold">
@@ -1770,19 +1778,30 @@ export default function AdminDashboard() {
                     </p>
                   </div>
                   <div className="rounded-xl bg-surface-300/30 p-3">
-                    <p className="text-xs text-white/40">Paid to creators</p>
+                    <p className="text-xs text-white/40">Fans paid</p>
+                    <p className="text-lg font-bold">
+                      TZS {stats.chatRevenue.totals.gross.toLocaleString()}
+                    </p>
+                    <p className="text-[11px] text-white/35 mt-0.5">before the split</p>
+                  </div>
+                  <div className="rounded-xl bg-surface-300/30 p-3">
+                    <p className="text-xs text-white/40">To creators (70%)</p>
                     <p className="text-lg font-bold text-emerald-400">
                       TZS {stats.chatRevenue.totals.earned.toLocaleString()}
                     </p>
+                    <p className="text-[11px] text-white/35 mt-0.5">
+                      of which TZS {stats.chatRevenue.totals.held.toLocaleString()} still held (
+                      {stats.chatRevenue.totals.heldMessages} message
+                      {stats.chatRevenue.totals.heldMessages === 1 ? "" : "s"})
+                    </p>
                   </div>
                   <div className="rounded-xl bg-surface-300/30 p-3">
-                    <p className="text-xs text-white/40">In 14-day holding</p>
-                    <p className="text-lg font-bold text-amber-400">
-                      TZS {stats.chatRevenue.totals.held.toLocaleString()}
+                    <p className="text-xs text-white/40">Platform cut (30%)</p>
+                    <p className="text-lg font-bold text-brand-400">
+                      TZS {stats.chatRevenue.totals.platformFee.toLocaleString()}
                     </p>
                     <p className="text-[11px] text-white/35 mt-0.5">
-                      {stats.chatRevenue.totals.heldMessages} message
-                      {stats.chatRevenue.totals.heldMessages === 1 ? "" : "s"}
+                      counted in Platform Revenue above
                     </p>
                   </div>
                 </div>
@@ -1830,9 +1849,9 @@ export default function AdminDashboard() {
                 )}
 
                 <p className="text-xs text-white/35 mt-3">
-                  A message counts once its creator was credited — a paid message to an ordinary
-                  account goes to that account&apos;s wallet instead. Nothing here is a platform cut,
-                  so none of it appears in Platform Revenue (30%) above.
+                  A message counts once the receiver was credited: a message to an ordinary account
+                  pays that account&apos;s wallet its 70% instead of a creator balance — the platform
+                  still takes its 30%. The holding applies to the creator&apos;s share only.
                 </p>
               </div>
             )}

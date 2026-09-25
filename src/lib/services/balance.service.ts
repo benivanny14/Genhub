@@ -9,6 +9,23 @@ import { Prisma } from "@prisma/client";
 
 const BUSINESS = config.business;
 
+/**
+ * The 70/30 split, in whole TZS, on any amount a viewer pays.
+ *
+ * Exported because it is a public promise — /about says creators keep 70% of
+ * every shilling — and every path that credits a creator has to compute it the
+ * same way. The rounding is the part that drifts when it is copied: the platform
+ * takes the rounded fee and the creator takes the remainder, so the two halves
+ * always add back up to what the viewer paid.
+ */
+export function splitRevenue(amount: number): {
+  platformFee: number;
+  creatorCut: number;
+} {
+  const platformFee = Math.round(amount * (BUSINESS.platformFeePercent / 100));
+  return { platformFee, creatorCut: amount - platformFee };
+}
+
 // =============================================================================
 // Shared grant — the 70/30 split, creator balance, video earnings and access.
 // Runs inside the caller's transaction so a gateway settlement and a wallet
@@ -26,8 +43,7 @@ async function grantVideoPurchase(
   }
 ): Promise<void> {
   const { transactionId, viewerId, creatorId, videoId, totalAmount } = params;
-  const platformFee = Math.round(totalAmount * (BUSINESS.platformFeePercent / 100));
-  const creatorCut = totalAmount - platformFee;
+  const { platformFee, creatorCut } = splitRevenue(totalAmount);
 
   // Update transaction with fee breakdown
   await tx.transaction.update({

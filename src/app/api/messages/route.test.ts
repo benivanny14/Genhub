@@ -65,9 +65,14 @@ vi.mock("@/lib/redis", () => ({
   checkRateLimit: () => mocks.checkRateLimit(),
 }));
 
-vi.mock("@/lib/services/balance.service", () => ({
-  debitWallet: (...a: unknown[]) => mocks.debitWallet(...a),
-}));
+// The real module, with only the wallet debit replaced: `splitRevenue` is the
+// platform's 70/30 promise and these tests should exercise the arithmetic that
+// ships, not a second copy of it written for the test.
+vi.mock("@/lib/services/balance.service", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/services/balance.service")>();
+  return { ...actual, debitWallet: (...a: unknown[]) => mocks.debitWallet(...a) };
+});
 
 import { MAX_PAID_MESSAGE, MIN_PAID_MESSAGE } from "@/lib/pay-message";
 import { POST } from "./route";
@@ -153,6 +158,48 @@ describe("what a message costs", () => {
   });
 });
 
+describe("the split", () => {
+  it("pays the creator 70% and records the platform's 30%", async () => {
+    asViewer();
+
+    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+
+    expect(res.status).toBe(201);
+    // A message is not an exception to the promise /about makes.
+    expect(mocks.createTransaction.mock.calls[0][0].data).toMatchObject({
+      amount: 500,
+      platformFee: 150,
+      creatorCut: 350,
+    });
+    expect(mocks.upsertBalance.mock.calls[0][0].update.pendingBalance).toEqual({
+      increment: 350,
+    });
+  });
+
+  it("gives the two halves back to the amount the fan paid", async () => {
+    asViewer();
+
+    // 333 is the case that would drift: 30% of it is not a whole shilling, so the
+    // rounding has to leave the creator with the remainder rather than a share
+    // that no longer adds up to what was charged.
+    await POST(send({ receiverId: CREATOR, amount: 333, content: "hi" }));
+
+    const recorded = mocks.createTransaction.mock.calls[0][0].data;
+    expect(recorded.platformFee).toBe(Math.round(333 * 0.3));
+    expect(recorded.platformFee + recorded.creatorCut).toBe(333);
+  });
+
+  it("tells the receiver what the sender paid and what their share is", async () => {
+    asViewer();
+
+    await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+
+    const note = mocks.createNotification.mock.calls[0][0].data;
+    expect(note.message).toContain("500");
+    expect(note.message).toContain("350");
+  });
+});
+
 describe("nobody is exempt", () => {
   it("never reads a subscription to decide the price", async () => {
     // A live membership row, if the route asked for one. It must not: the price
@@ -199,12 +246,13 @@ describe("the ledger a paid message writes", () => {
 
     expect(res.status).toBe(201);
     expect(mocks.updateUser).not.toHaveBeenCalled();
+    // 70% of 500: the holding gets the creator's share, not what the fan paid.
     expect(mocks.upsertBalance.mock.calls[0][0]).toMatchObject({
       where: { creatorId: CREATOR },
-      create: { creatorId: CREATOR, pendingBalance: 500, availableBalance: 0, totalEarned: 500 },
+      create: { creatorId: CREATOR, pendingBalance: 350, availableBalance: 0, totalEarned: 350 },
       update: {
-        pendingBalance: { increment: 500 },
-        totalEarned: { increment: 500 },
+        pendingBalance: { increment: 350 },
+        totalEarned: { increment: 350 },
       },
     });
     expect(mocks.createTransaction.mock.calls[0][0].data).toMatchObject({
@@ -213,7 +261,8 @@ describe("the ledger a paid message writes", () => {
       amount: 500,
       type: "TIP",
       status: "SUCCESS",
-      creatorCut: 500,
+      platformFee: 150,
+      creatorCut: 350,
       metadata: { method: "pay_message", recipientId: CREATOR },
     });
   });
@@ -229,9 +278,14 @@ describe("the ledger a paid message writes", () => {
     // spend: straight into the wallet, and the transaction names the recipient
     // without pretending they are a creator.
     expect(mocks.upsertBalance).not.toHaveBeenCalled();
-    expect(mocks.updateUser.mock.calls[0][0].data.walletBalance).toEqual({ increment: 900 });
+    // Their 70% of 900, into the wallet: the platform takes its 30% from an
+    // ordinary account exactly as it does from a creator's message.
+    expect(mocks.updateUser.mock.calls[0][0].data.walletBalance).toEqual({ increment: 630 });
     expect(mocks.createTransaction.mock.calls[0][0].data).toMatchObject({
       creatorId: null,
+      amount: 900,
+      platformFee: 270,
+      creatorCut: 630,
       metadata: { method: "pay_message", recipientId: VIEWER },
     });
   });
@@ -257,7 +311,6 @@ describe("the ledger a paid message writes", () => {
 
     const note = mocks.createNotification.mock.calls[0][0].data;
     expect(note.userId).toBe(CREATOR);
-    expect(note.message).toContain("500");
     expect(note.message).toMatch(/TZS/);
     expect(note.link).toBe("/inbox");
   });

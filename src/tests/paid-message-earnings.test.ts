@@ -45,7 +45,9 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/config", () => ({
-  default: { business: { holdingPeriodDays: 14 } },
+  default: {
+    business: { holdingPeriodDays: 14, platformFeePercent: 30, creatorFeePercent: 70 },
+  },
 }));
 
 import { getChatRevenue, getPaidMessageEarnings } from "@/lib/services/paid-message.service";
@@ -54,9 +56,16 @@ const DAY = 86_400_000;
 const CREATOR = "creator-1";
 
 /** The two `transaction.aggregate` calls: lifetime first, then the held part. */
-function ledger(lifetime: { count: number; sum: number | null }, held: { count: number; sum: number | null }) {
+function ledger(
+  lifetime: { count: number; sum: number | null; gross?: number },
+  held: { count: number; sum: number | null }
+) {
   mocks.transactionAggregate
-    .mockResolvedValueOnce({ _count: { _all: lifetime.count }, _sum: { creatorCut: lifetime.sum } })
+    .mockResolvedValueOnce({
+      _count: { _all: lifetime.count },
+      // `amount` is what fans paid; `creatorCut` is the creator's 70% of it.
+      _sum: { creatorCut: lifetime.sum, amount: lifetime.gross ?? 0 },
+    })
     .mockResolvedValueOnce({ _count: { _all: held.count }, _sum: { creatorCut: held.sum } });
 }
 
@@ -77,11 +86,14 @@ beforeEach(() => {
 
 describe("what the card counts", () => {
   it("counts paid messages, not tips", async () => {
-    ledger({ count: 4, sum: 6000 }, { count: 2, sum: 2500 });
+    ledger({ count: 4, sum: 6000, gross: 8571 }, { count: 2, sum: 2500 });
 
     const result = await getPaidMessageEarnings(CREATOR);
 
     expect(result.messages).toBe(4);
+    // The creator's share and what the fans actually paid are different numbers,
+    // and the card shows both.
+    expect(result.gross).toBe(8571);
     expect(result.earned).toBe(6000);
     expect(result.held).toBe(2500);
     expect(result.heldMessages).toBe(2);
@@ -118,6 +130,7 @@ describe("what the card counts", () => {
 
     expect(result).toEqual({
       messages: 0,
+      gross: 0,
       earned: 0,
       heldMessages: 0,
       held: 0,
@@ -184,6 +197,9 @@ describe("the recent list", () => {
     expect(result.recent[0]).toMatchObject({
       id: "m-new",
       amount: 1000,
+      // The row shows what the creator got, so it has to be the ledger's half of
+      // what the fan paid — not the gross, which the row shows beside it.
+      earned: 700,
       held: true,
       clearsAt: new Date(fresh.getTime() + 14 * DAY).toISOString(),
       sender: { displayName: "Asha" },
@@ -208,7 +224,7 @@ describe("chat revenue per creator", () => {
    * — order would break the moment one query joins a Promise.all earlier.
    */
   function platformTotals(
-    lifetime: { amount: number; count: number },
+    lifetime: { amount: number; count: number; gross: number },
     held: { amount: number; count: number }
   ) {
     mocks.transactionAggregate.mockImplementation(
@@ -216,7 +232,14 @@ describe("chat revenue per creator", () => {
         Promise.resolve(
           args.where.createdAt
             ? { _sum: { creatorCut: held.amount }, _count: { _all: held.count } }
-            : { _sum: { creatorCut: lifetime.amount }, _count: { _all: lifetime.count } }
+            : {
+                _sum: {
+                  creatorCut: lifetime.amount,
+                  amount: lifetime.gross,
+                  platformFee: lifetime.gross - lifetime.amount,
+                },
+                _count: { _all: lifetime.count },
+              }
         )
     );
   }
@@ -227,7 +250,7 @@ describe("chat revenue per creator", () => {
       row("c-top", 900, 3),
       row("c-low", 100, 1),
     ]);
-    platformTotals({ amount: 1500, count: 6 }, { amount: 700, count: 2 });
+    platformTotals({ amount: 1500, count: 6, gross: 2000 }, { amount: 700, count: 2 });
     mocks.userFindMany.mockResolvedValue([
       { id: "c-top", displayName: "Asha", avatarUrl: null },
       { id: "c-mid", displayName: "Neema", avatarUrl: null },
@@ -239,7 +262,9 @@ describe("chat revenue per creator", () => {
     expect(result.totals).toEqual({
       creators: 3,
       messages: 6,
+      gross: 2000,
       earned: 1500,
+      platformFee: 500,
       heldMessages: 2,
       held: 700,
     });
@@ -285,7 +310,7 @@ describe("chat revenue per creator", () => {
 
   it("takes the platform-wide held total from the whole ledger", async () => {
     mocks.transactionGroupBy.mockResolvedValueOnce([row("c1", 500, 1)]);
-    platformTotals({ amount: 500, count: 1 }, { amount: 500, count: 1 });
+    platformTotals({ amount: 500, count: 1, gross: 715 }, { amount: 500, count: 1 });
 
     const result = await getChatRevenue();
 
@@ -300,7 +325,15 @@ describe("chat revenue per creator", () => {
     const result = await getChatRevenue();
 
     expect(result).toEqual({
-      totals: { creators: 0, messages: 0, earned: 0, heldMessages: 0, held: 0 },
+      totals: {
+        creators: 0,
+        messages: 0,
+        gross: 0,
+        earned: 0,
+        platformFee: 0,
+        heldMessages: 0,
+        held: 0,
+      },
       creators: [],
       truncated: false,
     });

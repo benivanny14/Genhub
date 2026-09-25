@@ -12,7 +12,7 @@
 
 import type { Prisma } from "@prisma/client";
 import prisma from "../db";
-import config from "../config";
+import { splitRevenue } from "./balance.service";
 
 /** A membership period is one calendar month. */
 export const SUBSCRIPTION_PERIOD_MONTHS = 1;
@@ -36,13 +36,17 @@ export function nextRenewalDate(
   return next;
 }
 
-/** 30% platform / 70% creator, in whole TZS. */
+/**
+ * 30% platform / 70% creator, in whole TZS.
+ *
+ * Delegates to the one implementation of the split so a membership and a video
+ * purchase can never round differently by a shilling.
+ */
 export function splitSubscriptionAmount(amount: number): {
   platformFee: number;
   creatorCut: number;
 } {
-  const platformFee = Math.round(amount * (config.business.platformFeePercent / 100));
-  return { platformFee, creatorCut: amount - platformFee };
+  return splitRevenue(amount);
 }
 
 export interface GrantSubscriptionParams {

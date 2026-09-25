@@ -69,6 +69,8 @@ interface CreatorData {
   /** Chat income: every message is paid, and it clears on the 14-day clock. */
   paidMessages: {
     messages: number;
+    /** What fans paid, before the 30% platform share. */
+    gross: number;
     earned: number;
     heldMessages: number;
     held: number;
@@ -77,6 +79,7 @@ interface CreatorData {
     recent: {
       id: string;
       amount: number;
+      earned: number;
       createdAt: string;
       clearsAt: string;
       held: boolean;
@@ -926,7 +929,7 @@ export default function CreatorDashboard() {
               <div>
                 <h2 className="font-display font-bold">Paid Messages</h2>
                 <p className="text-xs text-white/40">
-                  Every message a fan sends you is worth what they chose to pay
+                  Every message a fan sends you is worth what they chose to pay — you keep 70% of it
                 </p>
               </div>
             </div>
@@ -953,11 +956,12 @@ export default function CreatorDashboard() {
                   <p className="text-xl font-bold mt-1 text-emerald-400">
                     {formatTZS(paidMessages.earned)}
                   </p>
-                  {paidMessages.cleared > 0 && (
-                    <p className="text-[11px] text-white/35 mt-1">
-                      {formatTZS(paidMessages.cleared)} cleared the holding
-                    </p>
-                  )}
+                  <p className="text-[11px] text-white/35 mt-1">
+                    your 70% of {formatTZS(paidMessages.gross)} paid by fans
+                    {paidMessages.cleared > 0
+                      ? ` · ${formatTZS(paidMessages.cleared)} cleared`
+                      : ""}
+                  </p>
                 </div>
                 <div className="rounded-xl bg-surface-300/30 p-4">
                   <p className="text-xs text-white/40">In 14-day holding</p>
@@ -997,9 +1001,14 @@ export default function CreatorDashboard() {
                           {m.held ? ` · clears ${formatDay(m.clearsAt)}` : " · cleared"}
                         </p>
                       </div>
-                      <p className="font-bold text-sm text-emerald-400 shrink-0">
-                        +{formatTZS(m.amount)}
-                      </p>
+                      <div className="text-right shrink-0">
+                        <p className="font-bold text-sm text-emerald-400">
+                          +{formatTZS(m.earned)}
+                        </p>
+                        <p className="text-[11px] text-white/35">
+                          {formatTZS(m.amount)} paid
+                        </p>
+                      </div>
                     </div>
                   ))}
                 </div>

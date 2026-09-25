@@ -14,6 +14,7 @@
 
 import prisma from "../db";
 import config from "../config";
+import { splitRevenue } from "./balance.service";
 
 /** The `metadata.method` value POST /api/messages stamps on its transaction. */
 export const PAY_MESSAGE_METHOD = "pay_message";
@@ -34,7 +35,10 @@ const PAID_MESSAGE_LEDGER = {
 
 export interface PaidMessageRow {
   id: string;
+  /** What the fan paid, before the platform's share. */
   amount: number;
+  /** This creator's share of that message (70%). */
+  earned: number;
   createdAt: string;
   /** When this message's money leaves the 14-day holding. */
   clearsAt: string;
@@ -46,7 +50,9 @@ export interface PaidMessageRow {
 export interface PaidMessageEarnings {
   /** Lifetime count of paid messages received. */
   messages: number;
-  /** Lifetime value credited to this creator by those messages. */
+  /** What fans paid for those messages, before the platform's share. */
+  gross: number;
+  /** Lifetime value credited to this creator by those messages (their 70%). */
   earned: number;
   /** How many received messages are still inside the holding period. */
   heldMessages: number;
@@ -79,7 +85,8 @@ export async function getPaidMessageEarnings(
     prisma.transaction.aggregate({
       where: paidMessage,
       _count: { _all: true },
-      _sum: { creatorCut: true },
+      // `amount` is what the fan paid; `creatorCut` is this creator's share of it.
+      _sum: { creatorCut: true, amount: true },
     }),
     prisma.transaction.aggregate({
       where: { ...paidMessage, createdAt: { gt: cutoff } },
@@ -111,6 +118,7 @@ export async function getPaidMessageEarnings(
 
   return {
     messages: lifetime._count._all,
+    gross: lifetime._sum.amount ?? 0,
     earned,
     heldMessages: held._count._all,
     held: heldAmount,
@@ -124,6 +132,10 @@ export async function getPaidMessageEarnings(
       return {
         id: m.id,
         amount: m.amount,
+        // The row shows two numbers — what the fan paid and what this creator
+        // got — and they have to be the same halves the ledger wrote, so the
+        // split is computed by the one function that owns it.
+        earned: splitRevenue(m.amount).creatorCut,
         createdAt: m.createdAt.toISOString(),
         clearsAt: clearsAt.toISOString(),
         held: clearsAt.getTime() > Date.now(),
@@ -155,7 +167,12 @@ export interface ChatRevenue {
     /** Creators paid at least once for a message — not every creator on the site. */
     creators: number;
     messages: number;
+    /** What fans paid in total, before the split. */
+    gross: number;
+    /** The creators' 70%. */
     earned: number;
+    /** The platform's 30%. */
+    platformFee: number;
     heldMessages: number;
     held: number;
   };
@@ -195,7 +212,15 @@ export async function getChatRevenue(
 
   if (perCreator.length === 0) {
     return {
-      totals: { creators: 0, messages: 0, earned: 0, heldMessages: 0, held: 0 },
+      totals: {
+        creators: 0,
+        messages: 0,
+        gross: 0,
+        earned: 0,
+        platformFee: 0,
+        heldMessages: 0,
+        held: 0,
+      },
       creators: [],
       truncated: false,
     };
@@ -220,7 +245,9 @@ export async function getChatRevenue(
     }),
     prisma.transaction.aggregate({
       where: filter,
-      _sum: { creatorCut: true },
+      // All three, because the platform's cut on chat is a number the admin card
+      // shows rather than something left to be inferred from the other two.
+      _sum: { creatorCut: true, amount: true, platformFee: true },
       _count: { _all: true },
     }),
     prisma.transaction.aggregate({
@@ -241,7 +268,9 @@ export async function getChatRevenue(
     totals: {
       creators: ranked.length,
       messages: totals._count._all,
+      gross: totals._sum.amount ?? 0,
       earned: totals._sum.creatorCut ?? 0,
+      platformFee: totals._sum.platformFee ?? 0,
       heldMessages: totalsHeld._count._all,
       held: totalsHeld._sum.creatorCut ?? 0,
     },

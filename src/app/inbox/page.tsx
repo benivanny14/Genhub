@@ -268,7 +268,7 @@ export default function InboxPage() {
           <div>
             <h1 className="text-2xl font-display font-bold">Inbox</h1>
             <p className={cn("text-sm", isLight ? "text-gray-500" : "text-white/50")}>
-              Direct messages — every message is a paid message, and the amount you type goes to the other person
+              Direct messages — every message is a paid message, and the person you write to keeps 70% of it
             </p>
           </div>
         </div>
@@ -476,8 +476,8 @@ export default function InboxPage() {
                       )}
                       {!demoMode && (
                         <p className={cn("text-[10px] mt-2", isLight ? "text-gray-400" : "text-white/30")}>
-                          Every message is a paid message — the amount above goes to the creator (min TZS{" "}
-                          {MIN_PAID_MESSAGE}). {" "}
+                          Every message is a paid message — the creator keeps 70% of the amount above (min
+                          TZS {MIN_PAID_MESSAGE}). {" "}
                           {activePartner?.role === "CREATOR" && (
                             <Link
                               href={`/creator/${activePartner.id}`}

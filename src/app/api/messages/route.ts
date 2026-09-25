@@ -7,7 +7,7 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
-import { debitWallet } from "@/lib/services/balance.service";
+import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
 import { api } from "@/lib/api-response";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
@@ -61,6 +61,12 @@ export async function POST(request: NextRequest) {
     });
     if (!receiver || receiver.isBanned) return api.notFound("This user does not exist");
 
+    // The same 70/30 split every other sale on the platform uses. The sender pays
+    // the amount they chose; the platform takes its fee from it and the receiver
+    // gets the rest — a paid message is not an exception to the promise /about
+    // makes, and the two halves always add back up to what was charged.
+    const { platformFee, creatorCut } = splitRevenue(amount);
+
     const message = await prisma.$transaction(async (tx) => {
       // The balance check and the deduction are one statement (debitWallet).
       // Checking with a read first let two messages start on one balance.
@@ -85,46 +91,50 @@ export async function POST(request: NextRequest) {
           where: { creatorId: receiverId },
           create: {
             creatorId: receiverId,
-            pendingBalance: amount,
+            pendingBalance: creatorCut,
             availableBalance: 0,
-            totalEarned: amount,
+            totalEarned: creatorCut,
           },
           update: {
-            pendingBalance: { increment: amount },
-            totalEarned: { increment: amount },
+            pendingBalance: { increment: creatorCut },
+            totalEarned: { increment: creatorCut },
           },
         });
       } else {
-        // A paid message to an ordinary account. The money is theirs, so it goes
-        // where every other incoming payment goes — their wallet. Writing a
-        // CreatorBalance row instead (what this route used to do) invented a
-        // creator who does not exist and held their money for 14 days against a
-        // payout they cannot request.
+        // A paid message to an ordinary account. Their share goes where every
+        // other incoming payment goes — their wallet. Writing a CreatorBalance row
+        // instead (what this route used to do) invented a creator who does not
+        // exist and held their money for 14 days against a payout they cannot
+        // request.
         await tx.user.update({
           where: { id: receiverId },
-          data: { walletBalance: { increment: amount } },
+          data: { walletBalance: { increment: creatorCut } },
         });
       }
 
-      // Create transaction record
+      // Create transaction record. The fee breakdown is recorded the same way a
+      // purchase records it, so the platform's cut on chat is countable rather
+      // than implied by the difference between two numbers.
       await tx.transaction.create({
         data: {
           userId: auth.userId,
           creatorId: receiver.role === "CREATOR" ? receiverId : null,
           amount,
+          platformFee,
           type: "TIP",
           status: "SUCCESS",
-          creatorCut: amount,
+          creatorCut,
           metadata: { method: "pay_message", recipientId: receiverId },
         },
       });
 
-      // Notify receiver
+      // Notify receiver. Both figures, because the sender paid one and the
+      // receiver only ever sees the other in their balance.
       await tx.notification.create({
         data: {
           userId: receiverId,
           title: "New message 💬",
-          message: `You received a paid message worth TZS ${amount.toLocaleString()}`,
+          message: `You received a paid message worth TZS ${amount.toLocaleString()} — your share is TZS ${creatorCut.toLocaleString()}`,
           type: "info",
           link: "/inbox",
         },
