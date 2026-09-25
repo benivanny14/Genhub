@@ -64,7 +64,12 @@ vi.mock("@/lib/payments/harakapay", async (importOriginal) => {
 });
 
 import prisma from "@/lib/db";
-import { harakaCollect, harakaStatus } from "@/lib/payments/harakapay";
+import {
+  harakaCollect,
+  harakaStatus,
+  HarakaFloatEmptyError,
+  FLOAT_EMPTY_CUSTOMER_MESSAGE,
+} from "@/lib/payments/harakapay";
 import { POST as topupPost } from "@/app/api/payments/topup/route";
 import { GET as statusGet } from "@/app/api/payments/status/[orderId]/route";
 import { POST as completePost } from "@/app/api/dev/sandbox/complete/route";
@@ -185,6 +190,40 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
     expect(tx!.status).toBe("PENDING");
     expect(tx!.type).toBe("WALLET_TOPUP");
     expect(tx!.amount).toBe(3_000);
+  });
+
+  it("refuses the whole order when the float is empty, and says the customer was not charged", async () => {
+    // What `harakaCollect` throws before it sends anything: the merchant float
+    // cannot pay for a USSD prompt, so a charge accepted now would never reach a
+    // handset. The route must turn that into a refusal the customer can read —
+    // not a 200 with "USSD push sent to phone" and an order nobody can settle.
+    collect.mockRejectedValueOnce(new HarakaFloatEmptyError(0));
+
+    const res = await topupPost(
+      post("/api/payments/topup", {
+        amount: 2_000,
+        gateway: "HARAKAPAY",
+        phoneNumber: PHONE,
+      })
+    );
+    const body = await res.json();
+
+    // 503, and a code the client can branch on — not the 502 a broken gateway
+    // gives, because this gateway is fine and we are the ones unable to sell.
+    expect(res.status).toBe(503);
+    expect(body.code).toBe("GATEWAY_FLOAT_EMPTY");
+    expect(body.error).toBe(FLOAT_EMPTY_CUSTOMER_MESSAGE);
+
+    // The row is closed rather than left PENDING: a checkout that can never
+    // settle would block the next attempt and blame the customer for it.
+    const tx = await prisma.transaction.findFirst({
+      where: { userId: ctx.viewerId, amount: 2_000, type: "WALLET_TOPUP", status: "FAILED" },
+      orderBy: { createdAt: "desc" },
+      select: { status: true, metadata: true },
+    });
+    expect(tx).not.toBeNull();
+    expect(tx!.status).toBe("FAILED");
+    expect((tx!.metadata as { refusal?: string })?.refusal).toBe("FLOAT_EMPTY");
   });
 
   it("surfaces the gateway's own rejection reason and fails the transaction", async () => {

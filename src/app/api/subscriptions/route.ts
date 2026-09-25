@@ -11,7 +11,11 @@ import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { z } from "zod";
 import config from "@/lib/config";
-import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
+import {
+  harakaCollect,
+  harakaErrorReason,
+  HarakaFloatEmptyError,
+} from "@/lib/payments/harakapay";
 import { generateOrderId } from "@/lib/utils";
 import { checkRateLimit } from "@/lib/redis";
 import {
@@ -170,10 +174,33 @@ export async function POST(request: NextRequest) {
         });
       } catch (harakaError: any) {
         const reason = harakaErrorReason(harakaError);
+        // Refused because the float cannot deliver a prompt — a 503, not a 502:
+        // the gateway is fine, we are temporarily unable to sell. Note the wallet
+        // path below is untouched by this: a viewer with a balance can still
+        // subscribe, which is how the platform keeps selling while the float is
+        // being topped up.
+        const floatEmpty = harakaError instanceof HarakaFloatEmptyError;
+
         await prisma.transaction.update({
           where: { id: transaction.id },
-          data: { status: "FAILED", metadata: { gatewayError: reason } },
+          data: {
+            status: "FAILED",
+            metadata: floatEmpty
+              ? { refusal: "FLOAT_EMPTY", gatewayError: reason }
+              : { gatewayError: reason },
+          },
         });
+
+        if (floatEmpty) {
+          // This screen has a wallet button too, and the wallet needs no float:
+          // naming it turns a refusal into a sale we can still make.
+          return api.error(
+            `${reason} You can subscribe from your wallet balance instead.`,
+            harakaError.status,
+            harakaError.code
+          );
+        }
+
         console.error("[HarakaPay Subscribe Error]", reason, harakaError);
         return api.error(`Payment failed — HarakaPay: ${reason}`, 502, "GATEWAY_ERROR");
       }

@@ -8,7 +8,11 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { topUpWalletSchema } from "@/lib/validation";
-import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
+import {
+  harakaCollect,
+  harakaErrorReason,
+  HarakaFloatEmptyError,
+} from "@/lib/payments/harakapay";
 import { assertSupportedGateway } from "@/lib/payments/gateway";
 import { generateOrderId } from "@/lib/utils";
 import { checkRateLimit } from "@/lib/redis";
@@ -142,10 +146,25 @@ export async function POST(request: NextRequest) {
       });
     } catch (harakaError: any) {
       const reason = harakaErrorReason(harakaError);
+      // A refusal, not a failure. Nothing left this server and nothing was
+      // charged, so the customer is told what happened and invited back —
+      // instead of being shown a gateway error for a charge nobody attempted.
+      const floatEmpty = harakaError instanceof HarakaFloatEmptyError;
+
       await prisma.transaction.update({
         where: { id: transaction.id },
-        data: { status: "FAILED", metadata: { gatewayError: reason } },
+        data: {
+          status: "FAILED",
+          metadata: floatEmpty
+            ? { refusal: "FLOAT_EMPTY", gatewayError: reason }
+            : { gatewayError: reason },
+        },
       });
+
+      if (floatEmpty) {
+        return api.error(reason, harakaError.status, harakaError.code);
+      }
+
       console.error("[HarakaPay TopUp Error]", reason, harakaError);
       return api.error(`Payment failed — HarakaPay: ${reason}`, 502, "GATEWAY_ERROR");
     }

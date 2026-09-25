@@ -6,6 +6,7 @@
 // =============================================================================
 
 import config from "../config";
+import { cacheGet, cacheSet } from "../redis";
 import { createBoundedCaller } from "../bounded-caller";
 import { reportCredentialFault } from "../credential-alert";
 
@@ -240,6 +241,12 @@ async function harakaFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export async function harakaCollect(
   request: HarakaCollectRequest
 ): Promise<HarakaCollectResponse> {
+  // The float gate, first: see section 4. It throws before a single byte is sent
+  // when the merchant account has nothing to deliver a prompt with, because a
+  // collect that is accepted and never delivered is worse than a collect that is
+  // refused — the first one tells the customer it worked.
+  await assertFloatCanDeliver();
+
   return harakaFetch<HarakaCollectResponse>("/api/v1/collect", {
     method: "POST",
     body: JSON.stringify({
@@ -269,6 +276,203 @@ export async function harakaStatus(
 
 export async function harakaBalance(): Promise<HarakaBalanceResponse> {
   return harakaFetch<HarakaBalanceResponse>("/api/v1/balance");
+}
+
+// =============================================================================
+// 4. The float gate: can a USSD prompt actually be delivered?
+// =============================================================================
+// HarakaPay settles a USSD prompt out of a PREPAID FLOAT on the merchant
+// account. At 0 the gateway does not refuse: it accepts the collect, answers
+// "USSD push sent", and never delivers the prompt. The customer taps Pay on a
+// screen that says it worked, their phone never rings, and the order sits
+// PENDING forever while nobody was told anything.
+//
+// The alerting already exists (harakapay-float-alert.service.ts tells the admins
+// on the way down). What did not exist was a refusal: the app kept selling. So
+// this is the guard, at the ONE call every USSD push goes through, which is the
+// only placement that a new route cannot bypass by forgetting to ask.
+//
+// Three decisions worth naming:
+//
+//   * BLOCK ONLY AT ZERO, not at the alert floor. The floor is where an operator
+//     wants to be warned; the gateway still delivers prompts above zero, so
+//     refusing a sale at the floor would turn a warning into lost revenue for a
+//     payment that would have completed. "Empty" is the state that cannot work.
+//
+//   * FAIL OPEN WHEN THE BALANCE IS UNREADABLE, and say so. A balance endpoint
+//     that will not answer is not knowledge that the float is empty, and blocking
+//     every payment on a reading we could not take would convert a gateway blip
+//     into an outage of our own making. The collect is the authoritative test:
+//     if it succeeds, there was float behind it. The unreadable case is reported
+//     by the watch that already logs it (`[Float Watch]`), surfaced in
+//     /api/payments/health, and does not pretend to be a decision here.
+//
+//   * ONE READING A MINUTE, not one per checkout. The answer is cached for
+//     FLOAT_CACHE_MS, so a busy minute costs one balance call instead of one per
+//     customer — and recovery is never more than a minute away, which is why an
+//     operator who tops up the float sees sales resume on their own.
+//
+// It is deliberately NOT consulted in sandbox mode: PAYMENT_SANDBOX=true means
+// "no gateway call at all", and a guard that phoned the live gateway to ask about
+// a float would break that promise in development.
+// =============================================================================
+
+/** How long one balance reading is trusted. Short, because it gates real money. */
+export const FLOAT_CACHE_MS = 60_000;
+
+/** Where the cached reading lives. Versioned: a shape change must not be read as the old one. */
+export const FLOAT_GATE_CACHE_KEY = "harakapay:float-gate:v1";
+
+/**
+ * The words a customer sees when a collect is refused.
+ *
+ * One string, shared by every checkout route, so three screens cannot describe
+ * the same outage three ways. What it says is deliberately narrow: this is
+ * temporarily unavailable, and you have NOT been charged. The second half is the
+ * one that matters — a customer who cannot tell whether the tap cost them money
+ * either pays again, or opens a support ticket, or both.
+ *
+ * "Nothing was sent to your phone" is the one claim that is true by
+ * construction rather than by diagnosis: the guard refuses *before* the collect,
+ * so the charge provably never left this server. It is also why the sentence does
+ * not name the mechanism ("the prompt cannot reach your phone") — the float is
+ * documented as paying for the prompt in some accounts and for settlement in
+ * others (§3.1 of PRODUCTION.md describes both symptoms), and a customer-facing
+ * claim should not be the half of that we are less sure about.
+ *
+ * What it does NOT say is equally deliberate. Not why: the state of the merchant
+ * account is ours to fix, not a stranger's to read, and "the float is empty" is
+ * a sentence about our cash position. Not "try again in a few minutes" as though
+ * a retry were the fix, because an unfunded account may stay that way for hours.
+ * And not a wallet pitch: the two checkouts that have a wallet fallback say so
+ * themselves (the top-up screen has none — telling somebody topping up their
+ * wallet to pay from their wallet is how a clear message reads as a misfire).
+ */
+export const FLOAT_EMPTY_CUSTOMER_MESSAGE =
+  "Mobile-money payments are temporarily unavailable: we cannot start the USSD charge " +
+  "right now, so nothing was sent to your phone and you have NOT been charged. " +
+  "Please try again shortly.";
+
+/**
+ * The refusal, as a type.
+ *
+ * A class rather than a message so callers branch on the FACT and not on the
+ * wording: the checkout routes answer 503 with the code below, and the renewal
+ * worker must skip the attempt entirely rather than record a failure against a
+ * subscribing customer for a fault that is entirely ours.
+ */
+export class HarakaFloatEmptyError extends Error {
+  readonly code = "GATEWAY_FLOAT_EMPTY";
+  /** 503, not 502: the gateway is fine, we are temporarily unable to sell. */
+  readonly status = 503;
+  readonly floatTzs: number;
+
+  constructor(floatTzs: number) {
+    super(FLOAT_EMPTY_CUSTOMER_MESSAGE);
+    this.name = "HarakaFloatEmptyError";
+    this.floatTzs = floatTzs;
+  }
+}
+
+/** What one look at the float concluded. */
+export type FloatGateState = "ok" | "empty" | "unknown";
+
+/**
+ * The decision itself, from a balance we may or may not have read.
+ *
+ * Pure, so the boundary is pinned by a test instead of discovered by a customer:
+ * a positive float is `ok`, zero (or a negative one, which some gateways report
+ * after a correction) is `empty`, and anything that is not a number at all is
+ * `unknown` — never `empty`, because "we could not read it" must not refuse a
+ * payment that may be perfectly payable.
+ */
+export function floatGateState(floatTzs: number | null | undefined): FloatGateState {
+  if (typeof floatTzs !== "number" || !Number.isFinite(floatTzs)) return "unknown";
+  return floatTzs > 0 ? "ok" : "empty";
+}
+
+/**
+ * True when a REAL collect is what the caller is about to attempt.
+ *
+ * The same condition the checkout routes use to decide between sandbox and a
+ * live push: in development with PAYMENT_SANDBOX on (or with no key at all) no
+ * USSD push is sent, so there is no float to consult and this guard must not
+ * reach for the network.
+ */
+export function floatGateApplies(): boolean {
+  const sandboxMode =
+    config.nodeEnv !== "production" &&
+    (!config.harakaPay.apiKey || config.harakaPay.sandbox);
+  return Boolean(config.harakaPay.apiKey) && !sandboxMode;
+}
+
+export interface FloatGate {
+  state: FloatGateState;
+  /** The float the last reading saw, when it saw one. */
+  floatTzs: number | null;
+  /** True when this answer came from the cache rather than the gateway. */
+  cached: boolean;
+}
+
+/**
+ * Ask whether the float can deliver a prompt, from cache when there is one.
+ *
+ * Never throws: every failure to read becomes `unknown`, which is a state the
+ * caller is allowed to sell in. That is what keeps a balance endpoint that is
+ * down from stopping payments twice over.
+ */
+export async function floatGate(): Promise<FloatGate> {
+  if (!floatGateApplies()) return { state: "ok", floatTzs: null, cached: false };
+
+  const cached = await cacheGet<FloatGate>(FLOAT_GATE_CACHE_KEY);
+  if (cached && (cached.state === "ok" || cached.state === "empty" || cached.state === "unknown")) {
+    return { ...cached, cached: true };
+  }
+
+  let reading: FloatGate;
+  try {
+    const body = await harakaBalance();
+    const raw = body?.float_balance;
+    const floatTzs =
+      raw === null || raw === undefined || !Number.isFinite(Number(raw))
+        ? null
+        : Number(raw);
+
+    reading = { state: floatGateState(floatTzs), floatTzs, cached: false };
+  } catch (error) {
+    // Named, not swallowed: this is the difference between "the float is fine"
+    // and "we do not know", and only one of them is a fact.
+    reading = { state: "unknown", floatTzs: null, cached: false };
+    console.warn(
+      `[Float Gate] could not read the gateway float, so payments are being attempted: ` +
+        `${harakaErrorReason(error)}`
+    );
+  }
+
+  // Cached whatever the answer was, `unknown` included: the decision it leads to
+  // is identical to the one an immediate re-read would produce, so a broken
+  // balance endpoint must not cost a gateway call on every single checkout.
+  await cacheSet(FLOAT_GATE_CACHE_KEY, reading, Math.ceil(FLOAT_CACHE_MS / 1000));
+  return reading;
+}
+
+/**
+ * Throw when the float cannot deliver a prompt.
+ *
+ * The whole guard, in one function, called by `harakaCollect` and by nothing
+ * else — so there is exactly one place that decides whether money may be asked
+ * for, and a new checkout route inherits it by calling the gateway the way every
+ * other route does.
+ */
+export async function assertFloatCanDeliver(): Promise<void> {
+  const gate = await floatGate();
+  if (gate.state === "empty") {
+    console.warn(
+      "[Float Gate] refused a collect: the HarakaPay float is empty, so the " +
+        "prompt would never be delivered. Top up the merchant float."
+    );
+    throw new HarakaFloatEmptyError(gate.floatTzs ?? 0);
+  }
 }
 
 // =============================================================================

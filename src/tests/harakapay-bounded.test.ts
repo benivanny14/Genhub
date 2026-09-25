@@ -30,6 +30,14 @@ vi.mock("@/lib/config", async (importOriginal) => {
   return { ...actual, default: { ...actual.default, harakaPay } };
 });
 
+// A cache that never holds anything, so each test's fetch accounting is its own:
+// `harakaCollect` now reads the float first (section 4 of the gateway module),
+// and a real Redis would let one test's reading answer another's.
+vi.mock("@/lib/redis", () => ({
+  cacheGet: async () => null,
+  cacheSet: async () => {},
+}));
+
 /** A fresh module instance, so each test starts with a closed breaker. */
 async function gateway() {
   vi.resetModules();
@@ -61,10 +69,19 @@ describe("HarakaPay calls are bounded", () => {
 
   it("keeps the gateway's own 4xx message and never trips the breaker on it", async () => {
     const { harakaCollect, harakaGatewayState } = await gateway();
-    const fetchMock = vi.fn(async () =>
+    // The float gate reads the balance in front of every collect and this one is
+    // healthy, so the 4xx below is the only thing being examined here.
+    const collectMock = vi.fn(async () =>
       json({ success: false, error: "Invalid mobile number." }, 400)
     );
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).includes("/balance")
+          ? json({ success: true, wallet_balance: 0, float_balance: 50_000 }, 200)
+          : collectMock()
+      )
+    );
 
     for (let i = 0; i < 3; i++) {
       await expect(
@@ -72,9 +89,9 @@ describe("HarakaPay calls are bounded", () => {
       ).rejects.toThrow("Invalid mobile number.");
     }
 
-    // Every call reached the gateway, and none of them counted as a fault: the
-    // gateway answered, it just said no.
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    // Every collect reached the gateway, and none of them counted as a fault:
+    // the gateway answered, it just said no.
+    expect(collectMock).toHaveBeenCalledTimes(3);
     expect(harakaGatewayState().failures).toBe(0);
     expect(harakaGatewayState().openUntil).toBe(0);
   });

@@ -13,6 +13,7 @@ import {
   harakaErrorReason,
   harakaStatus,
   harakaStatusToInternal,
+  HarakaFloatEmptyError,
 } from "@/lib/payments/harakapay";
 import { processPaymentWebhook } from "@/lib/services/webhook.service";
 import { purchaseVideoWithWallet } from "@/lib/services/balance.service";
@@ -377,10 +378,33 @@ export async function POST(request: NextRequest) {
       });
     } catch (harakaError: any) {
       const reason = harakaErrorReason(harakaError);
+      // Refused before anything was sent, because the merchant float is empty
+      // and the prompt would never arrive. The customer is owed the reason and
+      // the fact that they were not charged — and the WALLET path above still
+      // works, so this is a redirect, not a dead end.
+      const floatEmpty = harakaError instanceof HarakaFloatEmptyError;
+
       await prisma.transaction.update({
         where: { id: transaction.id },
-        data: { status: "FAILED", metadata: { gatewayError: reason } },
+        data: {
+          status: "FAILED",
+          metadata: floatEmpty
+            ? { refusal: "FLOAT_EMPTY", gatewayError: reason }
+            : { gatewayError: reason },
+        },
       });
+
+      if (floatEmpty) {
+        // The wallet fallback is real and unaffected (the float is only needed to
+        // push a prompt to a handset), and this screen offers it — so the refusal
+        // names it, instead of leaving the customer to find it.
+        return api.error(
+          `${reason} You can pay from your wallet balance instead.`,
+          harakaError.status,
+          harakaError.code
+        );
+      }
+
       console.error("[HarakaPay Collect Error]", reason, harakaError);
       return api.error(`Payment failed — HarakaPay: ${reason}`, 502, "GATEWAY_ERROR");
     }

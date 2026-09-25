@@ -307,7 +307,18 @@ Order inabaki `processing` milele. Kwa mteja hisia ni "nimelipa" — lakini pesa
 haifiki.
 
 1. Ingia **dashboard ya HarakaPay** → ongeza **float** (salio la kutosha
-   collections zako).
+   collections zako). Ni akaunti ile ile ya merchant uliyonayo sasa — hakuna
+   sehemu nyingine ya mfumo wetu inayoshikilia pesa hii.
+
+   > **Muhimu: `float_balance` ndiyo inapaswa kupanda, sio `wallet_balance`.**
+   > `GET /api/v1/balance` inarudi namba mbili: `wallet_balance` ni salio la
+   > merchant la kuwalipa creators, na `float_balance` ni salio la prepaid
+   > linalolipia prompt/settlement. Kizuizi cha app (float gate) kinasoma
+   > **`float_balance`** tu — hivyo salio la wallet likipanda na float ikabaki
+   > 0, checkout itaendelea kukataa (`503 GATEWAY_FLOAT_EMPTY`) na mteja
+   > ataona ujumbe wa ukweli badala ya “USSD push sent” ya uongo. Deposit
+   > ikionekana kwenye wallet pekee, waambie support wa HarakaPay
+   > kuihamishia kwenye float.
 2. Kama baada ya kufadhili bado haifanyi kazi, tuma ujumbe huu kwa support wao
    (*Dashboard → Support*, au barua pepe yao). Order ids hizi ni ushahidi:
 
@@ -331,7 +342,11 @@ npm run smoke:harakapay -- --collect 1000 0XXXXXXXXX
 ```
 
 Ingiza PIN. Kisha `npm run verify:live` inatakiwa kuonyesha
-`✓ HarakaPay  key valid · float > 0`.
+`✓ HarakaPay  key valid · float > 0`. Kama bado inasema `float is 0`, pesa
+haijaingia kwenye float — angalia tena `float_balance` (sio wallet).
+
+> Float ikiingia, **hakuna redeploy wala restart**: kizuizi kinasoma salio mara
+> moja kwa dakika, hivyo malipo yanaanza yenyewe ndani ya dakika moja.
 
 > Hakuna mabadiliko ya msimbo yanayoweza kurekebisha float — ni pesa, sio code.
 >

@@ -632,9 +632,16 @@ Use `GET /api/payments/health` (admin) as the dashboard:
      collections cannot settle.
    Send the order ids (`HP…`) and timestamps from `/api/payments/health`
    (`delivery.stuckPending`) as evidence.
-4. **Until it is fixed**, no money moves and no access is granted — customers
-   are never charged by a prompt they never saw. `delivery.deliveryWarning` on
-   `/api/payments/health` surfaces the symptom instead of hiding it.
+4. **A zero float now refuses the sale** (§4.0.6): checkout answers `503
+   GATEWAY_FLOAT_EMPTY` with *"…we cannot start the USSD charge right now, so
+   nothing was sent to your phone and you have NOT been charged"*, no `PENDING`
+   row is created, and no
+   collect is sent — so the money-and-access question only comes up while the
+   float is funded, which is the case this section is for. A customer whose
+   prompt never arrives **while the float is fine** is the account-level fault
+   below; a customer reading the refusal is the gate working.
+   `delivery.deliveryWarning` on `/api/payments/health` surfaces the stuck-order
+   symptom instead of hiding it.
 5. **Release a single stuck checkout without database access:** Admin → Payments
    lists charges (Pending / Completed / Failed) with age, provider reference and
    customer, and force-expires one charge so the customer's checkout lock is
@@ -1477,7 +1484,7 @@ writes nothing.
 - [ ] Confirm it still refuses without the secret (`401`), like every cron route
       (§4.0).
 
-### 4.0.6 The float: warned before it is empty, not when it is
+### 4.0.6 The float: warned before it is empty, refused when it is
 
 HarakaPay settles a USSD prompt out of a prepaid float on the merchant account,
 and at 0 it does not refuse anything: it accepts the collect, answers *"USSD push
@@ -1485,6 +1492,23 @@ sent"*, and never delivers the prompt (§3.1). The customer is told it worked; t
 order never settles; the merchant finds out from a complaint. The first one on
 this deployment is in the admin's bell — *"Wallet top-up — TZS 1,000 did not go
 through. The USSD prompt was never approved"*.
+
+**Which balance to fund matters.** `GET /api/v1/balance` reports two numbers and
+they are not interchangeable: `wallet_balance` is what the merchant account pays
+creators out of, and `float_balance` is the prepaid balance the prompts/settlements
+draw on. The gate reads **`float_balance` only** — a wallet holding a million with
+a 0 float still refuses every collect. So after any deposit, confirm the *float*
+moved:
+
+```bash
+curl -s -H "X-API-Key: $HARAKAPAY_API_KEY" "$HARAKAPAY_BASE_URL/api/v1/balance"
+#   {"success":true,"wallet_balance":0,"float_balance":>0}   <- float, not wallet
+```
+
+If a deposit lands in the wallet only, ask HarakaPay support to move it to the
+float. Nothing in the app can, and the gate keeps refusing until it is there —
+which is deliberate: a sale taken on an unfunded account is a customer who pays
+and gets nothing.
 
 Topping the float up means moving money onto the merchant account, so the alarm
 has to arrive on the way down. `src/lib/services/harakapay-float-alert.service.ts`
@@ -1497,6 +1521,33 @@ bell plus email — with the float, the floor, and what to top up.
 | `GET /api/health` | `payments: live`, and the services probe is `warn` below the floor, `fail` at 0 — a warning never joins `failing`, so `launch:check --remote` still reports READY while the float is low but usable |
 | `/api/cron/supervisor` | a `float` field in every poke: `read`, `level`, `snapshot`, and what the alert did |
 | The bell + email | the number, the floor, and *"top up the float on the HarakaPay merchant account"* — at most once per 12 h, throttled on the notification row so twelve pokes are one message |
+| `/api/payments/health` | `floatGate` (state, float, `refusing`) next to a `checks.floatGate` row, and `summary` starts with *"Payments are PAUSED…"* while it refuses |
+
+**The alarm is not the only thing standing there.** A warning still leaves the
+app selling, so a second, separate guard refuses the sale itself:
+`assertFloatCanDeliver` runs at the top of `harakaCollect`
+(`src/lib/payments/harakapay.ts`, §"4. The float gate"), which is the one call
+*every* USSD push goes through — top-up, video purchase, subscription, and the
+renewal worker. Nothing reaches the gateway, the routes answer `503` with the
+code `GATEWAY_FLOAT_EMPTY` and the sentence the customer reads, and the renewal
+worker holds a USSD renewal **without spending one of the fan's attempts**
+(nothing is recorded against them, no notification is sent, and there is no
+retry gap to wait out — the run after the top-up pushes normally).
+
+The three decisions in that guard are deliberate, and each is a way of getting
+it wrong:
+
+- **Only zero blocks, not the floor.** The floor is where an operator wants to be
+  warned; the gateway still delivers prompts above zero, so refusing a sale there
+  would lose revenue for a payment that would have completed.
+- **An unreadable balance fails open, and says so.** "We could not read it" is
+  not "it is empty"; blocking every payment on a balance endpoint that is down
+  would turn a gateway blip into an outage of our own making. The collect is the
+  authoritative test — if it succeeds, there was float behind it.
+- **One reading a minute, cached in Redis** (`harakapay:float-gate:v1`,
+  `FLOAT_CACHE_MS`), so a busy minute costs one balance call instead of one per
+  customer — and **recovery needs nothing but the top-up**: the entry expires,
+  the next checkout reads the gateway again, and sales resume on their own.
 
 Three rules worth keeping when this is changed again:
 
@@ -1516,6 +1567,16 @@ Three rules worth keeping when this is changed again:
       `alreadyTold` and nothing new may be sent.
 - [ ] Confirm the empty case reads honestly: at 0, the message must say the
       gateway *accepts and never delivers*, not that a payment failed.
+- [ ] Prove the refusal end to end: with the float at 0, a USSD top-up must
+      answer `503 GATEWAY_FLOAT_EMPTY` with the customer sentence, leave the
+      transaction `FAILED` (never `PENDING`), and send nothing to the gateway.
+      `/api/payments/health` must show `floatGate.refusing: true`.
+- [ ] Prove the fallback: on the same zero float, paying from the **wallet** must
+      still work (the float only pays for prompts, not for wallet spends), and a
+      fan with no wallet balance must be **held and not failed** by a renewal run
+      (`describeRenewals` says `held (the HarakaPay float is empty…)`).
+- [ ] Prove the recovery: top the float up and confirm a checkout pushes again
+      within about a minute — no redeploy, no restart, no cache to clear.
 
 ### 4.1 Charges nobody can classify yet (`UNDER_INVESTIGATION`)
 
