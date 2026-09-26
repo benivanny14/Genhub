@@ -135,6 +135,11 @@ const config = {
     creatorFeePercent: 70,     // 70% creator cut
     holdingPeriodDays: 14,     // 14-day holding period
     minPayoutAmount: 30000,    // Minimum 30,000 TZS payout
+    // The blue tick is bought, not earned. Priced per month, and the number is
+    // here rather than in the service so the creator's screen, the admin's
+    // approval and the charge all read the same one.
+    blueTickMonthlyPrice: 10000, // TZS per month of the verification badge
+    blueTickMonthDays: 30,       // a "month" is 30 days, so expiry is exact
     maxStrikes: 3,             // 3 strikes = ban
     teaserMinDuration: 15,     // Minimum preview seconds
     teaserMaxDuration: 30,     // Maximum preview seconds

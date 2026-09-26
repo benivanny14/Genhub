@@ -50,6 +50,8 @@ export const AUDIT_ACTIONS = {
   paymentGrant: "payment.grant",
   paymentMarkUnpaid: "payment.mark_unpaid",
   paymentRefund: "payment.refund",
+  blueTickApprove: "bluetick.approve",
+  blueTickReject: "bluetick.reject",
   jobRun: "job.run",
 } as const;
 

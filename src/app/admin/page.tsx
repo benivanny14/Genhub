@@ -43,6 +43,7 @@ import {
   ChevronDown,
   ChevronRight,
   Gavel,
+  Sparkles,
 } from "lucide-react";
 
 /**
@@ -270,6 +271,31 @@ interface AuditItem {
   actorId: string;
   actorName: string | null;
   actorEmail: string | null;
+}
+
+/**
+ * One blue-tick purchase as the admin sees it.
+ *
+ * The row names the creator because "request cmu8…" is a lookup; the badge
+ * decision is made about a person, and the screen has to say who.
+ */
+interface BlueTickAdminRow {
+  id: string;
+  status: string;
+  amount: number;
+  months: number;
+  paymentMethod: string;
+  paidAt: string;
+  expiresAt: string | null;
+  rejectionReason: string | null;
+  creator: {
+    id: string;
+    displayName: string | null;
+    email: string | null;
+    avatarUrl: string | null;
+    isVerified: boolean;
+    verifiedUntil: string | null;
+  };
 }
 
 interface EarningsCreator {
@@ -539,6 +565,7 @@ export default function AdminDashboard() {
     | "payments"
     | "audit"
     | "setup"
+    | "blueTicks"
   >("overview");
   const [loading, setLoading] = useState(true);
   const [kycList, setKycList] = useState<KycItem[]>([]);
@@ -552,6 +579,12 @@ export default function AdminDashboard() {
   const [loadingVideos, setLoadingVideos] = useState(false);
   const [busyVideo, setBusyVideo] = useState<string | null>(null);
   const [couponList, setCouponList] = useState<CouponItem[]>([]);
+  // Blue ticks: the paid verification. A row here has already been PAID for —
+  // the decision is whether to grant the month or refund it.
+  const [blueTickPending, setBlueTickPending] = useState<BlueTickAdminRow[]>([]);
+  const [blueTickRecent, setBlueTickRecent] = useState<BlueTickAdminRow[]>([]);
+  const [blueTickReason, setBlueTickReason] = useState("");
+  const [busyBlueTick, setBusyBlueTick] = useState<string | null>(null);
   const [auditList, setAuditList] = useState<AuditItem[]>([]);
   // Empty = every action code. Set to "user." or "payout." to narrow it.
   const [auditFilter, setAuditFilter] = useState("");
@@ -724,6 +757,7 @@ export default function AdminDashboard() {
     if (activeTab === "payouts") fetchPayouts();
     if (activeTab === "creators") fetchCreators();
     if (activeTab === "coupons") fetchCoupons();
+    if (activeTab === "blueTicks") fetchBlueTicks();
     if (activeTab === "audit") fetchAudit();
     if (activeTab === "earnings") fetchEarnings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -924,6 +958,46 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (data.success) setCreatorList(data.data.users);
     } catch {}
+  }
+
+  async function fetchBlueTicks() {
+    try {
+      const res = await adminFetch("/api/admin/blue-tick");
+      const data = await res.json();
+      if (data.success) {
+        setBlueTickPending(data.data.pending);
+        setBlueTickRecent(data.data.recent);
+      }
+    } catch {}
+  }
+
+  // Approve grants the month; reject refunds the money to the exact balance it
+  // came from. Both are one call because both are one decision.
+  async function decideBlueTick(requestId: string, action: "APPROVE" | "REJECT") {
+    setBusyBlueTick(requestId);
+    try {
+      const res = await adminFetch("/api/admin/blue-tick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          requestId,
+          action,
+          reason: blueTickReason || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast("success", data.message || "Done");
+        setBlueTickReason("");
+        fetchBlueTicks();
+      } else {
+        toast("error", data.error || "The request could not be reviewed");
+      }
+    } catch {
+      toast("error", "An error occurred");
+    } finally {
+      setBusyBlueTick(null);
+    }
   }
 
   async function fetchCoupons() {
@@ -1409,6 +1483,12 @@ export default function AdminDashboard() {
     { id: "reports" as const, label: "Reports", icon: AlertTriangle, badge: reportList.length },
     { id: "payouts" as const, label: "Payouts", icon: DollarSign, badge: payoutList.length },
     { id: "creators" as const, label: "Creators", icon: BadgeCheck },
+    {
+      id: "blueTicks" as const,
+      label: "Blue ticks",
+      icon: Sparkles,
+      badge: blueTickPending.length,
+    },
     { id: "coupons" as const, label: "Coupons", icon: Ticket },
     { id: "earnings" as const, label: "Earnings", icon: Wallet },
     {
@@ -2494,6 +2574,107 @@ export default function AdminDashboard() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Blue ticks — the paid verification. Every row here has already been
+            paid for; approving grants the month, rejecting refunds it. */}
+        {activeTab === "blueTicks" && (
+          <div className="space-y-6">
+            <div className="glass-card p-5">
+              <div className="flex items-center gap-2 mb-1">
+                <Sparkles className="w-5 h-5 text-sky-400" />
+                <h2 className="font-display font-bold">Waiting for a decision</h2>
+              </div>
+              <p className="text-xs text-white/40 mb-4">
+                {blueTickPending.length === 0
+                  ? "Nothing is waiting — every paid request has been reviewed."
+                  : `${blueTickPending.length} paid request(s). Approving makes the badge live for the months bought; rejecting returns the money to the balance it came from.`}
+              </p>
+
+              {blueTickPending.length > 0 && (
+                <div className="space-y-3">
+                  <input
+                    value={blueTickReason}
+                    onChange={(e) => setBlueTickReason(e.target.value)}
+                    placeholder="Reason (only used if you reject)"
+                    className="input-field text-sm"
+                  />
+                  {blueTickPending.map((row) => (
+                    <div
+                      key={row.id}
+                      className="rounded-xl border border-white/10 bg-white/5 p-3 flex flex-wrap items-center gap-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium truncate">
+                          {row.creator.displayName || row.creator.email || row.creator.id}
+                        </p>
+                        <p className="text-xs text-white/40">
+                          {row.months} month{row.months > 1 ? "s" : ""} · TZS{" "}
+                          {row.amount.toLocaleString()} · paid from{" "}
+                          {row.paymentMethod === "EARNINGS" ? "earnings" : "wallet"} ·{" "}
+                          {new Date(row.paidAt).toLocaleDateString("en-GB")}
+                        </p>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => decideBlueTick(row.id, "REJECT")}
+                          disabled={busyBlueTick === row.id}
+                          className="btn-ghost text-xs text-red-300 disabled:opacity-50"
+                        >
+                          Reject &amp; refund
+                        </button>
+                        <button
+                          onClick={() => decideBlueTick(row.id, "APPROVE")}
+                          disabled={busyBlueTick === row.id}
+                          className="btn-brand text-xs disabled:opacity-50"
+                        >
+                          {busyBlueTick === row.id ? "Working…" : "Approve"}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="glass-card p-5">
+              <h2 className="font-display font-bold mb-3">Recently reviewed</h2>
+              {blueTickRecent.length === 0 ? (
+                <p className="text-xs text-white/40">Nothing reviewed yet.</p>
+              ) : (
+                <div className="divide-y divide-white/5">
+                  {blueTickRecent.map((row) => (
+                    <div
+                      key={row.id}
+                      className="py-3 flex flex-wrap items-center gap-3 text-sm"
+                    >
+                      <span className="flex-1 min-w-0 truncate">
+                        {row.creator.displayName || row.creator.email || row.creator.id}
+                      </span>
+                      <span className="text-xs text-white/40">
+                        {row.months} month{row.months > 1 ? "s" : ""} · TZS{" "}
+                        {row.amount.toLocaleString()}
+                      </span>
+                      <span
+                        className={`text-xs px-2 py-1 rounded-full ${
+                          row.status === "APPROVED"
+                            ? "bg-sky-500/15 text-sky-300"
+                            : row.status === "EXPIRED"
+                              ? "bg-white/10 text-white/50"
+                              : "bg-red-500/15 text-red-300"
+                        }`}
+                      >
+                        {row.status}
+                        {row.status === "APPROVED" && row.expiresAt
+                          ? ` until ${new Date(row.expiresAt).toLocaleDateString("en-GB")}`
+                          : ""}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
 

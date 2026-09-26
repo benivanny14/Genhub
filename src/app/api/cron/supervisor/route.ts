@@ -23,6 +23,7 @@ import { getCronHealth } from "@/lib/services/cron-heartbeat.service";
 import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 import { alertHeldWorkers } from "@/lib/services/cron-hold-alert.service";
 import { watchFloat } from "@/lib/services/harakapay-float-alert.service";
+import { expireDueBlueTicks } from "@/lib/services/blue-tick.service";
 import {
   previewDueRenewals,
   summarizeRenewalPreview,
@@ -94,6 +95,12 @@ async function handle(request: NextRequest) {
     // a gateway that will not answer may cost the alarm, never the poke.
     const float = await watchFloat();
 
+    // Housekeeping that belongs to whichever poke arrives. A blue tick is bought
+    // by the month and no worker owns its ending, so the take-down rides here —
+    // bounded, and never able to take the poke down with it: a badge that stays
+    // up an hour longer must not cost the earnings release this same run does.
+    const blueTicksExpired = await expireDueBlueTicks().catch(() => 0);
+
     // A held renew-subscriptions is the one worker a person has to start by hand,
     // and "how many fans would this charge?" is the question that decides it. The
     // preview writes nothing (services/subscription-renewal.service.ts), so asking
@@ -117,7 +124,7 @@ async function handle(request: NextRequest) {
     // Re-read so the answer describes the deployment after the poke, not the one
     // it just repaired — this is the health a caller would otherwise fetch next.
     const health = snapshotSupervisorHealth(await getCronHealth());
-    const report = { ran, held: plan.held, renewals, float, health, alerts };
+    const report = { ran, held: plan.held, renewals, float, health, alerts, blueTicksExpired };
     const summary = summarizeSupervisorRun(ran, plan.held, alerts);
 
     const failed = ran.filter((r) => r.error);

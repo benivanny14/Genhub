@@ -54,6 +54,17 @@ export const CREATOR_GUIDELINES: CreatorGuideline[] = [
     severe: true,
   },
   {
+    id: "clean-set",
+    sw: "Chumba unachorekodi kiwe safi, chenye mpangilio na kitasaidia video kuwa nzuri. Video isiwe na uchafu wowote unaoonekana — kama vile vinyesi, taka, nguo chafu au kitu chochote kisichopendeza. Video yenye uchafu haitakubaliwa.",
+    en: "Record in a clean, tidy room. Nothing unpleasant may be visible on camera — mucus, rubbish, dirty linen or anything else that spoils the video. A dirty-looking video will not be accepted.",
+    severe: true,
+  },
+  {
+    id: "lighting",
+    sw: "Chumba kiwe na mwanga wa kutosha (mwanga wa asili au taa nzuri) ili video itoke clean, wazi na yenye rangi ya kuvutia. Video yenye giza au ukungu haitakubaliwa.",
+    en: "Light the room well — daylight or proper lamps — so the video comes out clean, bright and clear. Dark or murky video will not be accepted.",
+  },
+  {
     id: "story",
     sw: "Video iwe na story fupi inayovutia watazamaji, ili wapende videos zako na uwe na watazamaji wengi.",
     en: "Give the video a short, attractive story so viewers enjoy it, come back, and you build a bigger audience.",
@@ -89,7 +100,7 @@ export const GUIDELINE_ACK_LABEL_EN =
  * acknowledgement, so a rule that changed is re-read before the next upload —
  * a creation-time receipt nobody re-checks is not consent.
  */
-export const CREATOR_GUIDELINES_VERSION = 1;
+export const CREATOR_GUIDELINES_VERSION = 2;
 
 /** localStorage key holding `{ [userId]: version }` of what each account accepted. */
 export const GUIDELINE_ACK_STORAGE_KEY = "genhub.creatorGuidelines.v1";

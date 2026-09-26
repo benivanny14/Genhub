@@ -33,6 +33,10 @@ import {
   Captions,
   MessageSquare,
   Clapperboard,
+  BadgeCheck,
+  Copy,
+  Check,
+  Share2,
 } from "lucide-react";
 import { canOptimizeImage } from "@/lib/media";
 import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
@@ -181,6 +185,36 @@ interface UserData {
   role: string;
 }
 
+/** One past or pending blue-tick charge. */
+interface BlueTickHistoryRow {
+  id: string;
+  status: string;
+  amount: number;
+  months: number;
+  paymentMethod: string;
+  paidAt: string;
+  expiresAt: string | null;
+  rejectionReason: string | null;
+}
+
+/**
+ * The blue-tick card's data, straight from the service that charges for it —
+ * price, expiry and both balance sources included, so the screen cannot offer a
+ * price or a payment source the server will refuse.
+ */
+interface BlueTickView {
+  live: boolean;
+  expiresAt: string | null;
+  price: number;
+  monthDays: number;
+  maxMonths: number;
+  walletBalance: number;
+  availableBalance: number;
+  canAfford: boolean;
+  pending: BlueTickHistoryRow | null;
+  history: BlueTickHistoryRow[];
+}
+
 /** Bunny's processing state for one of the creator's videos. */
 interface EncodingState {
   state: "pending" | "processing" | "ready" | "failed" | "untracked";
@@ -303,6 +337,20 @@ export default function CreatorDashboard() {
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // The blue tick: bought by the month, approved by an admin, expiring on its
+  // own. Kept as its own read because the price, the balances that may pay for
+  // it and the expiry all come from one service (blue-tick.service.ts).
+  const [blueTick, setBlueTick] = useState<BlueTickView | null>(null);
+  const [showBlueTickModal, setShowBlueTickModal] = useState(false);
+  const [blueTickMonths, setBlueTickMonths] = useState(1);
+  const [buyingBlueTick, setBuyingBlueTick] = useState(false);
+
+  // The public link to this profile. Resolved after mount so the shared link
+  // carries the origin the creator is actually on; a build-time constant would
+  // be wrong on every deployment that is not that one.
+  const [profileUrl, setProfileUrl] = useState("");
+  const [linkCopied, setLinkCopied] = useState(false);
+
   const fetchData = useCallback(async () => {
     try {
       const [balanceRes, userRes, videosRes] = await Promise.all([
@@ -324,6 +372,15 @@ export default function CreatorDashboard() {
       }
 
       if (!userData.success) router.push("/login");
+
+      // The blue tick, read separately: the dashboard must still render when
+      // this one call fails, and its failure is not a reason to bounce the
+      // creator to the login page.
+      try {
+        const tickRes = await fetch("/api/creator/blue-tick");
+        const tickData = await tickRes.json();
+        if (tickData.success) setBlueTick(tickData.data);
+      } catch {}
     } catch {
       router.push("/login");
     } finally {
@@ -334,6 +391,16 @@ export default function CreatorDashboard() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Where this creator's shareable profile link points. The profile page is
+  // public, so a recipient lands on it as a viewer with no account needed —
+  // which is the whole point of the link. Resolved after mount so the shared
+  // link carries the origin the creator is actually on; a build-time constant
+  // would be wrong on every deployment that is not that one.
+  useEffect(() => {
+    if (!user) return;
+    setProfileUrl(`${window.location.origin}/creator/${user.id}`);
+  }, [user]);
 
   // While anything is still transcoding, re-read so the progress the creator is
   // watching actually moves. Stops on its own once everything is settled, so an
@@ -772,6 +839,62 @@ export default function CreatorDashboard() {
     });
   }
 
+  async function refreshBlueTick() {
+    try {
+      const res = await fetch("/api/creator/blue-tick");
+      const data = await res.json();
+      if (data.success) setBlueTick(data.data);
+    } catch {}
+  }
+
+  async function buyBlueTick() {
+    setBuyingBlueTick(true);
+    try {
+      const res = await fetch("/api/creator/blue-tick", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ months: blueTickMonths }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast("error", data.error || "Could not buy the blue tick");
+        return;
+      }
+      setShowBlueTickModal(false);
+      setBlueTickMonths(1);
+      toast("success", "Payment received — an admin will approve your blue tick shortly.");
+      await refreshBlueTick();
+    } catch {
+      toast("error", "An error occurred. Please try again.");
+    } finally {
+      setBuyingBlueTick(false);
+    }
+  }
+
+  async function copyProfileLink() {
+    try {
+      await navigator.clipboard.writeText(profileUrl);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+      toast("success", "Link copied — send it to anyone.");
+    } catch {
+      toast("warning", "Could not copy it — select the link and copy it by hand.");
+    }
+  }
+
+  async function shareProfileLink() {
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({ title: "My Genhub profile", url: profileUrl });
+        return;
+      } catch {
+        // Dismissed, or sharing is not actually available — neither is an error.
+        // Fall through to the copy, which always works.
+      }
+    }
+    await copyProfileLink();
+  }
+
   // The performance table is driven by the balance endpoint (money) and the
   // encoding column by /api/creator/videos (processing) — joined here so neither
   // endpoint has to know about the other's job.
@@ -867,6 +990,138 @@ export default function CreatorDashboard() {
             <p className="text-2xl font-bold text-brand-400">
               {formatTZS(creatorData?.todayEarnings || 0)}
             </p>
+          </div>
+        </div>
+
+        {/* Verification and sharing — the two things a creator goes looking for
+            and, until now, had nowhere on this page to find. */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Blue tick */}
+          <div className="glass-card p-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div
+                  className={cn(
+                    "w-10 h-10 rounded-xl flex items-center justify-center",
+                    blueTick?.live ? "bg-sky-500/20" : "bg-white/5"
+                  )}
+                >
+                  <BadgeCheck
+                    className={cn("w-5 h-5", blueTick?.live ? "text-sky-400" : "text-white/40")}
+                  />
+                </div>
+                <div>
+                  <p className="font-display font-bold flex items-center gap-1.5">
+                    Blue tick
+                    {blueTick?.live && <BadgeCheck className="w-4 h-4 text-sky-400" />}
+                  </p>
+                  <p className="text-xs text-white/50">
+                    {blueTick?.live
+                      ? blueTick.expiresAt
+                        ? `Verified until ${formatDay(blueTick.expiresAt)}`
+                        : "Verified"
+                      : `${formatTZS(blueTick?.price ?? 10000)} / month`}
+                  </p>
+                </div>
+              </div>
+
+              {blueTick?.live ? (
+                <span className="text-xs px-3 py-1.5 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-300 font-medium">
+                  Active
+                </span>
+              ) : blueTick?.pending ? (
+                <span className="text-xs px-3 py-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 text-amber-300 font-medium">
+                  Awaiting approval
+                </span>
+              ) : (
+                <button
+                  onClick={() => setShowBlueTickModal(true)}
+                  disabled={!blueTick}
+                  className="btn-brand text-sm disabled:opacity-50"
+                >
+                  Get verified
+                </button>
+              )}
+            </div>
+
+            <p className="text-xs text-white/40 mt-3 leading-relaxed">
+              {blueTick?.live
+                ? "The badge is shown next to your name on your profile and wherever your videos appear."
+                : blueTick?.pending
+                  ? `TZS ${blueTick.pending.amount.toLocaleString()} received for ${blueTick.pending.months} month${blueTick.pending.months > 1 ? "s" : ""} — an admin approves it, then the badge appears.`
+                  : "A verified badge next to your name, bought by the month. Pay from your wallet or your earnings — an admin approves it and it goes live."}
+            </p>
+
+            {!blueTick?.live && !blueTick?.pending && blueTick && (
+              <p className="text-xs text-white/40 mt-2">
+                Wallet {formatTZS(blueTick.walletBalance)} · earnings{" "}
+                {formatTZS(blueTick.availableBalance)}
+              </p>
+            )}
+
+            {blueTick?.history.some((row) => row.status === "REJECTED") && (
+              <p className="text-xs text-amber-300/70 mt-2">
+                A previous request was declined and refunded.
+              </p>
+            )}
+          </div>
+
+          {/* Share link */}
+          <div className="glass-card p-5">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
+                <Share2 className="w-5 h-5 text-brand-400" />
+              </div>
+              <div>
+                <p className="font-display font-bold">Your link</p>
+                <p className="text-xs text-white/50">
+                  Anyone who opens it lands on your profile — no account needed.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 mt-4">
+              <input
+                readOnly
+                value={profileUrl}
+                onFocus={(e) => e.currentTarget.select()}
+                className="input-field text-xs flex-1"
+                aria-label="Your shareable profile link"
+              />
+              <button
+                onClick={copyProfileLink}
+                className="btn-ghost shrink-0 flex items-center gap-1.5 text-sm"
+                title="Copy link"
+              >
+                {linkCopied ? (
+                  <Check className="w-4 h-4 text-emerald-400" />
+                ) : (
+                  <Copy className="w-4 h-4" />
+                )}
+                {linkCopied ? "Copied" : "Copy"}
+              </button>
+            </div>
+
+            <div className="flex flex-wrap gap-2 mt-3">
+              <button onClick={shareProfileLink} className="btn-ghost text-xs flex items-center gap-1.5">
+                <Share2 className="w-3.5 h-3.5" /> Share
+              </button>
+              {profileUrl.startsWith("http") && (
+                <a
+                  href={`https://wa.me/?text=${encodeURIComponent(
+                    `Watch my videos on Genhub: ${profileUrl}`
+                  )}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-ghost text-xs"
+                >
+                  WhatsApp
+                </a>
+              )}
+              <Link href={`/creator/${user?.id ?? ""}`} className="btn-ghost text-xs">
+                View as a visitor
+              </Link>
+            </div>
           </div>
         </div>
 
@@ -1810,6 +2065,88 @@ export default function CreatorDashboard() {
                   className="btn-brand flex-1"
                 >
                   {requestingPayout ? "Submitting..." : "Withdraw"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Blue tick checkout. The months are chosen here and charged once, up
+          front: the request then waits for an admin, and a declined request is
+          refunded to the same balance it came from. */}
+      {showBlueTickModal && blueTick && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="glass-card w-full max-w-md p-6 animate-slide-up">
+            <h2 className="text-xl font-display font-bold mb-1 flex items-center gap-2">
+              <BadgeCheck className="w-5 h-5 text-sky-400" /> Blue tick
+            </h2>
+            <p className="text-white/60 text-sm mb-5">
+              TZS {blueTick.price.toLocaleString()} for {blueTick.monthDays} days, shown next to
+              your name everywhere your profile appears. An admin approves it before it goes
+              live; if they decline it, you are refunded in full.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-sm text-white/60 mb-2 block">How many months?</label>
+                <div className="flex gap-2">
+                  {[1, 3, 6, 12]
+                    .filter((m) => m <= blueTick.maxMonths)
+                    .map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setBlueTickMonths(m)}
+                        className={cn(
+                          "flex-1 py-2 rounded-xl border text-sm font-medium transition",
+                          blueTickMonths === m
+                            ? "border-brand-500/60 bg-brand-500/20 text-brand-300"
+                            : "border-white/10 bg-white/5 text-white/60 hover:border-white/25"
+                        )}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                </div>
+              </div>
+
+              <div className="bg-surface-300/40 rounded-xl p-4 flex justify-between text-sm">
+                <span className="text-white/60">Total</span>
+                <span className="font-bold text-brand-400">
+                  TZS {(blueTick.price * blueTickMonths).toLocaleString()}
+                </span>
+              </div>
+
+              <p className="text-xs text-white/40">
+                Paid from your wallet first, then your available earnings. Wallet{" "}
+                {formatTZS(blueTick.walletBalance)} · earnings{" "}
+                {formatTZS(blueTick.availableBalance)}.
+              </p>
+
+              {blueTick.price * blueTickMonths >
+                Math.max(blueTick.walletBalance, blueTick.availableBalance) && (
+                <p className="text-xs text-amber-300/90">
+                  Neither balance covers this yet. Earn or top up, then come back — the option
+                  stays here.
+                </p>
+              )}
+
+              <div className="flex gap-3">
+                <button onClick={() => setShowBlueTickModal(false)} className="btn-ghost flex-1">
+                  Cancel
+                </button>
+                <button
+                  onClick={buyBlueTick}
+                  disabled={
+                    buyingBlueTick ||
+                    blueTick.price * blueTickMonths >
+                      Math.max(blueTick.walletBalance, blueTick.availableBalance)
+                  }
+                  className="btn-brand flex-1 disabled:opacity-50"
+                >
+                  {buyingBlueTick
+                    ? "Processing..."
+                    : `Pay TZS ${(blueTick.price * blueTickMonths).toLocaleString()}`}
                 </button>
               </div>
             </div>

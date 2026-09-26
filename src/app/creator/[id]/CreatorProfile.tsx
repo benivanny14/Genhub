@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import VideoCard from "@/components/VideoCard";
-import { Play, Users, Eye, Heart, Star, ArrowLeft, Smartphone, Wallet, MessageCircle } from "lucide-react";
+import { Play, Users, Eye, Heart, Star, ArrowLeft, Smartphone, Wallet, MessageCircle, BadgeCheck } from "lucide-react";
 import { formatTZS, formatCount } from "@/lib/utils";
 import Link from "next/link";
 import Image from "next/image";
@@ -21,6 +21,11 @@ interface CreatorProfile {
   id: string;
   displayName: string | null;
   avatarUrl: string | null;
+  /**
+   * The blue tick. Already resolved by the API (a bought badge has an expiry,
+   * so the flag alone is not the answer) — this component only draws it.
+   */
+  isVerified?: boolean;
   createdAt: string;
   creatorProfile: {
     bio: string | null;
@@ -293,23 +298,45 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 -mt-16 relative z-10">
         <div className="flex flex-col sm:flex-row items-start gap-4 mb-8">
           {/* Avatar */}
-          <div className="w-24 h-24 rounded-full bg-surface-300 border-4 border-surface-500 flex items-center justify-center text-3xl font-bold text-brand-400 overflow-hidden">
-            {creator.avatarUrl ? (
-              <Image
-                src={creator.avatarUrl}
-                alt=""
-                width={96}
-                height={96}
-                unoptimized={!canOptimizeImage(creator.avatarUrl)}
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              creator.displayName?.[0] || "C"
+          <div className="relative">
+            <div className="w-24 h-24 rounded-full bg-surface-300 border-4 border-surface-500 flex items-center justify-center text-3xl font-bold text-brand-400 overflow-hidden">
+              {creator.avatarUrl ? (
+                <Image
+                  src={creator.avatarUrl}
+                  alt=""
+                  width={96}
+                  height={96}
+                  unoptimized={!canOptimizeImage(creator.avatarUrl)}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                creator.displayName?.[0] || "C"
+              )}
+            </div>
+
+            {/* The blue tick, on the avatar as well as the name. It has to be
+                findable at a glance on a page full of faces, so it is drawn
+                twice — the full-size badge on the picture is what makes a
+                verified profile readable before anything is read. */}
+            {creator.isVerified && (
+              <span
+                title="Verified creator"
+                className="absolute -bottom-0.5 -right-0.5 w-8 h-8 rounded-full bg-surface-500 border-2 border-surface-500 flex items-center justify-center"
+              >
+                <BadgeCheck className="w-6 h-6 text-sky-400" />
+              </span>
             )}
           </div>
 
           <div className="flex-1 mt-2">
-            <h1 className="text-2xl font-display font-bold">{creator.displayName || "Creator"}</h1>
+            <h1 className="text-2xl font-display font-bold flex items-center gap-2 flex-wrap">
+              {creator.displayName || "Creator"}
+              {creator.isVerified && (
+                <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-300">
+                  <BadgeCheck className="w-3.5 h-3.5" /> Verified
+                </span>
+              )}
+            </h1>
             {creator.creatorProfile?.bio && (
               <p className="text-sm text-white/60 mt-1 max-w-xl">{creator.creatorProfile.bio}</p>
             )}
