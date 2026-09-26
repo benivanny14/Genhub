@@ -1064,8 +1064,6 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               title={video.title}
               videoId={video.id}
               viewerId={user?.id}
-              viewerPhone={user?.phone}
-              viewerName={user?.displayName || undefined}
               isTeaser={!canPlayFull}
               startAt={canPlayFull ? startAt : 0}
               onDownload={canPlayFull ? () => handleDownload() : undefined}

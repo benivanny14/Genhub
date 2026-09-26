@@ -29,9 +29,6 @@ interface VideoPlayerProps {
   title: string;
   videoId?: string;
   viewerId?: string;
-  viewerPhone?: string;
-  /** Display name shown on the anti-leak watermark instead of "Viewer <id>" */
-  viewerName?: string;
   isTeaser?: boolean;
   startAt?: number;
   onEnded?: () => void;
@@ -55,8 +52,6 @@ export default function VideoPlayer({
   title,
   videoId,
   viewerId = "anonymous",
-  viewerPhone,
-  viewerName,
   isTeaser = false,
   startAt = 0,
   onEnded,
@@ -66,7 +61,6 @@ export default function VideoPlayer({
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const watermarkIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
@@ -348,62 +342,20 @@ export default function VideoPlayer({
   }, [videoId, viewerId, isTeaser]);
 
   // =============================================================================
-  // Dynamic Watermark System
+  // No overlay on the picture
   // =============================================================================
-
-  const createWatermark = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const watermark = document.createElement("div");
-    watermark.className = "watermark-overlay";
-
-    // Watermark identifies the ACCOUNT: masked phone, else display name,
-    // else raw id prefix. The old "Viewer <id>" label mis-reported creators
-    // and admins as viewers.
-    const text = viewerPhone
-      ? viewerPhone.replace(/(\d{3})\d{4}(\d{3})/, "$1****$2")
-      : viewerName || viewerId.slice(0, 8);
-
-    watermark.textContent = text;
-
-    // Random position
-    const maxX = container.clientWidth - 150;
-    const maxY = container.clientHeight - 30;
-    watermark.style.left = `${Math.random() * maxX}px`;
-    watermark.style.top = `${Math.random() * maxY}px`;
-
-    // Random slight rotation
-    watermark.style.transform = `rotate(${(Math.random() - 0.5) * 20}deg)`;
-
-    container.appendChild(watermark);
-
-    // Fade in and out
-    watermark.style.opacity = "0";
-    watermark.style.transition = "opacity 2s";
-    requestAnimationFrame(() => {
-      watermark.style.opacity = "1";
-    });
-
-    setTimeout(() => {
-      watermark.style.opacity = "0";
-      setTimeout(() => watermark.remove(), 2000);
-    }, 5000);
-  }, [viewerId, viewerPhone, viewerName]);
-
-  useEffect(() => {
-    if (isTeaser) return; // No watermark for teasers
-
-    // Create watermarks periodically
-    watermarkIntervalRef.current = setInterval(createWatermark, 8000);
-    createWatermark(); // Create one immediately
-
-    return () => {
-      if (watermarkIntervalRef.current) {
-        clearInterval(watermarkIntervalRef.current);
-      }
-    };
-  }, [createWatermark, isTeaser]);
+  // A moving watermark used to print the viewer's masked phone (or their display
+  // name) across the screen every few seconds. Two reasons it is gone:
+  //
+  //   * It is read as the creator's own contact details floating on the video,
+  //     which makes a paid scene look defaced rather than produced. The picture
+  //     is the product, so it is shown clean.
+  //   * It never actually protected anything — the stream URL is short-lived and
+  //     signed, and the leak it was meant to trace could be re-encoded in a way
+  //     that drops the overlay entirely.
+  //
+  // The anti-piracy work that holds is still here: signed, expiring URLs, the
+  // disabled right-click and drag below, and the server-side access checks.
 
   // =============================================================================
   // Anti-Piracy: Prevent right-click, drag, and keyboard shortcuts
@@ -530,6 +482,14 @@ export default function VideoPlayer({
     video.currentTime = Math.max(0, Math.min(duration, video.currentTime + seconds));
   };
 
+  // One size for every control, so a tap lands the same way on each: 36px on a
+  // phone and 40px from `sm` up. The old `p-1.5` around a 20px icon made a ~32px
+  // target, and the ones at the right-hand edge — fullscreen especially — were
+  // the easiest to miss. `shrink-0` keeps them from being squeezed off the bar
+  // on a narrow screen instead of only moved inward.
+  const ctrlBtn =
+    "h-9 w-9 sm:h-10 sm:w-10 flex items-center justify-center rounded-full text-white/90 hover:bg-white/10 active:bg-white/20 transition touch-manipulation shrink-0";
+
   return (
     <div
       ref={containerRef}
@@ -645,33 +605,49 @@ export default function VideoPlayer({
           showControls || !isPlaying ? "opacity-100" : "opacity-0"
         }`}
       >
-        {/* Progress Bar */}
-        <div className="px-4 pt-2">
+        {/* Progress Bar — a slightly taller track on a phone, where a 1px line
+            is hard to grab. */}
+        <div className="px-2 sm:px-4 pt-2 pb-1">
           <input
             type="range"
             min={0}
             max={duration || 0}
             value={currentTime}
             onChange={handleSeek}
-            className="w-full h-1 bg-white/20 rounded-full appearance-none cursor-pointer
-              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+            aria-label="Seek"
+            className="w-full h-1.5 sm:h-1 bg-white/20 rounded-full appearance-none cursor-pointer touch-manipulation
+              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 sm:[&::-webkit-slider-thumb]:w-3 sm:[&::-webkit-slider-thumb]:h-3
               [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-brand-500
               [&::-webkit-slider-thumb]:hover:scale-125 [&::-webkit-slider-thumb]:transition-transform"
           />
         </div>
 
         {/* Control Buttons */}
-        <div className="flex items-center justify-between px-4 py-2">
-          <div className="flex items-center gap-2">
-            <button onClick={togglePlay} className="p-1.5 hover:bg-white/10 rounded-lg transition">
+        <div className="flex items-center justify-between gap-1 sm:gap-2 px-1.5 sm:px-4 py-1.5 sm:py-2">
+          <div className="flex items-center gap-0.5 sm:gap-1 min-w-0">
+            <button
+              onClick={togglePlay}
+              aria-label={isPlaying ? "Pause" : "Play"}
+              className={ctrlBtn}
+            >
               {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
             </button>
-            <button onClick={() => skip(10)} className="p-1.5 hover:bg-white/10 rounded-lg transition">
+            <button
+              onClick={() => skip(10)}
+              aria-label="Skip forward 10 seconds"
+              className={ctrlBtn}
+            >
               <SkipForward className="w-5 h-5" />
             </button>
-            <button onClick={toggleMute} className="p-1.5 hover:bg-white/10 rounded-lg transition">
+            <button
+              onClick={toggleMute}
+              aria-label={isMuted ? "Unmute" : "Mute"}
+              className={ctrlBtn}
+            >
               {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
             </button>
+            {/* The volume slider needs horizontal room the bar does not have on
+                a phone, where the mute button above is the control that matters. */}
             <input
               type="range"
               min={0}
@@ -679,23 +655,26 @@ export default function VideoPlayer({
               step={0.05}
               value={isMuted ? 0 : volume}
               onChange={handleVolumeChange}
-              className="w-20 h-1 bg-white/20 rounded-full appearance-none cursor-pointer
+              aria-label="Volume"
+              className="hidden sm:block w-16 lg:w-20 h-1 bg-white/20 rounded-full appearance-none cursor-pointer
                 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2 [&::-webkit-slider-thumb]:h-2
                 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
             />
-            <span className="text-xs text-white/70 font-mono ml-2">
-              {formatDuration(Math.floor(currentTime))} / {formatDuration(Math.floor(duration))}
+            <span className="text-[11px] sm:text-xs text-white/70 font-mono ml-1 sm:ml-2 whitespace-nowrap shrink-0">
+              {formatDuration(Math.floor(currentTime))}
+              <span className="hidden sm:inline"> / {formatDuration(Math.floor(duration))}</span>
             </span>
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
             {/* Members-only download */}
             {onDownload && (
               <button
                 onClick={onDownload}
                 disabled={downloading}
+                aria-label="Download (members)"
                 title="Download (members)"
-                className="p-1.5 hover:bg-white/10 rounded-lg transition disabled:opacity-50"
+                className={`${ctrlBtn} disabled:opacity-50`}
               >
                 {downloading ? (
                   <Loader2 className="w-5 h-5 animate-spin" />
@@ -710,17 +689,20 @@ export default function VideoPlayer({
               <div className="relative">
                 <button
                   onClick={() => setShowQuality((v) => !v)}
+                  aria-label="Quality"
                   title="Quality"
-                  className="flex items-center gap-1.5 p-1.5 hover:bg-white/10 rounded-lg transition"
+                  className={ctrlBtn}
                 >
                   <Settings className="w-5 h-5" />
-                  <span className="text-[10px] text-white/70 font-medium hidden sm:inline">
+                  {/* The label is the first thing to go on a narrow screen: the
+                      gear still opens the menu, and the menu names the level. */}
+                  <span className="text-[10px] text-white/70 font-medium hidden lg:inline">
                     {activeLabel}
                   </span>
                 </button>
 
                 {showQuality && (
-                  <div className="absolute bottom-11 right-0 bg-black/95 backdrop-blur border border-white/10 rounded-xl py-1 min-w-[140px] z-20 shadow-xl">
+                  <div className="absolute bottom-12 right-0 bg-black/95 backdrop-blur border border-white/10 rounded-xl py-1 min-w-[140px] z-20 shadow-xl">
                     <button
                       onClick={() => chooseQuality(-1)}
                       className="w-full flex items-center justify-between gap-3 px-3 py-2 text-xs hover:bg-white/10 transition"
@@ -745,7 +727,11 @@ export default function VideoPlayer({
               </div>
             )}
 
-            <button onClick={toggleFullscreen} className="p-1.5 hover:bg-white/10 rounded-lg transition">
+            <button
+              onClick={toggleFullscreen}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+              className={`${ctrlBtn} mr-0.5 sm:mr-0`}
+            >
               {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
             </button>
           </div>

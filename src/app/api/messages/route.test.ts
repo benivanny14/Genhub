@@ -37,6 +37,9 @@ const mocks = vi.hoisted(() => ({
   upsertBalance: vi.fn(),
   createTransaction: vi.fn(),
   createNotification: vi.fn(),
+  // Read side: the thread and the inbox.
+  findMany: vi.fn(),
+  updateMany: vi.fn(),
 }));
 
 // The transaction client shares the mock functions, so an assertion does not
@@ -53,7 +56,11 @@ vi.mock("@/lib/db", () => ({
   default: {
     user: { findUnique: (...a: unknown[]) => mocks.findUser(...a) },
     creatorSubscription: { findFirst: (...a: unknown[]) => mocks.findSubscription(...a) },
-    payMessage: { findFirst: (...a: unknown[]) => mocks.findMessage(...a) },
+    payMessage: {
+      findFirst: (...a: unknown[]) => mocks.findMessage(...a),
+      findMany: (...a: unknown[]) => mocks.findMany(...a),
+      updateMany: (...a: unknown[]) => mocks.updateMany(...a),
+    },
     $transaction: (fn: (client: unknown) => unknown) => fn(tx),
   },
 }));
@@ -79,7 +86,7 @@ vi.mock("@/lib/services/balance.service", async (importOriginal) => {
 });
 
 import { MAX_PAID_MESSAGE, MIN_PAID_MESSAGE } from "@/lib/pay-message";
-import { POST } from "./route";
+import { GET, POST } from "./route";
 
 const VIEWER = "viewer-1";
 const CREATOR = "creator-1";
@@ -89,6 +96,11 @@ function send(body: Record<string, unknown>) {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+/** A read: `?userId=X` is one thread, no query is the whole inbox. */
+function read(query = "") {
+  return new NextRequest(`https://app.test/api/messages${query}`);
 }
 
 const asViewer = (id = VIEWER) =>
@@ -411,5 +423,110 @@ describe("guards", () => {
 
     expect(res.status).toBe(404);
     expect(mocks.debitWallet).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// The other half of "pay to chat": the delivery.
+//
+// The POST tests above prove who is charged. They say nothing about whether the
+// message is then READABLE by both people — and a platform where a fan pays and
+// sees nothing back is the failure this whole feature exists to avoid. These
+// tests pin the read side: one thread is the conversation in BOTH directions, so
+// both the fan and the creator see both messages.
+// =============================================================================
+
+describe("both sides of the conversation can read it", () => {
+  const PAID = {
+    id: "msg-paid",
+    senderId: VIEWER,
+    receiverId: CREATOR,
+    amount: 500,
+    content: "hello from the fan",
+    isRead: false,
+    createdAt: new Date("2026-09-26T10:00:00Z"),
+    sender: { id: VIEWER, displayName: "Fan", avatarUrl: null, role: "VIEWER" },
+    receiver: { id: CREATOR, displayName: "Creator", avatarUrl: null, role: "CREATOR" },
+  };
+  const REPLY = {
+    id: "msg-reply",
+    senderId: CREATOR,
+    receiverId: VIEWER,
+    amount: 0,
+    content: "thanks for watching",
+    isRead: false,
+    createdAt: new Date("2026-09-26T10:05:00Z"),
+    sender: { id: CREATOR, displayName: "Creator", avatarUrl: null, role: "CREATOR" },
+    receiver: { id: VIEWER, displayName: "Fan", avatarUrl: null, role: "VIEWER" },
+  };
+
+  beforeEach(() => {
+    // Newest first, the way the route asks for them.
+    mocks.findMany.mockResolvedValue([REPLY, PAID]);
+    mocks.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  it("asks for the conversation in both directions, not one", async () => {
+    asViewer();
+
+    await GET(read(`?userId=${CREATOR}`));
+
+    // The bug this guards: querying only `senderId = me`, which shows a fan
+    // their own outgoing messages and hides every reply.
+    expect(mocks.findMany.mock.calls[0][0].where.OR).toEqual([
+      { senderId: VIEWER, receiverId: CREATOR },
+      { senderId: CREATOR, receiverId: VIEWER },
+    ]);
+  });
+
+  it("shows the fan the paid message AND the creator's reply", async () => {
+    asViewer();
+
+    const res = await GET(read(`?userId=${CREATOR}`));
+    const body = (await res.json()) as {
+      data: Array<{ id: string; content: string; senderId: string }>;
+    };
+
+    expect(res.status).toBe(200);
+    expect(body.data.map((m) => m.content)).toEqual([
+      "thanks for watching",
+      "hello from the fan",
+    ]);
+    expect(body.data.map((m) => m.senderId)).toContain(VIEWER);
+    expect(body.data.map((m) => m.senderId)).toContain(CREATOR);
+  });
+
+  it("shows the creator the same two messages", async () => {
+    asCreator();
+
+    const res = await GET(read(`?userId=${VIEWER}`));
+    const body = (await res.json()) as { data: Array<{ id: string }> };
+
+    expect(body.data).toHaveLength(2);
+    expect(body.data.map((m) => m.id).sort()).toEqual([PAID.id, REPLY.id].sort());
+  });
+
+  it("marks the OTHER side's messages read, and leaves your own alone", async () => {
+    asViewer();
+
+    await GET(read(`?userId=${CREATOR}`));
+
+    // readAt is stamped with the read, not just a boolean flipped.
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: { senderId: CREATOR, receiverId: VIEWER, isRead: false },
+      data: { isRead: true, readAt: expect.any(Date) },
+    });
+  });
+
+  it("lists the creator in the fan's inbox, with the unread count", async () => {
+    asViewer();
+
+    const res = await GET(read());
+    const body = await res.json();
+
+    expect(body.data.conversations).toHaveLength(1);
+    expect(body.data.conversations[0].partner.id).toBe(CREATOR);
+    // The reply is what the fan has not read yet.
+    expect(body.data.conversations[0].unreadCount).toBe(1);
   });
 });
