@@ -187,6 +187,19 @@ interface CreatorItem {
   walletBalance: number;
   createdAt: string;
   _count: { videos: number };
+  /**
+   * The last warning issued to this creator, and whether they have read it.
+   *
+   * The whole point of a warning is that it lands BEFORE the ban, so "warned"
+   * is not enough to act on: an unread warning means the next step has to be
+   * another warning, not a suspension of somebody who was never told.
+   */
+  lastWarning?: {
+    action: string;
+    reason: string;
+    createdAt: string;
+    acknowledgedAt: string | null;
+  } | null;
 }
 
 interface CreatorVideo {
@@ -2686,6 +2699,21 @@ export default function AdminDashboard() {
                             KYC: {creator.kycStatus} • Videos: {creator._count.videos} • Strikes: {creator.strikes}/3 • Joined:{" "}
                             {new Date(creator.createdAt).toLocaleDateString("en-US")}
                           </p>
+                          {creator.lastWarning && (
+                            <p
+                              className={`text-xs mt-0.5 ${
+                                creator.lastWarning.acknowledgedAt
+                                  ? "text-emerald-300/80"
+                                  : "text-amber-300"
+                              }`}
+                            >
+                              {creator.lastWarning.acknowledgedAt
+                                ? `Last warning read on ${new Date(
+                                    creator.lastWarning.acknowledgedAt
+                                  ).toLocaleDateString("en-GB")}`
+                                : "Last warning NOT read yet — they have to open their dashboard"}
+                            </p>
+                          )}
                         </div>
                       </div>
 
