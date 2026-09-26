@@ -42,6 +42,7 @@ import {
   ReceiptText,
   XCircle,
   Check,
+  Lock,
 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
@@ -55,7 +56,7 @@ const CommentsSection = dynamic(() => import("@/components/CommentsSection"), {
 });
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/lib/currency";
-import { shouldShowIntroTrailer } from "@/lib/intro-trailer";
+import { pickIntroMedium } from "@/lib/intro-trailer";
 
 interface VideoData {
   id: string;
@@ -89,6 +90,13 @@ interface VideoData {
   } | null;
   playbackUrl: string | null;
   teaserUrl: string | null;
+  /**
+   * Bunny's own generated animated preview, signed for this viewer. Sent only
+   * when the viewer has no entitlement AND no trailer clip is attached — the
+   * automatic intro so a paid scene with no uploaded trailer is never a black
+   * box. It is a separate asset, so it cannot be used to watch the scene.
+   */
+  introPreviewUrl?: string | null;
   /** Attached WebVTT captions, when the creator added them. */
   captionsUrl?: string | null;
   /**
@@ -196,6 +204,9 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   // end-card that asks them to unlock, `introKey` remounts the player to replay.
   const [introFinished, setIntroFinished] = useState(false);
   const [introKey, setIntroKey] = useState(0);
+  // Set when Bunny's animated preview cannot be fetched (a library with previews
+  // switched off answers 404). A broken image must never be the intro.
+  const [introAnimFailed, setIntroAnimFailed] = useState(false);
   // Library state: Watch Later bookmark, playlists picker, gallery lightbox
   const [inWatchLater, setInWatchLater] = useState(false);
   const [watchLaterBusy, setWatchLaterBusy] = useState(false);
@@ -839,16 +850,19 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       ? video.playbackUrl
       : video.teaserUrl;
 
-  // The intro trailer only applies to a paid scene the viewer cannot play yet
-  // and that actually HAS a trailer clip. A free scene plays in full, and a
-  // paid scene with no clip shows the "no preview" panel instead. The rule is
-  // pure, so it lives in lib/intro-trailer.ts and is unit-tested.
-  const showIntroTrailer = shouldShowIntroTrailer({
+  // Which intro this viewer gets: the creator's uploaded trailer, Bunny's own
+  // animated preview as the automatic floor, or nothing. The rule is pure, so it
+  // lives in lib/intro-trailer.ts and is unit-tested.
+  const introMedium = pickIntroMedium({
     canPlayFull,
     notPlayable,
-    teaserUrl: videoSrc,
+    teaserUrl: video.teaserUrl,
+    previewAnimationUrl: video.introPreviewUrl,
+    animationFailed: introAnimFailed,
     price: video.price,
   });
+  const showIntroTrailer = introMedium === "trailer";
+  const showIntroAnimation = introMedium === "animation";
 
   /**
    * The one door to the full scene. It never plays anything — it can only send
@@ -1057,20 +1071,106 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               </div>
             )}
           </div>
-        ) : (
-          // No playable source. For a paid scene without a teaser clip that is
-          // deliberate: we would rather show nothing than sign a non-buyer into
-          // the whole video, so say so instead of looking broken.
-          <div className="aspect-video bg-surface-400/40 rounded-2xl flex flex-col items-center justify-center gap-3 px-6 text-center">
-            <Play className="w-16 h-16 text-white/10" />
-            {!canPlayFull && video.price > 0 && (
-              <p className="text-sm text-white/45 max-w-sm">
-                {video.thumbnailUrl
-                  ? "No preview clip for this scene."
-                  : "No preview available."}{" "}
-                Buy it to watch in full.
+        ) : showIntroAnimation ? (
+          /*
+            Bunny's own animated preview — the intro for a paid scene whose
+            creator never uploaded a trailer. It is a separate ~10s asset, so it
+            teases without giving anything away, and it is what stops this spot
+            from being an empty black box.
+          */
+          <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
+            {/*
+              Ambient backdrop: the same animation, blurred and over-scaled, so a
+              portrait scene fills the 16:9 frame instead of sitting between two
+              black bars. The browser fetches it once — the route serves the same
+              bytes with a long private cache.
+            */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={video.introPreviewUrl as string}
+              alt=""
+              aria-hidden
+              className="absolute inset-0 h-full w-full scale-125 object-cover opacity-45 blur-2xl"
+            />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={video.introPreviewUrl as string}
+              alt={`${video.title} — intro preview`}
+              className="relative h-full w-full object-contain"
+              onError={() => setIntroAnimFailed(true)}
+            />
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black via-black/25 to-transparent" />
+
+            <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
+              <span className="inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-brand-300 ring-1 ring-brand-500/40 backdrop-blur">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-500" />
+                </span>
+                Intro Preview
+              </span>
+            </div>
+
+            <div className="absolute inset-x-0 bottom-0 p-4 sm:p-6">
+              <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-brand-300">
+                Auto-playing intro · silent
               </p>
+              <h3 className="mt-1 line-clamp-1 font-display text-lg font-bold text-white sm:text-2xl">
+                {video.title}
+              </h3>
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <button
+                  onClick={unlockFullScene}
+                  className="btn-brand inline-flex items-center gap-2"
+                >
+                  <Shield className="w-4 h-4" />
+                  {effectiveUser
+                    ? `Watch the full scene — ${format(video.price)}`
+                    : "Sign in to watch the full scene"}
+                </button>
+                <span className="text-xs text-white/50">
+                  The full scene is locked until you unlock it.
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          /*
+            Nothing to play as an intro: no uploaded trailer, and Bunny has no
+            animation either (a side-loaded row, or a library with previews off).
+            The poster plus the offer beats a black rectangle — an empty box
+            reads as a broken site and sells nothing.
+          */
+          <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-surface-400/40 ring-1 ring-white/10">
+            {video.thumbnailUrl && (
+              <Image
+                src={video.thumbnailUrl}
+                alt={video.title}
+                fill
+                sizes="(max-width: 1280px) 100vw, 1024px"
+                className="object-cover opacity-40 blur-[2px]"
+              />
             )}
+            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/60 ring-1 ring-white/15 backdrop-blur">
+                <Lock className="h-7 w-7 text-white/70" />
+              </div>
+              <p className="text-base font-semibold text-white/90">
+                {video.price > 0 ? "This scene is locked" : "Preview unavailable"}
+              </p>
+              {!canPlayFull && video.price > 0 && (
+                <button
+                  onClick={unlockFullScene}
+                  className="btn-brand inline-flex items-center gap-2"
+                >
+                  <Shield className="w-4 h-4" />
+                  {effectiveUser
+                    ? `Unlock the full scene — ${format(video.price)}`
+                    : "Sign in to unlock the full scene"}
+                </button>
+              )}
+            </div>
           </div>
         )}
 

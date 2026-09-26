@@ -10,7 +10,12 @@ import prisma from "@/lib/db";
 import { getCurrentUser, requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { updateVideoSchema } from "@/lib/validation";
-import { resolvePlaybackUrl, resolveTeaserUrl, deleteBunnyVideo } from "@/lib/bunny";
+import {
+  resolvePlaybackUrl,
+  resolveTeaserUrl,
+  introPreviewPath,
+  deleteBunnyVideo,
+} from "@/lib/bunny";
 import { resolveVideoEntitlement, type EntitlementSource } from "@/lib/services/video-entitlement.service";
 import { normalizeMediaUrl } from "@/lib/media";
 import config from "@/lib/config";
@@ -210,6 +215,19 @@ export async function GET(
       ...publicVideo
     } = video;
 
+    // The intro a viewer with no entitlement sees. A creator-uploaded trailer
+    // wins (`teaserUrl` above, already resolved); when there is none, Bunny's own
+    // generated animated preview fills the gap so the page is never an empty
+    // black box. Buyers need neither, so it is not even computed for them.
+    //
+    // The value is an IN-APP url, not the signed CDN one: this pull zone refuses
+    // any request that carries a Referer, and a browser always sends one for an
+    // <img> — so the CDN URL 200s in curl and 403s in the page. The route that
+    // serves it holds the token, and the token opens only that one file, never
+    // the scene's playlist.
+    const introPreviewUrl =
+      !hasAccess && !teaserUrl ? introPreviewPath(video) : null;
+
     return api.success({
       ...publicVideo,
       // Bunny transcodes after the upload finishes, so a video can be live but
@@ -222,6 +240,7 @@ export async function GET(
       paymentUnderInvestigation,
       playbackUrl,
       teaserUrl,
+      introPreviewUrl,
       viewsCount: video.viewsCount + (counted ? 1 : 0), // Reflect the view we just added
     });
   } catch (error) {
