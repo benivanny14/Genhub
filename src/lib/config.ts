@@ -24,6 +24,23 @@ const stripTrailingSlashes = (value: string) => value.replace(/\/+$/, "");
 const withHttps = (host: string) =>
   /^https?:\/\//.test(host) ? host : `https://${host}`;
 
+/**
+ * A whole number from the environment, or the default when it is missing or
+ * unusable.
+ *
+ * The fallback matters for a value like the daily spend cap: `Number("abc")` is
+ * NaN, and a cap that quietly became NaN would refuse every purchase instead of
+ * protecting one. An explicitly written `0` is kept — for the cap that is
+ * "disabled" — but an EMPTY value is treated as absent, so an unset variable is
+ * never mistaken for a request to switch the limit off.
+ */
+function intFromEnv(raw: string | undefined, fallback: number): number {
+  const text = (raw ?? "").trim();
+  if (!text) return fallback;
+  const n = Number(text);
+  return Number.isFinite(n) ? Math.trunc(n) : fallback;
+}
+
 function resolveAppUrl(): { url: string; source: AppUrlSource } {
   const explicit = (process.env.NEXT_PUBLIC_APP_URL || "").trim();
   if (explicit && !explicit.includes("localhost")) {
@@ -149,6 +166,13 @@ const config = {
     // nothing about how much they may consume. Generous on purpose: this is a
     // ceiling against runaway use, not a business limit.
     maxVideosPerCreator: 500,
+    // The most one account may SPEND from its wallet in a rolling 24 hours,
+    // across every paid action (video purchases, subscriptions, tips and paid
+    // messages). The per-transaction limits above bound a single charge; this
+    // bounds a day of them, which is what a stolen session or a script abuses.
+    // Generous on purpose — a ceiling against runaway use, not a business limit.
+    // Set DAILY_SPEND_CAP=0 to disable it.
+    dailySpendCap: intFromEnv(process.env.DAILY_SPEND_CAP, 500_000),
   },
 
   // Background jobs (Vercel cron / external schedulers call our cron routes)

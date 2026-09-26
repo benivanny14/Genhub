@@ -40,6 +40,10 @@ const mocks = vi.hoisted(() => ({
   // Read side: the thread and the inbox.
   findMany: vi.fn(),
   updateMany: vi.fn(),
+  // The daily spend cap, which is exercised on its own in
+  // src/tests/spend-cap.test.ts. Here it is a switch, so a send test can prove
+  // that a refused cap stops the charge before any money moves.
+  checkSpendCap: vi.fn(),
 }));
 
 // The transaction client shares the mock functions, so an assertion does not
@@ -84,6 +88,11 @@ vi.mock("@/lib/services/balance.service", async (importOriginal) => {
     await importOriginal<typeof import("@/lib/services/balance.service")>();
   return { ...actual, debitWallet: (...a: unknown[]) => mocks.debitWallet(...a) };
 });
+
+vi.mock("@/lib/services/spend-cap.service", () => ({
+  checkSpendCap: (...a: unknown[]) => mocks.checkSpendCap(...a),
+  spendCapMessage: () => "Daily spend limit reached (test)",
+}));
 
 import { MAX_PAID_MESSAGE, MIN_PAID_MESSAGE } from "@/lib/pay-message";
 import { GET, POST } from "./route";
@@ -135,6 +144,13 @@ beforeEach(() => {
     );
   });
   mocks.checkRateLimit.mockResolvedValue({ allowed: true });
+  mocks.checkSpendCap.mockResolvedValue({
+    allowed: true,
+    cap: 0,
+    spent: 0,
+    remaining: Infinity,
+    overBy: 0,
+  });
   mocks.debitWallet.mockResolvedValue({ ok: true, balance: 4000 });
   mocks.createNotification.mockResolvedValue({ id: "note-1" });
   mocks.createMessage.mockImplementation((args: { data: Record<string, unknown> }) =>
@@ -413,6 +429,40 @@ describe("guards", () => {
 
     expect(res.status).toBe(400);
     expect(mocks.debitWallet).not.toHaveBeenCalled();
+  });
+
+  it("refuses a send once the daily spend cap is reached, before any money moves", async () => {
+    asViewer();
+    mocks.checkSpendCap.mockResolvedValue({
+      allowed: false,
+      cap: 500_000,
+      spent: 500_000,
+      remaining: 0,
+      overBy: 500,
+    });
+
+    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+
+    expect(res.status).toBe(429);
+    expect(mocks.debitWallet).not.toHaveBeenCalled();
+    expect(mocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("never caps a creator's free reply — a reply is not spending", async () => {
+    asCreator();
+    mocks.checkSpendCap.mockResolvedValue({
+      allowed: false,
+      cap: 500_000,
+      spent: 500_000,
+      remaining: 0,
+      overBy: 500,
+    });
+
+    const res = await POST(send({ receiverId: VIEWER, content: "thanks" }));
+
+    expect(res.status).toBe(201);
+    // The cap is only consulted when something is actually being charged.
+    expect(mocks.checkSpendCap).not.toHaveBeenCalled();
   });
 
   it("refuses a banned receiver", async () => {

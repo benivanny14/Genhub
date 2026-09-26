@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
+import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 import { api } from "@/lib/api-response";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
@@ -107,6 +108,16 @@ export async function POST(request: NextRequest) {
 
     /** What is actually taken. Zero for a reply, which is the point. */
     const charged = freeReply ? 0 : (amount as number);
+
+    // The daily spend cap, checked before the transaction so a refusal costs
+    // nothing and leaves no half-written charge. A free reply (charged 0) is
+    // never capped — a creator answering is not spending.
+    if (charged > 0) {
+      const spendCap = await checkSpendCap(auth.userId, charged);
+      if (!spendCap.allowed) {
+        return api.error(spendCapMessage(spendCap), 429, "SPEND_CAP");
+      }
+    }
 
     // The same 70/30 split every other sale on the platform uses. The sender pays
     // the amount they chose; the platform takes its fee from it and the receiver

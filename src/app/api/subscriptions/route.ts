@@ -20,6 +20,7 @@ import {
   splitSubscriptionAmount,
 } from "@/lib/services/subscription.service";
 import { debitWallet } from "@/lib/services/balance.service";
+import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 
 const subscribeSchema = z.object({
   creatorId: z.string().min(1),
@@ -197,6 +198,14 @@ export async function POST(request: NextRequest) {
     // grantSubscription credits the creator with — so the row that records the
     // fee and the balance that receives the cut cannot round differently.
     const { platformFee, creatorCut } = splitSubscriptionAmount(price);
+
+    // The daily spend cap. Subscriptions are wallet spending on this path, so a
+    // day of them counts toward the same ceiling as purchases, tips and paid
+    // messages.
+    const spendCap = await checkSpendCap(auth.userId, price);
+    if (!spendCap.allowed) {
+      return api.error(spendCapMessage(spendCap), 429, "SPEND_CAP");
+    }
 
     const subscription = await prisma.$transaction(async (tx) => {
       // The debit is the check (debitWallet): it refuses rather than overdrawing

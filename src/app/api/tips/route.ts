@@ -8,6 +8,7 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
+import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 import { z } from "zod";
@@ -51,6 +52,13 @@ export async function POST(request: NextRequest) {
     // goes to the creator") untrue and gave the platform two different prices for
     // the same shilling depending on which button a fan pressed.
     const { platformFee, creatorCut } = splitRevenue(amount);
+
+    // The daily spend cap, before any money moves. Per-tip limits bound one tip;
+    // this bounds a day of them.
+    const spendCap = await checkSpendCap(auth.userId, amount);
+    if (!spendCap.allowed) {
+      return api.error(spendCapMessage(spendCap), 429, "SPEND_CAP");
+    }
 
     // The balance check IS the deduction (debitWallet): reading first and
     // decrementing after let several tips start on one balance and all be

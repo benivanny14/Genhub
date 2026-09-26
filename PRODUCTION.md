@@ -320,6 +320,45 @@ of reading a copy of its environment.
       (`NEXT_PUBLIC_*` values are visible to every visitor by design — keep
       only truly public values there).
 
+### 1.1 Access control, storage rules and spend limits (as audited)
+
+Stated here so they are deliberate choices rather than gaps somebody has to
+guess at.
+
+- [ ] **Row-level security is OFF, by design.** Postgres RLS is not enabled —
+      `prisma/migrations` contains no `ENABLE ROW LEVEL SECURITY`. Prisma connects
+      as the schema owner, so RLS would either be bypassed by that role or need a
+      separate non-owner role plus a policy per table: a large change with a real
+      chance of locking the app out of its own database. Access control is
+      enforced in the application layer instead — every route calls
+      `requireAuth`/`requireRole`, ids come from the session rather than the
+      request body, and private media keys are authorised in
+      `/api/media/[...path]`. If RLS is ever added, build it on a Neon branch
+      first and never point production at it until the branch is green.
+- [ ] **No secrets in the browser bundle.** The only `NEXT_PUBLIC_*` values used
+      in client code are `APP_URL`, `APP_NAME`, `COMPANY_LEGAL_NAME`,
+      `COMPANY_ADDRESS`, `SUPPORT_EMAIL` and `SUPPORT_PHONE`. No `JWT_SECRET`,
+      `BUNNY_*`, `HARAKAPAY_*` or `DATABASE_URL` is referenced in any `.tsx`;
+      those are read only in route handlers and services.
+- [ ] **Storage is not directly reachable.** `/api/upload` requires auth,
+      rate-limits to 5 per 5 minutes, restricts image types, caps 5 MB, and puts
+      KYC documents under `private/<userId>/`. `/api/media/[...path]` serves only
+      safe keys, gates `private/...` to the owner or an admin, refuses
+      `image/svg+xml`, and sends `nosniff` plus a sandbox CSP. Keep the Bunny
+      **storage zone private** — a public zone makes a leaked key directly
+      fetchable, outside every check above.
+- [ ] **Rate limits** (`src/lib/config.ts` → `rateLimit`): auth 10/min, upload
+      5/5min, payment 20/min, general 100/min, applied per account on the money
+      and interaction routes. When Redis is unreachable they fall back to
+      per-instance memory rather than failing open.
+- [ ] **Daily spend cap** (`DAILY_SPEND_CAP`, default TZS 500,000 per rolling
+      24h; see `src/lib/services/spend-cap.service.ts`): bounds total wallet
+      spending across purchases, subscriptions, tips and paid messages. The
+      per-transaction limits bound one charge; this bounds a day of them. A
+      refused charge gets HTTP 429 with code `SPEND_CAP` and both figures named.
+      Incoming money — wallet top-ups and referral bonuses — never counts toward
+      it. Set `DAILY_SPEND_CAP=0` to switch it off.
+
 ## 2. Environment variables
 
 Set these in your hosting provider (Vercel → Project → Settings → Env vars):
@@ -352,6 +391,7 @@ Set these in your hosting provider (Vercel → Project → Settings → Env vars
 | `NEXT_PUBLIC_COMPANY_LEGAL_NAME` | Registered entity — shown on `/2257` |
 | `NEXT_PUBLIC_COMPANY_ADDRESS` | Custodian's real place of business (28 C.F.R. § 75.2 requires it) |
 | `NEXT_PUBLIC_SUPPORT_EMAIL` | Compliance/reporting inbox |
+| `DAILY_SPEND_CAP` | Optional. TZS a single account may spend from its wallet per rolling 24h (default `500000`; `0` disables). Bounds total wallet spending across purchases, subscriptions, tips and paid messages. |
 
 After setting variables, hit `GET /api/health` — its `warnings[]` array runs
 the same audit (`productionConfigWarnings()` in `src/lib/config.ts`) and must

@@ -61,6 +61,19 @@ vi.mock("@/lib/services/balance.service", async (importOriginal) => {
   return { ...actual, debitWallet: (...a: unknown[]) => mocks.debitWallet(...a) };
 });
 
+// The daily spend cap is not this suite's subject (see src/tests/spend-cap.test.ts);
+// it is stubbed open so these tests keep testing the tip itself.
+vi.mock("@/lib/services/spend-cap.service", () => ({
+  checkSpendCap: async () => ({
+    allowed: true,
+    cap: 0,
+    spent: 0,
+    remaining: Infinity,
+    overBy: 0,
+  }),
+  spendCapMessage: () => "Daily spend limit reached",
+}));
+
 import { POST } from "./route";
 
 const VIEWER = "viewer-1";
