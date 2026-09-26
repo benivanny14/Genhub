@@ -279,6 +279,37 @@ interface AuditItem {
  * The row names the creator because "request cmu8…" is a lookup; the badge
  * decision is made about a person, and the screen has to say who.
  */
+/**
+ * One ordinary account, as the admin sees it.
+ *
+ * A viewer is not a creator with less: they hold a wallet, purchases,
+ * subscriptions and DMs, and a person who needs suspending is usually found by
+ * their phone number or email rather than by scrolling. Everything the admin
+ * needs to identify one and act on it is in one row.
+ */
+interface ViewerItem {
+  id: string;
+  displayName: string | null;
+  email: string | null;
+  phone: string | null;
+  role: string;
+  isBanned: boolean;
+  banReason: string | null;
+  strikes: number;
+  walletBalance: number;
+  kycStatus: string;
+  locale: string;
+  lastLoginAt: string | null;
+  createdAt: string;
+  _count: { videoAccess: number; subscriptions: number; sentMessages: number };
+  lastWarning: {
+    action: string;
+    reason: string;
+    createdAt: string;
+    acknowledgedAt: string | null;
+  } | null;
+}
+
 interface BlueTickAdminRow {
   id: string;
   status: string;
@@ -364,6 +395,9 @@ interface SetupItem {
   display: string | null;
   hint?: string;
   restartPending: boolean;
+  /** No env var: work in somebody else's dashboard, ticked off by hand. */
+  manual?: boolean;
+  manualDone?: boolean;
 }
 
 interface SetupGroup {
@@ -384,7 +418,7 @@ interface SetupProbe {
 
 interface SetupReport {
   groups: SetupGroup[];
-  summary: { done: number; todo: number; restartPending: number };
+  summary: { done: number; todo: number; manual: number; restartPending: number };
   envFile: { path: string; present: boolean };
   probes?: SetupProbe[];
 }
@@ -458,7 +492,15 @@ function JobStateIcon({ state }: { state: CronWorkerHealth["state"] }) {
   return <HelpCircle className="w-4 h-4 text-white/25 shrink-0 mt-0.5" />;
 }
 
-function SetupGroupCard({ group }: { group: SetupGroup }) {
+function SetupGroupCard({
+  group,
+  onToggleStep,
+  busyStep,
+}: {
+  group: SetupGroup;
+  onToggleStep: (item: SetupItem, done: boolean) => void;
+  busyStep: string | null;
+}) {
   const pending = group.items.filter((i) => i.state !== "ok");
   const settled = group.items.filter((i) => i.state === "ok");
 
@@ -496,6 +538,17 @@ function SetupGroupCard({ group }: { group: SetupGroup }) {
                     <span className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/50">
                       dashboard, not a file
                     </span>
+                  )}
+                  {/* A step no code can check. The button is the only evidence it
+                      was done, and it is what lets the tab badge reach zero. */}
+                  {item.manual && (
+                    <button
+                      onClick={() => onToggleStep(item, true)}
+                      disabled={busyStep === item.id}
+                      className="text-xs px-2.5 py-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20 transition disabled:opacity-50"
+                    >
+                      {busyStep === item.id ? "Saving…" : "I have done this"}
+                    </button>
                   )}
                   {item.display && (
                     <span
@@ -544,6 +597,16 @@ function SetupGroupCard({ group }: { group: SetupGroup }) {
             <span className="text-xs text-white/50">{item.title}</span>
             {item.key && <code className="text-xs text-white/25">{item.key}</code>}
             {item.display && <span className="text-xs text-emerald-300/60 truncate">{item.display}</span>}
+            {item.manual && (
+              <button
+                onClick={() => onToggleStep(item, false)}
+                disabled={busyStep === item.id}
+                className="text-xs text-white/40 hover:text-white/70 transition disabled:opacity-50"
+                title="Put this back on the list"
+              >
+                {busyStep === item.id ? "…" : "Undo"}
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -566,6 +629,7 @@ export default function AdminDashboard() {
     | "audit"
     | "setup"
     | "blueTicks"
+    | "viewers"
   >("overview");
   const [loading, setLoading] = useState(true);
   const [kycList, setKycList] = useState<KycItem[]>([]);
@@ -584,6 +648,11 @@ export default function AdminDashboard() {
   const [blueTickPending, setBlueTickPending] = useState<BlueTickAdminRow[]>([]);
   const [blueTickRecent, setBlueTickRecent] = useState<BlueTickAdminRow[]>([]);
   const [blueTickReason, setBlueTickReason] = useState("");
+  // Ordinary accounts: the people who watch. Kept apart from creators because
+  // the question asked of each list is different, and because a viewer with no
+  // videos was invisible on a page that only listed creators.
+  const [viewerList, setViewerList] = useState<ViewerItem[]>([]);
+  const [viewerQuery, setViewerQuery] = useState("");
   const [busyBlueTick, setBusyBlueTick] = useState<string | null>(null);
   const [auditList, setAuditList] = useState<AuditItem[]>([]);
   // Empty = every action code. Set to "user." or "payout." to narrow it.
@@ -634,6 +703,8 @@ export default function AdminDashboard() {
   } | null>(null);
   const [setup, setSetup] = useState<SetupReport | null>(null);
   const [setupBusy, setSetupBusy] = useState(false);
+  // Which manual launch step is mid-save, so its button locks.
+  const [stepBusy, setStepBusy] = useState<string | null>(null);
   const [pipeline, setPipeline] = useState<PipelineTest | null>(null);
   const [pipelineBusy, setPipelineBusy] = useState(false);
   // Native window.prompt is blocked in some embedded browsers, so the flows that
@@ -758,6 +829,7 @@ export default function AdminDashboard() {
     if (activeTab === "creators") fetchCreators();
     if (activeTab === "coupons") fetchCoupons();
     if (activeTab === "blueTicks") fetchBlueTicks();
+    if (activeTab === "viewers") fetchViewers();
     if (activeTab === "audit") fetchAudit();
     if (activeTab === "earnings") fetchEarnings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -960,6 +1032,17 @@ export default function AdminDashboard() {
     } catch {}
   }
 
+  async function fetchViewers(query = viewerQuery) {
+    try {
+      const search = query.trim();
+      const res = await adminFetch(
+        `/api/admin/users?role=VIEWER${search ? `&q=${encodeURIComponent(search)}` : ""}`
+      );
+      const data = await res.json();
+      if (data.success) setViewerList(data.data.users);
+    } catch {}
+  }
+
   async function fetchBlueTicks() {
     try {
       const res = await adminFetch("/api/admin/blue-tick");
@@ -1063,7 +1146,7 @@ export default function AdminDashboard() {
     }
   }
 
-  async function submitCreatorAction(
+  async function submitPersonAction(
     userId: string,
     action:
       | "VERIFY"
@@ -1074,6 +1157,7 @@ export default function AdminDashboard() {
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS",
+    role: "CREATOR" | "VIEWER",
     reason?: string
   ) {
     try {
@@ -1085,7 +1169,10 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (data.success) {
         toast("success", data.message || "Done");
-        fetchCreators();
+        // Reload the list that was acted on, not always the creators one: the
+        // admin is looking at the row they just changed.
+        if (role === "VIEWER") fetchViewers();
+        else fetchCreators();
       } else {
         toast("error", data.error || "Something went wrong");
       }
@@ -1094,6 +1181,7 @@ export default function AdminDashboard() {
     }
   }
 
+  /** The creators tab: same actions, creator wording. */
   function handleCreatorAction(
     userId: string,
     action:
@@ -1106,20 +1194,50 @@ export default function AdminDashboard() {
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS"
   ) {
+    handlePersonAction(userId, action, "CREATOR");
+  }
+
+  /**
+   * The viewers tab. Ban, warn and delete are the same API calls the creators
+   * tab makes — an abuser is suspended the same way whichever side of the site
+   * they are on — but the wording has to name the right person, and the list to
+   * reload afterwards is a different one.
+   */
+  function handleViewerAction(
+    userId: string,
+    action: "BAN" | "UNBAN" | "WARN" | "DELETE_ACCOUNT"
+  ) {
+    handlePersonAction(userId, action, "VIEWER");
+  }
+
+  function handlePersonAction(
+    userId: string,
+    action:
+      | "VERIFY"
+      | "UNVERIFY"
+      | "BAN"
+      | "UNBAN"
+      | "WARN"
+      | "DELETE_ACCOUNT"
+      | "FREEZE_PAYOUTS"
+      | "UNFREEZE_PAYOUTS",
+    role: "CREATOR" | "VIEWER"
+  ) {
+    const who = role === "VIEWER" ? "user" : "creator";
     // Actions that carry a reason (and a consequence the admin should type out)
     // share one typed dialog. The rest fire immediately.
     const prompts: Partial<
       Record<typeof action, { title: string; label: string; placeholder: string; confirmLabel: string }>
     > = {
       BAN: {
-        title: "Ban this creator",
-        label: "Reason (shared with the creator)",
+        title: `Ban this ${who}`,
+        label: `Reason (shared with the ${who})`,
         placeholder: "e.g. Repeated guideline violations",
-        confirmLabel: "Ban creator",
+        confirmLabel: `Ban ${who}`,
       },
       WARN: {
-        title: "Warn this creator",
-        label: "Warning (added as a strike and sent to the creator)",
+        title: `Warn this ${who}`,
+        label: `Warning (added as a strike and sent to the ${who}; they must confirm reading it)`,
         placeholder: "e.g. Video does not clearly show your face",
         confirmLabel: "Send warning",
       },
@@ -1130,8 +1248,11 @@ export default function AdminDashboard() {
         confirmLabel: "Pause withdrawals",
       },
       DELETE_ACCOUNT: {
-        title: "Delete this creator",
-        label: "This erases the account and its videos permanently. Type the reason to confirm.",
+        title: `Delete this ${who}`,
+        label:
+          role === "VIEWER"
+            ? "This erases the account and everything on it permanently. Type the reason to confirm."
+            : "This erases the account and its videos permanently. Type the reason to confirm.",
         placeholder: "e.g. Uploaded content without consent",
         confirmLabel: "Delete account permanently",
       },
@@ -1142,11 +1263,11 @@ export default function AdminDashboard() {
       askReason({
         ...prompt,
         tone: "danger",
-        onConfirm: (reason) => submitCreatorAction(userId, action, reason),
+        onConfirm: (reason) => submitPersonAction(userId, action, role, reason),
       });
       return;
     }
-    submitCreatorAction(userId, action);
+    submitPersonAction(userId, action, role);
   }
 
   /** Load (and show) every video a creator owns, published or not. */
@@ -1436,6 +1557,37 @@ export default function AdminDashboard() {
     }
   }
 
+  /**
+   * Tick a manual launch step off (or put it back).
+   *
+   * The checklist has steps no code can verify — funding the gateway float,
+   * allowing the domain as a referrer — and they used to sit in the badge
+   * forever. This is the record that answers for them instead.
+   */
+  async function toggleSetupStep(item: SetupItem, done: boolean) {
+    setStepBusy(item.id);
+    try {
+      const res = await adminFetch("/api/admin/setup", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stepId: item.id, done }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Keep the probes that are already on screen: the patch answers with
+        // the checklist only, and replacing the whole report would wipe them.
+        setSetup((prev) => (prev ? { ...prev, ...data.data } : data.data));
+        toast("success", data.message || "Saved");
+      } else {
+        toast("error", data.error || "Could not save that step");
+      }
+    } catch {
+      toast("error", "Could not save that step");
+    } finally {
+      setStepBusy(null);
+    }
+  }
+
   async function fetchSetup(runProbes = false) {
     setSetupBusy(true);
     try {
@@ -1483,6 +1635,7 @@ export default function AdminDashboard() {
     { id: "reports" as const, label: "Reports", icon: AlertTriangle, badge: reportList.length },
     { id: "payouts" as const, label: "Payouts", icon: DollarSign, badge: payoutList.length },
     { id: "creators" as const, label: "Creators", icon: BadgeCheck },
+    { id: "viewers" as const, label: "Viewers", icon: Users },
     {
       id: "blueTicks" as const,
       label: "Blue ticks",
@@ -1508,7 +1661,10 @@ export default function AdminDashboard() {
       id: "setup" as const,
       label: "Setup",
       icon: Rocket,
-      badge: setup?.summary.todo,
+      // Everything still outstanding: what the app can see (todo) plus the
+      // dashboard steps nobody has ticked off. The manual ones used to be
+      // counted as todo forever, which is why this badge never reached zero.
+      badge: setup ? setup.summary.todo + setup.summary.manual : undefined,
     },
   ];
 
@@ -2370,6 +2526,131 @@ export default function AdminDashboard() {
             )}
           </div>
         )}
+        {/* Viewers Tab — the people who watch. Every detail an admin needs to
+            identify one, and the same controls they hold over a creator. */}
+        {activeTab === "viewers" && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display font-bold">Viewers</h2>
+                <p className="text-xs text-white/40 mt-0.5">
+                  {viewerList.length} account{viewerList.length === 1 ? "" : "s"} — everyone who
+                  watches, with what they hold and when they were last here
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={viewerQuery}
+                  onChange={(e) => setViewerQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") fetchViewers();
+                  }}
+                  placeholder="Name, email or phone"
+                  className="input-field text-sm w-full sm:w-64"
+                />
+                <button onClick={() => fetchViewers()} className="btn-ghost text-sm shrink-0">
+                  Search
+                </button>
+              </div>
+            </div>
+
+            {viewerList.length === 0 ? (
+              <div className="glass-card p-12 text-center">
+                <Users className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
+                <p className="text-white/50">
+                  {viewerQuery ? "No account matches that search" : "No viewers found"}
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-4">
+                {viewerList.map((viewer) => (
+                  <div key={viewer.id} className="glass-card p-5">
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                      <div className="flex items-start gap-4 min-w-0">
+                        <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center font-bold text-white/70 shrink-0">
+                          {viewer.displayName?.[0] || "?"}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-medium flex items-center gap-2 flex-wrap">
+                            {viewer.displayName || "Unnamed"}
+                            {viewer.isBanned && (
+                              <span className="bg-red-500/20 text-red-400 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                                BANNED
+                              </span>
+                            )}
+                            {viewer.strikes > 0 && (
+                              <span className="bg-amber-500/15 text-amber-300 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                                {viewer.strikes} strike{viewer.strikes === 1 ? "" : "s"}
+                              </span>
+                            )}
+                          </p>
+                          <p className="text-xs text-white/50 truncate">
+                            {viewer.email || "no email"} · {viewer.phone || "no phone"}
+                          </p>
+                          <p className="text-xs text-white/40 mt-0.5">
+                            Wallet TZS {viewer.walletBalance.toLocaleString()} ·{" "}
+                            {viewer._count?.videoAccess ?? 0} purchased ·{" "}
+                            {viewer._count?.subscriptions ?? 0} subscribed ·{" "}
+                            {viewer._count?.sentMessages ?? 0} message(s) sent
+                          </p>
+                          <p className="text-xs text-white/30 mt-0.5">
+                            Joined {new Date(viewer.createdAt).toLocaleDateString("en-GB")} · last
+                            seen{" "}
+                            {viewer.lastLoginAt
+                              ? new Date(viewer.lastLoginAt).toLocaleDateString("en-GB")
+                              : "never"}
+                            {viewer.lastWarning && (
+                              <>
+                                {" "}· last warning{" "}
+                                {viewer.lastWarning.acknowledgedAt ? "read" : "NOT read yet"}
+                              </>
+                            )}
+                          </p>
+                          {viewer.isBanned && viewer.banReason && (
+                            <p className="text-xs text-red-300/70 mt-1">Banned: {viewer.banReason}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {viewer.isBanned ? (
+                          <button
+                            onClick={() => handleViewerAction(viewer.id, "UNBAN")}
+                            className="bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          >
+                            <CheckCircle className="w-3 h-3" /> Unban
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => handleViewerAction(viewer.id, "WARN")}
+                              className="bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                            >
+                              <AlertTriangle className="w-3 h-3" /> Warn
+                            </button>
+                            <button
+                              onClick={() => handleViewerAction(viewer.id, "BAN")}
+                              className="bg-red-500/20 text-red-400 hover:bg-red-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                            >
+                              <UserX className="w-3 h-3" /> Ban
+                            </button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => handleViewerAction(viewer.id, "DELETE_ACCOUNT")}
+                          className="bg-red-500/10 text-red-300 hover:bg-red-500/20 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                        >
+                          <Trash2 className="w-3 h-3" /> Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Creators Tab — verified badge management */}
         {activeTab === "creators" && (
           <div className="space-y-4">
@@ -3194,7 +3475,16 @@ export default function AdminDashboard() {
                   <div className="flex items-center gap-3 flex-wrap text-sm">
                     <span className="text-emerald-400">{setup.summary.done} collected</span>
                     <span className="text-white/20">·</span>
-                    <span className="text-white/70">{setup.summary.todo} still to do</span>
+                    <span className="text-white/70">{setup.summary.todo} still to configure</span>
+                    {setup.summary.manual > 0 && (
+                      <>
+                        <span className="text-white/20">·</span>
+                        <span className="text-amber-300/90">
+                          {setup.summary.manual} dashboard {setup.summary.manual === 1 ? "step" : "steps"}{" "}
+                          waiting on you
+                        </span>
+                      </>
+                    )}
                   </div>
                   <div className="h-2 rounded-full bg-white/5 mt-3 overflow-hidden">
                     <div
@@ -3202,7 +3492,10 @@ export default function AdminDashboard() {
                       style={{
                         width: `${Math.round(
                           (setup.summary.done /
-                            Math.max(setup.summary.done + setup.summary.todo, 1)) *
+                            Math.max(
+                              setup.summary.done + setup.summary.todo + setup.summary.manual,
+                              1
+                            )) *
                             100
                         )}%`,
                       }}
@@ -3323,7 +3616,12 @@ export default function AdminDashboard() {
             </div>
 
             {setup?.groups.map((group) => (
-              <SetupGroupCard key={group.id} group={group} />
+              <SetupGroupCard
+                key={group.id}
+                group={group}
+                onToggleStep={toggleSetupStep}
+                busyStep={stepBusy}
+              />
             ))}
 
             {!setup && (

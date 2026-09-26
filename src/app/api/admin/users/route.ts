@@ -46,16 +46,69 @@ export async function GET(request: NextRequest) {
         kycStatus: true,
         strikes: true,
         walletBalance: true,
+        verifiedUntil: true,
+        messagesEnabled: true,
+        payoutFrozenUntil: true,
+        locale: true,
+        lastLoginAt: true,
         createdAt: true,
         _count: {
           select: {
             videos: { where: { isPublished: true, isDeleted: false } },
+            videoAccess: true,
+            subscriptions: true,
+            sentMessages: true,
           },
-          },
+        },
       },
     });
 
-    return api.success({ users });
+    // Whether the last warning each of these people was issued has actually been
+    // READ.
+    //
+    // StrikeLog has no relation to User (by design — a strike outlives the
+    // account it was issued to), so this is a second query rather than an
+    // include. Without it an admin sees "warned" and cannot tell whether the
+    // warning landed, which is the whole question when the next step is a ban.
+    const ids = users.map((u) => u.id);
+    const latestWarnings = ids.length
+      ? await prisma.strikeLog.findMany({
+          where: { creatorId: { in: ids } },
+          orderBy: { createdAt: "desc" },
+          select: {
+            creatorId: true,
+            action: true,
+            reason: true,
+            createdAt: true,
+            acknowledgedAt: true,
+          },
+        })
+      : [];
+
+    const warningByUser = new Map<
+      string,
+      { action: string; reason: string; createdAt: Date; acknowledgedAt: Date | null }
+    >();
+    for (const warning of latestWarnings) {
+      if (!warningByUser.has(warning.creatorId)) warningByUser.set(warning.creatorId, warning);
+    }
+
+    return api.success({
+      users: users.map((user) => {
+        const warning = warningByUser.get(user.id);
+        return {
+          ...user,
+          lastWarning: warning
+            ? {
+                action: warning.action,
+                reason: warning.reason,
+                createdAt: warning.createdAt.toISOString(),
+                acknowledgedAt: warning.acknowledgedAt?.toISOString() ?? null,
+              }
+            : null,
+        };
+      }),
+    });
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized();
@@ -153,12 +206,17 @@ export async function POST(request: NextRequest) {
           issuedBy: auth.userId,
         },
       });
+      // Delivered twice on purpose, and the second one is the one that counts:
+      // a notification the creator may never open, and a dashboard warning they
+      // must acknowledge before the dashboard is usable again (GET/POST
+      // /api/creator/warnings, and the block on /creator). type "error" so the
+      // bell cannot be mistaken for a sale notice.
       await prisma.notification.create({
         data: {
           userId,
-          title: "Warning from Genhub ⚠️",
-          message: `${reason} (Strike ${nextStrikes}/3 — three strikes removes your account.)`,
-          type: "warning",
+          title: "Warning from Genhub ⚠️ — open your dashboard",
+          message: `${reason} (Strike ${nextStrikes}/3 — three strikes removes your account.) Confirm you have read this on your creator dashboard.`,
+          type: "error",
           link: "/creator",
         },
       });

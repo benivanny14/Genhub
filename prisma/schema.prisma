@@ -510,6 +510,15 @@ model StrikeLog {
   videoId    String?
   issuedBy   String
   createdAt  DateTime    @default(now())
+  /// When the creator acknowledged reading this warning.
+  ///
+  /// A warning that only exists in a bell is a warning that was never read:
+  /// the bell can be ignored, and a creator who never opened it keeps uploading
+  /// until the ban lands. NULL therefore means "not seen yet", and the creator's
+  /// own dashboard blocks on an unacknowledged warning until they press the one
+  /// button that sets this — so the record of the warning and the record of it
+  /// being read are the same row.
+  acknowledgedAt DateTime?
 
   @@index([creatorId])
   @@index([issuedBy])
@@ -909,6 +918,26 @@ model CronHeartbeat {
   runsTotal           Int       @default(0)
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
+}
+
+// =============================================================================
+// LAUNCH SETUP: steps an operator has ticked off by hand
+//
+// Some launch steps live in somebody else's dashboard — fund the gateway float,
+// allow the domain as a Bunny referrer — and no code can detect whether they
+// are done. Counting them as "todo" forever is what left the Setup badge stuck
+// at a number nobody could clear, so the operator records it here instead: the
+// badge counts what is genuinely outstanding, and this is the proof of the rest.
+// =============================================================================
+
+model SetupStep {
+  /// The checklist item id (e.g. "harakapay_float"), so a step cannot be
+  /// ticked twice and the record survives the checklist being reordered.
+  id     String   @id
+  title  String
+  doneAt DateTime @default(now())
+  /// Which admin ticked it. Nullable so a row survives that admin's deletion.
+  doneBy String?
 }
 
 // =============================================================================

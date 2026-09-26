@@ -9,6 +9,8 @@ import {
   VolumeX,
   Maximize,
   Minimize,
+  Expand,
+  Shrink,
   SkipForward,
   Settings,
   Download,
@@ -76,6 +78,18 @@ export default function VideoPlayer({
   const [volume, setVolume] = useState(1);
   const [showControls, setShowControls] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
+
+  // How the picture fills the frame. FILL is the default, and it is the fix for
+  // the report that the video "only shows in the middle with black bars down
+  // both sides": the element was a 16:9 box with the browser's default
+  // object-fit, so anything not exactly 16:9 — a phone-shot vertical clip, a 4:3
+  // scene — was letterboxed inside it.
+  //
+  // The toggle exists because filling the frame CROPS, and on the scene where
+  // the crop costs something (a title card, a shot with two people) that is the
+  // viewer's call rather than the player's. "Fit" is the old behaviour, one tap
+  // away, instead of the only behaviour.
+  const [fill, setFill] = useState(true);
 
   // Quality selector state (HLS levels)
   const hlsRef = useRef<Hls | null>(null);
@@ -505,14 +519,22 @@ export default function VideoPlayer({
   return (
     <div
       ref={containerRef}
-      className="relative bg-black rounded-2xl overflow-hidden group select-none"
+      className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden group select-none"
       onMouseMove={showControlsTemporarily}
       onMouseLeave={() => isPlaying && setShowControls(false)}
     >
-      {/* Video Element */}
+      {/* Video Element.
+
+          The frame's 16:9 lives on the container and the video is stretched
+          across it, so there is no letterbox to show: object-cover fills the
+          frame (cropping the overflow) and object-contain is the viewer's
+          choice when they want the whole frame. `absolute inset-0 h-full w-full`
+          is what makes the video follow the container instead of the container
+          following the video — the other way round is exactly how the black
+          bars came back. */}
       <video
         ref={videoRef}
-        className="w-full aspect-video"
+        className={`absolute inset-0 h-full w-full ${fill ? "object-cover" : "object-contain"}`}
         poster={poster}
         playsInline
         preload="metadata"
@@ -694,6 +716,18 @@ export default function VideoPlayer({
                 )}
               </div>
             )}
+
+            {/* Fill the screen, or show the whole frame as it was shot. */}
+            <button
+              onClick={() => setFill((v) => !v)}
+              title={fill ? "Show the whole frame" : "Fill the screen"}
+              className="flex items-center gap-1.5 p-1.5 hover:bg-white/10 rounded-lg transition"
+            >
+              {fill ? <Shrink className="w-5 h-5" /> : <Expand className="w-5 h-5" />}
+              <span className="text-[10px] text-white/70 font-medium hidden sm:inline">
+                {fill ? "Fill" : "Fit"}
+              </span>
+            </button>
 
             <button onClick={toggleFullscreen} className="p-1.5 hover:bg-white/10 rounded-lg transition">
               {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}

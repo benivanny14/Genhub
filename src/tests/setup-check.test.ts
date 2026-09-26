@@ -272,7 +272,12 @@ describe("assessSetup", () => {
     const report = assessSetup();
     const items = report.groups.flatMap((g) => g.items);
     expect(items).toHaveLength(SETUP_ITEMS.length);
-    expect(report.summary.done + report.summary.todo).toBe(SETUP_ITEMS.length);
+    // Three buckets, not two: a dashboard step nobody has ticked off is neither
+    // "collected" nor something the app can see is missing. It used to be
+    // counted as todo forever, which is why the admin badge never cleared.
+    expect(report.summary.done + report.summary.todo + report.summary.manual).toBe(
+      SETUP_ITEMS.length
+    );
   });
 
   it("reports the env file it actually read", () => {
@@ -321,5 +326,32 @@ describe("assessSetup", () => {
     expect(manual).toBeDefined();
     expect(manual!.state).toBe("missing");
     expect(manual!.display).toBeNull();
+    expect(manual!.manual).toBe(true);
+    expect(manual!.manualDone).toBe(false);
+  });
+
+  it("lets an operator tick a dashboard step off, so the count can reach zero", () => {
+    const step = SETUP_ITEMS.find((i) => !i.key)!;
+
+    const report = assessSetup([step.id]);
+    const item = report.groups.flatMap((g) => g.items).find((i) => i.id === step.id)!;
+
+    expect(item.state).toBe("ok");
+    expect(item.manualDone).toBe(true);
+    expect(report.summary.manual).toBe(
+      SETUP_ITEMS.filter((i) => !i.key).length - 1
+    );
+    // A ticked manual step is collected, not still-to-do.
+    expect(report.summary.done).toBe(assessSetup().summary.done + 1);
+  });
+
+  it("reports manual steps separately from what the app can verify", () => {
+    const report = assessSetup();
+    const manualCount = SETUP_ITEMS.filter((i) => !i.key).length;
+
+    expect(report.summary.manual).toBe(manualCount);
+    // Nothing a manual step does may show up as an unfinished CONFIG item: that
+    // is the number an operator can actually act on, and it must mean only that.
+    expect(report.summary.todo).toBe(SETUP_ITEMS.length - manualCount - report.summary.done);
   });
 });

@@ -88,6 +88,14 @@ export type ItemState =
 
 export interface SetupItemView extends ChecklistItem {
   state: ItemState;
+  /**
+   * True for a step with no environment variable — work in somebody else's
+   * dashboard. The app can never detect whether it is done, so an admin marks
+   * it off by hand (see the SetupStep table).
+   */
+  manual?: boolean;
+  /** A manual step an admin has ticked off. */
+  manualDone?: boolean;
   /** a safe-to-display summary; null when nothing is set */
   display: string | null;
   hint?: string;
@@ -105,7 +113,16 @@ export interface SetupGroupView extends Omit<ChecklistGroup, "items"> {
 
 export interface SetupReport {
   groups: SetupGroupView[];
-  summary: { done: number; todo: number; restartPending: number };
+  /**
+   * `todo` counts what the app can SEE is unfinished (a variable missing, local
+   * or wrong). `manual` counts dashboard steps nobody has ticked off yet.
+   *
+   * They are separate numbers because only one of them could ever have been
+   * zero before this: a manual step has no variable, so it was counted as todo
+   * forever — which is why the admin Setup badge sat at a number that opening
+   * the tab, reading everything and doing everything could not clear.
+   */
+  summary: { done: number; todo: number; manual: number; restartPending: number };
   envFile: { path: string; present: boolean };
 }
 
@@ -200,20 +217,34 @@ const STATE_HINT: Record<ItemState, string | undefined> = {
 };
 
 // ------------------------------------------------------------------- assess
-export function assessSetup(): SetupReport {
+export function assessSetup(doneManualSteps: Iterable<string> = []): SetupReport {
   const file = readEnvFile();
+  const manualDone = new Set(doneManualSteps);
 
-  let done = 0;
+  let doneCount = 0;
   let todo = 0;
+  let manual = 0;
   let restartCount = 0;
 
   const groups: SetupGroupView[] = SETUP_GROUPS.map((group) => ({
     ...group,
     items: group.items.map((item) => {
-      // A manual step has no env var: it is work in someone else's dashboard.
+      // A manual step has no env var: it is work in someone else's dashboard,
+      // and the only evidence it was done is an admin saying so. Counted as its
+      // own kind rather than as todo, so the panel can tell "you have not done
+      // this yet" from "the app cannot see whether you have".
       if (!item.key) {
-        todo += 1;
-        return { ...item, state: "missing" as const, display: null, restartPending: false };
+        const isDone = manualDone.has(item.id);
+        if (isDone) doneCount += 1;
+        else manual += 1;
+        return {
+          ...item,
+          state: (isDone ? "ok" : "missing") as ItemState,
+          display: null,
+          restartPending: false,
+          manual: true,
+          manualDone: isDone,
+        };
       }
 
       // Resolve which variable this item is actually judged by: the first
@@ -257,7 +288,7 @@ export function assessSetup(): SetupReport {
             : chosen.mustHint || `Must contain "${chosen.must}".`
           : STATE_HINT[state];
 
-      if (state === "ok") done += 1;
+      if (state === "ok") doneCount += 1;
       else todo += 1;
       if (restartPending) restartCount += 1;
 
@@ -273,7 +304,7 @@ export function assessSetup(): SetupReport {
 
   return {
     groups,
-    summary: { done, todo, restartPending: restartCount },
+    summary: { done: doneCount, todo, manual, restartPending: restartCount },
     envFile: { path: file.path, present: file.present },
   };
 }

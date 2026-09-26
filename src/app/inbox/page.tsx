@@ -71,7 +71,7 @@ const DEMO_MESSAGES: Message[] = [
 ];
 
 export default function InboxPage() {
-  const [user, setUser] = useState<{ id: string } | null>(null);
+  const [user, setUser] = useState<{ id: string; role?: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [demoMode, setDemoMode] = useState(false);
@@ -94,6 +94,12 @@ export default function InboxPage() {
   const { theme } = useTheme();
   const { toast } = useToast();
   const isLight = theme === "light";
+
+  // Answering costs a creator nothing. The viewer is the payer — that is the
+  // product — and charging a creator for their own reply made the inbox
+  // one-way for anyone whose wallet was empty. Same rule the API applies, read
+  // from the same source of truth (the account's role).
+  const freeReply = user?.role === "CREATOR" || user?.role === "ADMIN";
 
   useEffect(() => {
     init();
@@ -252,7 +258,9 @@ export default function InboxPage() {
   async function handleSend() {
     if (!activePartner || !content.trim() || sending) return;
     const amt = Math.max(0, parseInt(amount) || 0);
-    if (amt < MIN_PAID_MESSAGE) {
+    // The floor only applies to somebody who is paying. A reply carries no
+    // amount at all, so there is nothing for the API to charge.
+    if (!freeReply && amt < MIN_PAID_MESSAGE) {
       toast("error", `Minimum paid message is TZS ${MIN_PAID_MESSAGE}`);
       return;
     }
@@ -261,7 +269,11 @@ export default function InboxPage() {
       const res = await fetch("/api/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ receiverId: activePartner.id, amount: amt, content: content.trim() }),
+        body: JSON.stringify(
+          freeReply
+            ? { receiverId: activePartner.id, content: content.trim() }
+            : { receiverId: activePartner.id, amount: amt, content: content.trim() }
+        ),
       });
       const data = await res.json();
       if (data.success) {
@@ -522,15 +534,19 @@ export default function InboxPage() {
                         </p>
                       ) : (
                         <div className="flex flex-col sm:flex-row gap-2">
-                          <input
-                            type="number"
-                            value={amount}
-                            onChange={(e) => setAmount(e.target.value)}
-                            min={MIN_PAID_MESSAGE}
-                            max={50000}
-                            className={cn("input-field sm:w-28 py-2.5 text-sm")}
-                            title="Amount (TZS)"
-                          />
+                          {/* The price of the message. A creator answering does
+                              not see it, because they are not paying. */}
+                          {!freeReply && (
+                            <input
+                              type="number"
+                              value={amount}
+                              onChange={(e) => setAmount(e.target.value)}
+                              min={MIN_PAID_MESSAGE}
+                              max={50000}
+                              className={cn("input-field sm:w-28 py-2.5 text-sm")}
+                              title="Amount (TZS)"
+                            />
+                          )}
                           <input
                             type="text"
                             value={content}
@@ -554,8 +570,9 @@ export default function InboxPage() {
                       )}
                       {!demoMode && (
                         <p className={cn("text-[10px] mt-2", isLight ? "text-gray-400" : "text-white/30")}>
-                          Every message is a paid message — the creator keeps 70% of the amount above (min
-                          TZS {MIN_PAID_MESSAGE}). {" "}
+                          {freeReply
+                            ? "Replying is free for you — the viewer is the one who pays for messages."
+                            : `Every message is a paid message — the creator keeps 70% of the amount above (min TZS ${MIN_PAID_MESSAGE}).`}{" "}
                           {activePartner?.role === "CREATOR" && (
                             <Link
                               href={`/creator/${activePartner.id}`}

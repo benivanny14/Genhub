@@ -16,16 +16,17 @@ import { z } from "zod";
 
 const sendMessageSchema = z.object({
   receiverId: z.string().min(1),
-  // Every message is a paid message. There is no free chat and no exemption
-  // list: a subscription buys a creator's *videos* for a month, not their inbox,
-  // and a creator answering a fan pays like anybody else. 0 is therefore a
-  // missing amount, not a meaningful one, and the server charges exactly what
-  // the request asks for.
+  // The amount is what a VIEWER pays to reach somebody, and it is required of
+  // them. A creator (or admin) answering their own inbox sends no amount at all
+  // - see the freeReply check in POST, which is the rule that makes a creator's
+  // inbox a conversation instead of a one-way channel. 0 is therefore a missing
+  // amount for a viewer, not a meaningful one.
   amount: z
     .number()
     .int()
     .min(MIN_PAID_MESSAGE, `The minimum amount is TZS ${MIN_PAID_MESSAGE}`)
-    .max(MAX_PAID_MESSAGE),
+    .max(MAX_PAID_MESSAGE)
+    .optional(),
   content: z.string().min(1).max(2000),
 });
 
@@ -70,18 +71,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Who is allowed to answer without paying.
+    //
+    // A viewer pays to start and to continue a conversation — that is the
+    // product, and it is unchanged. A creator answering their own inbox does
+    // NOT: charging them made a reply impossible for anyone whose wallet was
+    // empty (every creator's money sits in earnings, not in the wallet), and it
+    // turned the inbox into a one-way channel in which a fan could pay to be
+    // heard and hear nothing back.
+    //
+    // Read from the database, not from the token: a role can change long before
+    // a seven-day session is reissued, and this decides who pays.
+    const sender = await prisma.user.findUnique({
+      where: { id: auth.userId },
+      select: { role: true },
+    });
+    const freeReply = sender?.role === "CREATOR" || sender?.role === "ADMIN";
+
+    if (!freeReply && amount === undefined) {
+      return api.validation(`The minimum amount is TZS ${MIN_PAID_MESSAGE}`);
+    }
+
+    /** What is actually taken. Zero for a reply, which is the point. */
+    const charged = freeReply ? 0 : (amount as number);
+
     // The same 70/30 split every other sale on the platform uses. The sender pays
     // the amount they chose; the platform takes its fee from it and the receiver
     // gets the rest — a paid message is not an exception to the promise /about
-    // makes, and the two halves always add back up to what was charged.
-    const { platformFee, creatorCut } = splitRevenue(amount);
+    // makes, and the two halves always add back up to what was charged. A free
+    // reply splits 0, so nothing is invented for anyone.
+    const { platformFee, creatorCut } = splitRevenue(charged);
 
     const message = await prisma.$transaction(async (tx) => {
-      // The balance check and the deduction are one statement (debitWallet).
-      // Checking with a read first let two messages start on one balance.
-      const debited = await debitWallet(tx, { userId: auth.userId, amount });
-      if (!debited.ok) {
-        return { insufficient: true as const, balance: debited.balance };
+      if (charged > 0) {
+        // The balance check and the deduction are one statement (debitWallet).
+        // Checking with a read first let two messages start on one balance.
+        const debited = await debitWallet(tx, { userId: auth.userId, amount: charged });
+        if (!debited.ok) {
+          return { insufficient: true as const, balance: debited.balance };
+        }
       }
 
       // Create message
@@ -93,10 +121,27 @@ export async function POST(request: NextRequest) {
         data: {
           senderId: auth.userId,
           receiverId,
-          amount,
+          amount: charged,
           content,
         },
       });
+
+      // Nothing to split when nothing was charged: no creator balance moves, no
+      // wallet is credited, and no ledger row is written. A ledger entry for a
+      // free message would be a transaction of 0 that every earnings and revenue
+      // read would then have to know to ignore.
+      if (charged === 0) {
+        await tx.notification.create({
+          data: {
+            userId: receiverId,
+            title: "New message 💬",
+            message: `${sender?.role === "ADMIN" ? "Genhub support" : "The creator"} replied to you.`,
+            type: "info",
+            link: "/inbox",
+          },
+        });
+        return msg;
+      }
 
       if (receiver.role === "CREATOR") {
         // Credit creator's pending balance (14-day holding, like a purchase)
@@ -132,7 +177,7 @@ export async function POST(request: NextRequest) {
         data: {
           userId: auth.userId,
           creatorId: receiver.role === "CREATOR" ? receiverId : null,
-          amount,
+          amount: charged,
           platformFee,
           type: "TIP",
           status: "SUCCESS",
@@ -147,7 +192,7 @@ export async function POST(request: NextRequest) {
         data: {
           userId: receiverId,
           title: "New message 💬",
-          message: `You received a paid message worth TZS ${amount.toLocaleString()} — your share is TZS ${creatorCut.toLocaleString()}`,
+          message: `You received a paid message worth TZS ${charged.toLocaleString()} — your share is TZS ${creatorCut.toLocaleString()}`,
           type: "info",
           link: "/inbox",
         },

@@ -52,6 +52,7 @@ export const AUDIT_ACTIONS = {
   paymentRefund: "payment.refund",
   blueTickApprove: "bluetick.approve",
   blueTickReject: "bluetick.reject",
+  setupStep: "setup.step",
   jobRun: "job.run",
 } as const;
 
