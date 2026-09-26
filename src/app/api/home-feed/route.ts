@@ -10,7 +10,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
 import { cacheGet, cacheSet } from "@/lib/redis";
-import { resolveTeaserUrl } from "@/lib/bunny";
+import { introClipPath, resolveTeaserUrl } from "@/lib/bunny";
 import { rankTrending, buildCategoryCounts, activeCreators } from "@/lib/trending";
 
 const ROW_SIZE = 10;
@@ -62,25 +62,35 @@ type RawVideo = {
 // same helper as every other route so the shape cannot drift again.
 function mapVideos(raw: RawVideo[]) {
   return raw.map(
-    ({ previewUrl, bunnyVideoId, teaserBunnyVideoId, teaserClipUrl, price, createdAt, ...v }) => ({
-      ...v,
-      // `price` is destructured out only so the teaser resolver can see it — it
-      // must go back on the response, or every card loses its price badge and
-      // the UI cannot tell a free scene from a paid one.
-      price,
-      createdAt: createdAt.toISOString(),
+    ({ previewUrl, bunnyVideoId, teaserBunnyVideoId, teaserClipUrl, price, createdAt, ...v }) => {
       // `id` is the row id, and the resolver needs it: a Bunny-hosted trailer is
       // served through /api/videos/<rowId>/stream so its manifest can be
       // rewritten (see lib/hls.ts) instead of handed over unusable.
-      teaserUrl: resolveTeaserUrl({
+      const teaserUrl = resolveTeaserUrl({
         id: v.id,
         bunnyVideoId,
         previewUrl,
         teaserBunnyVideoId,
         teaserClipUrl,
         price,
-      }),
-    })
+      });
+
+      return {
+        ...v,
+        // `price` is destructured out only so the teaser resolver can see it — it
+        // must go back on the response, or every card loses its price badge and
+        // the UI cannot tell a free scene from a paid one.
+        price,
+        createdAt: createdAt.toISOString(),
+        teaserUrl,
+        // What a card plays on hover when the scene is LOCKED. Without this the
+        // whole grid moves on hover except the paid scenes — the ones the page
+        // exists to sell — because a paid scene with no uploaded trailer resolves
+        // to null. The clip is sixteen seconds cut from the scene itself and is
+        // signed per file, so it is safe for anyone to receive.
+        introUrl: teaserUrl ? null : introClipPath({ id: v.id, bunnyVideoId }),
+      };
+    }
   );
 }
 

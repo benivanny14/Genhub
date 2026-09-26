@@ -7,7 +7,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
-import { resolveTeaserUrl } from "@/lib/bunny";
+import { introClipPath, resolveTeaserUrl } from "@/lib/bunny";
 
 export async function GET(request: NextRequest) {
   try {
@@ -80,22 +80,30 @@ export async function GET(request: NextRequest) {
       // Bunny-hosted rows previously got `teaserUrl: previewUrl` regardless,
       // so a subscriber's feed had no teaser at all for them.
       videos: videos.map(
-        ({ previewUrl, bunnyVideoId, teaserBunnyVideoId, teaserClipUrl, price, ...v }) => ({
-          ...v,
-          // Destructured out only for the resolver — the client needs it back.
-          price,
+        ({ previewUrl, bunnyVideoId, teaserBunnyVideoId, teaserClipUrl, price, ...v }) => {
           // `id` is the row id: a Bunny-hosted trailer is served through
           // /api/videos/<rowId>/stream so its manifest can be rewritten rather
           // than handed to a player that cannot authorise its segments.
-          teaserUrl: resolveTeaserUrl({
+          const teaserUrl = resolveTeaserUrl({
             id: v.id,
             bunnyVideoId,
             previewUrl,
             teaserBunnyVideoId,
             teaserClipUrl,
             price,
-          }),
-        })
+          });
+
+          return {
+            ...v,
+            // Destructured out only for the resolver — the client needs it back.
+            price,
+            teaserUrl,
+            // A subscription covers a creator's whole catalogue, but a feed also
+            // carries scenes the viewer has NOT unlocked, and those are the ones
+            // whose cards need something to show on hover.
+            introUrl: teaserUrl ? null : introClipPath({ id: v.id, bunnyVideoId }),
+          };
+        }
       ),
       posts,
     });

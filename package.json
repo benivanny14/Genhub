@@ -37,6 +37,7 @@
     "smoke:bunny": "node scripts/verify-bunny.mjs",
     "verify:referrers": "node scripts/verify-referrers.mjs",
     "verify:paywall": "node scripts/verify-paywall.mjs",
+    "verify:intro-clip": "node scripts/verify-intro-clip.mjs",
     "verify:jwt-separation": "node scripts/verify-jwt-separation.mjs",
     "admin:create": "node scripts/create-admin.mjs",
     "accounts:create": "node scripts/create-launch-accounts.mjs",

@@ -632,6 +632,16 @@ export function resolveTeaserUrl(video: VideoSourceLocation): string | null {
 export const INTRO_PREVIEW_MINUTES = 60;
 
 /**
+ * How long the signed segment URLs inside a stitched intro clip stay valid.
+ *
+ * Short by design: the clip is ~16 seconds, so a viewer who starts it needs a
+ * couple of minutes at most, and every second beyond that is a URL that could be
+ * reused. It is not a playback session — nothing in the manifest leads anywhere
+ * else, because each URL opens one segment file and nothing under it.
+ */
+export const INTRO_CLIP_MINUTES = 20;
+
+/**
  * Bunny's OWN animated preview of a scene — a silent ~10 second montage at
  * `/{bunnyVideoId}/preview.webp` — signed for a viewer who has not paid.
  *
@@ -699,6 +709,69 @@ export function resolveIntroPreviewUrl(
   } catch {
     // An unconfigured CDN hostname is the only throw here; both callers would
     // rather show no intro than a broken image.
+    return null;
+  }
+}
+
+/**
+ * The in-app URL for a scene's stitched intro clip:
+ * `/api/videos/<rowId>/intro-clip`.
+ *
+ * The client never sees the manifest's real location or the Bunny GUID: the route
+ * fetches the scene's own playlists with per-file tokens, decides which four
+ * segments make the trailer, and signs those four URLs (lib/intro-clip.ts).
+ *
+ * Null when the row cannot be served this way — no row id, no Bunny id, a
+ * fabricated `demo-` id, or an unconfigured library — which is also the signal
+ * for the page to fall back to Bunny's animated preview.
+ */
+export function introClipPath(video: VideoSourceLocation): string | null {
+  if (!video.id || !video.bunnyVideoId) return null;
+  if (!isBunnyPlaybackConfigured()) return null;
+  if (!isBunnyVideoId(video.bunnyVideoId)) return null;
+  return `/api/videos/${encodeURIComponent(video.id)}/intro-clip`;
+}
+
+/**
+ * The signed CDN URL for one file inside the video's folder, server-side only.
+ *
+ * The signature covers the EXACT path: measured against the live zone, a token
+ * signed for `…/360p/video0.ts` answers 403 for `video7.ts`, for the manifests,
+ * for `play_360p.mp4`, and for another video's segments, and a forged token is
+ * refused everywhere. That property is what makes the intro clip safe to hand to
+ * a non-buyer: the clip is the only thing the URLs inside it can open.
+ *
+ * The path is joined and normalised here rather than by the caller so that no
+ * manifest line — however it is written — can steer the signature at a path
+ * outside the video's own folder.
+ */
+export function signedBunnyFileUrl(
+  bunnyVideoId: string,
+  relativePath: string,
+  expirationMinutes: number = INTRO_CLIP_MINUTES
+): string | null {
+  if (!isBunnyPlaybackConfigured()) return null;
+  if (!isBunnyVideoId(bunnyVideoId)) return null;
+
+  const parts: string[] = [];
+  for (const part of `${bunnyVideoId}/${relativePath}`.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+
+  const path = `/${parts.join("/")}`;
+  // A manifest that tried to climb out of the folder is refused outright: there
+  // is no legitimate line inside a rendition playlist that leaves it.
+  if (!path.startsWith(`/${bunnyVideoId}/`)) return null;
+
+  const expiresAt = Math.floor(Date.now() / 1000) + expirationMinutes * 60;
+  try {
+    return signedBunnyUrl(path, expiresAt);
+  } catch {
     return null;
   }
 }

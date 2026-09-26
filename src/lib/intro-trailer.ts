@@ -8,19 +8,25 @@
 // it wrong either leaks the scene or shows a black void), and it is trivially
 // unit-testable.
 //
-// Two intros exist, in preference order:
+// Three intros exist, in preference order:
 //
 //   "trailer"    a separate short clip the CREATOR uploaded. Chosen, branded,
 //                played through the HLS player with an end card.
-//   "animation"  Bunny's own generated animated preview (a silent ~10s montage).
-//                The automatic floor, so a paid scene with no upload still has
-//                something moving to show instead of a black box.
+//   "montage"    four ~4 second pieces cut from the scene itself (opening,
+//                middle, further in, end) and stitched into one manifest by
+//                /api/videos/[id]/intro-clip — real motion, the shape every
+//                streaming site uses. Safe to hand to a non-buyer because every
+//                segment URL in it is signed for that one file (see
+//                lib/intro-clip.ts), so it cannot be widened into the scene.
+//   "animation"  Bunny's own generated animated preview: a silent, low
+//                resolution webp. The floor beneath the floor, for a library
+//                with previews on but no usable playlist.
 //
-// Neither is the scene: both are separate assets, so neither can be used to
-// watch it.
+// None of the three is the scene: each is a separate asset (or, for the montage,
+// sixteen seconds of one), so none can be used to watch it.
 // =============================================================================
 
-export type IntroMedium = "trailer" | "animation" | "none";
+export type IntroMedium = "trailer" | "montage" | "animation" | "none";
 
 export interface IntroTrailerInput {
   /** The viewer holds a live entitlement (free, purchase, subscription, owner). */
@@ -30,8 +36,19 @@ export interface IntroTrailerInput {
   /** The creator's separate trailer clip, if one is attached and playable. */
   teaserUrl: string | null | undefined;
   /**
-   * Bunny's generated animated preview, already signed. Only ever sent for a
-   * viewer with no entitlement, and only when no trailer clip exists.
+   * The in-app URL of the stitched intro clip (`/api/videos/<id>/intro-clip`).
+   * Only ever sent for a viewer with no entitlement and no trailer.
+   */
+  clipUrl?: string | null;
+  /**
+   * Set once the clip has failed to play in the browser — the manifest did not
+   * load, or the segments were refused. The page then drops to the animation
+   * rather than showing a player that will never start.
+   */
+  montageFailed?: boolean;
+  /**
+   * Bunny's generated animated preview, already signed. The fallback when the
+   * clip cannot be built or played.
    */
   previewAnimationUrl?: string | null;
   /**
@@ -50,18 +67,21 @@ export interface IntroTrailerInput {
  * Returns "none" when the viewer can already watch the scene (an intro would be
  * a downgrade), when the scene cannot play at all (there is no preview to build
  * either), or when it is free (there is nothing to unlock). Otherwise the
- * creator's trailer wins, and Bunny's animation is the fallback.
+ * creator's trailer wins, then the stitched clip, then Bunny's webp animation.
  */
 export function pickIntroMedium({
   canPlayFull,
   notPlayable,
   teaserUrl,
+  clipUrl,
+  montageFailed,
   previewAnimationUrl,
   animationFailed,
   price,
 }: IntroTrailerInput): IntroMedium {
   if (canPlayFull || notPlayable || price <= 0) return "none";
   if (teaserUrl) return "trailer";
+  if (clipUrl && !montageFailed) return "montage";
   if (previewAnimationUrl && !animationFailed) return "animation";
   return "none";
 }

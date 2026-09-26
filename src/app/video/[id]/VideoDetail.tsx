@@ -56,6 +56,7 @@ const CommentsSection = dynamic(() => import("@/components/CommentsSection"), {
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/lib/currency";
 import { pickIntroMedium } from "@/lib/intro-trailer";
+import IntroClipPlayer from "@/components/IntroClipPlayer";
 
 /**
  * How many times the animated intro is asked for again before the page gives up
@@ -103,6 +104,13 @@ interface VideoData {
    * box. It is a separate asset, so it cannot be used to watch the scene.
    */
   introPreviewUrl?: string | null;
+  /**
+   * The stitched intro clip: four ~4 second pieces of the scene itself, cut and
+   * signed by /api/videos/[id]/intro-clip. Preferred over the webp animation
+   * because it is real motion — this is the trailer a viewer who has not paid
+   * watches. Sent only when the viewer has no entitlement and no trailer.
+   */
+  introClipUrl?: string | null;
   /** Attached WebVTT captions, when the creator added them. */
   captionsUrl?: string | null;
   /**
@@ -216,6 +224,9 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [introAnimFailed, setIntroAnimFailed] = useState(false);
   // Retries spent on this scene's animated preview. See the `onError` below.
   const [introAnimAttempt, setIntroAnimAttempt] = useState(0);
+  // The stitched clip could not be played (no playlist yet, a CDN refusal, a
+  // browser with no HLS). The card then falls back to the webp animation.
+  const [introClipFailed, setIntroClipFailed] = useState(false);
 
   // Intro state belongs to ONE scene. Walking from one video to the next reuses
   // this component, so a failure on the last scene must not mute the next
@@ -223,6 +234,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   useEffect(() => {
     setIntroAnimFailed(false);
     setIntroAnimAttempt(0);
+    setIntroClipFailed(false);
     setIntroFinished(false);
     setIntroKey(0);
   }, [video?.id, viewAsVisitor]);
@@ -877,12 +889,19 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     canPlayFull,
     notPlayable,
     teaserUrl: video.teaserUrl,
+    clipUrl: video.introClipUrl,
+    montageFailed: introClipFailed,
     previewAnimationUrl: video.introPreviewUrl,
     animationFailed: introAnimFailed,
     price: video.price,
   });
   const showIntroTrailer = introMedium === "trailer";
+  const showIntroMontage = introMedium === "montage";
   const showIntroAnimation = introMedium === "animation";
+  // The stitched clip behaves like the creator's trailer — it has an end, and
+  // the end is the moment to sell — so the ribbon, the paywall bar and the end
+  // card all key off this.
+  const introPlaysLikeTrailer = showIntroTrailer || showIntroMontage;
   // The intro route ignores query strings — `?retry=` exists only to make the
   // browser ask again instead of replaying its cached failure.
   const introAnimSrc = video.introPreviewUrl
@@ -1055,7 +1074,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             />
 
             {/* "INTRO" ribbon — the viewer is told this is a trailer, on purpose */}
-            {showIntroTrailer && !introFinished && (
+            {introPlaysLikeTrailer && !introFinished && (
               <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
                 <span className="inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-brand-300 ring-1 ring-brand-500/40 backdrop-blur">
                   <span className="relative flex h-2 w-2">
@@ -1068,7 +1087,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             )}
 
             {/* End card — the trailer is over, and the only way forward is to pay */}
-            {showIntroTrailer && introFinished && (
+            {introPlaysLikeTrailer && introFinished && (
               <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black/85 px-6 text-center backdrop-blur-sm">
                 <p className="text-xs font-bold uppercase tracking-[0.2em] text-brand-300">
                   Intro finished
@@ -1098,21 +1117,21 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               </div>
             )}
           </div>
-        ) : showIntroAnimation ? (
+        ) : showIntroMontage || showIntroAnimation ? (
           /*
-            Bunny's own animated preview — the intro for a paid scene whose
-            creator never uploaded a trailer. It is a separate ~10s asset, so it
-            teases without giving anything away, and it is what stops this spot
-            from being an empty black box.
+            The intro card. Two assets can fill it and they are the same card on
+            purpose: "montage" is the trailer cut from the scene itself — four
+            four-second pieces of REAL MOTION, the opening, the middle, further
+            in and the end — while "animation" is Bunny's animated preview, the
+            floor for a scene whose playlist cannot be used yet.
+
+            object-cover on both, deliberately. A portrait upload in a 16:9 frame
+            used to sit between two black side bars, which reads as a broken
+            player; filling the frame and cropping the overflow is what a
+            streaming site does, and the blurred poster underneath keeps the
+            frame lit from the first paint instead of flashing black.
           */
           <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
-            {/*
-              Ambient backdrop: the scene's own poster, blurred and over-scaled,
-              so the 16:9 frame is lit the instant the page paints and a portrait
-              scene never sits between two black bars. The poster is already in
-              the browser's cache from the feed, so this costs no request — the
-              animation only has to appear, never to un-blank the box.
-            */}
             {video.thumbnailUrl && (
               <Image
                 src={video.thumbnailUrl}
@@ -1123,21 +1142,36 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 className="scale-125 object-cover opacity-70 blur-2xl"
               />
             )}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={introAnimSrc as string}
-              alt={`${video.title} — intro preview`}
-              className="relative h-full w-full object-contain"
-              onError={() => {
-                // Ask again before giving up: one dropped request must not turn
-                // the intro into the lock card.
-                if (introAnimAttempt < INTRO_ANIM_MAX_ATTEMPTS) {
-                  setIntroAnimAttempt(introAnimAttempt + 1);
-                } else {
-                  setIntroAnimFailed(true);
-                }
-              }}
-            />
+
+            {showIntroMontage ? (
+              <IntroClipPlayer
+                key={`intro-clip-${introKey}`}
+                src={video.introClipUrl as string}
+                title={video.title}
+                onUnavailable={() => setIntroClipFailed(true)}
+                onEnded={handleIntroEnded}
+                // The clip ends, and the end is the offer — so it plays once
+                // rather than looping away the moment it is selling.
+                loop={false}
+              />
+            ) : (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img
+                src={introAnimSrc as string}
+                alt={`${video.title} — intro preview`}
+                className="relative h-full w-full object-cover"
+                onError={() => {
+                  // Ask again before giving up: one dropped request must not turn
+                  // the intro into the lock card.
+                  if (introAnimAttempt < INTRO_ANIM_MAX_ATTEMPTS) {
+                    setIntroAnimAttempt(introAnimAttempt + 1);
+                  } else {
+                    setIntroAnimFailed(true);
+                  }
+                }}
+              />
+            )}
+
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black via-black/25 to-transparent" />
 
             <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
@@ -1146,32 +1180,67 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                   <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
                   <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-500" />
                 </span>
-                Intro Preview
+                {showIntroMontage ? "Intro" : "Intro Preview"}
               </span>
             </div>
 
-            <div className="absolute inset-x-0 bottom-0 p-4 sm:p-6">
-              <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-brand-300">
-                Auto-playing intro · silent
-              </p>
-              <h3 className="mt-1 line-clamp-1 font-display text-lg font-bold text-white sm:text-2xl">
-                {video.title}
-              </h3>
-              <div className="mt-3 flex flex-wrap items-center gap-3">
+            {/* The end card, which for the stitched clip is a real ending. */}
+            {showIntroMontage && introFinished && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black/85 px-6 text-center backdrop-blur-sm">
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-brand-300">
+                  Intro finished
+                </p>
+                <p className="max-w-md text-sm text-white/70">
+                  Those were clips from the scene. The rest stays locked until you
+                  unlock it.
+                </p>
                 <button
                   onClick={unlockFullScene}
-                  className="btn-brand inline-flex items-center gap-2"
+                  className="btn-brand inline-flex items-center gap-2 text-base"
                 >
                   <Shield className="w-4 h-4" />
                   {effectiveUser
-                    ? `Watch the full scene — ${format(video.price)}`
-                    : "Sign in to watch the full scene"}
+                    ? `Unlock the full scene — ${format(video.price)}`
+                    : "Sign in to unlock the full scene"}
                 </button>
-                <span className="text-xs text-white/50">
-                  The full scene is locked until you unlock it.
-                </span>
+                <button
+                  onClick={() => {
+                    setIntroFinished(false);
+                    setIntroKey((k) => k + 1);
+                  }}
+                  className="text-xs text-white/50 underline-offset-2 hover:text-white hover:underline"
+                >
+                  Watch the intro again
+                </button>
               </div>
-            </div>
+            )}
+
+            {!introFinished && (
+              <div className="absolute inset-x-0 bottom-0 p-4 sm:p-6">
+                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-brand-300">
+                  {showIntroMontage
+                    ? "Intro · clips from this scene"
+                    : "Auto-playing intro · silent"}
+                </p>
+                <h3 className="mt-1 line-clamp-1 font-display text-lg font-bold text-white sm:text-2xl">
+                  {video.title}
+                </h3>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <button
+                    onClick={unlockFullScene}
+                    className="btn-brand inline-flex items-center gap-2"
+                  >
+                    <Shield className="w-4 h-4" />
+                    {effectiveUser
+                      ? `Watch the full scene — ${format(video.price)}`
+                      : "Sign in to watch the full scene"}
+                  </button>
+                  <span className="text-xs text-white/50">
+                    The full scene is locked until you unlock it.
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           /*
@@ -1240,7 +1309,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
         )}
 
         {/* Intro paywall bar — under the trailer, never over its controls */}
-        {showIntroTrailer && !introFinished && (
+        {introPlaysLikeTrailer && !introFinished && (
           <div className="mt-3 flex flex-col gap-3 rounded-2xl border border-brand-500/25 bg-brand-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <p className="flex items-center gap-2 text-sm font-semibold text-brand-200">

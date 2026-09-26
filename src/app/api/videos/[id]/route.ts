@@ -14,6 +14,7 @@ import {
   resolvePlaybackUrl,
   resolveTeaserUrl,
   introPreviewPath,
+  introClipPath,
   deleteBunnyVideo,
 } from "@/lib/bunny";
 import { resolveVideoEntitlement, type EntitlementSource } from "@/lib/services/video-entitlement.service";
@@ -228,6 +229,15 @@ export async function GET(
     const introPreviewUrl =
       !hasAccess && !teaserUrl ? introPreviewPath(video) : null;
 
+    // The stitched clip — four four-second pieces of the scene itself, cut and
+    // signed by /api/videos/[id]/intro-clip. It is preferred over the webp
+    // animation because it is real motion, and it is offered under the same
+    // conditions: no entitlement, and no trailer the creator chose instead.
+    // Nothing about the scene is decided here; the route re-derives both the
+    // segments and the signatures on every request.
+    const introClipUrl =
+      !hasAccess && !teaserUrl ? introClipPath(video) : null;
+
     return api.success({
       ...publicVideo,
       // Bunny transcodes after the upload finishes, so a video can be live but
@@ -241,6 +251,7 @@ export async function GET(
       playbackUrl,
       teaserUrl,
       introPreviewUrl,
+      introClipUrl,
       viewsCount: video.viewsCount + (counted ? 1 : 0), // Reflect the view we just added
     });
   } catch (error) {

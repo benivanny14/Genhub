@@ -14,6 +14,14 @@ interface VideoCardProps {
   slug?: string | null;
   thumbnailUrl?: string | null;
   teaserUrl?: string | null;
+  /**
+   * The scene's stitched intro clip (`/api/videos/<id>/intro-clip`), sent for a
+   * paid scene with no trailer of its own. Hovering a card is the moment a
+   * viewer decides, so a locked card must move like every other card on the
+   * grid — it is the same sixteen seconds the watch page shows before the
+   * paywall.
+   */
+  introUrl?: string | null;
   price: number;
   duration?: number | null;
   viewsCount: number;
@@ -41,25 +49,31 @@ export default function VideoCard(video: VideoCardProps) {
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewActiveRef = useRef(false);
 
+  // The creator's own trailer when there is one; otherwise the clip cut from
+  // the scene, so a PAID card previews like any other card instead of sitting
+  // there as a still. Both are HLS manifests our own routes serve, so the card
+  // never talks to the CDN directly.
+  const previewSrc = video.teaserUrl || video.introUrl || null;
+
   // Hover preview — lazily load hls.js only when the user actually hovers
   function startPreview() {
-    if (!video.teaserUrl || previewActiveRef.current) return;
+    if (!previewSrc || previewActiveRef.current) return;
     if (typeof window === "undefined" || !window.matchMedia("(hover: hover)").matches) return;
     previewActiveRef.current = true;
     if (previewTimerRef.current) clearTimeout(previewTimerRef.current);
     previewTimerRef.current = setTimeout(async () => {
       const el = previewVideoRef.current;
-      if (!el || !previewActiveRef.current || !video.teaserUrl) return;
+      if (!el || !previewActiveRef.current || !previewSrc) return;
       try {
         const { default: Hls } = await import("hls.js");
         if (!previewActiveRef.current) return;
         if (Hls.isSupported()) {
           const hls = new Hls({ maxBufferLength: 4, maxMaxBufferLength: 8, startLevel: 0 });
-          hls.loadSource(video.teaserUrl);
+          hls.loadSource(previewSrc);
           hls.attachMedia(el);
           previewHlsRef.current = hls;
         } else if (el.canPlayType("application/vnd.apple.mpegurl")) {
-          el.src = video.teaserUrl;
+          el.src = previewSrc;
         } else {
           return;
         }
@@ -136,6 +150,7 @@ export default function VideoCard(video: VideoCardProps) {
         <video
           ref={previewVideoRef}
           muted
+          loop
           playsInline
           preload="none"
           className={`absolute inset-0 w-full h-full object-cover pointer-events-none transition-opacity duration-300 ${
@@ -159,8 +174,12 @@ export default function VideoCard(video: VideoCardProps) {
           </div>
         )}
 
-        {/* Play Button Overlay */}
-        <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+        {/* Play Button Overlay — and out of the way of a running preview */}
+        <div
+          className={`absolute inset-0 flex items-center justify-center transition-opacity duration-300 ${
+            previewing ? "opacity-0" : "opacity-0 group-hover:opacity-100"
+          }`}
+        >
           <div className="w-14 h-14 rounded-full bg-brand-500/80 backdrop-blur-sm flex items-center justify-center shadow-lg shadow-brand-500/30">
             <Play className="w-6 h-6 text-white fill-white ml-0.5" />
           </div>

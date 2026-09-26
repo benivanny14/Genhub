@@ -5,6 +5,7 @@ const base = {
   canPlayFull: false,
   notPlayable: false,
   teaserUrl: null as string | null,
+  clipUrl: "/api/videos/abc/intro-clip",
   previewAnimationUrl: "https://cdn.example.com/abc/preview.webp?token=t&expires=1",
   price: 1000,
 };
@@ -16,8 +17,16 @@ describe("pickIntroMedium", () => {
     ).toBe("trailer");
   });
 
-  it("falls back to Bunny's animated preview when there is no trailer", () => {
-    expect(pickIntroMedium(base)).toBe("animation");
+  it("cuts the scene itself when there is no trailer to show", () => {
+    expect(pickIntroMedium(base)).toBe("montage");
+  });
+
+  it("falls back to Bunny's animated preview when the clip cannot be shown", () => {
+    expect(pickIntroMedium({ ...base, clipUrl: null })).toBe("animation");
+    expect(pickIntroMedium({ ...base, montageFailed: true })).toBe("animation");
+    expect(pickIntroMedium({ ...base, montageFailed: true, previewAnimationUrl: null })).toBe(
+      "none"
+    );
   });
 
   it("keeps the trailer preferred even when an animation is also available", () => {
@@ -42,12 +51,14 @@ describe("pickIntroMedium", () => {
   });
 
   it("gives up on the animation once it has failed to load", () => {
-    expect(pickIntroMedium({ ...base, animationFailed: true })).toBe("none");
+    expect(pickIntroMedium({ ...base, clipUrl: null, animationFailed: true })).toBe("none");
   });
 
   it("shows nothing when there is neither asset", () => {
-    expect(pickIntroMedium({ ...base, previewAnimationUrl: null })).toBe("none");
-    expect(pickIntroMedium({ ...base, previewAnimationUrl: undefined })).toBe("none");
+    expect(pickIntroMedium({ ...base, clipUrl: null, previewAnimationUrl: null })).toBe("none");
+    expect(pickIntroMedium({ ...base, clipUrl: undefined, previewAnimationUrl: undefined })).toBe(
+      "none"
+    );
   });
 });
 
@@ -59,7 +70,7 @@ describe("hasIntro", () => {
 
   it("is false when the viewer can already watch, or nothing is available", () => {
     expect(hasIntro({ ...base, canPlayFull: true })).toBe(false);
-    expect(hasIntro({ ...base, previewAnimationUrl: null })).toBe(false);
+    expect(hasIntro({ ...base, clipUrl: null, previewAnimationUrl: null })).toBe(false);
     expect(hasIntro({ ...base, price: 0 })).toBe(false);
   });
 });
