@@ -32,8 +32,11 @@ import {
   Tag,
   Captions,
   MessageSquare,
+  Clapperboard,
 } from "lucide-react";
 import { canOptimizeImage } from "@/lib/media";
+import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
+import type { BunnyUploadCredentials } from "@/lib/bunny";
 import {
   PAYOUT_METHODS,
   PAYOUT_METHOD_LABEL,
@@ -41,7 +44,7 @@ import {
   isBankPayout,
   lastPayoutAccount,
 } from "@/lib/payout-account";
-import { formatTZS, formatRelativeTime, formatCount } from "@/lib/utils";
+import { formatTZS, formatRelativeTime, formatCount, cn } from "@/lib/utils";
 // The one list of categories — the same ids /browse/[category] serves, minus the
 // "all" pseudo-category, which is a filter and not something a video can be.
 import { CATEGORIES } from "@/lib/categories";
@@ -202,6 +205,8 @@ interface CreatorVideo {
   category: string | null;
   tags: string[];
   captionsUrl: string | null;
+  /** Whether a separate trailer clip (the intro) is attached. */
+  hasTeaser: boolean;
   createdAt: string;
   encoding: EncodingState;
 }
@@ -282,6 +287,13 @@ export default function CreatorDashboard() {
   const [editCategory, setEditCategory] = useState("");
   const [editTags, setEditTags] = useState("");
   const [editTeaserDuration, setEditTeaserDuration] = useState(15);
+  // Whether a trailer clip is already attached, and the id of one uploaded in
+  // this edit session (sent on save). Kept apart because the schema can set a
+  // teaser but not clear one, so an untouched field must send nothing.
+  const [editTeaserAttached, setEditTeaserAttached] = useState(false);
+  const [newTeaserBunnyVideoId, setNewTeaserBunnyVideoId] = useState("");
+  const [editTeaserProgress, setEditTeaserProgress] = useState(0);
+  const [uploadingEditTeaser, setUploadingEditTeaser] = useState(false);
   const [editCoverUrl, setEditCoverUrl] = useState<string | null>(null);
   const [editCaptionsUrl, setEditCaptionsUrl] = useState("");
   const [uploadingCaptions, setUploadingCaptions] = useState(false);
@@ -411,6 +423,9 @@ export default function CreatorDashboard() {
     setEditCategory(video.category || "");
     setEditTags((video.tags || []).join(", "));
     setEditTeaserDuration(video.teaserDuration || 15);
+    setEditTeaserAttached(video.hasTeaser);
+    setNewTeaserBunnyVideoId("");
+    setEditTeaserProgress(0);
     setEditCoverUrl(video.thumbnailUrl);
     setEditCaptionsUrl(video.captionsUrl || "");
     setOpenMenuId(null);
@@ -438,6 +453,49 @@ export default function CreatorDashboard() {
       );
     } finally {
       setUploadingCover(false);
+    }
+  }
+
+  /**
+   * Attach or replace the trailer clip a non-buyer gets to watch.
+   *
+   * Same flow as the upload page: reserve a Bunny slot, then send the file over
+   * TUS so a dropped connection resumes. The result is held in state and only
+   * written to the video row on Save, so a cancelled edit changes nothing — and
+   * this is the door that finally lets an existing scene grow an intro trailer.
+   */
+  async function uploadEditTeaser(file: File) {
+    setUploadingEditTeaser(true);
+    setEditTeaserProgress(0);
+    try {
+      const res = await fetch("/api/videos/upload-signature", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: `${editTitle || "trailer"} (teaser)` }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast("error", data.error || "Could not start the trailer upload");
+        return;
+      }
+
+      const credentials = data.data as BunnyUploadCredentials;
+      await uploadFileWithTus(file, credentials, {
+        onProgress: (uploaded, total) =>
+          setEditTeaserProgress(Math.round((uploaded / total) * 100)),
+      });
+
+      setNewTeaserBunnyVideoId(credentials.videoId);
+      toast("success", "Trailer uploaded — press Save to attach it");
+    } catch (error) {
+      toast(
+        "error",
+        error instanceof TusUploadError
+          ? error.message
+          : "Network error while uploading the trailer"
+      );
+    } finally {
+      setUploadingEditTeaser(false);
     }
   }
 
@@ -533,6 +591,10 @@ export default function CreatorDashboard() {
           category: editCategory,
           tags,
           teaserDuration: editTeaserDuration,
+          // Only when a new clip was uploaded in this session. Sending the saved
+          // value every time would be a no-op, and the schema has no way to clear
+          // it, so "unchanged" must mean "not sent".
+          ...(newTeaserBunnyVideoId ? { teaserBunnyVideoId: newTeaserBunnyVideoId } : {}),
           ...(editCoverUrl ? { thumbnailUrl: editCoverUrl } : {}),
           // Always sent, empty included: clearing the field is how a creator
           // removes captions, and an omitted field could not mean that.
@@ -1485,6 +1547,56 @@ export default function CreatorDashboard() {
                 </div>
               </div>
 
+              {/* Intro trailer — the clip a non-buyer watches before the paywall */}
+              <div className="rounded-xl border border-white/10 p-4">
+                <label className="text-sm text-white/60 mb-2 flex items-center gap-2">
+                  <Clapperboard className="w-4 h-4" /> Intro trailer clip
+                </label>
+                <p className="text-xs text-white/45 mb-3 leading-relaxed">
+                  A short clip (10–30s) that people who have not paid can watch, with an
+                  unlock offer under it. Without one, a paid scene shows only a poster —
+                  we will not sign a non-buyer into the whole video to give them a preview.
+                </p>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="btn-ghost cursor-pointer inline-flex items-center gap-2 text-sm">
+                    <span aria-hidden>🎬</span>
+                    <span>
+                      {uploadingEditTeaser
+                        ? `Uploading… ${editTeaserProgress}%`
+                        : newTeaserBunnyVideoId
+                          ? "Replace the new trailer"
+                          : editTeaserAttached
+                            ? "Replace trailer clip"
+                            : "Choose a trailer clip"}
+                    </span>
+                    <input
+                      type="file"
+                      accept="video/*"
+                      className="hidden"
+                      disabled={uploadingEditTeaser}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) uploadEditTeaser(file);
+                      }}
+                    />
+                  </label>
+
+                  {(newTeaserBunnyVideoId || editTeaserAttached) && (
+                    <span
+                      className={cn(
+                        "text-xs",
+                        newTeaserBunnyVideoId ? "text-amber-400/80" : "text-emerald-400/80"
+                      )}
+                    >
+                      {newTeaserBunnyVideoId
+                        ? "New trailer ready — press Save to attach it"
+                        : "Trailer attached — non-buyers see this instead of the full video"}
+                    </span>
+                  )}
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm text-white/60 mb-2 block" htmlFor="edit-category">
@@ -1502,6 +1614,13 @@ export default function CreatorDashboard() {
                         {c.label}
                       </option>
                     ))}
+                    {/* A video tagged before the category list changed still
+                        holds a slug that is no longer offered. Without this the
+                        select renders empty and a later save would silently
+                        erase the tag the creator already chose. */}
+                    {editCategory && !CATEGORIES.some((c) => c.id === editCategory) && (
+                      <option value={editCategory}>{editCategory} (old tag)</option>
+                    )}
                   </select>
                 </div>
                 <div>

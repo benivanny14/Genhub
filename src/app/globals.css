@@ -256,4 +256,108 @@
       transform: translateY(0);
     }
   }
+
+  /* =========================================================================
+     Auth experience
+     The sign-in / sign-up pages carry the brand, so they get their own small
+     vocabulary of motion: a rise for entrance, a shake for refusal, a pop for
+     acceptance, and a slow aurora for the panel behind them.
+     ========================================================================= */
+
+  /* Staggered entrance for form rows and cards */
+  .auth-rise {
+    animation: authRise 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes authRise {
+    from {
+      opacity: 0;
+      transform: translateY(16px) scale(0.985);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  /* Refusal — the card rejects a bad attempt with a short shake */
+  .auth-shake {
+    animation: authShake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+  }
+  @keyframes authShake {
+    10%, 90% { transform: translateX(-2px); }
+    20%, 80% { transform: translateX(3px); }
+    30%, 50%, 70% { transform: translateX(-7px); }
+    40%, 60% { transform: translateX(7px); }
+  }
+
+  /* Acceptance — a check that springs in on success */
+  .auth-pop {
+    animation: authPop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+  }
+  @keyframes authPop {
+    0% { opacity: 0; transform: scale(0.6); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+
+  /* The slow-moving colour field behind the brand panel */
+  .auth-aurora {
+    background:
+      radial-gradient(60% 55% at 20% 25%, rgba(139, 92, 246, 0.55), transparent 70%),
+      radial-gradient(52% 52% at 82% 18%, rgba(236, 72, 153, 0.38), transparent 70%),
+      radial-gradient(58% 62% at 70% 82%, rgba(56, 189, 248, 0.30), transparent 70%),
+      linear-gradient(160deg, #0b0716, #1a0f2e 55%, #050506);
+    background-size: 200% 200%, 200% 200%, 200% 200%, 100% 100%;
+    animation: authAurora 18s ease-in-out infinite alternate;
+  }
+  @keyframes authAurora {
+    0% { background-position: 0% 0%, 100% 0%, 50% 100%, 0 0; }
+    100% { background-position: 60% 40%, 20% 60%, 20% 30%, 0 0; }
+  }
+
+  /* Gentle float for the logo halo */
+  .auth-float {
+    animation: authFloat 6s ease-in-out infinite;
+  }
+  @keyframes authFloat {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+  }
+
+  /* A sweep of light across the button while the form is busy */
+  .auth-busy {
+    background-image: linear-gradient(
+      100deg,
+      transparent 20%,
+      rgba(255, 255, 255, 0.28) 40%,
+      rgba(255, 255, 255, 0.28) 45%,
+      transparent 65%
+    ) !important;
+    background-size: 220% 100% !important;
+    animation: authBusy 1.4s linear infinite;
+  }
+  @keyframes authBusy {
+    from { background-position: 220% 0; }
+    to { background-position: -220% 0; }
+  }
+
+  /* Rotating conic ring around the logo */
+  .auth-orbit {
+    animation: authOrbit 7s linear infinite;
+  }
+  @keyframes authOrbit {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Respect a viewer who asked the OS to calm motion down */
+  @media (prefers-reduced-motion: reduce) {
+    .auth-rise,
+    .auth-shake,
+    .auth-pop,
+    .auth-aurora,
+    .auth-float,
+    .auth-busy,
+    .auth-orbit {
+      animation: none !important;
+    }
+  }
 }

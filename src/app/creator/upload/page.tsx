@@ -8,6 +8,7 @@ import { canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
+import { CATEGORIES } from "@/lib/categories";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
 import Link from "next/link";
 import {
@@ -357,13 +358,11 @@ export default function UploadPage() {
               className="input-field"
             >
               <option value="">Select category...</option>
-              <option value="music">Music</option>
-              <option value="comedy">Comedy</option>
-              <option value="education">Education</option>
-              <option value="sports">Sports</option>
-              <option value="lifestyle">Lifestyle</option>
-              <option value="tech">Technology</option>
-              <option value="exclusive">Exclusive</option>
+              {CATEGORIES.filter((c) => c.id !== "all").map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                </option>
+              ))}
             </select>
           </div>
 

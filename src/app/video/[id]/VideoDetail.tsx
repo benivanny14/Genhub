@@ -10,7 +10,7 @@ const VideoPlayer = dynamic(() => import("@/components/VideoPlayer"), {
   ssr: false,
   loading: () => <div className="skeleton aspect-video rounded-xl" />,
 });
-import { formatTZS, formatCount, formatRelativeTime } from "@/lib/utils";
+import { formatTZS, formatCount, formatRelativeTime, formatDuration } from "@/lib/utils";
 import {
   Play,
   Eye,
@@ -55,6 +55,7 @@ const CommentsSection = dynamic(() => import("@/components/CommentsSection"), {
 });
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/lib/currency";
+import { shouldShowIntroTrailer } from "@/lib/intro-trailer";
 
 interface VideoData {
   id: string;
@@ -190,6 +191,11 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [tipMessage, setTipMessage] = useState("");
   const [tipping, setTipping] = useState(false);
   const [startAt, setStartAt] = useState(0);
+  // Intro/trailer experience. A viewer who has not paid sees the trailer, and
+  // the full scene stays locked behind payment — `introFinished` drives the
+  // end-card that asks them to unlock, `introKey` remounts the player to replay.
+  const [introFinished, setIntroFinished] = useState(false);
+  const [introKey, setIntroKey] = useState(0);
   // Library state: Watch Later bookmark, playlists picker, gallery lightbox
   const [inWatchLater, setInWatchLater] = useState(false);
   const [watchLaterBusy, setWatchLaterBusy] = useState(false);
@@ -832,6 +838,43 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     : canPlayFull
       ? video.playbackUrl
       : video.teaserUrl;
+
+  // The intro trailer only applies to a paid scene the viewer cannot play yet
+  // and that actually HAS a trailer clip. A free scene plays in full, and a
+  // paid scene with no clip shows the "no preview" panel instead. The rule is
+  // pure, so it lives in lib/intro-trailer.ts and is unit-tested.
+  const showIntroTrailer = shouldShowIntroTrailer({
+    canPlayFull,
+    notPlayable,
+    teaserUrl: videoSrc,
+    price: video.price,
+  });
+
+  /**
+   * The one door to the full scene. It never plays anything — it can only send
+   * the viewer to sign in or open the purchase sheet, which is the whole point
+   * of the intro: entice, then charge.
+   */
+  function unlockFullScene() {
+    if (!effectiveUser) {
+      router.push(
+        `/login?redirect=${encodeURIComponent(`/video/${video?.slug || video?.id || ""}`)}`
+      );
+      return;
+    }
+    if (video?.paymentUnderInvestigation) {
+      toast("info", "We are still checking your last payment — please do not pay again.");
+      return;
+    }
+    setShowPurchaseModal(true);
+  }
+
+  /** The trailer ran to its end — that is the moment to make the offer. */
+  function handleIntroEnded() {
+    setIntroFinished(true);
+    toast("info", "That was the intro — unlock the full scene to keep watching.");
+  }
+
   const totalVotes = likesCount + dislikesCount;
   const ratingPct = totalVotes > 0 ? Math.round((likesCount / totalVotes) * 100) : 100;
   const ratingLabel = totalVotes > 0 ? `${ratingPct}%` : "Rate";
@@ -949,23 +992,71 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             )}
           </div>
         ) : videoSrc ? (
-          <VideoPlayer
-            src={videoSrc}
-            poster={video.thumbnailUrl || undefined}
-            title={video.title}
-            videoId={video.id}
-            viewerId={user?.id}
-            viewerPhone={user?.phone}
-            viewerName={user?.displayName || undefined}
-            isTeaser={!canPlayFull}
-            startAt={canPlayFull ? startAt : 0}
-            onDownload={canPlayFull ? () => handleDownload() : undefined}
-            downloading={downloading}
-            // Captions belong to the scene, so a viewer previewing the teaser
-            // does not get the full scene's captions over a clip they may not be
-            // entitled to hear.
-            captionsUrl={canPlayFull ? video.captionsUrl : null}
-          />
+          <div className="relative">
+            <VideoPlayer
+              key={showIntroTrailer ? `intro-${introKey}` : "full"}
+              src={videoSrc}
+              poster={video.thumbnailUrl || undefined}
+              title={video.title}
+              videoId={video.id}
+              viewerId={user?.id}
+              viewerPhone={user?.phone}
+              viewerName={user?.displayName || undefined}
+              isTeaser={!canPlayFull}
+              startAt={canPlayFull ? startAt : 0}
+              onDownload={canPlayFull ? () => handleDownload() : undefined}
+              downloading={downloading}
+              onEnded={showIntroTrailer ? handleIntroEnded : undefined}
+              // Captions belong to the scene, so a viewer previewing the teaser
+              // does not get the full scene's captions over a clip they may not be
+              // entitled to hear.
+              captionsUrl={canPlayFull ? video.captionsUrl : null}
+            />
+
+            {/* "INTRO" ribbon — the viewer is told this is a trailer, on purpose */}
+            {showIntroTrailer && !introFinished && (
+              <div className="pointer-events-none absolute left-3 top-3 flex items-center gap-2">
+                <span className="inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1 text-[11px] font-bold uppercase tracking-wider text-brand-300 ring-1 ring-brand-500/40 backdrop-blur">
+                  <span className="relative flex h-2 w-2">
+                    <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-400 opacity-75" />
+                    <span className="relative inline-flex h-2 w-2 rounded-full bg-brand-500" />
+                  </span>
+                  Intro Trailer
+                </span>
+              </div>
+            )}
+
+            {/* End card — the trailer is over, and the only way forward is to pay */}
+            {showIntroTrailer && introFinished && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black/85 px-6 text-center backdrop-blur-sm">
+                <p className="text-xs font-bold uppercase tracking-[0.2em] text-brand-300">
+                  Intro finished
+                </p>
+                <p className="max-w-md text-sm text-white/70">
+                  You just watched the trailer. The full scene stays locked until
+                  you unlock it.
+                </p>
+                <button
+                  onClick={unlockFullScene}
+                  className="btn-brand inline-flex items-center gap-2 text-base"
+                >
+                  <Shield className="w-4 h-4" />
+                  {effectiveUser
+                    ? `Unlock the full scene — ${format(video.price)}`
+                    : "Sign in to unlock the full scene"}
+                </button>
+                <button
+                  onClick={() => {
+                    setIntroFinished(false);
+                    setIntroKey((k) => k + 1);
+                  }}
+                  className="text-xs text-white/50 underline-offset-2 hover:text-white hover:underline"
+                >
+                  Watch the intro again
+                </button>
+              </div>
+            )}
+          </div>
         ) : (
           // No playable source. For a paid scene without a teaser clip that is
           // deliberate: we would rather show nothing than sign a non-buyer into
@@ -980,6 +1071,29 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 Buy it to watch in full.
               </p>
             )}
+          </div>
+        )}
+
+        {/* Intro paywall bar — under the trailer, never over its controls */}
+        {showIntroTrailer && !introFinished && (
+          <div className="mt-3 flex flex-col gap-3 rounded-2xl border border-brand-500/25 bg-brand-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <p className="flex items-center gap-2 text-sm font-semibold text-brand-200">
+                <Play className="w-4 h-4 fill-current" />
+                This is the intro trailer
+              </p>
+              <p className="mt-0.5 text-xs text-white/60">
+                The full scene ({formatDuration(video.duration ?? 0)}) is locked until
+                you unlock it.
+              </p>
+            </div>
+            <button
+              onClick={unlockFullScene}
+              className="btn-brand inline-flex shrink-0 items-center justify-center gap-2"
+            >
+              <Shield className="w-4 h-4" />
+              {effectiveUser ? `Watch full scene — ${format(video.price)}` : "Sign in to watch"}
+            </button>
           </div>
         )}
 

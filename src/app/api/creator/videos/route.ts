@@ -66,6 +66,10 @@ export async function GET(request: NextRequest) {
         category: true,
         tags: true,
         captionsUrl: true,
+        // Read only to answer "is a trailer attached?", then stripped below — the
+        // creator's list needs the fact, not the Bunny GUID. The raw id is the
+        // thing the whole playback design keeps off the client.
+        teaserBunnyVideoId: true,
         encodingStatus: true,
         encodeProgress: true,
         encodingError: true,
@@ -74,8 +78,9 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const withEncoding = videos.map((video) => ({
+    const withEncoding = videos.map(({ teaserBunnyVideoId, ...video }) => ({
       ...video,
+      hasTeaser: !!teaserBunnyVideoId,
       encoding: describeEncoding(video.encodingStatus, video.encodeProgress),
     }));
 

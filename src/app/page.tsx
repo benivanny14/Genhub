@@ -87,8 +87,12 @@ interface HomeFeed {
   creators: FeedCreator[];
 }
 
-const CATEGORY_IDS = ["", "music", "comedy", "education", "sports", "lifestyle", "tech", "exclusive"];
-const CATEGORY_KEYS = ["cat.all", "cat.music", "cat.comedy", "cat.education", "cat.sports", "cat.lifestyle", "cat.tech", "cat.exclusive"];
+// Filter chips are derived from the category registry so adding or renaming a
+// category never leaves a stale chip behind. "all" maps to the empty filter.
+const HOME_CHIPS = CATEGORIES.map((c) => ({
+  id: c.id === "all" ? "" : c.id,
+  label: c.label,
+}));
 
 const SORT_VALUES = ["newest", "popular", "rated", "price_low", "price_high", "trending"];
 const SORT_KEYS = ["sort.newest", "sort.popular", "sort.rated", "sort.priceLow", "sort.priceHigh", "sort.trending"];
@@ -788,20 +792,20 @@ export default function HomePage() {
       <section className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
-            {CATEGORY_IDS.map((catId, i) => (
+            {HOME_CHIPS.map((chip) => (
               <button
-                key={catId}
-                onClick={() => setCategory(catId)}
+                key={chip.id}
+                onClick={() => setCategory(chip.id)}
                 className={cn(
                   "whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition-all",
-                  category === catId
+                  category === chip.id
                     ? "bg-brand-500 text-white shadow-lg shadow-brand-500/25"
                     : isLight
                       ? "bg-white text-gray-500 hover:text-gray-900 hover:bg-brand-50 border border-gray-200"
                       : "bg-surface-400/60 text-white/60 hover:text-white hover:bg-surface-400"
                 )}
               >
-                {t(CATEGORY_KEYS[i])}
+                {chip.id === "" ? t("cat.all") : chip.label}
               </button>
             ))}
           </div>
