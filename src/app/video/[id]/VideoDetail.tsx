@@ -42,7 +42,6 @@ import {
   ReceiptText,
   XCircle,
   Check,
-  Lock,
 } from "lucide-react";
 import Link from "next/link";
 import Image from "next/image";
@@ -57,6 +56,13 @@ const CommentsSection = dynamic(() => import("@/components/CommentsSection"), {
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/lib/currency";
 import { pickIntroMedium } from "@/lib/intro-trailer";
+
+/**
+ * How many times the animated intro is asked for again before the page gives up
+ * on it. One retry covers a dropped phone request or a cold proxy; more than one
+ * just makes a slow connection slower.
+ */
+const INTRO_ANIM_MAX_ATTEMPTS = 1;
 
 interface VideoData {
   id: string;
@@ -204,9 +210,23 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   // end-card that asks them to unlock, `introKey` remounts the player to replay.
   const [introFinished, setIntroFinished] = useState(false);
   const [introKey, setIntroKey] = useState(0);
-  // Set when Bunny's animated preview cannot be fetched (a library with previews
-  // switched off answers 404). A broken image must never be the intro.
+  // Set when Bunny's animated preview cannot be fetched after every retry (a
+  // library with previews switched off answers 404). Only then does the page
+  // fall back — a broken image must never be the intro.
   const [introAnimFailed, setIntroAnimFailed] = useState(false);
+  // Retries spent on this scene's animated preview. See the `onError` below.
+  const [introAnimAttempt, setIntroAnimAttempt] = useState(0);
+
+  // Intro state belongs to ONE scene. Walking from one video to the next reuses
+  // this component, so a failure on the last scene must not mute the next
+  // scene's intro, and a finished trailer must not carry its end card along.
+  useEffect(() => {
+    setIntroAnimFailed(false);
+    setIntroAnimAttempt(0);
+    setIntroFinished(false);
+    setIntroKey(0);
+  }, [video?.id, viewAsVisitor]);
+
   // Library state: Watch Later bookmark, playlists picker, gallery lightbox
   const [inWatchLater, setInWatchLater] = useState(false);
   const [watchLaterBusy, setWatchLaterBusy] = useState(false);
@@ -863,6 +883,13 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   });
   const showIntroTrailer = introMedium === "trailer";
   const showIntroAnimation = introMedium === "animation";
+  // The intro route ignores query strings — `?retry=` exists only to make the
+  // browser ask again instead of replaying its cached failure.
+  const introAnimSrc = video.introPreviewUrl
+    ? introAnimAttempt > 0
+      ? `${video.introPreviewUrl}?retry=${introAnimAttempt}`
+      : video.introPreviewUrl
+    : null;
 
   /**
    * The one door to the full scene. It never plays anything — it can only send
@@ -1080,24 +1107,36 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           */
           <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black ring-1 ring-white/10">
             {/*
-              Ambient backdrop: the same animation, blurred and over-scaled, so a
-              portrait scene fills the 16:9 frame instead of sitting between two
-              black bars. The browser fetches it once — the route serves the same
-              bytes with a long private cache.
+              Ambient backdrop: the scene's own poster, blurred and over-scaled,
+              so the 16:9 frame is lit the instant the page paints and a portrait
+              scene never sits between two black bars. The poster is already in
+              the browser's cache from the feed, so this costs no request — the
+              animation only has to appear, never to un-blank the box.
             */}
+            {video.thumbnailUrl && (
+              <Image
+                src={video.thumbnailUrl}
+                alt=""
+                aria-hidden
+                fill
+                sizes="(max-width: 1280px) 100vw, 1024px"
+                className="scale-125 object-cover opacity-70 blur-2xl"
+              />
+            )}
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={video.introPreviewUrl as string}
-              alt=""
-              aria-hidden
-              className="absolute inset-0 h-full w-full scale-125 object-cover opacity-45 blur-2xl"
-            />
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={video.introPreviewUrl as string}
+              src={introAnimSrc as string}
               alt={`${video.title} — intro preview`}
               className="relative h-full w-full object-contain"
-              onError={() => setIntroAnimFailed(true)}
+              onError={() => {
+                // Ask again before giving up: one dropped request must not turn
+                // the intro into the lock card.
+                if (introAnimAttempt < INTRO_ANIM_MAX_ATTEMPTS) {
+                  setIntroAnimAttempt(introAnimAttempt + 1);
+                } else {
+                  setIntroAnimFailed(true);
+                }
+              }}
             />
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black via-black/25 to-transparent" />
 
@@ -1138,31 +1177,57 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           /*
             Nothing to play as an intro: no uploaded trailer, and Bunny has no
             animation either (a side-loaded row, or a library with previews off).
-            The poster plus the offer beats a black rectangle — an empty box
-            reads as a broken site and sells nothing.
+            This spot is still a shop window and never a hole — the poster keeps
+            its light, the play badge invites the click, and the offer sits over
+            it. A black rectangle reads as a broken site and sells nothing.
           */
           <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-surface-400/40 ring-1 ring-white/10">
-            {video.thumbnailUrl && (
+            {video.thumbnailUrl ? (
               <Image
                 src={video.thumbnailUrl}
                 alt={video.title}
                 fill
                 sizes="(max-width: 1280px) 100vw, 1024px"
-                className="object-cover opacity-40 blur-[2px]"
+                className="object-cover"
               />
+            ) : (
+              <div className="absolute inset-0 bg-gradient-to-br from-brand-500/30 via-surface-500 to-black" />
             )}
-            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent" />
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-black/60 ring-1 ring-white/15 backdrop-blur">
-                <Lock className="h-7 w-7 text-white/70" />
-              </div>
-              <p className="text-base font-semibold text-white/90">
-                {video.price > 0 ? "This scene is locked" : "Preview unavailable"}
+            {/* Only the lower part is darkened, so the poster keeps its light. */}
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-3/5 bg-gradient-to-t from-black via-black/75 to-transparent" />
+
+            {!canPlayFull && video.price > 0 && (
+              <button
+                onClick={unlockFullScene}
+                aria-label={
+                  effectiveUser
+                    ? `Unlock the full scene — ${format(video.price)}`
+                    : "Sign in to unlock the full scene"
+                }
+                className="group absolute inset-0 z-10 flex items-center justify-center"
+              >
+                <span className="flex h-16 w-16 items-center justify-center rounded-full bg-black/45 ring-1 ring-white/30 backdrop-blur transition group-hover:scale-110 group-hover:bg-brand-500/80">
+                  <Play className="ml-1 h-7 w-7 fill-current text-white" />
+                </span>
+              </button>
+            )}
+
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 sm:p-6">
+              <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-brand-300">
+                {video.price > 0 ? "Locked scene" : "Preview unavailable"}
+              </p>
+              <h3 className="mt-1 line-clamp-1 font-display text-lg font-bold text-white sm:text-2xl">
+                {video.title}
+              </h3>
+              <p className="mt-1 text-xs text-white/60">
+                {video.price > 0
+                  ? "This scene has no intro clip yet — the full scene is one unlock away."
+                  : "This scene has no preview clip."}
               </p>
               {!canPlayFull && video.price > 0 && (
                 <button
                   onClick={unlockFullScene}
-                  className="btn-brand inline-flex items-center gap-2"
+                  className="pointer-events-auto btn-brand mt-3 inline-flex items-center gap-2"
                 >
                   <Shield className="w-4 h-4" />
                   {effectiveUser
