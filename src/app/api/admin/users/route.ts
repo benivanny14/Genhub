@@ -9,6 +9,7 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { invalidateAccountStatus } from "@/lib/services/account-status.service";
+import { canEraseAccount, eraseAccount } from "@/lib/services/account-erasure.service";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 
 export async function GET(request: NextRequest) {
@@ -64,7 +65,16 @@ export async function GET(request: NextRequest) {
   }
 }
 
-const ACTIONS = ["VERIFY", "UNVERIFY", "BAN", "UNBAN"] as const;
+const ACTIONS = [
+  "VERIFY",
+  "UNVERIFY",
+  "BAN",
+  "UNBAN",
+  "WARN",
+  "DELETE_ACCOUNT",
+  "FREEZE_PAYOUTS",
+  "UNFREEZE_PAYOUTS",
+] as const;
 
 export async function POST(request: NextRequest) {
   try {
@@ -87,6 +97,7 @@ export async function POST(request: NextRequest) {
         role: true,
         isVerified: true,
         isBanned: true,
+        strikes: true,
         displayName: true,
         email: true,
       },
@@ -124,6 +135,107 @@ export async function POST(request: NextRequest) {
         detail: { wasVerified: target.isVerified },
       });
       return api.success({ isVerified }, isVerified ? "User verified" : "Verification removed");
+    }
+
+    // WARN — a strike, recorded and delivered. Deliberately does not ban:
+    // escalation is a decision, and a warning that silently suspends teaches the
+    // admin nothing about the tool they are holding.
+    if (action === "WARN") {
+      const reason = body?.reason?.toString().slice(0, 500) || "Creator guidelines violation";
+      const nextStrikes = Math.min(3, target.strikes + 1);
+
+      await prisma.user.update({ where: { id: userId }, data: { strikes: nextStrikes } });
+      await prisma.strikeLog.create({
+        data: {
+          creatorId: userId,
+          action: "WARNING",
+          reason,
+          issuedBy: auth.userId,
+        },
+      });
+      await prisma.notification.create({
+        data: {
+          userId,
+          title: "Warning from Genhub ⚠️",
+          message: `${reason} (Strike ${nextStrikes}/3 — three strikes removes your account.)`,
+          type: "warning",
+          link: "/creator",
+        },
+      });
+      await recordAudit({
+        actorId: auth.userId,
+        action: AUDIT_ACTIONS.userWarn,
+        targetType: "User",
+        targetId: userId,
+        summary: `Warned ${target.displayName || target.email || userId} (strike ${nextStrikes}/3) — ${reason}`,
+        detail: { strikes: nextStrikes, reason },
+      });
+      return api.success({ strikes: nextStrikes }, "Warning sent");
+    }
+
+    // FREEZE_PAYOUTS / UNFREEZE_PAYOUTS — block withdrawals until a date.
+    // A date rather than a flag so a lift can be scheduled and an admin who
+    // forgets does not lock a creator out permanently; see the schema comment.
+    if (action === "FREEZE_PAYOUTS" || action === "UNFREEZE_PAYOUTS") {
+      const isFreeze = action === "FREEZE_PAYOUTS";
+      const reason = isFreeze
+        ? body?.reason?.toString().slice(0, 500) || "Account under review"
+        : null;
+      const days = Math.min(365, Math.max(1, Number(body?.days) || 30));
+      const until = isFreeze ? new Date(Date.now() + days * 24 * 60 * 60 * 1000) : null;
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { payoutFrozenUntil: until, payoutFrozenReason: reason },
+      });
+      await prisma.notification.create({
+        data: {
+          userId,
+          title: isFreeze ? "Withdrawals paused" : "Withdrawals restored",
+          message: isFreeze
+            ? `Withdrawals are paused until ${until!.toLocaleDateString("en-GB")}: ${reason}`
+            : "You can request withdrawals again.",
+          type: isFreeze ? "warning" : "success",
+          link: "/wallet",
+        },
+      });
+      await recordAudit({
+        actorId: auth.userId,
+        action: isFreeze ? AUDIT_ACTIONS.payoutFreeze : AUDIT_ACTIONS.payoutUnfreeze,
+        targetType: "User",
+        targetId: userId,
+        summary: `${isFreeze ? "Froze withdrawals for" : "Restored withdrawals for"} ${
+          target.displayName || target.email || userId
+        }${isFreeze ? ` until ${until!.toISOString()} — ${reason}` : ""}`,
+        detail: { until: until?.toISOString() ?? null, reason, days },
+      });
+      return api.success(
+        { payoutFrozenUntil: until?.toISOString() ?? null },
+        isFreeze ? "Withdrawals paused" : "Withdrawals restored"
+      );
+    }
+
+    // DELETE_ACCOUNT — a real erasure, not a flag. Reuses the same service the
+    // account holder's own "delete my account" uses, so an admin cannot do
+    // anything a user cannot, and the last-admin guard still applies.
+    if (action === "DELETE_ACCOUNT") {
+      const guard = await canEraseAccount(userId, target.role);
+      if (!guard.allowed) return api.validation(guard.reason || "This account cannot be deleted");
+
+      const report = await eraseAccount(userId);
+      await recordAudit({
+        actorId: auth.userId,
+        action: AUDIT_ACTIONS.userDelete,
+        targetType: "User",
+        targetId: userId,
+        summary: `Deleted the account of ${target.displayName || target.email || userId}`,
+        detail: {
+          removed: report.removed,
+          videosRemoved: report.videosRemoved,
+          failures: report.failures,
+        },
+      });
+      return api.success({ report }, "Account deleted");
     }
 
     // BAN / UNBAN

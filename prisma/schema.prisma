@@ -128,6 +128,16 @@ model User {
   referralCode  String?  @unique // Shareable code for the affiliate program
   referredById  String?  // Who invited this user
   referralEarnings Int   @default(0) // Lifetime TZS earned from referrals
+  // A creator can close their inbox at any time and reopen it later. ON by
+  // default so the feature exists the moment someone wants it off, and so an
+  // existing account does not silently gain a "no messages" state it never
+  // chose. Enforced in POST /api/messages (the sender is refused, politely).
+  messagesEnabled Boolean @default(true)
+  // Admin freeze on withdrawals. `null` = not frozen. The date, not a boolean,
+  // so a freeze can be time-boxed ("until Friday") and lifts itself — an admin
+  // who forgets to unfreeze does not leave a creator locked out forever.
+  payoutFrozenUntil  DateTime?
+  payoutFrozenReason String?
   locale       String   @default("sw") // sw = Kiswahili, en = English
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())
@@ -444,6 +454,13 @@ model PayMessage {
   amount     Int      // Amount in TZS to view message
   content    String
   isRead     Boolean  @default(false)
+  // End-to-end delivery evidence. `deliveredAt` is stamped the instant the row
+  // is committed — at that point the message IS delivered, because it lives
+  // server-side and the receiver's next read returns it. `readAt` records when
+  // the receiver actually opened it. Together they let the sender see "delivered"
+  // vs "read", which is the only honest thing to show without a per-device ack.
+  deliveredAt DateTime @default(now())
+  readAt      DateTime?
   createdAt  DateTime @default(now())
 
   sender   User @relation("SenderMessages", fields: [senderId], references: [id])

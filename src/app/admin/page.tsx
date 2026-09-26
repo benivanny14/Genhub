@@ -37,6 +37,12 @@ import {
   Rocket,
   Upload,
   MessageSquare,
+  Snowflake,
+  Trash2,
+  Film,
+  ChevronDown,
+  ChevronRight,
+  Gavel,
 } from "lucide-react";
 
 /**
@@ -180,6 +186,24 @@ interface CreatorItem {
   walletBalance: number;
   createdAt: string;
   _count: { videos: number };
+}
+
+interface CreatorVideo {
+  id: string;
+  title: string;
+  slug: string | null;
+  price: number;
+  isPublished: boolean;
+  isFlagged: boolean;
+  isDeleted: boolean;
+  duration: number | null;
+  viewsCount: number;
+  purchaseCount: number;
+  likesCount: number;
+  dislikesCount: number;
+  thumbnailUrl: string | null;
+  createdAt: string;
+  creator: { id: string; displayName: string | null };
 }
 
 interface OverviewData {
@@ -521,6 +545,12 @@ export default function AdminDashboard() {
   const [reportList, setReportList] = useState<ReportItem[]>([]);
   const [payoutList, setPayoutList] = useState<PayoutItem[]>([]);
   const [creatorList, setCreatorList] = useState<CreatorItem[]>([]);
+  // Per-creator video management: which creator's videos are expanded, the
+  // videos themselves, and which row is mid-action so its buttons lock.
+  const [expandedCreator, setExpandedCreator] = useState<string | null>(null);
+  const [creatorVideos, setCreatorVideos] = useState<CreatorVideo[]>([]);
+  const [loadingVideos, setLoadingVideos] = useState(false);
+  const [busyVideo, setBusyVideo] = useState<string | null>(null);
   const [couponList, setCouponList] = useState<CouponItem[]>([]);
   const [auditList, setAuditList] = useState<AuditItem[]>([]);
   // Empty = every action code. Set to "user." or "payout." to narrow it.
@@ -961,7 +991,15 @@ export default function AdminDashboard() {
 
   async function submitCreatorAction(
     userId: string,
-    action: "VERIFY" | "UNVERIFY" | "BAN" | "UNBAN",
+    action:
+      | "VERIFY"
+      | "UNVERIFY"
+      | "BAN"
+      | "UNBAN"
+      | "WARN"
+      | "DELETE_ACCOUNT"
+      | "FREEZE_PAYOUTS"
+      | "UNFREEZE_PAYOUTS",
     reason?: string
   ) {
     try {
@@ -971,26 +1009,141 @@ export default function AdminDashboard() {
         body: JSON.stringify(reason ? { userId, action, reason } : { userId, action }),
       });
       const data = await res.json();
-      if (data.success) fetchCreators();
-      else toast("error", data.error || "Something went wrong");
+      if (data.success) {
+        toast("success", data.message || "Done");
+        fetchCreators();
+      } else {
+        toast("error", data.error || "Something went wrong");
+      }
     } catch {
       toast("error", "An error occurred");
     }
   }
 
-  function handleCreatorAction(userId: string, action: "VERIFY" | "UNVERIFY" | "BAN" | "UNBAN") {
-    if (action === "BAN") {
-      askReason({
+  function handleCreatorAction(
+    userId: string,
+    action:
+      | "VERIFY"
+      | "UNVERIFY"
+      | "BAN"
+      | "UNBAN"
+      | "WARN"
+      | "DELETE_ACCOUNT"
+      | "FREEZE_PAYOUTS"
+      | "UNFREEZE_PAYOUTS"
+  ) {
+    // Actions that carry a reason (and a consequence the admin should type out)
+    // share one typed dialog. The rest fire immediately.
+    const prompts: Partial<
+      Record<typeof action, { title: string; label: string; placeholder: string; confirmLabel: string }>
+    > = {
+      BAN: {
         title: "Ban this creator",
         label: "Reason (shared with the creator)",
-        placeholder: "e.g. Repeated copyright violations",
+        placeholder: "e.g. Repeated guideline violations",
         confirmLabel: "Ban creator",
+      },
+      WARN: {
+        title: "Warn this creator",
+        label: "Warning (added as a strike and sent to the creator)",
+        placeholder: "e.g. Video does not clearly show your face",
+        confirmLabel: "Send warning",
+      },
+      FREEZE_PAYOUTS: {
+        title: "Pause withdrawals",
+        label: "Reason (the creator is told; withdrawals resume after 30 days or when you lift it)",
+        placeholder: "e.g. Account under review for suspected fraud",
+        confirmLabel: "Pause withdrawals",
+      },
+      DELETE_ACCOUNT: {
+        title: "Delete this creator",
+        label: "This erases the account and its videos permanently. Type the reason to confirm.",
+        placeholder: "e.g. Uploaded content without consent",
+        confirmLabel: "Delete account permanently",
+      },
+    };
+
+    const prompt = prompts[action];
+    if (prompt) {
+      askReason({
+        ...prompt,
         tone: "danger",
         onConfirm: (reason) => submitCreatorAction(userId, action, reason),
       });
       return;
     }
     submitCreatorAction(userId, action);
+  }
+
+  /** Load (and show) every video a creator owns, published or not. */
+  async function toggleCreatorVideos(creatorId: string) {
+    if (expandedCreator === creatorId) {
+      setExpandedCreator(null);
+      return;
+    }
+    setExpandedCreator(creatorId);
+    setLoadingVideos(true);
+    try {
+      const res = await adminFetch(`/api/admin/videos?creatorId=${creatorId}`);
+      const data = await res.json();
+      if (data.success) setCreatorVideos(data.data.videos);
+      else toast("error", data.error || "Could not load videos");
+    } catch {
+      toast("error", "Could not load videos");
+    } finally {
+      setLoadingVideos(false);
+    }
+  }
+
+  async function handleVideoAction(
+    videoId: string,
+    action: "DELETE" | "HIDE" | "RESTORE" | "UNFLAG",
+    reason?: string
+  ) {
+    setBusyVideo(videoId);
+    try {
+      const res = await adminFetch("/api/admin/videos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId, action, reason }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast("success", data.message || "Done");
+        if (expandedCreator) await toggleCreatorVideosRefresh(expandedCreator);
+      } else {
+        toast("error", data.error || "Something went wrong");
+      }
+    } catch {
+      toast("error", "An error occurred");
+    } finally {
+      setBusyVideo(null);
+    }
+  }
+
+  /** Re-fetch the expanded creator's videos without collapsing the panel. */
+  async function toggleCreatorVideosRefresh(creatorId: string) {
+    setLoadingVideos(true);
+    try {
+      const res = await adminFetch(`/api/admin/videos?creatorId=${creatorId}`);
+      const data = await res.json();
+      if (data.success) setCreatorVideos(data.data.videos);
+    } catch {
+      // Keep the stale list rather than blanking it.
+    } finally {
+      setLoadingVideos(false);
+    }
+  }
+
+  function confirmDeleteVideo(video: CreatorVideo) {
+    askReason({
+      title: `Delete “${video.title}”`,
+      label: "This removes the video from Bunny and the site. Type the reason to confirm.",
+      placeholder: "e.g. Guideline violation / reported content",
+      confirmLabel: "Delete video permanently",
+      tone: "danger",
+      onConfirm: (reason) => handleVideoAction(video.id, "DELETE", reason),
+    });
   }
 
   async function handleKycReview(kycId: string, status: "APPROVED" | "REJECTED", reason?: string) {
@@ -2211,6 +2364,132 @@ export default function AdminDashboard() {
                         </a>
                       </div>
                     </div>
+
+                    {/* Second row: moderation of the account and its money. */}
+                    <div className="flex flex-wrap items-center gap-2 mt-3 pt-3 border-t border-white/5">
+                      <button
+                        onClick={() => toggleCreatorVideos(creator.id)}
+                        className="btn-ghost text-xs flex items-center gap-1"
+                      >
+                        {expandedCreator === creator.id ? (
+                          <ChevronDown className="w-3 h-3" />
+                        ) : (
+                          <ChevronRight className="w-3 h-3" />
+                        )}
+                        <Film className="w-3 h-3" /> Videos ({creator._count.videos})
+                      </button>
+                      <button
+                        onClick={() => handleCreatorAction(creator.id, "WARN")}
+                        className="bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                      >
+                        <Gavel className="w-3 h-3" /> Warn
+                      </button>
+                      <button
+                        onClick={() => handleCreatorAction(creator.id, "FREEZE_PAYOUTS")}
+                        className="bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                      >
+                        <Snowflake className="w-3 h-3" /> Pause withdrawals
+                      </button>
+                      <button
+                        onClick={() => handleCreatorAction(creator.id, "UNFREEZE_PAYOUTS")}
+                        className="btn-ghost text-xs flex items-center gap-1"
+                      >
+                        <RotateCcw className="w-3 h-3" /> Resume withdrawals
+                      </button>
+                      <button
+                        onClick={() => handleCreatorAction(creator.id, "DELETE_ACCOUNT")}
+                        className="bg-red-600/20 text-red-300 hover:bg-red-600/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3 h-3" /> Delete account
+                      </button>
+                    </div>
+
+                    {/* Every video this creator owns, and what an admin can do
+                        to each one. This is what makes "find a creator and see
+                        all their videos" possible without leaving the page. */}
+                    {expandedCreator === creator.id && (
+                      <div className="mt-4 space-y-2">
+                        {loadingVideos ? (
+                          <p className="text-xs text-white/40 flex items-center gap-2">
+                            <Loader2 className="w-3 h-3 animate-spin" /> Loading videos…
+                          </p>
+                        ) : creatorVideos.length === 0 ? (
+                          <p className="text-xs text-white/40">This creator has no videos yet.</p>
+                        ) : (
+                          creatorVideos.map((video) => (
+                            <div
+                              key={video.id}
+                              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border border-white/5 bg-black/20 p-3"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-sm font-medium truncate flex items-center gap-2">
+                                  {video.title}
+                                  {video.isDeleted && (
+                                    <span className="bg-red-500/20 text-red-400 text-[10px] px-1.5 py-0.5 rounded">
+                                      DELETED
+                                    </span>
+                                  )}
+                                  {!video.isDeleted && !video.isPublished && (
+                                    <span className="bg-white/10 text-white/50 text-[10px] px-1.5 py-0.5 rounded">
+                                      HIDDEN
+                                    </span>
+                                  )}
+                                  {video.isFlagged && (
+                                    <span className="bg-amber-500/20 text-amber-400 text-[10px] px-1.5 py-0.5 rounded">
+                                      FLAGGED
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="text-[11px] text-white/40">
+                                  TZS {video.price.toLocaleString()} • {video.duration ? `${Math.round(video.duration / 60)} min` : "—"} •{" "}
+                                  {video.viewsCount.toLocaleString()} views • {video.purchaseCount} sold • 👍 {video.likesCount} / 👎{" "}
+                                  {video.dislikesCount}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {video.slug && (
+                                  <a
+                                    href={`/video/${video.slug}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="btn-ghost text-xs flex items-center gap-1"
+                                  >
+                                    <Eye className="w-3 h-3" /> View
+                                  </a>
+                                )}
+                                {!video.isDeleted && video.isPublished && (
+                                  <button
+                                    onClick={() => handleVideoAction(video.id, "HIDE")}
+                                    disabled={busyVideo === video.id}
+                                    className="btn-ghost text-xs flex items-center gap-1 disabled:opacity-50"
+                                  >
+                                    <Eye className="w-3 h-3" /> Hide
+                                  </button>
+                                )}
+                                {!video.isDeleted && !video.isPublished && (
+                                  <button
+                                    onClick={() => handleVideoAction(video.id, "RESTORE")}
+                                    disabled={busyVideo === video.id}
+                                    className="bg-blue-500/20 text-blue-400 px-3 py-1.5 rounded-lg text-xs font-medium transition disabled:opacity-50 flex items-center gap-1"
+                                  >
+                                    <RotateCcw className="w-3 h-3" /> Restore
+                                  </button>
+                                )}
+                                {!video.isDeleted && (
+                                  <button
+                                    onClick={() => confirmDeleteVideo(video)}
+                                    disabled={busyVideo === video.id}
+                                    className="bg-red-500/20 text-red-400 hover:bg-red-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition disabled:opacity-50 flex items-center gap-1"
+                                  >
+                                    <Trash2 className="w-3 h-3" /> Delete
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

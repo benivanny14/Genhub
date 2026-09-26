@@ -8,6 +8,8 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { getCurrentUser, requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { checkRateLimit } from "@/lib/redis";
+import config from "@/lib/config";
 
 // GET /api/videos/[id]/interactions
 export async function GET(
@@ -66,6 +68,17 @@ export async function POST(
   try {
     const { id } = await params;
     const auth = await requireAuth();
+
+    // A like is a write to a shared counter, so it is rate-limited per account,
+    // not per IP: the vote count on a video is what its creator is judged by, and
+    // a script that toggles like/dislike in a loop both inflates and corrupts it.
+    const { allowed } = await checkRateLimit(
+      `interaction:${auth.userId}`,
+      config.rateLimit.general.max,
+      config.rateLimit.general.windowMs
+    );
+    if (!allowed) return api.rateLimited("Too many actions — please wait a moment");
+
     const body = await request.json();
     const type = body.type as "like" | "dislike" | "favorite";
 

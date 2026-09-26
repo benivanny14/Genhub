@@ -19,6 +19,7 @@
 // =============================================================================
 
 import prisma from "@/lib/db";
+import { MIN_VIDEO_DURATION_SECONDS } from "@/lib/creator-guidelines";
 import {
   BUNNY_TUS_ENDPOINT,
   createVideoUpload,
@@ -163,6 +164,33 @@ async function notifyReady(video: {
       message: `“${video.title}” finished processing and is now live on Genhub.`,
       type: "success",
       link: video.slug ? `/video/${video.slug}` : `/video/${video.id}`,
+    },
+  });
+}
+
+/**
+ * A video that finished at Bunny but is shorter than the 8-minute floor. It is
+ * NOT published, and the creator is told why in the same breath — a silent
+ * unpublished video is the worst outcome, because they cannot tell it apart
+ * from a bug.
+ */
+async function notifyTooShort(video: {
+  id: string;
+  creatorId: string;
+  title: string;
+  slug: string | null;
+}, seconds: number): Promise<void> {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  await prisma.notification.create({
+    data: {
+      userId: video.creatorId,
+      title: "Your video is too short to publish",
+      message:
+        `“${video.title}” is about ${minutes} minute(s) long. Creator guidelines ` +
+        `require at least ${MIN_VIDEO_DURATION_SECONDS / 60} minutes, so it stays ` +
+        `unpublished. Upload a longer version to go live.`,
+      type: "error",
+      link: "/creator",
     },
   });
 }
@@ -485,10 +513,21 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
 
   const { snapshot } = result;
 
-  // Publish when it becomes playable. Only ever flips false -> true, so a
-  // creator who unpublishes is never overridden by the next poll.
-  const shouldPublish = snapshot.state === "ready" && !video.isPublished;
-  const shouldNotify = snapshot.state === "ready" && !video.encodingNotifiedAt;
+  // The 8-minute floor, enforced where the real duration finally exists: Bunny
+  // only reports `lengthSeconds` once it has encoded the file, so this is the
+  // first moment the rule can be checked at all. A ready-but-too-short video is
+  // held back instead of published.
+  const tooShort =
+    snapshot.state === "ready" &&
+    typeof result.lengthSeconds === "number" &&
+    result.lengthSeconds > 0 &&
+    result.lengthSeconds < MIN_VIDEO_DURATION_SECONDS;
+
+  // Publish when it becomes playable — and long enough. Only ever flips
+  // false -> true, so a creator who unpublishes is never overridden by the next
+  // poll.
+  const shouldPublish = snapshot.state === "ready" && !video.isPublished && !tooShort;
+  const shouldNotify = snapshot.state === "ready" && !video.encodingNotifiedAt && !tooShort;
 
   await prisma.video.update({
     where: { id: video.id },
@@ -499,12 +538,14 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
       encodingCheckedAt: new Date(),
       ...(result.lengthSeconds ? { duration: result.lengthSeconds } : {}),
       ...(shouldPublish ? { isPublished: true } : {}),
-      ...(shouldNotify ? { encodingNotifiedAt: new Date() } : {}),
+      ...((shouldNotify || tooShort) ? { encodingNotifiedAt: new Date() } : {}),
     },
   });
 
   if (shouldNotify) {
     await notifyReady(video);
+  } else if (tooShort && !video.encodingNotifiedAt && result.lengthSeconds) {
+    await notifyTooShort(video, result.lengthSeconds);
   } else if (snapshot.state === "failed" && !video.encodingNotifiedAt) {
     // One notification for a failure too, so the creator is not left waiting.
     await prisma.video.update({

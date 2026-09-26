@@ -85,6 +85,10 @@ export default function InboxPage() {
   // round trip. Set after mount (it is read from the URL), never during render,
   // so the server and the first client render agree.
   const [signInHref, setSignInHref] = useState("/login");
+  // Whether this account's inbox is open to new messages. Defaults to on; the
+  // server is the source of truth and this is refreshed on load.
+  const [messagesEnabled, setMessagesEnabled] = useState(true);
+  const [savingSettings, setSavingSettings] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const { theme } = useTheme();
@@ -122,12 +126,47 @@ export default function InboxPage() {
       } else {
         setUser({ id: "" });
       }
+      await fetchMessageSettings();
       const list = await fetchConversations();
       await openRequestedPartner(list);
     } catch {
       // Server unreachable — leave signed-out state
     }
     setLoading(false);
+  }
+
+  async function fetchMessageSettings() {
+    try {
+      const res = await fetch("/api/messages/settings");
+      const data = await res.json();
+      if (data.success) setMessagesEnabled(data.data.messagesEnabled);
+    } catch {
+      // Leave the default on; the send path still enforces the real value.
+    }
+  }
+
+  async function toggleMessages() {
+    if (savingSettings) return;
+    setSavingSettings(true);
+    const next = !messagesEnabled;
+    try {
+      const res = await fetch("/api/messages/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messagesEnabled: next }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMessagesEnabled(next);
+        toast("success", next ? "Messages turned on" : "Messages turned off");
+      } else {
+        toast("error", data.error || "Could not change the setting");
+      }
+    } catch {
+      toast("error", "Could not change the setting");
+    } finally {
+      setSavingSettings(false);
+    }
   }
 
   async function fetchConversations(): Promise<Conversation[]> {
@@ -272,6 +311,45 @@ export default function InboxPage() {
             </p>
           </div>
         </div>
+
+        {/* Inbox switch. A creator can close their inbox at any time so nobody
+            can write to them, and open it again when they want to reply. */}
+        {user && (
+          <div
+            className={cn(
+              "rounded-2xl border p-4 flex items-center justify-between gap-4",
+              isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+            )}
+          >
+            <div>
+              <p className="text-sm font-medium">
+                Messages are {messagesEnabled ? "ON" : "OFF"}
+              </p>
+              <p className={cn("text-xs", isLight ? "text-gray-500" : "text-white/50")}>
+                {messagesEnabled
+                  ? "People can send you paid messages. You pay nothing to reply."
+                  : "Nobody can send you new messages. Your existing messages are kept."}
+              </p>
+            </div>
+            <button
+              onClick={toggleMessages}
+              disabled={savingSettings}
+              className={cn(
+                "relative w-14 h-8 rounded-full transition shrink-0 disabled:opacity-50",
+                messagesEnabled ? "bg-emerald-500" : isLight ? "bg-gray-300" : "bg-white/20"
+              )}
+              aria-pressed={messagesEnabled}
+              aria-label="Toggle messages"
+            >
+              <span
+                className={cn(
+                  "absolute top-1 w-6 h-6 rounded-full bg-white transition-all",
+                  messagesEnabled ? "left-7" : "left-1"
+                )}
+              />
+            </button>
+          </div>
+        )}
 
         {!user ? (
           <div className={cn(

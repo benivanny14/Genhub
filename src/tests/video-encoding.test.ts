@@ -208,7 +208,9 @@ describeDB("refreshVideoEncoding (real database)", () => {
   });
 
   it("publishes and notifies the moment Bunny reports finished", async () => {
-    bunnyState.details = { status: 4, encodeProgress: 100, length: 12_000 };
+    // 8 minutes (480s) — the creator-guidelines floor. A shorter scene is held
+    // back by the rule below, so the "happy path" fixture must clear it.
+    bunnyState.details = { status: 4, encodeProgress: 100, length: 480_000 };
 
     const result = await refreshVideoEncoding(videoId);
 
@@ -216,12 +218,31 @@ describeDB("refreshVideoEncoding (real database)", () => {
 
     const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
     expect(video.isPublished).toBe(true);
-    expect(video.duration).toBe(12);
+    expect(video.duration).toBe(480);
 
     const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
     expect(notifications).toHaveLength(1);
     expect(notifications[0].type).toBe("success");
     expect(notifications[0].message).toContain("Encoding probe");
+  });
+
+  it("holds back a ready video shorter than the 8-minute guidelines floor", async () => {
+    bunnyState.details = { status: 4, encodeProgress: 100, length: 90_000 };
+
+    const result = await refreshVideoEncoding(videoId);
+
+    expect(result?.published).toBe(false);
+
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.isPublished).toBe(false);
+    expect(video.duration).toBe(90);
+
+    // The creator is told why — a silent unpublished video is indistinguishable
+    // from a bug from their side of the screen.
+    const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].type).toBe("error");
+    expect(notifications[0].title).toMatch(/too short/i);
   });
 
   it("notifies exactly once, no matter how often it polls", async () => {

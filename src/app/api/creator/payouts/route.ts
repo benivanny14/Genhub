@@ -24,14 +24,24 @@ export async function POST(request: NextRequest) {
 
     const { amount, paymentMethod, accountDetails, bankName } = result.data;
 
-    // Check KYC status
+    // Check KYC status and whether an admin has paused withdrawals. Both are
+    // read once, together, because they answer the same question: may this
+    // creator move money right now?
     const user = await prisma.user.findUnique({
       where: { id: auth.userId },
-      select: { kycStatus: true },
+      select: { kycStatus: true, payoutFrozenUntil: true, payoutFrozenReason: true },
     });
 
     if (user?.kycStatus !== "APPROVED") {
       return api.forbidden("Your KYC must be approved before you can withdraw");
+    }
+
+    if (user.payoutFrozenUntil && user.payoutFrozenUntil > new Date()) {
+      const until = user.payoutFrozenUntil.toLocaleDateString("en-GB");
+      return api.forbidden(
+        `Your withdrawals are paused until ${until}` +
+          (user.payoutFrozenReason ? `: ${user.payoutFrozenReason}` : ".")
+      );
     }
 
     // Every balance check and the deduction live in requestPayout, where they

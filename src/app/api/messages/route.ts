@@ -57,9 +57,18 @@ export async function POST(request: NextRequest) {
     // Verify receiver exists
     const receiver = await prisma.user.findUnique({
       where: { id: receiverId },
-      select: { id: true, isBanned: true, role: true },
+      select: { id: true, isBanned: true, role: true, messagesEnabled: true },
     });
     if (!receiver || receiver.isBanned) return api.notFound("This user does not exist");
+
+    // The inbox switch. Checked here rather than merely hidden in the UI: a
+    // creator who closed their inbox is not reachable from the API either, or
+    // the toggle would only hide the button while the messages kept arriving.
+    if (receiver.messagesEnabled === false) {
+      return api.error(
+        "This user has turned messages off, so they cannot receive new messages right now."
+      );
+    }
 
     // The same 70/30 split every other sale on the platform uses. The sender pays
     // the amount they chose; the platform takes its fee from it and the receiver
@@ -76,6 +85,10 @@ export async function POST(request: NextRequest) {
       }
 
       // Create message
+      // deliveredAt defaults to now() at the database, so the commit itself is
+      // the delivery receipt — the money is taken and the message is durable in
+      // the same transaction, which is the whole "end to end" guarantee: there is
+      // no window where a viewer is charged and nothing is stored.
       const msg = await tx.payMessage.create({
         data: {
           senderId: auth.userId,
@@ -221,10 +234,11 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Mark as read
+    // Mark as read, and stamp WHEN. `isRead` alone answered "has it been seen";
+    // readAt answers "when", which is what the sender's "Read" bubble needs.
     await prisma.payMessage.updateMany({
       where: { senderId: userId, receiverId: auth.userId, isRead: false },
-      data: { isRead: true },
+      data: { isRead: true, readAt: new Date() },
     });
 
     return api.success(messages);

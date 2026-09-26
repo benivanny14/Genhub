@@ -10,6 +10,13 @@ import { useToast } from "@/components/Toast";
 import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
 import { CATEGORIES } from "@/lib/categories";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
+import {
+  CREATOR_GUIDELINES,
+  CREATOR_GUIDELINES_VERSION,
+  GUIDELINE_ACK_LABEL_EN,
+  GUIDELINE_ACK_LABEL_SW,
+  GUIDELINE_ACK_STORAGE_KEY,
+} from "@/lib/creator-guidelines";
 import Link from "next/link";
 import {
   Upload,
@@ -19,6 +26,8 @@ import {
   FileText,
   ArrowLeft,
   CheckCircle,
+  ShieldAlert,
+  ScrollText,
 } from "lucide-react";
 
 interface User {
@@ -56,6 +65,13 @@ export default function UploadPage() {
   // 18 U.S.C. § 2257 — the creator must affirm this before the video is created.
   const [complianceAttested, setComplianceAttested] = useState(false);
 
+  // The creator guidelines gate. `null` = not read yet for this account; a
+  // number = the version this account accepted. Anything below the current
+  // version sends them back through the rules, so an edited rule is re-read.
+  const [ackVersion, setAckVersion] = useState<number | null>(null);
+  const [guidelineChecks, setGuidelineChecks] = useState<Record<string, boolean>>({});
+  const allGuidelinesChecked = CREATOR_GUIDELINES.every((g) => guidelineChecks[g.id]);
+
   const checkAccess = useCallback(async () => {
     try {
       const res = await fetchCurrentUser();
@@ -79,6 +95,33 @@ export default function UploadPage() {
   useEffect(() => {
     checkAccess();
   }, [checkAccess]);
+
+  /** Read what this account already accepted, keyed by user id. */
+  useEffect(() => {
+    if (!user) return;
+    try {
+      const raw = localStorage.getItem(GUIDELINE_ACK_STORAGE_KEY);
+      const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+      setAckVersion(typeof map[user.id] === "number" ? map[user.id] : null);
+    } catch {
+      setAckVersion(null);
+    }
+  }, [user]);
+
+  /** Persist the acknowledgement so the gate is a one-time read, per version. */
+  function acceptGuidelines() {
+    if (!user || !allGuidelinesChecked) return;
+    try {
+      const raw = localStorage.getItem(GUIDELINE_ACK_STORAGE_KEY);
+      const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+      map[user.id] = CREATOR_GUIDELINES_VERSION;
+      localStorage.setItem(GUIDELINE_ACK_STORAGE_KEY, JSON.stringify(map));
+    } catch {
+      // A browser that refuses storage should not block the upload; the gate
+      // still ran this session.
+    }
+    setAckVersion(CREATOR_GUIDELINES_VERSION);
+  }
 
   /** Reserve the slot and get the short-lived credentials to fill it. */
   async function initiateUpload(): Promise<BunnyUploadCredentials | null> {
@@ -174,6 +217,85 @@ export default function UploadPage() {
         <div className="flex items-center justify-center h-[60vh]">
           <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
         </div>
+      </div>
+    );
+  }
+
+  // ---- Creator guidelines gate --------------------------------------------
+  // Shown before the form and only once per guidelines version. Every rule is
+  // individually ticked, because a single "I agree" at the bottom of a wall of
+  // text is how people accept rules they never read — and rule #2 here costs a
+  // creator their account.
+  if (ackVersion !== CREATOR_GUIDELINES_VERSION) {
+    return (
+      <div className="min-h-screen">
+        <Header />
+        <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+          <div className="flex items-center gap-3">
+            <Link href="/creator" className="p-2 rounded-xl hover:bg-white/10 transition">
+              <ArrowLeft className="w-5 h-5" />
+            </Link>
+            <div>
+              <h1 className="text-2xl font-display font-bold flex items-center gap-2">
+                <ScrollText className="w-6 h-6 text-brand-400" />
+                Masharti ya Creators
+              </h1>
+              <p className="text-white/50 text-sm">
+                Soma masharti yote kabla ya ku-upload video yako
+              </p>
+            </div>
+          </div>
+
+          <div className="glass-card p-6 space-y-3">
+            {CREATOR_GUIDELINES.map((g, i) => (
+              <label
+                key={g.id}
+                className={`flex items-start gap-3 rounded-xl border p-4 cursor-pointer transition ${
+                  guidelineChecks[g.id]
+                    ? "border-emerald-500/40 bg-emerald-500/5"
+                    : g.severe
+                      ? "border-red-500/30 bg-red-500/5"
+                      : "border-white/10 hover:border-white/20"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!guidelineChecks[g.id]}
+                  onChange={(e) =>
+                    setGuidelineChecks((prev) => ({ ...prev, [g.id]: e.target.checked }))
+                  }
+                  className="mt-1 w-4 h-4 accent-emerald-500 shrink-0"
+                />
+                <div className="space-y-1">
+                  <p className="text-sm font-medium flex items-center gap-2">
+                    <span className="text-white/40">
+                      {i + 1}.
+                    </span>
+                    {g.severe && <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />}
+                    <span>{g.sw}</span>
+                  </p>
+                  <p className="text-xs text-white/50">{g.en}</p>
+                </div>
+              </label>
+            ))}
+          </div>
+
+          <div className="glass-card p-4 space-y-3">
+            <p className="text-xs text-white/50">
+              {GUIDELINE_ACK_LABEL_SW}
+              <br />
+              {GUIDELINE_ACK_LABEL_EN}
+            </p>
+            <button
+              onClick={acceptGuidelines}
+              disabled={!allGuidelinesChecked}
+              className="btn-brand w-full disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              <CheckCircle className="w-4 h-4" />
+              Endelea ku-upload
+            </button>
+          </div>
+        </main>
       </div>
     );
   }
