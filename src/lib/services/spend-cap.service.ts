@@ -113,6 +113,41 @@ export async function checkSpendCap(
 }
 
 /**
+ * What is left to spend today, shaped for display.
+ *
+ * `null` when the cap is switched off, so a surface can hide the whole
+ * allowance panel rather than render "unlimited" — a number the customer cannot
+ * see is better than one they can spend, and "remaining: Infinity" is not
+ * something a wallet page can draw anyway.
+ */
+export interface SpendAllowance {
+  /** The configured cap. Always > 0 here; a disabled cap returns null. */
+  cap: number;
+  /** Spent in the rolling window so far. */
+  spent: number;
+  /** `cap - spent`, floored at 0 so an overspent window never reads negative. */
+  remaining: number;
+}
+
+/**
+ * The allowance left for the wallet page, or null when there is no cap.
+ *
+ * Deliberately separate from `checkSpendCap`: that one answers "may THIS charge
+ * go through" and needs an amount, while this one only reports where the account
+ * stands. Reading it must never refuse anything, so it cannot be the same call.
+ */
+export async function spendAllowance(
+  userId: string,
+  now: number = Date.now()
+): Promise<SpendAllowance | null> {
+  const cap = config.business.dailySpendCap;
+  if (cap <= 0) return null;
+
+  const spent = await dailySpend(userId, now);
+  return { cap, spent, remaining: Math.max(0, cap - spent) };
+}
+
+/**
  * The sentence a refused charge shows the customer.
  *
  * It names both numbers, because "you have reached your limit" with no figures

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import { useRouter } from "next/navigation";
-import { Wallet, ArrowUpRight, ArrowDownLeft, Plus, History, Phone, Ticket } from "lucide-react";
+import { Wallet, ArrowUpRight, ArrowDownLeft, Plus, History, Phone, Ticket, ShieldCheck } from "lucide-react";
 import { formatTZS, formatRelativeTime } from "@/lib/utils";
 import { useCurrency } from "@/lib/currency";
 import { useToast } from "@/components/Toast";
@@ -24,6 +24,14 @@ interface Transaction {
   video?: { title: string } | null;
 }
 
+// How much of the rolling 24-hour spend cap is left. Null from the API when the
+// cap is switched off, and the panel is hidden then.
+interface SpendAllowance {
+  cap: number;
+  spent: number;
+  remaining: number;
+}
+
 export default function WalletPage() {
   const router = useRouter();
   const [user, setUser] = useState<UserData | null>(null);
@@ -36,6 +44,7 @@ export default function WalletPage() {
   const [couponCode, setCouponCode] = useState("");
   const [couponInfo, setCouponInfo] = useState<{ bonus: number } | null>(null);
   const [couponError, setCouponError] = useState("");
+  const [allowance, setAllowance] = useState<SpendAllowance | null>(null);
   const { format } = useCurrency();
   const { toast } = useToast();
 
@@ -135,10 +144,26 @@ export default function WalletPage() {
     }
   }, []);
 
+  // The daily spend cap, so the limit is on screen before a charge is refused
+  // rather than after. Informational only: a failed read just leaves the panel
+  // hidden, which is the same as it being switched off.
+  const fetchAllowance = useCallback(async () => {
+    try {
+      const res = await fetch("/api/wallet/spend-cap");
+      const data = await res.json();
+      if (data.success) {
+        setAllowance(data.data);
+      }
+    } catch {
+      // Leave the panel hidden.
+    }
+  }, []);
+
   useEffect(() => {
     fetchUserData();
     fetchTransactions();
-  }, [fetchUserData, fetchTransactions]);
+    fetchAllowance();
+  }, [fetchUserData, fetchTransactions, fetchAllowance]);
 
   async function handleTopUp() {
     if (!phoneNumber || !topUpAmount) return;
@@ -227,6 +252,46 @@ export default function WalletPage() {
             <Plus className="w-4 h-4" /> Add Funds
           </button>
         </div>
+
+        {/* Daily spending limit — the cap that refuses a charge, shown while
+            there is still room so hitting it is never a surprise. */}
+        {allowance && allowance.cap > 0 && (
+          <div className="glass-card p-4">
+            <h2 className="font-display font-bold mb-2 flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-brand-400" /> Daily spending limit
+            </h2>
+            <p className="text-sm text-white/60 mb-3">
+              {allowance.remaining <= 0 ? (
+                <span className="text-amber-400">
+                  You have reached today&apos;s limit. It frees up as older charges age out.
+                </span>
+              ) : (
+                <>
+                  You can still spend{" "}
+                  <span className="text-white font-semibold">{format(allowance.remaining)}</span>{" "}
+                  today.
+                </>
+              )}
+            </p>
+            <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+              <div
+                className={`h-full transition-all ${
+                  allowance.remaining <= 0 ? "bg-amber-500" : "bg-brand-500"
+                }`}
+                style={{
+                  width: `${Math.min(
+                    100,
+                    Math.round((allowance.spent / allowance.cap) * 100)
+                  )}%`,
+                }}
+              />
+            </div>
+            <div className="flex justify-between text-xs text-white/40 mt-1">
+              <span>{format(allowance.spent)} used</span>
+              <span>{format(allowance.cap)} limit</span>
+            </div>
+          </div>
+        )}
 
         {/* Transaction History */}
         <div className="glass-card p-4">
