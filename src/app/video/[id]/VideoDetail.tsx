@@ -448,8 +448,12 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
   useEffect(() => {
     if (video && !isDemo && !viewAsVisitor) fetchInteractions();
+    // `user?.id` is here on purpose: this ran before the viewer had loaded, so it
+    // answered as a signed-out visitor and the page kept showing "not liked"
+    // even for someone who had already liked the video. Re-running when the
+    // account arrives restores their real vote.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [video?.id, isDemo, viewAsVisitor]);
+  }, [video?.id, user?.id, isDemo, viewAsVisitor]);
 
   // Resume position for partially watched videos
   useEffect(() => {

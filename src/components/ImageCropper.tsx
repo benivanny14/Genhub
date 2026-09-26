@@ -240,8 +240,9 @@ export default function ImageCropper({
           </button>
         </div>
         <p className="text-xs text-white/45 mb-4">
-          Drag the picture to move it, and use the slider to zoom. The square is
-          exactly what will be saved.
+          Drag the picture to move it, and use the slider to zoom. The{" "}
+          {shape === "square" ? "square" : "frame"} is exactly what will be
+          saved.
         </p>
 
         {loadError ? (

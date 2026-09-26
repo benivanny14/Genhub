@@ -6,6 +6,7 @@ import Image from "next/image";
 import { Play, Clock, Eye, Heart, Bookmark, BadgeCheck, Lock } from "lucide-react";
 import { formatTZS, formatDuration } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
+import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
 
 interface VideoCardProps {
@@ -40,6 +41,7 @@ interface VideoCardProps {
 export default function VideoCard(video: VideoCardProps) {
   const displaySlug = video.slug || video.id;
   const { theme } = useTheme();
+  const { toast } = useToast();
   const isLight = theme === "light";
   const [liked, setLiked] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -110,30 +112,66 @@ export default function VideoCard(video: VideoCardProps) {
 
   useEffect(() => () => stopPreview(), []);
 
+  /**
+   * The heart fills, AND the write is checked.
+   *
+   * This used to fire the request and ignore the answer, so a signed-out tap —
+   * or any failure — left a filled heart behind with nothing saved. From the
+   * viewer's side that is exactly "the like button does not work": it lights up,
+   * and a reload loses it. Now the heart is put back whenever the write did not
+   * succeed, and a signed-out tap says why instead of pretending.
+   */
   async function handleLike(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    setLiked(!liked);
+    const next = !liked;
+    setLiked(next);
     try {
-      await fetch(`/api/videos/${video.id}/interactions`, {
+      const res = await fetch(`/api/videos/${video.id}/interactions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ type: "like" }),
       });
-    } catch {}
+      const data = await res.json().catch(() => null);
+      if (!data?.success) {
+        setLiked(!next);
+        if (res.status === 401 || res.status === 403) {
+          toast("warning", "Sign in to like this video");
+        } else {
+          toast("error", data?.error || "Could not save your like");
+        }
+      }
+    } catch {
+      setLiked(!next);
+      toast("error", "Could not save your like");
+    }
   }
 
   async function handleSave(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
-    setSaved(!saved);
+    const next = !saved;
+    setSaved(next);
     try {
-      await fetch("/api/favorites", {
+      const res = await fetch("/api/favorites", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ videoId: video.id }),
       });
-    } catch {}
+      const data = await res.json().catch(() => null);
+      if (!data?.success) {
+        setSaved(!next);
+        toast(
+          res.status === 401 || res.status === 403 ? "warning" : "error",
+          res.status === 401 || res.status === 403
+            ? "Sign in to save this video"
+            : data?.error || "Could not save this video"
+        );
+      }
+    } catch {
+      setSaved(!next);
+      toast("error", "Could not save this video");
+    }
   }
 
   return (

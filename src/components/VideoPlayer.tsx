@@ -9,8 +9,6 @@ import {
   VolumeX,
   Maximize,
   Minimize,
-  Expand,
-  Shrink,
   SkipForward,
   Settings,
   Download,
@@ -79,17 +77,21 @@ export default function VideoPlayer({
   const [showControls, setShowControls] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
 
-  // How the picture fills the frame. FILL is the default, and it is the fix for
-  // the report that the video "only shows in the middle with black bars down
-  // both sides": the element was a 16:9 box with the browser's default
-  // object-fit, so anything not exactly 16:9 — a phone-shot vertical clip, a 4:3
-  // scene — was letterboxed inside it.
+  // The frame takes the PICTURE's shape, not the other way round.
   //
-  // The toggle exists because filling the frame CROPS, and on the scene where
-  // the crop costs something (a title card, a shot with two people) that is the
-  // viewer's call rather than the player's. "Fit" is the old behaviour, one tap
-  // away, instead of the only behaviour.
-  const [fill, setFill] = useState(true);
+  // The player used to sit in a fixed 16:9 box with the video stretched across
+  // it. Anything that was not shot in 16:9 — a phone-shot vertical clip, a 4:3
+  // scene — was then either cropped to fill (zooming in, hiding part of the
+  // frame and softening the image) or letterboxed inside the box (black bars
+  // down the sides). Both were wrong, and both were the reported complaint.
+  //
+  // Instead, once the browser reports the video's real dimensions
+  // (videoWidth / videoHeight on loadedmetadata) the FRAME adopts that aspect
+  // ratio and the video fills it exactly with object-fit: contain. Nothing is
+  // cropped, nothing is scaled above its natural size, and there are no bars —
+  // the page shows a frame that is as wide (or as tall) as the clip really is,
+  // capped so a tall clip still fits the viewport.
+  const [aspect, setAspect] = useState<number | null>(null);
 
   // Quality selector state (HLS levels)
   const hlsRef = useRef<Hls | null>(null);
@@ -125,6 +127,9 @@ export default function VideoPlayer({
 
   useEffect(() => {
     resumedRef.current = false;
+    // A new source has its own dimensions; drop the old shape until the new
+    // metadata arrives so the frame never keeps the previous clip's ratio.
+    setAspect(null);
   }, [src]);
 
   useEffect(() => {
@@ -480,6 +485,15 @@ export default function VideoPlayer({
     setIsMuted(!isMuted);
   };
 
+  // The browser's own fullscreen (Esc, the OS control) changes the state behind
+  // our back. Without this the frame would think it is still inline after an
+  // Esc and clamp itself to the viewport-height cap.
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
   const toggleFullscreen = async () => {
     const container = containerRef.current;
     if (!container) return;
@@ -519,7 +533,17 @@ export default function VideoPlayer({
   return (
     <div
       ref={containerRef}
-      className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden group select-none"
+      className="relative w-full bg-black rounded-2xl overflow-hidden group select-none mx-auto"
+      style={
+        isFullscreen
+          ? { width: "100%", height: "100%" }
+          : aspect
+            ? // The video's own ratio, at most the full width, and never taller
+              // than the viewport — so a vertical clip fits a phone screen nicely
+              // and a wide one uses the whole width without being blown up.
+              { aspectRatio: `${aspect}`, width: `min(100%, calc(80vh * ${aspect}))` }
+            : { aspectRatio: "16 / 9", width: "100%" }
+      }
       onMouseMove={showControlsTemporarily}
       onMouseLeave={() => isPlaying && setShowControls(false)}
     >
@@ -534,10 +558,14 @@ export default function VideoPlayer({
           bars came back. */}
       <video
         ref={videoRef}
-        className={`absolute inset-0 h-full w-full ${fill ? "object-cover" : "object-contain"}`}
+        className="absolute inset-0 h-full w-full object-contain"
         poster={poster}
         playsInline
         preload="metadata"
+        onLoadedMetadata={(e) => {
+          const v = e.currentTarget;
+          if (v.videoWidth > 0 && v.videoHeight > 0) setAspect(v.videoWidth / v.videoHeight);
+        }}
         onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
         onDurationChange={(e) => setDuration(e.currentTarget.duration)}
         onPlay={() => setIsPlaying(true)}
@@ -716,18 +744,6 @@ export default function VideoPlayer({
                 )}
               </div>
             )}
-
-            {/* Fill the screen, or show the whole frame as it was shot. */}
-            <button
-              onClick={() => setFill((v) => !v)}
-              title={fill ? "Show the whole frame" : "Fill the screen"}
-              className="flex items-center gap-1.5 p-1.5 hover:bg-white/10 rounded-lg transition"
-            >
-              {fill ? <Shrink className="w-5 h-5" /> : <Expand className="w-5 h-5" />}
-              <span className="text-[10px] text-white/70 font-medium hidden sm:inline">
-                {fill ? "Fill" : "Fit"}
-              </span>
-            </button>
 
             <button onClick={toggleFullscreen} className="p-1.5 hover:bg-white/10 rounded-lg transition">
               {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}

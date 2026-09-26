@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import Image from "next/image";
+import ImageCropper from "@/components/ImageCropper";
 import { canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
@@ -56,6 +57,10 @@ export default function UploadPage() {
   const [bunnyVideoId, setBunnyVideoId] = useState("");
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [uploadingThumb, setUploadingThumb] = useState(false);
+  // The picture the creator just chose, held while they frame it. The cover is
+  // shown as a 16:9 shape everywhere (feed, profile, watch page), so the same
+  // shape is what they position here — what they see is what every viewer gets.
+  const [thumbCropFile, setThumbCropFile] = useState<File | null>(null);
   // Separate short clip shown to non-buyers. Without it a paid scene shows only
   // a poster, because signing the main video for non-buyers would unlock the
   // whole scene (a Bunny token authorises a path, not a duration).
@@ -167,6 +172,26 @@ export default function UploadPage() {
           : "Upload failed. Please try again."
       );
       return false;
+    }
+  }
+
+  /**
+   * Upload a framed cover and remember its URL on the draft.
+   *
+   * Called with the cropped file the ImageCropper produced, so the picture we
+   * store is exactly the 16:9 frame the creator positioned — no re-cropping by
+   * the feed or the profile can move it afterwards.
+   */
+  async function uploadThumb(file: File) {
+    setUploadingThumb(true);
+    try {
+      const { uploadImage } = await import("@/lib/upload-client");
+      // Public: a thumbnail is shown to every visitor on the feed.
+      setThumbnailUrl(await uploadImage(file, { kind: "public" }));
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadingThumb(false);
     }
   }
 
@@ -502,7 +527,10 @@ export default function UploadPage() {
             />
           </div>
 
-          {/* Thumbnail */}
+          {/* Thumbnail — chosen from the creator's own files and framed before
+              it is saved. There is deliberately no URL field here: the cover is
+              a picture we host, and a pasted link to somebody else's host could
+              break, change or disappear under the viewer. */}
           <div>
             <label className="text-sm text-white/60 mb-2 block">Thumbnail</label>
             <label className="flex items-center gap-3 cursor-pointer border-2 border-dashed border-white/20 rounded-xl p-4 hover:border-brand-500/50 transition">
@@ -518,48 +546,40 @@ export default function UploadPage() {
               </span>
               <input
                 type="file"
-                accept="image/*"
+                accept="image/jpeg,image/png,image/webp"
                 className="hidden"
                 disabled={uploadingThumb}
-                onChange={async (e) => {
+                onChange={(e) => {
                   const file = e.target.files?.[0];
+                  // Reset so choosing the same file again still fires.
+                  e.target.value = "";
                   if (!file) return;
-                  setUploadingThumb(true);
-                  try {
-                    const { uploadImage } = await import("@/lib/upload-client");
-                    // Public: a thumbnail is shown to every visitor on the feed.
-                    setThumbnailUrl(await uploadImage(file, { kind: "public" }));
-                  } catch (err) {
-                    toast(
-                      "error",
-                      err instanceof Error ? err.message : "Upload failed"
-                    );
-                  } finally {
-                    setUploadingThumb(false);
+                  if (!file.type.startsWith("image/")) {
+                    toast("error", "Please choose an image file");
+                    return;
                   }
+                  // Frame it as the 16:9 cover every viewer will see.
+                  setThumbCropFile(file);
                 }}
               />
             </label>
+            <p className="text-xs text-white/40 mt-2">
+              JPEG, PNG or WebP, up to 5 MB. You can move and zoom the picture
+              before it is saved, so it looks exactly as you want it on the feed.
+            </p>
             {thumbnailUrl && (
-              // Creator-supplied URL on an arbitrary host, so it is optimised
-              // only when it is a public file we host (canOptimizeImage);
-              // otherwise the raw source is used and the preview never breaks.
+              // The cover is shown as a 16:9 shape wherever a viewer meets it, so
+              // the preview uses the same shape — what the creator framed is what
+              // they see here and what the profile shows.
               <Image
                 src={thumbnailUrl}
                 alt="Thumbnail preview"
                 width={320}
-                height={96}
+                height={180}
                 unoptimized={!canOptimizeImage(thumbnailUrl)}
-                className="mt-2 h-24 w-full max-w-xs object-cover rounded-lg"
+                className="mt-2 aspect-video w-full max-w-xs object-cover rounded-lg"
               />
             )}
-            <input
-              type="url"
-              value={thumbnailUrl}
-              onChange={(e) => setThumbnailUrl(e.target.value)}
-              placeholder="…or paste an image URL (optional)"
-              className="input-field mt-2"
-            />
           </div>
 
           {/* Teaser / trailer clip — what non-buyers get to watch */}
@@ -676,6 +696,20 @@ export default function UploadPage() {
             {uploading ? "Creating..." : "Create Video"}
           </button>
         </form>
+
+        {thumbCropFile && (
+          <ImageCropper
+            file={thumbCropFile}
+            shape="wide"
+            confirmLabel="Save thumbnail"
+            busy={uploadingThumb}
+            onCancel={() => setThumbCropFile(null)}
+            onConfirm={(cropped) => {
+              setThumbCropFile(null);
+              void uploadThumb(cropped);
+            }}
+          />
+        )}
       </main>
     </div>
   );

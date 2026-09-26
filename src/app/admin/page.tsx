@@ -6,6 +6,7 @@ import Header from "@/components/Header";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 import {
   Shield,
   HelpCircle,
@@ -323,6 +324,27 @@ interface ViewerItem {
   } | null;
 }
 
+/**
+ * One comment, with the two names an admin needs to decide about it: who wrote
+ * it and which video it sits under, so a removal can be judged without opening
+ * the scene as a viewer.
+ */
+interface AdminCommentItem {
+  id: string;
+  body: string;
+  isDeleted: boolean;
+  parentId: string | null;
+  createdAt: string;
+  user: {
+    id: string;
+    displayName: string | null;
+    email: string | null;
+    role: string;
+    isBanned: boolean;
+  };
+  video: { id: string; title: string; slug: string | null; thumbnailUrl: string | null };
+}
+
 interface BlueTickAdminRow {
   id: string;
   status: string;
@@ -630,6 +652,7 @@ function SetupGroupCard({
 export default function AdminDashboard() {
   const router = useRouter();
   const { toast } = useToast();
+  const confirmDialog = useConfirm();
   const [activeTab, setActiveTab] = useState<
     | "overview"
     | "kyc"
@@ -643,6 +666,7 @@ export default function AdminDashboard() {
     | "setup"
     | "blueTicks"
     | "viewers"
+    | "comments"
   >("overview");
   const [loading, setLoading] = useState(true);
   const [kycList, setKycList] = useState<KycItem[]>([]);
@@ -667,6 +691,11 @@ export default function AdminDashboard() {
   const [viewerList, setViewerList] = useState<ViewerItem[]>([]);
   const [viewerQuery, setViewerQuery] = useState("");
   const [busyBlueTick, setBusyBlueTick] = useState<string | null>(null);
+  // Moderation of what people write: every comment, searchable, with a delete
+  // that reaches the same endpoint a user's own delete uses.
+  const [commentList, setCommentList] = useState<AdminCommentItem[]>([]);
+  const [commentQuery, setCommentQuery] = useState("");
+  const [busyComment, setBusyComment] = useState<string | null>(null);
   const [auditList, setAuditList] = useState<AuditItem[]>([]);
   // Empty = every action code. Set to "user." or "payout." to narrow it.
   const [auditFilter, setAuditFilter] = useState("");
@@ -844,6 +873,7 @@ export default function AdminDashboard() {
     if (activeTab === "blueTicks") fetchBlueTicks();
     if (activeTab === "viewers") fetchViewers();
     if (activeTab === "audit") fetchAudit();
+    if (activeTab === "comments") fetchComments();
     if (activeTab === "earnings") fetchEarnings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -1054,6 +1084,52 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (data.success) setViewerList(data.data.users);
     } catch {}
+  }
+
+  async function fetchComments(query = commentQuery) {
+    try {
+      const search = query.trim();
+      const res = await adminFetch(
+        `/api/admin/comments${search ? `?q=${encodeURIComponent(search)}` : ""}`
+      );
+      const data = await res.json();
+      if (data.success) setCommentList(data.data.comments);
+    } catch {}
+  }
+
+  /**
+   * Remove one comment from its video for everyone.
+   *
+   * Asked first, in our own words, and the removal is optimistic only after a
+   * success — a moderation action that only LOOKS like it happened is worse than
+   * one that fails loudly, because the admin moves on believing it is gone.
+   */
+  async function handleDeleteComment(comment: AdminCommentItem) {
+    const goAhead = await confirmDialog({
+      title: "Delete this comment?",
+      message:
+        `"${comment.body.slice(0, 140)}"\n\nby ${
+          comment.user.displayName || comment.user.email || "an unnamed account"
+        } on "${comment.video.title}". It disappears from that video for everyone, and the author is not told. This cannot be undone.`,
+      confirmLabel: "Delete comment",
+    });
+    if (!goAhead) return;
+
+    setBusyComment(comment.id);
+    try {
+      const res = await adminFetch(`/api/comments/${comment.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        toast("success", "Comment deleted");
+        setCommentList((list) => list.filter((c) => c.id !== comment.id));
+      } else {
+        toast("error", data.error || "Could not delete the comment");
+      }
+    } catch {
+      toast("error", "Network error");
+    } finally {
+      setBusyComment(null);
+    }
   }
 
   async function fetchBlueTicks() {
@@ -1649,6 +1725,7 @@ export default function AdminDashboard() {
     { id: "payouts" as const, label: "Payouts", icon: DollarSign, badge: payoutList.length },
     { id: "creators" as const, label: "Creators", icon: BadgeCheck },
     { id: "viewers" as const, label: "Viewers", icon: Users },
+    { id: "comments" as const, label: "Comments", icon: MessageSquare },
     {
       id: "blueTicks" as const,
       label: "Blue ticks",
@@ -2656,6 +2733,102 @@ export default function AdminDashboard() {
                           <Trash2 className="w-3 h-3" /> Delete
                         </button>
                       </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Comments Tab — read what people wrote and remove anything that
+            should not stand. */}
+        {activeTab === "comments" && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display font-bold">Comments</h2>
+                <p className="text-xs text-white/40 mt-0.5">
+                  {commentList.length} comment{commentList.length === 1 ? "" : "s"} — what
+                  viewers wrote, and on which video. Deleting one removes it from that
+                  video for everyone.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  value={commentQuery}
+                  onChange={(e) => setCommentQuery(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") fetchComments();
+                  }}
+                  placeholder="Comment, author or video"
+                  className="input-field text-sm w-full sm:w-64"
+                />
+                <button onClick={() => fetchComments()} className="btn-ghost text-sm shrink-0">
+                  Search
+                </button>
+              </div>
+            </div>
+
+            {commentList.length === 0 ? (
+              <div className="glass-card p-12 text-center">
+                <MessageSquare className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
+                <p className="text-white/50">
+                  {commentQuery ? "No comment matches that search" : "No comments yet"}
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-3">
+                {commentList.map((comment) => (
+                  <div key={comment.id} className="glass-card p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium">
+                            {comment.user.displayName || comment.user.email || "Unnamed"}
+                          </span>
+                          {comment.user.role === "CREATOR" && (
+                            <span className="bg-brand-500/15 text-brand-400 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                              CREATOR
+                            </span>
+                          )}
+                          {comment.user.isBanned && (
+                            <span className="bg-red-500/20 text-red-400 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                              BANNED
+                            </span>
+                          )}
+                          {comment.parentId && (
+                            <span className="bg-white/10 text-white/50 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                              REPLY
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm mt-1 whitespace-pre-wrap break-words text-white/80">
+                          {comment.body}
+                        </p>
+                        <p className="text-xs text-white/40 mt-1">
+                          on{" "}
+                          <Link
+                            href={`/video/${comment.video.slug || comment.video.id}`}
+                            className="text-brand-400 hover:underline"
+                          >
+                            {comment.video.title}
+                          </Link>{" "}
+                          · {new Date(comment.createdAt).toLocaleDateString("en-GB")}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleDeleteComment(comment)}
+                        disabled={busyComment === comment.id}
+                        className="bg-red-500/15 text-red-300 hover:bg-red-500/25 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1 shrink-0 disabled:opacity-50"
+                      >
+                        {busyComment === comment.id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-3 h-3" />
+                        )}
+                        Delete
+                      </button>
                     </div>
                   </div>
                 ))}

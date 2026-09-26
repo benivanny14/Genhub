@@ -37,6 +37,7 @@ export const AUDIT_ACTIONS = {
   videoDelete: "video.delete",
   videoHide: "video.hide",
   videoRestore: "video.restore",
+  commentDelete: "comment.delete",
   couponCreate: "coupon.create",
   couponToggle: "coupon.toggle",
   payoutApprove: "payout.approve",

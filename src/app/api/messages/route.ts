@@ -14,6 +14,19 @@ import config from "@/lib/config";
 import { MAX_PAID_MESSAGE, MIN_PAID_MESSAGE } from "@/lib/pay-message";
 import { z } from "zod";
 
+/**
+ * The budget for the send-message transaction.
+ *
+ * Prisma's default is 5 seconds and it measures the DATABASE, not the work. A
+ * charged message runs debitWallet, the message row, a balance upsert, the
+ * ledger row and a notification — five round trips — and on this deployment a
+ * pooled Postgres query measures ~0.5 s each, so the defaults roll back a send
+ * that did nothing wrong. A rolled-back send is the exact "the message never
+ * arrived" report, so the budget is set where the work actually fits. Same
+ * values as the blue-tick charge, which hit the same wall.
+ */
+const MESSAGE_TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
+
 const sendMessageSchema = z.object({
   receiverId: z.string().min(1),
   // The amount is what a VIEWER pays to reach somebody, and it is required of
@@ -199,7 +212,7 @@ export async function POST(request: NextRequest) {
       });
 
       return msg;
-    });
+    }, MESSAGE_TX_OPTIONS);
 
     if ("insufficient" in message) {
       return api.error(
