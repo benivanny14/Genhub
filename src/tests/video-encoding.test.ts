@@ -210,7 +210,11 @@ describeDB("refreshVideoEncoding (real database)", () => {
   it("publishes and notifies the moment Bunny reports finished", async () => {
     // 8 minutes (480s) — the creator-guidelines floor. A shorter scene is held
     // back by the rule below, so the "happy path" fixture must clear it.
-    bunnyState.details = { status: 4, encodeProgress: 100, length: 480_000 };
+    //
+    // `length` is what Bunny really sends: SECONDS. This fixture used to say
+    // 480_000, which only worked because the reader divided by 1000 — so the
+    // test agreed with the bug and would not have noticed the fix.
+    bunnyState.details = { status: 4, encodeProgress: 100, length: 480 };
 
     const result = await refreshVideoEncoding(videoId);
 
@@ -227,7 +231,7 @@ describeDB("refreshVideoEncoding (real database)", () => {
   });
 
   it("holds back a ready video shorter than the 8-minute guidelines floor", async () => {
-    bunnyState.details = { status: 4, encodeProgress: 100, length: 90_000 };
+    bunnyState.details = { status: 4, encodeProgress: 100, length: 90 };
 
     const result = await refreshVideoEncoding(videoId);
 
@@ -242,6 +246,26 @@ describeDB("refreshVideoEncoding (real database)", () => {
     const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
     expect(notifications).toHaveLength(1);
     expect(notifications[0].type).toBe("error");
+    expect(notifications[0].title).toMatch(/too short/i);
+  });
+
+  it("reads Bunny's `length` as seconds, so the 8-minute floor actually fires", async () => {
+    // The live library's own answer for a 5-second upload: `length: 5`. Read as
+    // milliseconds that rounded to 0, and 0 failed the `> 0` guard below — so
+    // the shortest possible file sailed past a published "8 minutes minimum"
+    // rule and landed on a paid feed, with `duration` left NULL as well.
+    bunnyState.details = { status: 4, encodeProgress: 100, length: 5 };
+
+    const result = await refreshVideoEncoding(videoId);
+
+    expect(result?.published).toBe(false);
+
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.duration).toBe(5);
+    expect(video.isPublished).toBe(false);
+
+    const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
+    expect(notifications).toHaveLength(1);
     expect(notifications[0].title).toMatch(/too short/i);
   });
 

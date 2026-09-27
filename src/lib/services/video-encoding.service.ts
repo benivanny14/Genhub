@@ -132,9 +132,19 @@ export async function fetchEncodingFromBunny(
       typeof details.status === "number" ? details.status : null,
       typeof details.encodeProgress === "number" ? details.encodeProgress : 0
     );
+    // Bunny reports `length` in SECONDS, not milliseconds. Measured against the
+    // live library: a 5-second clip comes back as `length: 5`.
+    //
+    // This used to divide by 1000, and because the field is already seconds the
+    // result was 0 for every real upload — which quietly did two things. The
+    // `duration` column was never written, because `...(0 ? : {})` is falsy, so
+    // every video in the catalogue showed no length. And the creator-guidelines
+    // floor below tests `lengthSeconds > 0`, so it could never fire: a 5-second
+    // clip was published to a paid feed whose rules say eight minutes minimum.
+    // One wrong unit disabled a rule and a column at the same time, silently.
     const length =
       typeof details.length === "number" && details.length > 0
-        ? Math.round(details.length / 1000)
+        ? Math.round(details.length)
         : null;
 
     return {
