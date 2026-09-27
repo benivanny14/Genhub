@@ -166,10 +166,20 @@ const problems = [];
 
 for (const call of calls) {
   let path = call.raw.split("?")[0];
-  // ${...} segments are dynamic
+  // ${...} segments are dynamic — but ONLY when the expression is the whole
+  // segment (`/api/videos/${id}`). A `${` that appears after static text is the
+  // tail of a template the extractor truncated at a nested backtick, e.g.
+  //   `/api/admin/comments${search ? `?q=${x}` : ""}`
+  // captures as `comments${search ? ` and the real path is `comments`. Treating
+  // that as dynamic invented `/api/admin/__DYNAMIC__` — a route that does not
+  // exist because it was never in the source. Strip the tail instead.
   path = path
     .split("/")
-    .map((seg) => (seg.includes("${") ? "__DYNAMIC__" : seg))
+    .map((seg) => {
+      const at = seg.indexOf("${");
+      if (at === -1) return seg;
+      return at === 0 ? "__DYNAMIC__" : seg.slice(0, at);
+    })
     .join("/");
 
   const key = `${call.method} ${path}`;
@@ -181,12 +191,14 @@ for (const call of calls) {
   );
   if (matched.length === 0) {
     missingRoute++;
-    problems.push(`MISSING ROUTE   ${call.method} ${path}   (called from ${call.file})`);
+    problems.push(
+      `MISSING ROUTE   ${call.method} ${path}   (raw: ${call.raw}; called from ${call.file})`
+    );
   } else if (!matched.some((r) => r.methods.has(call.method))) {
     missingMethod++;
     const have = [...new Set(matched.flatMap((r) => [...r.methods]))].join(",") || "none";
     problems.push(
-      `MISSING METHOD  ${call.method} ${path}   (route exports: ${have}; called from ${call.file})`
+      `MISSING METHOD  ${call.method} ${path}   (raw: ${call.raw}; route exports: ${have}; called from ${call.file})`
     );
   }
 }
