@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
       return api.validation(result.error.errors[0].message);
     }
 
-    const { displayName, email, phone, password, role, locale, referralCode } = result.data;
+    const { displayName, email, password, role, locale, referralCode } = result.data;
 
     // Resolve referrer (affiliate attribution) before creating the user
     let referrer: { id: string; displayName: string | null } | null = null;
@@ -47,23 +47,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Check if email or phone already exists
-    const existingUser = await prisma.user.findFirst({
-      where: {
-        OR: [
-          ...(email ? [{ email }] : []),
-          ...(phone ? [{ phone }] : []),
-        ],
-      },
+    // Email is the only identifier a new account can have — see registerSchema.
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
     });
 
     if (existingUser) {
-      return api.error(
-        existingUser.email === email
-          ? "This email address is already in use"
-          : "This phone number is already in use",
-        409
-      );
+      return api.error("This email address is already in use", 409);
     }
 
     // Hash password
@@ -97,7 +88,6 @@ export async function POST(request: NextRequest) {
       data: {
         displayName,
         email,
-        phone,
         passwordHash,
         role,
         locale,
@@ -182,15 +172,6 @@ export async function POST(request: NextRequest) {
           console.error("[Welcome Email Error]", mailError)
         );
     }
-    if (user.phone) {
-      // Welcome SMS for phone signups (console transport in dev)
-      import("@/lib/sms")
-        .then(({ sendWelcomeSms }) =>
-          sendWelcomeSms(user.phone!, user.displayName || "")
-        )
-        .catch((smsError) => console.error("[Welcome SMS Error]", smsError));
-    }
-
     return api.success(user, "Sign-up successful", 201);
   } catch (error) {
     console.error("[Register Error]", error);

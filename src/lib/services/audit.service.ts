@@ -32,6 +32,10 @@ export const AUDIT_ACTIONS = {
   userUnban: "user.unban",
   userWarn: "user.warn",
   userDelete: "user.delete",
+  // Issuing a password-reset link on somebody's behalf. Worth a durable record:
+  // it is an admin handing out account access, and "who reset this account, and
+  // when?" is asked weeks later, not at the time.
+  userResetLink: "user.reset_link",
   payoutFreeze: "payout.freeze",
   payoutUnfreeze: "payout.unfreeze",
   videoDelete: "video.delete",

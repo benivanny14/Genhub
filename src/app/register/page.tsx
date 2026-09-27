@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AuthBrandPanel from "@/components/AuthBrandPanel";
-import { Play, Mail, Phone, Lock, Eye, EyeOff, User, Film, Check, Loader2, ArrowRight, ScrollText, ShieldAlert } from "lucide-react";
+import { Play, Mail, Lock, Eye, EyeOff, User, Film, Check, Loader2, ArrowRight, ScrollText, ShieldAlert } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
@@ -48,7 +48,6 @@ export default function RegisterPage() {
   const [role, setRole] = useState<"VIEWER" | "CREATOR">("VIEWER");
   const [displayName, setDisplayName] = useState("");
   const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -102,8 +101,11 @@ export default function RegisterPage() {
       refuse("Passwords do not match");
       return;
     }
-    if (!email && !phone) {
-      refuse("Enter an email address or a phone number");
+    // Email only. Signing up with a phone number was removed along with the SMS
+    // reset channel it depended on: the account it produced could not be
+    // recovered. See registerSchema in lib/validation.ts.
+    if (!email.trim()) {
+      refuse(t("auth.emailRequired"));
       return;
     }
     if (role === "CREATOR" && !allGuidelinesChecked) {
@@ -120,8 +122,7 @@ export default function RegisterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           displayName,
-          email: email || undefined,
-          phone: phone || undefined,
+          email: email.trim(),
           password,
           role,
           locale: "en",
@@ -262,16 +263,11 @@ export default function RegisterPage() {
 
               <div className="relative">
                 <Mail className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t("auth.emailOptional")} className="input-field pl-10" autoComplete="email" />
-              </div>
-
-              <div className="relative">
-                <Phone className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
-                <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder={t("auth.phoneOptional")} className="input-field pl-10" autoComplete="tel" />
+                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder={t("auth.emailRequired")} className="input-field pl-10" autoComplete="email" required />
               </div>
 
               <p className={cn("text-xs -mt-3", isLight ? "text-gray-400" : "text-white/40")}>
-                {t("auth.bothHint")}
+                {t("auth.emailWhy")}
               </p>
 
               <div className="relative">

@@ -46,6 +46,7 @@ import {
   ChevronRight,
   Gavel,
   Sparkles,
+  Mail,
 } from "lucide-react";
 
 /**
@@ -967,7 +968,10 @@ export default function AdminDashboard() {
         key: "sms",
         ok: health?.checks?.sms === "africastalking",
         value: health?.checks?.sms,
-        hint: "console = password-reset SMS never arrives",
+        // Not a launch blocker any more: password reset is email-only and
+        // sign-up requires an email, so nothing sends SMS. Shown so an operator
+        // can see whether a provider is wired up for later.
+        hint: "console = no SMS provider (no current flow sends SMS)",
       });
 
       // The float is NOT a row here: it has its own card above, because a
@@ -1274,7 +1278,8 @@ export default function AdminDashboard() {
       | "WARN"
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
-      | "UNFREEZE_PAYOUTS",
+      | "UNFREEZE_PAYOUTS"
+      | "SEND_RESET_LINK",
     role: "CREATOR" | "VIEWER",
     reason?: string
   ) {
@@ -1311,6 +1316,7 @@ export default function AdminDashboard() {
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS"
+      | "SEND_RESET_LINK"
   ) {
     handlePersonAction(userId, action, "CREATOR");
   }
@@ -1323,7 +1329,7 @@ export default function AdminDashboard() {
    */
   function handleViewerAction(
     userId: string,
-    action: "BAN" | "UNBAN" | "WARN" | "DELETE_ACCOUNT"
+    action: "BAN" | "UNBAN" | "WARN" | "DELETE_ACCOUNT" | "SEND_RESET_LINK"
   ) {
     handlePersonAction(userId, action, "VIEWER");
   }
@@ -1338,7 +1344,8 @@ export default function AdminDashboard() {
       | "WARN"
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
-      | "UNFREEZE_PAYOUTS",
+      | "UNFREEZE_PAYOUTS"
+      | "SEND_RESET_LINK",
     role: "CREATOR" | "VIEWER"
   ) {
     const who = role === "VIEWER" ? "user" : "creator";
@@ -2809,6 +2816,13 @@ export default function AdminDashboard() {
                           </>
                         )}
                         <button
+                          onClick={() => handleViewerAction(viewer.id, "SEND_RESET_LINK")}
+                          className="bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          title="Email this user a password-reset link"
+                        >
+                          <Mail className="w-3 h-3" /> Reset link
+                        </button>
+                        <button
                           onClick={() => handleViewerAction(viewer.id, "DELETE_ACCOUNT")}
                           className="bg-red-500/10 text-red-300 hover:bg-red-500/20 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
                         >
@@ -3003,6 +3017,13 @@ export default function AdminDashboard() {
                             <UserX className="w-3 h-3" /> Ban
                           </button>
                         )}
+                        <button
+                          onClick={() => handleCreatorAction(creator.id, "SEND_RESET_LINK")}
+                          className="bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          title="Email this creator a password-reset link"
+                        >
+                          <Mail className="w-3 h-3" /> Reset link
+                        </button>
                         <a href={`/creator/${creator.id}`} className="btn-ghost text-xs">
                           View Profile
                         </a>

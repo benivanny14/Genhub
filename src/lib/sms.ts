@@ -1,7 +1,21 @@
 // =============================================================================
 // GENHUB - Transactional SMS (Africa's Talking)
-// Phone-only accounts (very common in Tanzania) need SMS for password reset —
-// without it those users can never recover their account.
+//
+// NOTHING CALLS THIS TODAY, and that is deliberate rather than an oversight.
+//
+// It used to carry two things: the password-reset link for phone-only accounts,
+// and a welcome message for phone sign-ups. Both went away together — reset is
+// now email-only, and sign-up requires an email (see
+// lib/services/password-reset.service.ts for why the SMS reset was removed: it
+// created a token, handed it to a console transport because Africa's Talking was
+// never configured, and told the account holder to check a phone that would
+// never buzz).
+//
+// Kept rather than deleted: the integration is correct and the parts below are
+// the expensive bit to get right (E.164 normalisation, recipient-status checks,
+// a never-throwing transport). When a flow that should text somebody arrives —
+// a settled payment, a withdrawal — this is where it goes, and it needs a
+// deliberately configured AT_API_KEY rather than an accidental one.
 //
 // Configuration (all optional in dev):
 //   AT_API_KEY      Africa's Talking API key

@@ -27,14 +27,30 @@ describe("registerSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should accept valid registration with phone", () => {
+  // The phone-only sign-up path is gone, and it went with the SMS reset channel
+  // that made it survivable: such an account could create a reset token and
+  // never receive it. Email is now the one identifier sign-up accepts.
+  it("refuses a registration that offers a phone number instead of an email", () => {
     const result = registerSchema.safeParse({
       displayName: "Test User",
       phone: "+255712345678",
       password: "password123",
       role: "CREATOR",
     });
+    expect(result.success).toBe(false);
+  });
+
+  it("ignores a phone number rather than storing one", () => {
+    // Unknown keys are stripped, so a caller that still sends a phone cannot
+    // put one on the row and re-create the account this rule exists to prevent.
+    const result = registerSchema.safeParse({
+      displayName: "Test User",
+      email: "test@example.com",
+      phone: "+255712345678",
+      password: "password123",
+    });
     expect(result.success).toBe(true);
+    if (result.success) expect(result.data).not.toHaveProperty("phone");
   });
 
   it("should reject short display name", () => {
@@ -64,16 +80,7 @@ describe("registerSchema", () => {
     expect(result.success).toBe(false);
   });
 
-  it("should reject invalid phone number", () => {
-    const result = registerSchema.safeParse({
-      displayName: "Test User",
-      phone: "12345",
-      password: "password123",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("should reject when both email and phone are missing", () => {
+  it("should reject a registration with no email", () => {
     const result = registerSchema.safeParse({
       displayName: "Test User",
       password: "password123",

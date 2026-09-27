@@ -249,9 +249,11 @@ export function productionConfigWarnings(): string[] {
   if (!config.email.host) {
     warnings.push("SMTP_HOST is not set — password-reset and welcome emails are only logged, users cannot recover accounts");
   }
-  if (!config.sms.apiKey) {
-    warnings.push("AT_API_KEY is not set — phone-only users cannot receive password-reset SMS");
-  }
+  // AT_API_KEY is deliberately NOT warned about. Password reset is email-only
+  // and sign-up requires an email, so no flow sends SMS any more — a warning
+  // about a channel nothing uses is a warning people learn to skip. /api/health
+  // still reports `sms` so an operator can see whether a provider is wired for
+  // later.
   // Only warn when NEITHER backend is real. Telling someone their Redis is
   // misconfigured while working Upstash REST credentials sit in .env.local is
   // the kind of warning people learn to ignore.

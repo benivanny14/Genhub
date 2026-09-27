@@ -11,6 +11,7 @@ import { api } from "@/lib/api-response";
 import { invalidateAccountStatus } from "@/lib/services/account-status.service";
 import { canEraseAccount, eraseAccount } from "@/lib/services/account-erasure.service";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
+import { sendPasswordResetLink } from "@/lib/services/password-reset.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -127,6 +128,7 @@ const ACTIONS = [
   "DELETE_ACCOUNT",
   "FREEZE_PAYOUTS",
   "UNFREEZE_PAYOUTS",
+  "SEND_RESET_LINK",
 ] as const;
 
 export async function POST(request: NextRequest) {
@@ -188,6 +190,49 @@ export async function POST(request: NextRequest) {
         detail: { wasVerified: target.isVerified },
       });
       return api.success({ isVerified }, isVerified ? "User verified" : "Verification removed");
+    }
+
+    // SEND_RESET_LINK — email a password-reset link on the account holder's
+    // behalf.
+    //
+    // Reset is email-only and sign-up now requires an email, but an account made
+    // before that rule can have no address on file, and it has no way back in
+    // without help. The alternative to this action is an operator editing the
+    // database by hand, which is how access quietly stops being auditable — so
+    // this exists, goes through the same function the public form uses, and is
+    // recorded whether or not it worked.
+    if (action === "SEND_RESET_LINK") {
+      const outcome = await sendPasswordResetLink(userId);
+
+      await recordAudit({
+        actorId: auth.userId,
+        action: AUDIT_ACTIONS.userResetLink,
+        targetType: "User",
+        targetId: userId,
+        summary: `${
+          outcome.delivered ? "Sent a password-reset link to" : "Could NOT send a password-reset link to"
+        } ${target.displayName || target.email || userId}${
+          outcome.delivered ? ` (${outcome.to})` : ` — ${outcome.reason}`
+        }`,
+        detail: {
+          delivered: outcome.delivered,
+          reason: outcome.delivered ? null : outcome.reason,
+        },
+      });
+
+      // A failure is reported to the admin, who is looking at the row and
+      // already knows the account exists. The public endpoint cannot do this
+      // without becoming an enumeration oracle.
+      if (!outcome.delivered) {
+        return api.error(
+          outcome.reason === "NO_EMAIL_ON_FILE"
+            ? "That account has no email address, so there is nowhere to send a reset link. Add one to the account first."
+            : "That account no longer exists.",
+          409
+        );
+      }
+
+      return api.success({ sentTo: outcome.to }, `Reset link sent to ${outcome.to}`);
     }
 
     // WARN — a strike, recorded and delivered. Deliberately does not ban:

@@ -36,19 +36,23 @@ export function mediaOrExternalUrl(label: string) {
 // Auth Schemas
 // =============================================================================
 
+// The email address is REQUIRED, and there is no phone field.
+//
+// Signing up with a phone number instead of an email was allowed for a while,
+// because that is how many people in Tanzania prefer to be reached. It was taken
+// out because the account it produced could not be recovered: password reset has
+// no SMS channel (Africa's Talking was never configured, so the text went to a
+// console), which left a phone-only account with no way back in short of asking
+// the operator. Requiring an email at sign-up is what makes "reset by email" a
+// promise the platform can keep. Phone numbers are still accepted at sign-IN,
+// for the accounts that predate this rule.
 export const registerSchema = z.object({
   displayName: z.string().min(2, "Name must be at least 2 characters").max(50),
-  email: z.string().email("Enter a valid email address").optional(),
-  phone: z
-    .string()
-    .regex(/^(\+255|0)[67]\d{8}$/, "Enter a valid phone number")
-    .optional(),
+  email: z.string().trim().email("Enter a valid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
   role: z.enum(["VIEWER", "CREATOR"]).default("VIEWER"),
   locale: z.enum(["sw", "en"]).default("sw"),
   referralCode: z.string().trim().max(32).optional(),
-}).refine((data) => data.email || data.phone, {
-  message: "An email address or phone number is required",
 });
 
 export const loginSchema = z.object({

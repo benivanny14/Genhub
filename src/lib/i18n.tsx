@@ -62,9 +62,13 @@ const translations: Record<string, Record<Locale, string>> = {
   "auth.creator": { en: "Creator", sw: "Muundaji" },
   "auth.creatorDesc": { en: "Upload videos", sw: "Pakia video" },
   "auth.displayName": { en: "Display Name", sw: "Jina la Kuonyesha" },
-  "auth.emailOptional": { en: "Email (optional)", sw: "Barua pepe (hiari)" },
-  "auth.phoneOptional": { en: "Phone number (optional)", sw: "Nambari ya simu (hiari)" },
-  "auth.bothHint": { en: "Enter email OR phone number (or both)", sw: "Weka barua pepe AU nambari ya simu (au zote mbili)" },
+  "auth.emailRequired": { en: "Email address", sw: "Barua pepe" },
+  // Sign-up takes an email and nothing else. The old copy offered "email OR
+  // phone", which described an account nobody could recover (no SMS reset).
+  "auth.emailWhy": {
+    en: "We use this to sign you in and to email you a reset link if you forget your password.",
+    sw: "Tunaitumia kwa kuingia na kutuma kiungo cha kubadilisha nenosiri ukilisahau.",
+  },
   "auth.passwordPlaceholder": { en: "Password (8+ characters)", sw: "Nenosiri (herufi 8+)" },
   "auth.confirmPassword": { en: "Confirm password", sw: "Rudia nenosiri" },
   "auth.creating": { en: "Creating account...", sw: "Inasajili..." },

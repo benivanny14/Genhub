@@ -282,10 +282,19 @@ EMAIL_FROM=Genhub <no-reply@genhub.co.tz>
 - Port 465 inatumia SSL; port 587 inatumia STARTTLS. Ikiwa 465 haifanyi kazi,
   jaribu 587.
 
-### SMS (si lazima) — Africa's Talking
+### SMS (HAITUMIKI — si lazima) — Africa's Talking
 
-Kwa watumiaji waliojisajili kwa **namba ya simu pekee** (bila barua pepe),
-hawawezi kupata link ya kurejesha password kwa email. Hii inatatua.
+**Hakuna feature yoyote inayotuma SMS sasa.** Kurejesha password kunatumwa kwa
+**email pekee**, na usajili unahitaji barua pepe — kwa hivyo akaunti yenye namba
+ya simu pekee haijafanywa tena. Akaunti za zamani za aina hiyo zinaweza kuingia
+kwa namba yao, na admin anaweza kuwatumia reset link (Admin → Users → *Reset
+link*).
+
+Sehemu hii imebaki kwa sababu `src/lib/sms.ts` ipo kwa matumizi ya baadaye (k.m.
+kuthibitisha malipo yaliyolipwa) — si kwa ajili ya kurejesha password. Usiweke
+`AT_API_KEY` kwa matumaini kwamba inasaidia reset: haifanyi hivyo.
+
+Hatua hizi zinafanya kazi ikiwa utaihitaji siku moja:
 
 1. **https://africastalking.com** → *Sign up* → **Go to Sandbox** kwa majaribio.
 2. **Settings** → **API Key** → nakili → `AT_API_KEY=...`

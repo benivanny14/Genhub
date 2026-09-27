@@ -392,7 +392,7 @@ Set these in your hosting provider (Vercel → Project → Settings → Env vars
 | `SMTP_HOST` / `SMTP_PORT` | e.g. `smtp.resend.com` / `587` |
 | `SMTP_USER` / `SMTP_PASS` | SMTP credentials (app password for Gmail) |
 | `EMAIL_FROM` | e.g. `Genhub <no-reply@your-domain>` (must match the SMTP domain) |
-| `AT_API_KEY` / `AT_USERNAME` | Africa's Talking API key + username (SMS for phone-only accounts) |
+| `AT_API_KEY` / `AT_USERNAME` | Africa's Talking key + username. **Not required**: password reset is email-only and sign-up requires an email, so no flow sends SMS today (lib/sms.ts is kept for a future channel) |
 | `AT_SENDER_ID` | Optional SMS sender ID |
 | `BUNNY_STREAM_API_KEY` | Stream library API key (Stream → your library → API tab) |
 | `BUNNY_STREAM_LIBRARY_ID` | Stream library id |
@@ -2079,9 +2079,14 @@ Manual checks:
 
 - Request a password reset → the **email actually arrives** (with SMTP unset
   it is only logged server-side — `checks.email` in `/api/health` shows which).
-- Request a password reset for a **phone-only account** → the **SMS arrives**
-  (`checks.sms` in `/api/health`; Africa's Talking sandbox works with
-  `AT_USERNAME=sandbox` for a dry run).
+  Reset is **email only**: there is no SMS branch to test, and an account with no
+  email on file (created before sign-up required one) gets nothing — the request
+  is logged for support and the response stays the same either way. Admin →
+  Users → **Reset link** covers that account: it reports "no email address"
+  instead of silently doing nothing.
+- Sign up with a **phone number and no email** → refused. The form has one email
+  field and it is required (`registerSchema` in `src/lib/validation.ts`).
+  Existing phone-only accounts still sign in with their number.
 - Sign up a fresh account → welcome email arrives.
 - **Play one video all the way through** on the live domain, and switch quality in
   the player. Bunny's pull zone decides this by **Referer**, so a host that is not

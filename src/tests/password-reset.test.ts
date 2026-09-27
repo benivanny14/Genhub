@@ -13,8 +13,9 @@
 //   4. The response says the same thing whether or not the account exists, so the
 //      endpoint cannot be used to enumerate users.
 //
-// Storage, mail, SMS and the rate limiter are mocked; hashing and the route logic
-// are real.
+// Storage, mail and the rate limiter are mocked; hashing and the route logic are
+// real. There is no SMS mock because there is no SMS branch: reset is email-only
+// and an account with no address on file gets nothing at all.
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -30,7 +31,6 @@ const mocks = vi.hoisted(() => ({
   resetUpdate: vi.fn(),
   transaction: vi.fn(),
   sendEmail: vi.fn(),
-  sendSms: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -62,10 +62,6 @@ vi.mock("@/lib/email", () => ({
   sendPasswordResetEmail: mocks.sendEmail,
 }));
 
-vi.mock("@/lib/sms", () => ({
-  sendPasswordResetSms: mocks.sendSms,
-}));
-
 import { POST as forgotPassword } from "@/app/api/auth/forgot-password/route";
 import { POST as resetPassword } from "@/app/api/auth/reset-password/route";
 
@@ -85,7 +81,6 @@ beforeEach(() => {
   mocks.userFindUnique.mockResolvedValue({ email: "fan@example.com", phone: null });
   mocks.resetCreate.mockResolvedValue({ id: "reset-1" });
   mocks.sendEmail.mockResolvedValue({ transport: "smtp", sent: true });
-  mocks.sendSms.mockResolvedValue({ transport: "console", sent: true });
   mocks.transaction.mockImplementation(
     async (run: (tx: unknown) => Promise<unknown>) =>
       run({ user: { update: mocks.userUpdate }, passwordReset: { update: mocks.resetUpdate } })
@@ -107,15 +102,20 @@ describe("requesting a reset", () => {
     expect(stored).not.toBe(tokenInLink);
   });
 
-  it("sends the token by SMS when the account has only a phone", async () => {
+  // The account that predates "sign-up requires an email". There is nowhere to
+  // send the link, so nothing is issued and nothing is said: the response has to
+  // stay identical or the endpoint confirms which addresses have accounts.
+  it("sends nothing for an account with no email, and answers the same", async () => {
     mocks.userFindFirst.mockResolvedValue({ id: "u2" });
-    mocks.userFindUnique.mockResolvedValue({ email: null, phone: "0712345678" });
+    mocks.userFindUnique.mockResolvedValue({ email: null });
 
-    await forgotPassword(post({ phone: "0712345678" }));
+    const response = await forgotPassword(post({ email: "nostalgic@example.com" }));
+    const body = await response.json();
 
-    const url = mocks.sendSms.mock.calls[0][1] as string;
-    const tokenInLink = new URL(url).searchParams.get("token") as string;
-    expect(mocks.resetCreate.mock.calls[0][0].data.token).toBe(sha(tokenInLink));
+    expect(response.status).toBe(200);
+    expect(body.message).toMatch(/if that account exists/i);
+    expect(mocks.resetCreate).not.toHaveBeenCalled();
+    expect(mocks.sendEmail).not.toHaveBeenCalled();
   });
 
   it("retires every outstanding token before issuing a new one", async () => {
@@ -140,9 +140,12 @@ describe("requesting a reset", () => {
     expect(mocks.sendEmail).not.toHaveBeenCalled();
   });
 
-  it("requires an email or a phone", async () => {
-    const response = await forgotPassword(post({}));
-    expect(response.status).toBe(422);
+  it("requires an email", async () => {
+    expect((await forgotPassword(post({}))).status).toBe(422);
+    // A phone number is no longer an alternative way in — there is no channel
+    // that could deliver the link to one.
+    expect((await forgotPassword(post({ phone: "0712345678" }))).status).toBe(422);
+    expect(mocks.userFindFirst).not.toHaveBeenCalled();
   });
 });
 

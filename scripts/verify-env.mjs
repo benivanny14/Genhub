@@ -114,11 +114,8 @@ check(
 );
 
 // -------------------------------------------------------------- Warnings
-if (!env("AT_API_KEY")) {
-  warnings.push(
-    "AT_API_KEY is not set — phone-only accounts cannot receive password-reset SMS"
-  );
-}
+// No AT_API_KEY warning: password reset is email-only and sign-up requires an
+// email, so no flow sends SMS. See src/lib/services/password-reset.service.ts.
 if (!env("BUNNY_STORAGE_ZONE") || !env("BUNNY_STORAGE_ACCESS_KEY")) {
   warnings.push("Bunny storage zone is not set — thumbnail uploads use the URL field only");
 }
