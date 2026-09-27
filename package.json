@@ -22,6 +22,9 @@
     "db:studio": "node scripts/db-migrate.mjs studio",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "fixture:video": "node e2e/make-fixture.mjs",
     "setup": "node scripts/setup-env.mjs",
     "preflight": "node scripts/preflight.mjs",
     "preflight:prod": "node scripts/preflight.mjs --production",
@@ -63,6 +66,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.20.4",
     "@types/nodemailer": "^8.0.2",

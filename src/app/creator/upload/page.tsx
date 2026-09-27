@@ -15,6 +15,7 @@ import type { BunnyUploadCredentials } from "@/lib/bunny";
 import {
   CREATOR_GUIDELINES,
   CREATOR_GUIDELINES_VERSION,
+  MIN_VIDEO_DURATION_SECONDS,
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
   GUIDELINE_ACK_STORAGE_KEY,
@@ -413,6 +414,13 @@ export default function UploadPage() {
                   MP4, MOV, AVI — Max 2GB. Next you will cut and preview it before
                   it uploads.
                 </p>
+                {price > 0 && (
+                  <p className="text-xs text-amber-200/80 mt-2">
+                    A paid scene must be at least {MIN_VIDEO_DURATION_SECONDS / 60} minutes
+                    long or it never goes live — the trimmer shows the length of your
+                    cut while you drag.
+                  </p>
+                )}
                 <input
                   type="file"
                   accept="video/*"
@@ -726,6 +734,10 @@ export default function UploadPage() {
         {trimFile && (
           <VideoTrimmer
             file={trimFile}
+            // A free scene has no length rule; a paid one is only published once
+            // it is long enough, so the trimmer has to say so while there is
+            // still time to do something about it.
+            minDurationSeconds={price > 0 ? MIN_VIDEO_DURATION_SECONDS : 0}
             onCancel={() => setTrimFile(null)}
             onConfirm={(chosen) => {
               setTrimFile(null);

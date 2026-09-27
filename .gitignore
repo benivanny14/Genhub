@@ -37,3 +37,9 @@ public/uploads/
 .vercel/
 .freebuff/
 .DS_Store
+
+# Playwright browser-test output (traces, screenshots, HTML report)
+test-results/
+playwright-report/
+blob-report/
+

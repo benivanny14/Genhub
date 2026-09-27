@@ -22,6 +22,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Loader2, Pause, Play, Scissors, X } from "lucide-react";
+import { exportWithWebCodecs, webCodecsExportSupported } from "@/lib/video-export-webcodecs";
 import {
   MIN_TRIM_SECONDS,
   baseMimeType,
@@ -36,15 +37,77 @@ import {
   type TrimRange,
 } from "@/lib/video-trim";
 
+/** How many frames the timeline previews, and at what size they are captured. */
+const THUMBNAIL_COUNT = 8;
+const THUMBNAIL_WIDTH = 160;
+const THUMBNAIL_HEIGHT = 90;
+
+/**
+ * How a cut's frames were produced.
+ *
+ * `decoder` means the file's own encoded chunks were demuxed and handed to
+ * VideoDecoder, which is the fast path; `seek` means the element was walked
+ * frame by frame; `recorder` means the real-time MediaRecorder fallback. The
+ * first two differ from the last by an order of magnitude in time, so a caller
+ * that wants to reason about export speed needs to see which one ran.
+ */
+export type VideoTrimExportPath = "decoder" | "seek" | "recorder";
+
 interface VideoTrimmerProps {
   /** The file the creator just picked. */
   file: File;
+  /**
+   * The shortest cut that can still publish, in seconds — 0 when there is no
+   * such rule.
+   *
+   * A paid scene under this length is accepted, stored and transcoded, and then
+   * never goes live (see MIN_VIDEO_DURATION_SECONDS and the publishing worker).
+   * The creator should not have to discover that days later, so the length of
+   * the cut is put next to the rule while they drag.
+   */
+  minDurationSeconds?: number;
   onCancel: () => void;
-  /** Receives the file to upload, and whether it was actually trimmed. */
-  onConfirm: (file: File, trimmed: boolean) => void;
+  /**
+   * Receives the file to upload, whether it was actually trimmed, and — when
+   * the component produced it — how its frames were produced.
+   */
+  onConfirm: (
+    file: File,
+    trimmed: boolean,
+    details?: { path: VideoTrimExportPath }
+  ) => void;
 }
 
-export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmerProps) {
+/**
+ * Whether the source element actually carries a soundtrack.
+ *
+ * The Web Audio graph always hands back a destination track, whether or not
+ * anything ever plays into it, so routing a silent video through it would stamp
+ * a silent Opus track onto every cut the creator makes. `captureStream()` is the
+ * one API that answers this honestly — it exposes an audio track only when the
+ * media has one. A browser without it falls back to the graph and records a
+ * silent track, because that is better than a clip that lost its sound.
+ */
+function sourceHasAudio(el: HTMLVideoElement): boolean {
+  const capture = (el as HTMLVideoElement & { captureStream?: () => MediaStream })
+    .captureStream;
+  if (typeof capture !== "function") return true;
+  try {
+    const stream = capture.call(el);
+    const has = stream.getAudioTracks().length > 0;
+    stream.getTracks().forEach((track) => track.stop());
+    return has;
+  } catch {
+    return true;
+  }
+}
+
+export default function VideoTrimmer({
+  file,
+  minDurationSeconds = 0,
+  onCancel,
+  onConfirm,
+}: VideoTrimmerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
 
@@ -59,6 +122,10 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // A few frames from across the clip, drawn along the timeline. Dragging a
+  // handle onto "the boring bit" is a guess when the strip is blank; with the
+  // frames showing, the creator can see the cut land on the shot they meant.
+  const [thumbnails, setThumbnails] = useState<string[]>([]);
 
   // The export runs against its own off-screen <video>; this flag is the one
   // way it can be told to give up (the Cancel button while encoding).
@@ -99,6 +166,74 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
   const minLength = Math.min(MIN_TRIM_SECONDS, duration || MIN_TRIM_SECONDS);
   const kept = trimDuration(range);
   const fullRange = isFullRange(range, duration);
+  const shortOfMinimum = minDurationSeconds > 0 && kept < minDurationSeconds && duration > 0;
+
+  // Grab the frames in the background, one at a time, and let the strip fill in
+  // left to right. Each is a seek on an element of its own, so the preview the
+  // creator is watching never stutters for it.
+  useEffect(() => {
+    if (!objectUrl || duration <= 0) {
+      setThumbnails([]);
+      return;
+    }
+
+    let cancelled = false;
+    const frame = document.createElement("video");
+    frame.src = objectUrl;
+    frame.muted = true;
+    frame.playsInline = true;
+    frame.preload = "auto";
+
+    const shoot = async () => {
+      await new Promise<void>((resolve, reject) => {
+        frame.onloadedmetadata = () => resolve();
+        frame.onerror = () => reject(new Error("thumbnail load"));
+        if (frame.readyState >= 1) resolve();
+      });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = THUMBNAIL_WIDTH;
+      canvas.height = THUMBNAIL_HEIGHT;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+
+      const shots: string[] = [];
+      for (let index = 0; index < THUMBNAIL_COUNT; index++) {
+        if (cancelled) return;
+        // The middle of each slice, so the strip reads as the clip rather than
+        // as its very first and very last frame.
+        const at = ((index + 0.5) / THUMBNAIL_COUNT) * duration;
+        await new Promise<void>((resolve) => {
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            resolve();
+          };
+          frame.onseeked = finish;
+          if (Math.abs(frame.currentTime - at) < 0.05) {
+            finish();
+            return;
+          }
+          frame.currentTime = at;
+          setTimeout(finish, 1500);
+        });
+        if (cancelled) return;
+        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        shots.push(canvas.toDataURL("image/jpeg", 0.6));
+        setThumbnails([...shots]);
+      }
+    };
+
+    void shoot().catch(() => {
+      // A browser that will not decode a frame loses the strip, not the trimmer.
+    });
+
+    return () => {
+      cancelled = true;
+      frame.removeAttribute("src");
+    };
+  }, [objectUrl, duration]);
 
   function handleLoadedMetadata() {
     const video = videoRef.current;
@@ -151,7 +286,13 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
 
   function onTrackPointerDown(event: React.PointerEvent<HTMLDivElement>) {
     if (duration <= 0 || exporting) return;
-    const handle = (event.target as HTMLElement).dataset?.handle;
+    // `closest`, not `dataset` on the target: the handle's own grip is a child
+    // <span>, and grabbing the grip is the most natural way to reach for a
+    // handle. Reading the data attribute off the raw target classified that
+    // press as a seek on the track, so the handle refused to move under the
+    // finger that was clearly holding it.
+    const handleEl = (event.target as HTMLElement).closest<HTMLElement>("[data-handle]");
+    const handle = handleEl?.dataset.handle;
     const target = handle === "start" || handle === "end" ? handle : "seek";
     if (target === "seek") {
       const video = videoRef.current;
@@ -216,14 +357,6 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
     const previewUrl = objectUrl;
     if (!previewUrl || exporting || duration <= 0) return;
 
-    const mime = pickTrimMimeType((type) => window.MediaRecorder.isTypeSupported(type));
-    if (!mime) {
-      setError(
-        "This browser cannot re-encode the cut. You can still upload the full video below."
-      );
-      return;
-    }
-
     const from = range.start;
     const to = clampTrimRange(range, duration).end;
     if (to - from < MIN_TRIM_SECONDS) {
@@ -275,6 +408,64 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
         if (el.readyState >= 1) resolve();
       });
 
+      // The fast path first. WebCodecs takes the kept frames by seeking instead
+      // of by playing them, so the cut is bounded by the disk rather than by how
+      // long the clip runs, and it lands on the frames the creator chose. Every
+      // failure — no codec, a source that will not seek, a decoder that gives up
+      // — is treated as "use the other path", never as a failed upload.
+      if (webCodecsExportSupported()) {
+        try {
+          const cut = await exportWithWebCodecs({
+            element: el,
+            file,
+            start: from,
+            end: to,
+            onProgress: (percent) =>
+              setProgress((current) => (percent > current ? percent : current)),
+            isCancelled: () => cancelRef.current,
+          });
+
+          cleanup();
+          setExporting(false);
+
+          if (cancelRef.current) {
+            cancelRef.current = false;
+            setProgress(0);
+            return;
+          }
+
+          // The muxer always writes VP8 in a WebM, whatever the source was.
+          onConfirm(
+            new File([cut.data], outputFileName(file.name, "video/webm"), {
+              type: "video/webm",
+            }),
+            true,
+            { path: cut.frameSource }
+          );
+          return;
+        } catch {
+          if (cancelRef.current) {
+            cleanup();
+            setExporting(false);
+            setProgress(0);
+            cancelRef.current = false;
+            return;
+          }
+          // Fall through to the recorder, which works in every browser that can
+          // play the video at all.
+        }
+      }
+
+      const mime = pickTrimMimeType((type) => window.MediaRecorder.isTypeSupported(type));
+      if (!mime) {
+        cleanup();
+        setExporting(false);
+        setError(
+          "This browser cannot re-encode the cut. You can still upload the full video below."
+        );
+        return;
+      }
+
       const size = exportCanvasSize(el.videoWidth, el.videoHeight);
       const canvas = document.createElement("canvas");
       canvas.width = size.width;
@@ -285,19 +476,22 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
 
       stream = canvas.captureStream(30);
 
-      // Capture the original audio alongside the re-drawn picture. Routing the
-      // element through the graph also means nothing is played out loud while
-      // it records. A video without an audio track, or a browser that refuses
-      // the graph, still records — silent, not broken.
-      try {
-        audioContext = new window.AudioContext();
-        const source = audioContext.createMediaElementSource(el);
-        const destination = audioContext.createMediaStreamDestination();
-        source.connect(destination);
-        destination.stream.getAudioTracks().forEach((track) => stream!.addTrack(track));
-        await audioContext.resume();
-      } catch {
-        audioContext = null;
+      // Capture the original audio alongside the re-drawn picture — but only
+      // when there is some, so a silent source does not come back with a silent
+      // track attached. Routing the element through the graph also means
+      // nothing is played out loud while it records. A browser that refuses the
+      // graph still records, silently rather than not at all.
+      if (sourceHasAudio(el)) {
+        try {
+          audioContext = new window.AudioContext();
+          const source = audioContext.createMediaElementSource(el);
+          const destination = audioContext.createMediaStreamDestination();
+          source.connect(destination);
+          destination.stream.getAudioTracks().forEach((track) => stream!.addTrack(track));
+          await audioContext.resume();
+        } catch {
+          audioContext = null;
+        }
       }
 
       recorder = new MediaRecorder(stream, {
@@ -376,7 +570,9 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
 
       cleanup();
       setExporting(false);
-      onConfirm(new File([blob], outputFileName(file.name, mime), { type }), true);
+      onConfirm(new File([blob], outputFileName(file.name, mime), { type }), true, {
+        path: "recorder",
+      });
     } catch {
       cleanup();
       setExporting(false);
@@ -424,6 +620,20 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
           Pick the part worth keeping and watch it here. Only that part is
           uploaded — the rest never leaves your phone.
         </p>
+
+        {minDurationSeconds > 0 && (
+          <p
+            data-testid="minimum-rule"
+            className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200"
+          >
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              A paid scene must be at least {formatTimecode(minDurationSeconds)} long or
+              it never goes live. Your cut&apos;s length is shown under the timeline as
+              you drag.
+            </span>
+          </p>
+        )}
 
         {loadError ? (
           <p className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
@@ -473,8 +683,27 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
                 onPointerMove={onTrackPointerMove}
                 onPointerUp={onTrackPointerUp}
                 onPointerCancel={onTrackPointerUp}
-                className="relative h-9 select-none touch-none cursor-pointer"
+                className="relative h-12 sm:h-9 select-none touch-none cursor-pointer"
               >
+                {/* The frames themselves: the strip is what turns the handles
+                    from guesswork into a decision. Purely decorative, so it is
+                    behind everything and takes no pointer events. */}
+                <div
+                  data-testid="frame-strip"
+                  className="absolute inset-0 rounded-md overflow-hidden flex bg-white/5 pointer-events-none"
+                >
+                  {thumbnails.map((src, index) => (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={index}
+                      src={src}
+                      alt=""
+                      draggable={false}
+                      className="h-full min-w-0 flex-1 object-cover"
+                    />
+                  ))}
+                </div>
+                <div className="absolute inset-0 rounded-md bg-black/45 pointer-events-none" />
                 <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-2 rounded-full bg-white/15" />
                 <div
                   className="absolute top-1/2 -translate-y-1/2 h-2 rounded-full bg-brand-500"
@@ -495,7 +724,7 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
                   aria-valuenow={Math.round(range.start)}
                   data-handle="start"
                   onKeyDown={(event) => onHandleKeyDown(event, "start")}
-                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-9 rounded-md bg-brand-500 border-2 border-white shadow cursor-ew-resize flex items-center justify-center outline-none focus:ring-2 focus:ring-white/70"
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-7 h-11 sm:w-5 sm:h-9 rounded-md bg-brand-500 border-2 border-white shadow cursor-ew-resize flex items-center justify-center outline-none focus:ring-2 focus:ring-white/70 before:absolute before:-inset-x-1.5 before:-inset-y-1 before:content-['']"
                   style={{ left: `${startPct}%` }}
                 >
                   <span className="w-0.5 h-4 bg-white/80 rounded-full" />
@@ -510,7 +739,7 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
                   aria-valuenow={Math.round(range.end)}
                   data-handle="end"
                   onKeyDown={(event) => onHandleKeyDown(event, "end")}
-                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-5 h-9 rounded-md bg-brand-500 border-2 border-white shadow cursor-ew-resize flex items-center justify-center outline-none focus:ring-2 focus:ring-white/70"
+                  className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-7 h-11 sm:w-5 sm:h-9 rounded-md bg-brand-500 border-2 border-white shadow cursor-ew-resize flex items-center justify-center outline-none focus:ring-2 focus:ring-white/70 before:absolute before:-inset-x-1.5 before:-inset-y-1 before:content-['']"
                   style={{ left: `${endPct}%` }}
                 >
                   <span className="w-0.5 h-4 bg-white/80 rounded-full" />
@@ -525,6 +754,32 @@ export default function VideoTrimmer({ file, onCancel, onConfirm }: VideoTrimmer
                 </span>
                 <span>{formatTimecode(range.end)}</span>
               </div>
+
+              {minDurationSeconds > 0 && duration > 0 && (
+                <p
+                  data-testid="length-status"
+                  className={`mt-2 flex items-start gap-2 rounded-lg p-2 text-xs ${
+                    shortOfMinimum
+                      ? "border border-amber-500/30 bg-amber-500/10 text-amber-200"
+                      : "border border-emerald-500/25 bg-emerald-500/10 text-emerald-200"
+                  }`}
+                >
+                  {shortOfMinimum ? (
+                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                  ) : (
+                    <Check className="w-4 h-4 shrink-0 mt-0.5" />
+                  )}
+                  <span>
+                    {shortOfMinimum
+                      ? `This cut is ${formatTimecode(kept)} — ${
+                          minDurationSeconds - kept >= 1
+                            ? `${formatTimecode(minDurationSeconds - kept)} short of the `
+                            : `short of the `
+                        }${formatTimecode(minDurationSeconds)} a paid scene needs. It would upload and then never go live.`
+                      : `${formatTimecode(kept)} — long enough for a paid scene (needs ${formatTimecode(minDurationSeconds)}).`}
+                  </span>
+                </p>
+              )}
 
               {!fullRange && (
                 <button
