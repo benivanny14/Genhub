@@ -212,7 +212,7 @@ export default function WalletPage() {
         setCouponInfo(null);
         toast(
           "info",
-          "Check your phone — approve the HarakaPay prompt with your PIN to complete the top-up."
+          "Check your phone — approve the mobile money prompt with your PIN to complete the top-up."
         );
         if (orderId) {
           pollTopUp(orderId);
@@ -415,13 +415,13 @@ export default function WalletPage() {
                 />
               </div>
 
-              {/* Payment method — HarakaPay USSD push (all networks) */}
+              {/* Payment method — mobile money USSD push (all networks) */}
               <div>
                 <label className="text-sm text-white/60 mb-2 block">Payment Method</label>
                 <div className="flex items-center gap-3 p-3 rounded-xl border border-brand-500/30 bg-brand-500/10">
                   <Phone className="w-5 h-5 text-brand-400 shrink-0" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-brand-400">HarakaPay</p>
+                    <p className="text-sm font-medium text-brand-400">Mobile money</p>
                     <p className="text-xs text-white/50">
                       USSD push — Vodacom, Tigo &amp; Airtel supported. Confirm with your PIN.
                     </p>

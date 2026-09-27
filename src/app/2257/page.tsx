@@ -33,7 +33,7 @@ const SECTIONS: { title: string; body: string[] }[] = [
     title: "Compliance statement",
     body: [
       "Genhub is an adult content platform restricted to users aged 18 years or older. All performers appearing in content published on Genhub were over the age of 18 at the time the content was created.",
-      "Every creator must tick an explicit 18 U.S.C. § 2257 attestation before a video can be created. The server refuses to store any video without it, and the time of the attestation is recorded against the video along with the creator's verified identity (KYC).",
+      "Every creator must tick an explicit 18 U.S.C. § 2257 attestation before a video can be created. No video can be published without it, and the time of the attestation is recorded against the video along with the creator's verified identity (KYC).",
     ],
   },
   {

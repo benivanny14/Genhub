@@ -22,7 +22,7 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "How do payments work?",
-    a: "All payments go through HarakaPay mobile money — M-Pesa, Tigo Pesa and Airtel Money. You approve the charge with a USSD prompt on your phone. You can pay directly per video, or top up your wallet first and spend from it.",
+    a: "All payments are made with mobile money — M-Pesa, Tigo Pesa and Airtel Money. You approve the charge with a prompt on your phone. You can pay directly per video, or top up your wallet first and spend from it.",
   },
   {
     q: "When do creators get paid?",
@@ -30,7 +30,7 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "Is my data safe?",
-    a: "Yes. Your session is kept in a secure, script-inaccessible cookie, passwords are stored only as one-way hashes, every payment confirmation is verified before it is trusted, and we never store your mobile money PIN.",
+    a: "Yes. We take protecting your account and your payments seriously, and we never see or store your mobile money PIN. If you ever think someone else has accessed your account, contact support and we will help you secure it.",
   },
   {
     q: "How do I become a creator?",

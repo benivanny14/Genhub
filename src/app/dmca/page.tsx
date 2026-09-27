@@ -115,7 +115,7 @@ export default function DmcaPage() {
             <p className="text-sm text-white/60">
               For non-copyright issues (abuse, non-consensual content, spam) use the{" "}
               <span className="text-white/80">Report</span> button on any video or comment — it
-              reaches our moderation queue directly.
+              reaches our team directly.
             </p>
             <div className="flex flex-wrap gap-3 mt-4 text-sm">
               <Link href="/2257" className="btn-ghost">

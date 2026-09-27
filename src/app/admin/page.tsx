@@ -48,6 +48,7 @@ import {
   Sparkles,
   Mail,
 } from "lucide-react";
+import SystemReference from "./SystemReference";
 
 /**
  * Live readiness of the things that cannot be fixed from the code — the video
@@ -701,6 +702,7 @@ export default function AdminDashboard() {
     | "blueTicks"
     | "viewers"
     | "comments"
+    | "system"
   >("overview");
   const [loading, setLoading] = useState(true);
   const [kycList, setKycList] = useState<KycItem[]>([]);
@@ -1769,6 +1771,7 @@ export default function AdminDashboard() {
       badge: blueTickPending.length,
     },
     { id: "coupons" as const, label: "Coupons", icon: Ticket },
+    { id: "system" as const, label: "System", icon: Activity },
     { id: "earnings" as const, label: "Earnings", icon: Wallet },
     {
       id: "payments" as const,
@@ -3744,6 +3747,9 @@ export default function AdminDashboard() {
         )}
 
         {/* Setup Tab */}
+        {/* System Tab - internal reference, deliberately admin-only */}
+        {activeTab === "system" && <SystemReference />}
+
         {activeTab === "setup" && (
           <div className="space-y-6">
             <div className="glass-card p-5">

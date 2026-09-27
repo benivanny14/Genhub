@@ -91,7 +91,15 @@ describe("the privacy policy", () => {
   });
 
   it("says what the protection actually is", () => {
-    expect(privacy).toContain("signed");
+    // Described in OUTCOME terms on purpose. The policy used to name the
+    // mechanism ("signed for your account"); that is implementation detail, and
+    // implementation detail lives on the admin reference now (see
+    // src/app/admin/SystemReference.tsx). A user-facing page says what happens
+    // for the customer — links are short-lived and a shared one stops working —
+    // not how it is built. What is still pinned is that the claim is concrete
+    // and true, not a vague reassurance.
+    expect(privacy.toLowerCase()).toContain("short-lived");
+    expect(privacy.toLowerCase()).toContain("stops working");
     // "We do not print your email, phone number…" — the sentence a customer is
     // owed once the tracing overlay is gone.
     expect(privacy.toLowerCase()).toContain("not print");
