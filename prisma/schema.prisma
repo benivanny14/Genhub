@@ -778,7 +778,10 @@ model CreatorProfile {
   userId          String   @unique
   bio             String?
   coverImageUrl   String?
-  subscriptionPrice Int?   @default(5000) // Monthly subscription price
+  // Monthly subscription price. The default matches SUBSCRIPTION_PRICE_TZS in
+  // lib/subscription.ts — a profile made without a price must cost the same as
+  // one made with it, or a new subscriber sees a number no screen ever offered.
+  subscriptionPrice Int?   @default(8000)
   socialLinks     Json?    // { twitter, instagram, youtube, tiktok }
   totalSubscribers Int     @default(0)
   createdAt       DateTime @default(now())

@@ -21,6 +21,7 @@ import {
 } from "@/lib/services/subscription.service";
 import { debitWallet } from "@/lib/services/balance.service";
 import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
+import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
 
 const subscribeSchema = z.object({
   creatorId: z.string().min(1),
@@ -54,7 +55,9 @@ export async function POST(request: NextRequest) {
     });
     if (!creator || creator.isBanned) return api.notFound("This creator does not exist");
 
-    const price = creator.creatorProfile?.subscriptionPrice || 5000;
+    // A per-creator price wins; otherwise the platform price. Renewals do NOT
+    // read this — they run at the price the subscriber agreed to.
+    const price = creator.creatorProfile?.subscriptionPrice || SUBSCRIPTION_PRICE_TZS;
 
     // Check existing subscription
     const existing = await prisma.creatorSubscription.findUnique({

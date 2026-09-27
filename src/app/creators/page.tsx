@@ -10,6 +10,7 @@ import Header from "@/components/Header";
 import { Search, Users, BadgeCheck, Film, UserPlus, Crown } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { cn } from "@/lib/utils";
+import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
 
 interface DirectoryCreator {
   id: string;
@@ -182,11 +183,13 @@ export default function CreatorDirectoryPage() {
                   <span className={cn("flex items-center gap-1", isLight ? "text-gray-400" : "text-white/40")}>
                     <Users className="w-3 h-3" /> {c._count.subscriberOf.toLocaleString()} subscribers
                   </span>
-                  {c.creatorProfile?.subscriptionPrice != null && (
-                    <span className="flex items-center gap-1 text-amber-400 font-medium">
-                      <Crown className="w-3 h-3" /> TZS {c.creatorProfile.subscriptionPrice.toLocaleString()}/mo
-                    </span>
-                  )}
+                  {/* Always shown, with the platform price as the fallback: a
+                      creator whose profile has no price still quotes one when
+                      somebody opens their page, and the list has to agree. */}
+                  <span className="flex items-center gap-1 text-amber-400 font-medium">
+                    <Crown className="w-3 h-3" /> TZS{" "}
+                    {(c.creatorProfile?.subscriptionPrice || SUBSCRIPTION_PRICE_TZS).toLocaleString()}/mo
+                  </span>
                 </div>
               </Link>
             ))}

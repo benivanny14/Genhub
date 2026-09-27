@@ -16,6 +16,7 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { canOptimizeImage } from "@/lib/media";
+import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
 
 interface CreatorProfile {
   id: string;
@@ -263,7 +264,10 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
     );
   }
 
-  const subPrice = creator.creatorProfile?.subscriptionPrice || 5000;
+  // The creator's own price when they have one; the platform price otherwise.
+  // Never a bare literal: this page, the subscribe API and the creators list all
+  // quote the same number, and a hand-written copy is how they drift apart.
+  const subPrice = creator.creatorProfile?.subscriptionPrice || SUBSCRIPTION_PRICE_TZS;
 
   return (
     <div className="min-h-screen">
