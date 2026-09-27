@@ -269,7 +269,7 @@ function EncodingBadge({ encoding }: { encoding?: EncodingState }) {
     return (
       <span
         className="inline-flex items-center gap-1 text-xs font-medium text-red-400"
-        title={encoding.error || "Bunny Stream could not process this file"}
+        title={encoding.error || "This file could not be processed for playback"}
       >
         <XCircle className="w-3.5 h-3.5" /> Failed
       </span>
@@ -1342,7 +1342,7 @@ export default function CreatorDashboard() {
                   : `${awaitingPublish} videos are still processing`}
               </p>
               <p className="text-white/50 mt-0.5">
-                They will go live on their own the moment Bunny Stream finishes —
+                They will go live on their own the moment processing finishes —
                 no action needed. You will get a notification when each one is ready.
               </p>
             </div>
@@ -1350,9 +1350,16 @@ export default function CreatorDashboard() {
         )}
 
         {/* My Videos — everything this creator has posted, including the ones
-            the public feed cannot show yet, with the actions they need on it. */}
-        <div className="glass-card overflow-hidden">
-          <div className="p-4 border-b border-white/10 flex items-center justify-between gap-3">
+            the public feed cannot show yet, with the actions they need on it.
+
+            NOT `overflow-hidden`: each row's action menu is absolutely
+            positioned and opens downward, so a clipping container cut the menu
+            off the bottom row entirely — the creator's last video had Edit,
+            Publish and Delete rendered outside the card and unreachable. The
+            corners are rounded on the header and the final row instead, which
+            is all `overflow-hidden` was doing here. */}
+        <div className="glass-card">
+          <div className="p-4 border-b border-white/10 rounded-t-2xl flex items-center justify-between gap-3">
             <div>
               <h2 className="font-display font-bold">My Videos</h2>
               <p className="text-xs text-white/40 mt-0.5">
@@ -1369,7 +1376,10 @@ export default function CreatorDashboard() {
 
           <div className="divide-y divide-white/5">
             {videos.map((video) => (
-              <div key={video.id} className="flex items-center gap-3 p-4 hover:bg-white/5 transition">
+              <div
+                key={video.id}
+                className="flex items-center gap-3 p-4 hover:bg-white/5 transition last:rounded-b-2xl"
+              >
                 {/* Thumbnail — the picture the viewer will see on the feed. A
                     missing one gets the same treatment as a broken one, because
                     from the creator's side both mean "post has no cover". */}
@@ -1472,7 +1482,7 @@ export default function CreatorDashboard() {
             ))}
 
             {videos.length === 0 && (
-              <div className="px-4 py-12 text-center">
+              <div className="px-4 py-12 text-center rounded-b-2xl">
                 <Film className="w-8 h-8 mx-auto text-white/20 mb-3" />
                 <p className="text-white/50 text-sm">You have not posted a video yet</p>
                 <Link href="/creator/upload" className="btn-brand inline-flex items-center gap-2 mt-4">
