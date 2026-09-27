@@ -9,6 +9,7 @@ import {
   VolumeX,
   Maximize,
   Minimize,
+  SkipBack,
   SkipForward,
   Settings,
   Download,
@@ -37,6 +38,19 @@ import {
  * so seeking back to the start does not bring it up again either.
  */
 const BRAND_MARK_START_WINDOW_SECONDS = 10;
+/**
+ * How far the rewind / skip-ahead controls move the playhead.
+ *
+ * Ten seconds is the interval people expect from a player that has these
+ * buttons, and it is short enough to overshoot less than a scene beat. Used by
+ * the two buttons, by the left/right thirds of the picture, and nowhere else -
+ * one constant, so a tap and a button can never disagree.
+ */
+const SKIP_SECONDS = 10;
+
+/** How long the `+10s` / `-10s` confirmation stays on screen after a jump. */
+const SKIP_FLASH_MS = 600;
+
 /** How long it stays fully visible. */
 const BRAND_MARK_HOLD_MS = 2800;
 /** How long the fade-out lasts; the element unmounts after it. */
@@ -84,6 +98,14 @@ export default function VideoPlayer({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  /** The `+10s` / `-10s` marker, cleared by its own timer after a jump. */
+  const [skipFlash, setSkipFlash] = useState<{ label: string; side: "left" | "right" } | null>(
+    null
+  );
+  /** Seconds under the pointer on the scrubber, or null when it is away. */
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const seekBarRef = useRef<HTMLDivElement>(null);
+  const skipFlashTimer = useRef<NodeJS.Timeout | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
@@ -145,6 +167,7 @@ export default function VideoPlayer({
   useEffect(
     () => () => {
       brandMarkTimers.current.forEach(clearTimeout);
+      if (skipFlashTimer.current) clearTimeout(skipFlashTimer.current);
     },
     []
   );
@@ -528,10 +551,37 @@ export default function VideoPlayer({
     setIsMuted(vol === 0);
   };
 
+  /**
+   * Move the playhead, and say so.
+   *
+   * The confirmation matters more than it looks: a ten-second jump inside a
+   * long scene is nearly invisible, and without a `+10s` marker the viewer who
+   * pressed the button cannot tell a working control from a tap that missed. So
+   * every jump — button, side tap — shows which way it went, on the side it went
+   * to, and the seconds are clamped to the actual length rather than the button
+   * pretending past the end.
+   */
   const skip = (seconds: number) => {
     const video = videoRef.current;
     if (!video) return;
-    video.currentTime = Math.max(0, Math.min(duration, video.currentTime + seconds));
+    const total = duration || video.duration || 0;
+    const next = Math.max(0, Math.min(total, video.currentTime + seconds));
+    video.currentTime = next;
+    setCurrentTime(next);
+
+    setSkipFlash({ label: `${seconds > 0 ? "+" : "\u2212"}${Math.abs(seconds)}s`, side: seconds > 0 ? "right" : "left" });
+    if (skipFlashTimer.current) clearTimeout(skipFlashTimer.current);
+    skipFlashTimer.current = setTimeout(() => setSkipFlash(null), SKIP_FLASH_MS);
+  };
+
+  /** Where the pointer is on the scrubber, in seconds, for the time bubble. */
+  const handleScrubHover = (e: React.MouseEvent<HTMLDivElement>) => {
+    const bar = seekBarRef.current;
+    if (!bar || !duration) return;
+    const rect = bar.getBoundingClientRect();
+    if (rect.width === 0) return;
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    setHoverTime(ratio * duration);
   };
 
   // One size for every control, so a tap lands the same way on each: 36px on a
@@ -661,6 +711,50 @@ export default function VideoPlayer({
         </div>
       )}
 
+      {/* Rewind / skip ahead by tapping the picture.
+
+          The left third of the frame jumps back and the right third jumps
+          forward, so the viewer does not have to find a 36px button in the dark
+          to go back ten seconds. Only while PLAYING: paused, the whole frame
+          belongs to the big play button, and a tap there has to mean "start" —
+          two meanings for one tap is how a player feels broken.
+
+          Both stop above the control bar (`bottom-16`), and the bar is z-30
+          against their z-20, so the bottom strip still belongs to the buttons
+          the viewer can see. The middle third is deliberately inert. */}
+      {isPlaying && !fatalError && (
+        <>
+          <button
+            type="button"
+            aria-label={`Rewind ${SKIP_SECONDS} seconds`}
+            onClick={() => skip(-SKIP_SECONDS)}
+            className="absolute bottom-16 left-0 top-0 z-20 w-1/3 touch-manipulation sm:w-1/4"
+          />
+          <button
+            type="button"
+            aria-label={`Skip forward ${SKIP_SECONDS} seconds`}
+            onClick={() => skip(SKIP_SECONDS)}
+            className="absolute bottom-16 right-0 top-0 z-20 w-1/3 touch-manipulation sm:w-1/4"
+          />
+        </>
+      )}
+
+      {/* The jump, confirmed on the side it went to. A ten-second move inside a
+          long scene is almost invisible, so without this the control is
+          indistinguishable from a tap that missed. */}
+      {skipFlash && (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute bottom-16 top-0 z-20 flex w-1/3 items-center sm:w-1/4 ${
+            skipFlash.side === "left" ? "left-0 justify-start pl-4 sm:pl-8" : "right-0 justify-end pr-4 sm:pr-8"
+          }`}
+        >
+          <span className="rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-sm">
+            {skipFlash.label}
+          </span>
+        </div>
+      )}
+
       {/* Big Play Button (when paused) */}
       {!isPlaying && !isLoading && !fatalError && (
         <button
@@ -675,25 +769,48 @@ export default function VideoPlayer({
 
       {/* Controls Bar */}
       <div
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-opacity duration-300 ${
+        // z-30: the side tap zones below are z-20, and without this the bottom
+        // strip of the picture would swallow clicks meant for these buttons.
+        className={`absolute bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-opacity duration-300 ${
           showControls || !isPlaying ? "opacity-100" : "opacity-0"
         }`}
       >
         {/* Progress Bar — a slightly taller track on a phone, where a 1px line
-            is hard to grab. */}
+            is hard to grab.
+
+            The wrapper exists for the time bubble: hovering the bar used to say
+            nothing about WHERE in the scene you were about to land, so finding a
+            moment meant dragging, watching the picture and dragging back. */}
         <div className="px-2 sm:px-4 pt-2 pb-1">
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            value={currentTime}
-            onChange={handleSeek}
-            aria-label="Seek"
-            className="w-full h-1.5 sm:h-1 bg-white/20 rounded-full appearance-none cursor-pointer touch-manipulation
-              [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 sm:[&::-webkit-slider-thumb]:w-3 sm:[&::-webkit-slider-thumb]:h-3
-              [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-brand-500
-              [&::-webkit-slider-thumb]:hover:scale-125 [&::-webkit-slider-thumb]:transition-transform"
-          />
+          <div
+            ref={seekBarRef}
+            className="relative"
+            onMouseMove={handleScrubHover}
+            onMouseLeave={() => setHoverTime(null)}
+          >
+            {hoverTime !== null && duration > 0 && (
+              <div
+                className="pointer-events-none absolute -top-7 z-10 -translate-x-1/2 rounded-md bg-black/85 px-2 py-0.5 font-mono text-[10px] text-white/90 backdrop-blur-sm"
+                style={{ left: `${Math.min(100, (hoverTime / duration) * 100)}%` }}
+              >
+                {formatDuration(Math.floor(hoverTime))}
+              </div>
+            )}
+            <input
+              type="range"
+              min={0}
+              max={duration || 0}
+              value={currentTime}
+              onChange={handleSeek}
+              onMouseUp={() => setHoverTime(null)}
+              onTouchEnd={() => setHoverTime(null)}
+              aria-label="Seek"
+              className="w-full h-1.5 sm:h-1 bg-white/20 rounded-full appearance-none cursor-pointer touch-manipulation
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 sm:[&::-webkit-slider-thumb]:w-3 sm:[&::-webkit-slider-thumb]:h-3
+                [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-brand-500
+                [&::-webkit-slider-thumb]:hover:scale-125 [&::-webkit-slider-thumb]:transition-transform"
+            />
+          </div>
         </div>
 
         {/* Control Buttons */}
@@ -707,8 +824,15 @@ export default function VideoPlayer({
               {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
             </button>
             <button
-              onClick={() => skip(10)}
-              aria-label="Skip forward 10 seconds"
+              onClick={() => skip(-SKIP_SECONDS)}
+              aria-label={`Rewind ${SKIP_SECONDS} seconds`}
+              className={ctrlBtn}
+            >
+              <SkipBack className="w-5 h-5" />
+            </button>
+            <button
+              onClick={() => skip(SKIP_SECONDS)}
+              aria-label={`Skip forward ${SKIP_SECONDS} seconds`}
               className={ctrlBtn}
             >
               <SkipForward className="w-5 h-5" />
