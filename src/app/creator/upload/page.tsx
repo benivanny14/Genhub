@@ -5,6 +5,7 @@ import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import Image from "next/image";
 import ImageCropper from "@/components/ImageCropper";
+import VideoTrimmer from "@/components/VideoTrimmer";
 import { canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
@@ -55,6 +56,9 @@ export default function UploadPage() {
   const [category, setCategory] = useState("");
   const [tags, setTags] = useState("");
   const [bunnyVideoId, setBunnyVideoId] = useState("");
+  // The file the creator just picked, held while they cut it. Nothing is
+  // reserved or uploaded until they finish in the trimmer.
+  const [trimFile, setTrimFile] = useState<File | null>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [uploadingThumb, setUploadingThumb] = useState(false);
   // The picture the creator just chose, held while they frame it. The cover is
@@ -192,6 +196,19 @@ export default function UploadPage() {
       toast("error", err instanceof Error ? err.message : "Upload failed");
     } finally {
       setUploadingThumb(false);
+    }
+  }
+
+  /** Reproduce the upload once a file is final — full or already cut. */
+  async function startVideoUpload(file: File) {
+    const credentials = await initiateUpload();
+    if (!credentials) return;
+    const uploaded = await uploadToBunny(file, credentials, setUploadProgress);
+    if (!uploaded) {
+      // The slot is empty, so let the creator pick a file again instead of
+      // leaving them stuck on a reserved video id.
+      setBunnyVideoId("");
+      setUploadProgress(0);
     }
   }
 
@@ -392,27 +409,22 @@ export default function UploadPage() {
                 <p className="text-sm text-white/60 mb-1">
                   Click here to upload your video
                 </p>
-                <p className="text-xs text-white/40">MP4, MOV, AVI — Max 2GB</p>
+                <p className="text-xs text-white/40">
+                  MP4, MOV, AVI — Max 2GB. Next you will cut and preview it before
+                  it uploads.
+                </p>
                 <input
                   type="file"
                   accept="video/*"
                   className="hidden"
-                  onChange={async (e) => {
+                  onChange={(e) => {
                     const file = e.target.files?.[0];
+                    // Reset so choosing the same file again still fires.
+                    e.target.value = "";
                     if (!file) return;
-                    const credentials = await initiateUpload();
-                    if (!credentials) return;
-                    const uploaded = await uploadToBunny(
-                      file,
-                      credentials,
-                      setUploadProgress
-                    );
-                    if (!uploaded) {
-                      // The slot is empty, so let the creator pick a file again
-                      // instead of leaving them stuck on a reserved video id.
-                      setBunnyVideoId("");
-                      setUploadProgress(0);
-                    }
+                    // Open the cutter first: the creator marks and watches the
+                    // part worth keeping, and only that part is uploaded.
+                    setTrimFile(file);
                   }}
                 />
               </label>
@@ -707,6 +719,17 @@ export default function UploadPage() {
             onConfirm={(cropped) => {
               setThumbCropFile(null);
               void uploadThumb(cropped);
+            }}
+          />
+        )}
+
+        {trimFile && (
+          <VideoTrimmer
+            file={trimFile}
+            onCancel={() => setTrimFile(null)}
+            onConfirm={(chosen) => {
+              setTrimFile(null);
+              void startVideoUpload(chosen);
             }}
           />
         )}
