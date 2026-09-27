@@ -4,13 +4,14 @@
 // GENHUB - Support / Contact page
 // =============================================================================
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Header from "@/components/Header";
-import { LifeBuoy, ArrowLeft, Mail, Phone, MapPin, Send } from "lucide-react";
+import { LifeBuoy, ArrowLeft, Mail, Phone, MapPin, Send, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { useTheme } from "@/lib/ThemeProvider";
 import { cn, toTelHref } from "@/lib/utils";
 import config from "@/lib/config";
+import { fetchCurrentUser } from "@/lib/current-user";
 
 const TOPICS = [
   "Account & login",
@@ -25,18 +26,66 @@ export default function SupportPage() {
   const [topic, setTopic] = useState(TOPICS[0]);
   const [subject, setSubject] = useState("");
   const [message, setMessage] = useState("");
+  const [replyEmail, setReplyEmail] = useState("");
+  const [signedIn, setSignedIn] = useState<boolean | null>(null);
+  const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const { theme } = useTheme();
   const isLight = theme === "light";
 
-  function handleSubmit(e: React.FormEvent) {
+  // Whether a reply address has to be asked for. A signed-in ticket already
+  // carries the account, so the field stays out of the way for them.
+  useEffect(() => {
+    let cancelled = false;
+    fetchCurrentUser()
+      .then((res) => res.json())
+      .then((data) => {
+        if (cancelled) return;
+        setSignedIn(Boolean(data?.success));
+        if (data?.success && data.data?.email) setReplyEmail(data.data.email);
+      })
+      .catch(() => {
+        // A signed-out visitor gets a 401 response, not a rejection; a rejection
+        // here is a network failure, and the safe reading of that is "ask for an
+        // address", which is what `false` does.
+        if (!cancelled) setSignedIn(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /**
+   * POST the ticket. The old version opened a `mailto:` link, which only works
+   * when the visitor's machine has a mail client registered and leaves the
+   * message sitting in a draft they still have to send — so a ticket could look
+   * sent and never leave the browser. This says what actually happened: success
+   * means the message reached support, failure names a way to reach them.
+   */
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    // Static site fallback: open the user's mail client with the ticket pre-filled
-    const body = `Topic: ${topic}\n\n${message}`;
-    window.location.href = `mailto:${config.compliance.supportEmail}?subject=${encodeURIComponent(
-      subject || `Genhub support — ${topic}`
-    )}&body=${encodeURIComponent(body)}`;
-    setSent(true);
+    setSending(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/support", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic, subject, message, email: replyEmail }),
+      });
+      const data = await res.json().catch(() => null);
+
+      if (res.ok && data?.success) {
+        setSent(true);
+        return;
+      }
+      setError(data?.error || "We could not send your message. Please try again.");
+    } catch {
+      setError("Network error — your message was not sent. Please try again.");
+    } finally {
+      setSending(false);
+    }
   }
 
   return (
@@ -119,6 +168,7 @@ export default function SupportPage() {
               placeholder="Short summary"
               className="input-field"
               required
+              minLength={3}
               maxLength={200}
             />
           </div>
@@ -132,23 +182,60 @@ export default function SupportPage() {
               placeholder="Describe the issue…"
               className="input-field resize-none"
               required
+              minLength={10}
               maxLength={4000}
             />
+            <p className={cn("text-xs mt-1", isLight ? "text-gray-400" : "text-white/40")}>
+              For a payment issue, include the transaction ID — it is the one thing we cannot
+              look up for you.
+            </p>
           </div>
 
-          <button type="submit" className="btn-brand flex items-center gap-2">
-            <Send className="w-4 h-4" /> Send to support
+          {/* Only when nobody is signed in: a ticket with no reply address is a
+              ticket nobody can answer, and the people who need support most are
+              often the ones who cannot log in. */}
+          {signedIn === false && (
+            <div>
+              <label className={cn("text-sm mb-1 block", isLight ? "text-gray-500" : "text-white/60")}>
+                Your email (we reply here)
+              </label>
+              <input
+                type="email"
+                value={replyEmail}
+                onChange={(e) => setReplyEmail(e.target.value)}
+                placeholder="you@example.com"
+                className="input-field"
+                autoComplete="email"
+                required
+              />
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={sending}
+            className="btn-brand flex items-center gap-2 disabled:opacity-60"
+          >
+            <Send className="w-4 h-4" /> {sending ? "Sending…" : "Send to support"}
           </button>
 
+          {error && (
+            <p className="flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+              <AlertTriangle className="mt-0.5 w-4 h-4 shrink-0" /> {error}
+            </p>
+          )}
+
           {sent && (
-            <p className="text-sm text-emerald-400">
-              ✓ Your email client should have opened. If not, write to{" "}
-              {config.compliance.supportEmail} directly.
+            <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+              ✓ Message received. Support will reply to{" "}
+              {replyEmail || "the email on your account"} — usually within 24 hours. Keep this
+              page or the email for reference.
             </p>
           )}
 
           <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/40")}>
-            We reply within 24 hours. For payment issues include your transaction ID.
+            Tickets reach support immediately. If you would rather write to us yourself, our
+            address is {config.compliance.supportEmail}.
           </p>
         </form>
       </main>

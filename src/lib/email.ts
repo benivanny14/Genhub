@@ -29,6 +29,15 @@ interface SendMailOptions {
   subject: string;
   text: string;
   html: string;
+  /**
+   * Where a reply goes when it is not `to`.
+   *
+   * A support ticket is delivered to the support address but must be answerable
+   * to the person who wrote it, and those are different addresses. Without this
+   * the reply would land at the support inbox's own sent-to address and the
+   * visitor would never hear back.
+   */
+  replyTo?: string;
 }
 
 const from = () => process.env.EMAIL_FROM || "Genhub <no-reply@genhub.local>";
