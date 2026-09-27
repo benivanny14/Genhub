@@ -25,12 +25,12 @@ const VALUES = [
   {
     icon: Shield,
     title: "Safe by default",
-    body: "18+ age gate, KYC verification, signature-verified webhooks, and a fast human moderation team.",
+    body: "18+ age gate, KYC verification, tamper-proof payment confirmations, and a fast human moderation team.",
   },
   {
     icon: Zap,
     title: "Fast streaming",
-    body: "Adaptive HLS delivery with instant free teasers, resume-playback, and hover previews on every card.",
+    body: "Adaptive delivery that matches your connection, instant free teasers, resume-playback, and hover previews on every card.",
   },
 ];
 

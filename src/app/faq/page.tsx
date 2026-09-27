@@ -30,7 +30,7 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "Is my data safe?",
-    a: "Yes. Sessions use httpOnly JWT cookies, passwords are hashed with bcrypt, payment callbacks are verified with a shared secret, and we never store your mobile money PIN.",
+    a: "Yes. Your session is kept in a secure, script-inaccessible cookie, passwords are stored only as one-way hashes, every payment confirmation is verified before it is trusted, and we never store your mobile money PIN.",
   },
   {
     q: "How do I become a creator?",
@@ -38,7 +38,7 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "Can I watch on my phone?",
-    a: "Yes — Genhub works in any modern mobile browser, streams adaptive HLS video, and remembers where you stopped so you can continue on any device.",
+    a: "Yes — Genhub works in any modern mobile browser, adjusts playback quality to your connection, and remembers where you stopped so you can continue on any device.",
   },
   {
     q: "How do referral rewards work?",
