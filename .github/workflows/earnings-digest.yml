@@ -1,0 +1,53 @@
+# =============================================================================
+# GENHUB - Weekly creator earnings digest
+# Calls POST /api/cron/earnings-digest hourly. The worker itself enforces the
+# week (at most one digest per creator per seven days), so an hourly poke simply
+# makes sure the digest goes out on the first run after a creator's week turns
+# over — it does not mean an email every hour.
+#
+# Setup required (the same two values every other worker workflow reads):
+#   * Repository variable  APP_URL      — e.g. https://genhub.co.tz
+#   * Repository secret    CRON_SECRET  — must match the server's CRON_SECRET
+# The job skips cleanly (green) until both are configured.
+#
+# This file is not the only way the digest runs: /api/cron/supervisor runs it
+# too, because a safe worker left out of the supervisor is one that silently
+# stops when its own file is not delivered (see §4.0.4). This file is the
+# dedicated poke; the supervisor is the safety net.
+# =============================================================================
+
+name: Weekly earnings digest
+
+on:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call digest endpoint
+        env:
+          BASE_URL: ${{ vars.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$BASE_URL" ]; then
+            echo "APP_URL repository variable not set — skipping run."
+            exit 0
+          fi
+          if [ -z "$CRON_SECRET" ]; then
+            echo "CRON_SECRET repository secret not set — skipping run."
+            exit 0
+          fi
+          curl -fsS -X POST "$BASE_URL/api/cron/earnings-digest" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            --max-time 60
+
+      # Same scarce-delivery trick as the other worker workflows: this run also
+      # pokes every worker that has fallen behind.
+      - name: Run anything the schedule missed
+        uses: ./.github/actions/supervise
+        with:
+          base-url: ${{ vars.APP_URL }}
+          cron-secret: ${{ secrets.CRON_SECRET }}

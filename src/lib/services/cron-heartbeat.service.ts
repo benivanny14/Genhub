@@ -183,9 +183,7 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     everyMinutes: 60,
     staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     inFlightGraceMinutes: 5,
-    // No file of its own: the digest is run by the cron supervisor (§4.0.4),
-    // which pokes everything overdue on whichever worker file GitHub delivers.
-    schedule: "vercel.json or .github/workflows/supervisor.yml",
+    schedule: "vercel.json or .github/workflows/earnings-digest.yml",
     sendsCustomerRequests: false,
   },
 ] as const;
