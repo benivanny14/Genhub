@@ -1870,7 +1870,42 @@ npm run accounts:create -- \
   --name "Your Display Name"
 ```
 
+#### The test content the seed never wrote
+
+`demo:wipe` only removes the *seeded* rows. Everything put there by trying the
+product out — a handful of uploads, the purchases and comments they collected,
+the KYC submissions behind them — is not demo content and survives it, so a
+launch can still open on "4 videos" from one person and a revenue chart built
+from invented sales.
+
+```bash
+# 1. Look first: it names every video it would take and every account it keeps.
+npm run clean:launch
+
+# 2. Delete the content, in foreign-key order. Accounts stay where they are.
+npm run clean:launch -- --yes
+
+# 3. Optional, and irreversible: also remove the NON-admin accounts that owned
+#    that content. Deliberately a second flag — a creator account is not content.
+npm run clean:launch -- --yes --accounts
+```
+
+It never deletes an ADMIN account, because that is the only way back into the
+panel that approves KYC and clears payouts. Coupons and the operational tables
+(setup steps, worker heartbeats, the watchdog's memory) are left alone.
+
+**The bytes are on Bunny, not in Postgres.** Deleting a video row tells Bunny
+nothing, so the upload stays in the library, keeps counting against storage, and
+appears on no screen at all — every screen lists rows.
+
+```bash
+npm run bunny:orphans            # list assets with no matching row
+npm run bunny:orphans -- --yes   # delete them (check the titles first)
+```
+
 - [ ] Demo content removed (`npm run demo:wipe` reports 0 left).
+- [ ] Test content removed (`npm run clean:launch` reports no content rows), and
+      Bunny left with no orphans (`npm run bunny:orphans` reports 0).
 - [ ] At least one real ADMIN account able to sign in.
 - [ ] At least one CREATOR that can actually upload — see the KYC note below.
 - [ ] Promo codes reviewed: the seed creates `WELCOME10`, `GENHUB500` and
