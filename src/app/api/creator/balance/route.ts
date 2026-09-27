@@ -28,6 +28,10 @@ export async function GET(request: NextRequest) {
       where: { creatorId: auth.userId },
     });
 
+    // The holding window, in one place: every sale matures on its OWN clock,
+    // so this is used both to date each row below and to find the next clear.
+    const holdingMs = config.business.holdingPeriodDays * 86_400_000;
+
     // Get video performance stats
     const videoStats = await prisma.video.findMany({
       where: { creatorId: auth.userId, isDeleted: false },
@@ -146,7 +150,6 @@ export async function GET(request: NextRequest) {
     // its OWN clock, so this is the oldest still-held one plus the holding
     // window — and it answers the question a creator actually asks ("when do I
     // get paid?") without making them count days from a sale they cannot date.
-    const holdingMs = config.business.holdingPeriodDays * 86_400_000;
     const oldestHeld = await prisma.transaction.findFirst({
       where: {
         creatorId: auth.userId,
@@ -174,7 +177,17 @@ export async function GET(request: NextRequest) {
       todayEarnings: todayTransactions._sum.creatorCut || 0,
       totalViews,
       videoStats: enrichedVideos,
-      recentTransactions,
+      // Each row carries its own clear date and whether it is still held, so the
+      // list answers "when does THIS payment unlock" without the client having
+      // to know the holding length or re-derive the rule.
+      recentTransactions: recentTransactions.map((tx) => {
+        const clearsAt = new Date(tx.createdAt.getTime() + holdingMs);
+        return {
+          ...tx,
+          clearsAt: clearsAt.toISOString(),
+          held: clearsAt.getTime() > Date.now(),
+        };
+      }),
       payouts,
       paidMessages,
     });

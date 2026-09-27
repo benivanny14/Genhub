@@ -44,7 +44,8 @@ export type CronWorkerId =
   | "release-earnings"
   | "reconcile-payments"
   | "renew-subscriptions"
-  | "poll-encoding";
+  | "poll-encoding"
+  | "earnings-digest";
 
 export interface CronWorkerDef {
   id: CronWorkerId;
@@ -168,6 +169,23 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     inFlightGraceMinutes: 5,
     schedule: "vercel.json or .github/workflows/poll-encoding.yml",
+    sendsCustomerRequests: false,
+  },
+  {
+    id: "earnings-digest",
+    name: "Weekly earnings digest",
+    consequence:
+      "Creators stop being told when their money clears the 14-day hold, so pending reads as money the platform is withholding.",
+    // The worker itself decides who is due a digest (at most once every seven
+    // days, per creator), so it is safe — and useful — to poke it hourly: most
+    // runs send nothing and just keep the schedule warm. `everyMinutes` is
+    // therefore the check cadence, not the email cadence.
+    everyMinutes: 60,
+    staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
+    inFlightGraceMinutes: 5,
+    // No file of its own: the digest is run by the cron supervisor (§4.0.4),
+    // which pokes everything overdue on whichever worker file GitHub delivers.
+    schedule: "vercel.json or .github/workflows/supervisor.yml",
     sendsCustomerRequests: false,
   },
 ] as const;

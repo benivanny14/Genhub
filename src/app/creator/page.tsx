@@ -80,6 +80,10 @@ interface CreatorData {
     creatorCut: number | null;
     type: string;
     createdAt: string;
+    /** When this sale's holding period ends. Optional for older payloads. */
+    clearsAt?: string;
+    /** Still inside the 14-day window (so still counted in Pending). */
+    held?: boolean;
     /** `{ method: "pay_message" }` for a message; a plain tip has none. */
     metadata?: { method?: string } | null;
     video?: { title: string } | null;
@@ -1652,6 +1656,10 @@ export default function CreatorDashboard() {
                   <p className="text-sm">{transactionLabel(tx)}</p>
                   <p className="text-xs text-white/40">
                     {formatRelativeTime(new Date(tx.createdAt))}
+                    {tx.clearsAt &&
+                      (tx.held
+                        ? ` · clears ${formatDay(tx.clearsAt)}`
+                        : " · available")}
                   </p>
                 </div>
                 <p className="font-bold text-sm text-emerald-400">

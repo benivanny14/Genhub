@@ -166,6 +166,11 @@ model User {
   // so bumping CREATOR_GUIDELINES_VERSION asks every creator again.
   guidelinesAcceptedVersion Int       @default(0)
   guidelinesAcceptedAt      DateTime?
+  // When this creator last received the weekly earnings digest. NULL = never.
+  // The digest job runs often and sends only when seven days have passed, so
+  // this column is both the cadence and the at-most-once guard (the job claims
+  // it with a conditional update before it sends).
+  lastEarningsDigestAt      DateTime?
   locale       String   @default("sw") // sw = Kiswahili, en = English
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())

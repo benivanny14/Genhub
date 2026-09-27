@@ -31,6 +31,10 @@ import { releaseMatureEarnings, type ReleaseResult } from "./earning-release.ser
 import { reconcileStalePayments, type ReconcileResult } from "./payment-reconcile.service";
 import { renewDueSubscriptions, type RenewalResult } from "./subscription-renewal.service";
 import { refreshPendingEncodings } from "./video-encoding.service";
+import {
+  sendDueEarningsDigests,
+  type EarningsDigestResult,
+} from "./earnings-digest.service";
 
 /**
  * Inferred rather than imported: video-encoding.service.ts already exports a
@@ -76,6 +80,13 @@ export function describeEncoding(result: EncodingRunResult): string {
   return `${result.checked} checked, ${result.published} published, ${result.failed} failed`;
 }
 
+export function describeEarningsDigest(result: EarningsDigestResult): string {
+  return (
+    `Digests: ${result.sent} sent, ${result.skipped} skipped of ${result.checked} creator(s)` +
+    (result.errors > 0 ? `, ${result.errors} failed` : "")
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Running
 // ---------------------------------------------------------------------------
@@ -116,6 +127,10 @@ export function runWorkerNow(
   id: "poll-encoding",
   options?: WorkerRunOptions
 ): Promise<CronRunOutcome<EncodingRunResult>>;
+export function runWorkerNow(
+  id: "earnings-digest",
+  options?: WorkerRunOptions
+): Promise<CronRunOutcome<EarningsDigestResult>>;
 /**
  * A worker id that is only known at runtime — the admin panel takes it from a
  * request body. Callers here get `unknown`, which is the honest type: they have
@@ -149,5 +164,8 @@ export async function runWorkerNow(
 
     case "poll-encoding":
       return runCronJob("poll-encoding", () => refreshPendingEncodings(), describeEncoding, origin);
+
+    case "earnings-digest":
+      return runCronJob("earnings-digest", () => sendDueEarningsDigests(), describeEarningsDigest, origin);
   }
 }

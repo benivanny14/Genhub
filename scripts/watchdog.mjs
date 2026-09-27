@@ -261,7 +261,12 @@ export function alertMessage(baseUrl, report, extras = []) {
 // ---------------------------------------------------------------------------
 
 /** Workers this script may start by itself. See the note above. */
-export const RECOVERABLE_WORKERS = ["release-earnings", "reconcile-payments", "poll-encoding"];
+export const RECOVERABLE_WORKERS = [
+  "release-earnings",
+  "reconcile-payments",
+  "poll-encoding",
+  "earnings-digest",
+];
 
 /**
  * Is automatic restarting switched on?
