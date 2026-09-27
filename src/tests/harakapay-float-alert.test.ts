@@ -32,7 +32,7 @@ vi.mock("@/lib/config", () => ({
 vi.mock("@/lib/db", () => ({
   default: {
     user: { findMany: vi.fn() },
-    notification: { findFirst: vi.fn(), create: vi.fn() },
+    notification: { findFirst: vi.fn(), create: vi.fn(), deleteMany: vi.fn() },
   },
 }));
 
@@ -46,7 +46,7 @@ import { formatTZS } from "@/lib/utils";
 import {
   DEFAULT_FLOAT_FLOOR_TZS,
   FLOAT_ALERT_LINK,
-  FLOAT_ALERT_WINDOW_MS,
+  FLOAT_ALERT_TITLE,
   alertFloat,
   assessFloat,
   floatAlertCopy,
@@ -58,6 +58,7 @@ import {
 const findMany = vi.mocked(prisma.user.findMany);
 const findFirst = vi.mocked(prisma.notification.findFirst);
 const create = vi.mocked(prisma.notification.create);
+const clear = vi.mocked(prisma.notification.deleteMany);
 const mail = vi.mocked(sendMail);
 
 const admin = { id: "admin-1", email: "owner@genhub.test" };
@@ -92,6 +93,7 @@ beforeEach(() => {
   findMany.mockResolvedValue([admin] as never);
   findFirst.mockResolvedValue(null);
   create.mockResolvedValue({ id: "n1" } as never);
+  clear.mockResolvedValue({ count: 0 } as never);
 });
 
 // ---------------------------------------------------------------------------
@@ -222,14 +224,14 @@ describe("alertFloat", () => {
     expect(whereOf(1).title).toBe(written);
   });
 
-  it("asks for the reminder window in the past, not for everything", async () => {
+  it("throttles on the title with no time window — one alert per episode", async () => {
     await alertFloat("empty", snapshot(0));
-    const since = whereOf(0).createdAt?.gt;
-    if (!since) throw new Error("the alert did not ask for a window at all");
-    const age = Date.now() - since.getTime();
+    const where = whereOf(0);
 
-    expect(age).toBeGreaterThanOrEqual(FLOAT_ALERT_WINDOW_MS - 1_000);
-    expect(age).toBeLessThan(FLOAT_ALERT_WINDOW_MS + 5_000);
+    expect(where.title).toBe(FLOAT_ALERT_TITLE);
+    // No `createdAt` filter: the row silences the alert for as long as the float
+    // stays bad, however long that is. Recovery is what re-arms it.
+    expect(where.createdAt).toBeUndefined();
   });
 
   it("shouts when there is no admin to tell", async () => {
@@ -283,7 +285,7 @@ describe("alertFloat", () => {
 // ---------------------------------------------------------------------------
 
 describe("watchFloat", () => {
-  it("says nothing when the float is fine, and does not touch the database", async () => {
+  it("clears the episode when the float is fine, and mails nobody", async () => {
     const watch = await watchFloat({
       read: async () => ({ success: true, float_balance: 25_000, wallet_balance: 500 }),
     });
@@ -291,7 +293,47 @@ describe("watchFloat", () => {
     expect(watch.read).toBe(true);
     expect(watch.level).toBe("ok");
     expect(watch.outcome).toBeNull();
+    // No admin read, no row, no mail — but the alert is re-armed so the next
+    // drop is announced again.
     expect(findMany).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(mail).not.toHaveBeenCalled();
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not repeat while the float stays bad", async () => {
+    findFirst.mockResolvedValue({ id: "already" } as never);
+
+    const watch = await watchFloat({
+      read: async () => ({ success: true, float_balance: 0 }),
+    });
+
+    expect(watch.level).toBe("empty");
+    expect(watch.outcome?.alreadyTold).toBe(true);
+    expect(create).not.toHaveBeenCalled();
+    expect(mail).not.toHaveBeenCalled();
+  });
+
+  it("re-arms after a recovery, so a later drop is announced again", async () => {
+    findFirst.mockResolvedValue(null);
+
+    const first = await watchFloat({
+      read: async () => ({ success: true, float_balance: 0 }),
+    });
+    expect(first.outcome?.alerted).toBe(true);
+
+    // The float comes back: the episode is cleared so the alarm is armed again.
+    const recovered = await watchFloat({
+      read: async () => ({ success: true, float_balance: 25_000 }),
+    });
+    expect(recovered.level).toBe("ok");
+    expect(clear).toHaveBeenCalled();
+
+    // And it drops again -> told again.
+    const again = await watchFloat({
+      read: async () => ({ success: true, float_balance: 0 }),
+    });
+    expect(again.outcome?.alerted).toBe(true);
   });
 
   it("alerts on the way down", async () => {

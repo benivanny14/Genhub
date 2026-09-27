@@ -271,7 +271,7 @@
             "Sign in to https://harakapay.net/dashboard and finish any \"start receiving payments\" / activation prompt - live collections will not settle until the account itself is activated",
             "Look for a top-up on the Wallet/Float card. Many accounts have none: Float and Wallet (94%) are balances that HarakaPay credits, so if there is nothing to click, ask their support in writing how the float is funded on your account",
             "Ask them which balance a deposit lands in, and send your order ids (and the order where the customer approved but nothing settled) as the evidence",
-            "It is funded when GET /api/v1/balance reports float_balance above 0 - the app refuses USSD collects until then",
+            "It is funded when GET /api/v1/balance reports float_balance above 0. The app does not refuse collects at 0 - it keeps accepting them - so top it up to keep them settling",
             "Prove it from your own phone: npm run smoke:harakapay:live"
           ]
         }

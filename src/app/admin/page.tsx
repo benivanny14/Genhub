@@ -943,7 +943,7 @@ export default function AdminDashboard() {
           key: "gatewayFloat",
           ok: Number(balance.float_balance ?? 0) > 0,
           value: `float ${balance.float_balance ?? 0} · wallet ${balance.wallet_balance ?? 0}`,
-          hint: "With a zero float HarakaPay accepts the charge and never delivers the USSD prompt",
+          hint: "Zero float — top up the merchant float so collections keep settling",
         });
       }
 

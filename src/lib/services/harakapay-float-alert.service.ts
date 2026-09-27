@@ -8,20 +8,22 @@
 // complaint — this deployment's first one is in the bell ("Wallet top-up — TZS
 // 1,000 did not go through. The USSD prompt was never approved").
 //
-// The service probe already reports float 0 as a hard failure, and that is
-// correct but late: by then customers are already being turned away. Topping the
-// float up means moving money onto the merchant account, which takes minutes at
-// best and a business day at worst, so the alarm has to fire on the way *down* —
-// at a floor the operator chooses, not at the bottom.
+// A zero float is a balance on the merchant's HarakaPay account, not a broken
+// credential: the key is valid, the gateway answers, and the app keeps accepting
+// collects — so it must not turn a deploy or a service check red. But it is
+// still worth saying early (a prompt that is accepted and never delivered is the
+// worst kind of quiet), so the alert fires on the way *down*, at a floor the
+// operator chooses, rather than waiting for the bottom.
 //
-// Three rules, the same three the overdue-worker alert follows
-// (cron-hold-alert.service.ts):
+// Three rules, close to the overdue-worker alert's (cron-hold-alert.service.ts):
 //
-//   * One row per window. The supervisor pokes this every ten minutes, and a
-//     warning that arrives that often is a warning somebody mutes. The record in
-//     the bell is the throttle, not process memory: on serverless hosting each
-//     instance would keep its own cooldown and mail the same operator once per
-//     instance.
+//   * One row per EPISODE. The supervisor pokes this every ten minutes, and a
+//     warning that arrives that often is a warning somebody mutes. The alert is
+//     sent once when the float falls below the floor and stays silent while it
+//     remains there; it is re-armed only after the float recovers, so one
+//     persistent zero cannot nag an operator who has already read it. The record
+//     in the bell is the memory, not process state: on serverless hosting each
+//     instance would keep its own and mail the same operator once per instance.
 //   * Never throw. This runs inside the poke that also starts the workers, so a
 //     balance call that times out may cost the alarm and must not cost the poke.
 //   * "Could not read the balance" is not "the balance is fine". A gateway that
@@ -34,15 +36,6 @@ import config from "@/lib/config";
 import { sendMail } from "@/lib/email";
 import { formatTZS } from "@/lib/utils";
 import { harakaBalance, type HarakaBalanceResponse } from "@/lib/payments/harakapay";
-
-/**
- * How long before the same operator is told again.
- *
- * Twelve hours: long enough that a float can sit low across a working day
- * without filling the bell, short enough that somebody who reads it in the
- * morning and tops up in the afternoon still gets one reminder if they forget.
- */
-export const FLOAT_ALERT_WINDOW_MS = 12 * 60 * 60_000;
 
 /** Where the notification and the email send the reader. */
 export const FLOAT_ALERT_LINK = "/admin";
@@ -175,7 +168,7 @@ export function floatAlertCopy(
     "",
     action,
     "",
-    `You will be reminded at most once every ${FLOAT_ALERT_WINDOW_MS / 3600_000} hours.`,
+    "You will not be told again unless the float recovers and then drops again.",
   ].join("\n");
 
   const emailHtml = `
@@ -197,7 +190,7 @@ export function floatAlertCopy(
       </p>
       <p style="color:#e5e7eb;font-size:15px;line-height:1.6">${action}</p>
       <p style="color:#6b7280;font-size:12px;margin-top:24px">
-        This reminder repeats at most once every ${FLOAT_ALERT_WINDOW_MS / 3600_000} hours.
+        You will not be told again unless the float recovers and then drops again.
       </p>
     </div>
   </div>`;
@@ -208,7 +201,7 @@ export function floatAlertCopy(
 export interface FloatAlertOutcome {
   /** Somebody was told on this poke. */
   alerted: boolean;
-  /** Correctly silent: somebody was told inside the window. Not a problem. */
+  /** Correctly silent: this episode was already announced. Not a problem. */
   alreadyTold: boolean;
   /** The record or the mail host refused, so nobody was reached. */
   failed: boolean;
@@ -238,8 +231,7 @@ const NOTHING_TO_DO: FloatAlertOutcome = {
  */
 export async function alertFloat(
   level: Exclude<FloatLevel, "ok">,
-  snapshot: FloatSnapshot,
-  deps: { now?: () => number } = {}
+  snapshot: FloatSnapshot
 ): Promise<FloatAlertOutcome> {
   let admins: { id: string; email: string | null }[];
   try {
@@ -262,16 +254,18 @@ export async function alertFloat(
     return { ...NOTHING_TO_DO, noAdmins: true };
   }
 
-  const now = deps.now ?? (() => Date.now());
   const copy = floatAlertCopy(level, snapshot, config.appUrl);
-  const since = new Date(now() - FLOAT_ALERT_WINDOW_MS);
   const outcome: FloatAlertOutcome = { ...NOTHING_TO_DO };
   let writeRefused = false;
 
   for (const admin of admins) {
     try {
+      // The record is the throttle: once this admin has been told about this
+      // episode, this poke says nothing. No time window — the alert is re-armed
+      // only when the float recovers (clearFloatAlertEpisode), so the same empty
+      // float is never reported over and over.
       const recent = await prisma.notification.findFirst({
-        where: { userId: admin.id, title: copy.title, createdAt: { gt: since } },
+        where: { userId: admin.id, title: copy.title },
         select: { id: true },
       });
       if (recent) continue;
@@ -352,7 +346,7 @@ export interface FloatWatch {
  * gets ignored the one time it is right.
  */
 export async function watchFloat(
-  deps: { read?: () => Promise<HarakaBalanceResponse>; now?: () => number } = {}
+  deps: { read?: () => Promise<HarakaBalanceResponse> } = {}
 ): Promise<FloatWatch> {
   const floorTzs = floatFloorTzs();
   let body: HarakaBalanceResponse;
@@ -387,13 +381,30 @@ export async function watchFloat(
   };
   const level = assessFloat(floatTzs, floorTzs);
 
-  // `ok` costs nothing: no admin read, no row, no mail. The common case must not
-  // depend on the database being reachable.
+  // `ok` sends nothing: no admin read, no row, no mail. It does re-arm the alert
+  // so a later drop is announced again — see clearFloatAlertEpisode.
   if (level === "ok") {
+    await clearFloatAlertEpisode();
     return { read: true, level, snapshot, outcome: null };
   }
 
-  return { read: true, level, snapshot, outcome: await alertFloat(level, snapshot, deps) };
+  return { read: true, level, snapshot, outcome: await alertFloat(level, snapshot) };
+}
+
+/**
+ * Forget the current episode so the next drop is reported again.
+ *
+ * The alert is one row per episode (see the header). Without this, the first time
+ * a float went empty would silence the alarm for that operator forever. Best
+ * effort and never throws: a database that refuses a cleanup must not turn a
+ * healthy float reading into an error.
+ */
+export async function clearFloatAlertEpisode(): Promise<void> {
+  try {
+    await prisma.notification.deleteMany({ where: { title: FLOAT_ALERT_TITLE } });
+  } catch (error) {
+    console.error("[Float Alert] could not clear the previous alert:", message(error));
+  }
 }
 
 function asAmount(value: unknown): number | null {

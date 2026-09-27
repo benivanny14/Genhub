@@ -130,11 +130,14 @@ async function checkHarakapay() {
     const float = Number(body.float_balance ?? 0);
     record({
       name: "HarakaPay",
-      state: float > 0 ? "ok" : "fail",
+      // A zero float is a WARNING: the key is valid and the gateway answers, so
+      // nothing is broken. It is a balance on the HarakaPay account, not a
+      // credential, and the app never refuses a collect over it.
+      state: float > 0 ? "ok" : "warn",
       detail:
         `key valid · wallet ${body.wallet_balance ?? 0} · float ${float}` +
         (float <= 0
-          ? ` · ${RED} float is 0: accepts collects and reports "USSD push sent", but orders never settle`
+          ? ` · ${AMBER} float is 0 — top up the merchant float so collections keep settling`
           : ""),
     });
   } catch (error) {

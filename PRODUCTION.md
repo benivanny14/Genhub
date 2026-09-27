@@ -653,9 +653,9 @@ working in that case — the fault is on the merchant account. **Start here:**
 ```bash
 node scripts/preflight.mjs --production --gateway
 #   ✓ API key is valid — wallet 0, float 0
-#   ✗ Merchant float is 0 — HarakaPay accepts our request and reports "USSD
+#   ! Merchant float is 0 — HarakaPay accepts our request and reports "USSD
 #     push sent", but the prompt does not reach the customer and the order
-#     stays `processing` forever.
+#     stays `processing` forever. Deploy is not blocked; top it up.
 ```
 
 A zero `float_balance` is the single most common cause and the one thing no code
@@ -665,8 +665,8 @@ account has one — and if it does not (a real dashboard shows only the *Wallet
 then their support is the only route, in writing, together with confirming that
 live collections are activated (§4.0.6). You should not have to
 read this section to find out — the app tells you on the way down (§4.0.6: a
-notification and an email when the float crosses `HARAKAPAY_FLOAT_FLOOR_TZS`,
-before it reaches 0). Everything below is the
+notification and an email once the float drops to or under
+`HARAKAPAY_FLOAT_FLOOR_TZS`, including at 0). Everything below is the
 longer diagnostic for when the float is funded and prompts *still* do not arrive.
 Use `GET /api/payments/health` (admin) as the dashboard:
 
@@ -798,8 +798,8 @@ Where to see it:
       same sentence at the top of the warnings list.
 - [ ] The HarakaPay probe (`npm run verify:live`) reports `warn` — "key valid …
       HarakaPay has not answered its last calls" — when the gateway answers the
-      probe but this process has been skipping it. A zero float stays a hard
-      failure; the breaker only ever softens an otherwise-healthy probe.
+      probe but this process has been skipping it. A zero float is reported as a
+      `warn`, like the breaker; neither ever turns the probe into a hard failure.
 
 The breaker is **per process**. A serverless cold start begins with it closed,
 which is why it is a fast-fail for a single bad spell rather than a global
@@ -1571,14 +1571,14 @@ account with no way to fund it that is forever. The alarm below is the control.
 Topping the float up means moving money onto the merchant account, so the alarm
 has to arrive on the way down. `src/lib/services/harakapay-float-alert.service.ts`
 reads `GET /api/v1/balance` on every supervisor poke and, under
-`HARAKAPAY_FLOAT_FLOOR_TZS` (default 10,000 TZS), tells the admins once per 12 h —
-bell plus email — with the float, the floor, and what to top up.
+`HARAKAPAY_FLOAT_FLOOR_TZS` (default 10,000 TZS), tells the admins once per
+**episode** — bell plus email — with the float, the floor, and what to top up.
 
 | Where | What it says |
 |---|---|
-| `GET /api/health` | `payments: live`, and the services probe is `warn` below the floor, `fail` at 0 — a warning never joins `failing`, so `launch:check --remote` still reports READY while the float is low but usable |
+| `GET /api/health` | `payments: live`, and the services probe is `warn` below the floor **and at 0** — a warning never joins `failing`, so `launch:check --remote` still reports READY while the float is low or empty |
 | `/api/cron/supervisor` | a `float` field in every poke: `read`, `level`, `snapshot`, and what the alert did |
-| The bell + email | the number, the floor, and *"top up the float on the HarakaPay merchant account"* — at most once per 12 h, throttled on the notification row so twelve pokes are one message |
+| The bell + email | the number, the floor, and *"top up the float on the HarakaPay merchant account"* — once per episode, not once per poke, and not again until the float recovers |
 
 Three rules worth keeping when this is changed again:
 
@@ -1587,15 +1587,22 @@ Three rules worth keeping when this is changed again:
   did not send is unreadable too, never `0` — paging somebody about a float that is
   healthy is how the alarm gets ignored the one time it is right.
 - **One title for both levels.** The bell line is the throttle key, so a float that
-  crosses the floor and then empties inside the window is one problem and one row,
-  not two. The severity lives in the message, which is read.
+  crosses the floor and then empties is one problem and one row, not two. The
+  severity lives in the message, which is read.
+- **One alert per episode, re-armed on recovery.** The throttle is the presence of
+  the notification row itself, with no time window, so a float that stays low is
+  announced once and never poked again — no daily reminder, no red CI. When the
+  float recovers (`level: ok`) the alert row is cleared, so a *later* drop is a new
+  episode and is announced again. That is what stops a service that is merely
+  waiting on HarakaPay's support from emailing the admins on every run.
 - **It never throws.** It runs inside the poke that also starts the workers: a
   balance call that times out may cost the alarm, never the poke.
 
 - [ ] Set the floor for your own traffic and prove the alarm: with the float under
       it, one poke should write one notification and one email.
 - [ ] Prove the throttle: poke again immediately — the answer must report
-      `alreadyTold` and nothing new may be sent.
+      `alreadyTold` and nothing new may be sent. It stays silent regardless of how
+      much time passes until the float recovers.
 - [ ] Confirm the empty case reads honestly: at 0, the message must say the
       gateway *accepts and never delivers*, not that a payment failed.
 - [ ] If the dashboard offers no way to credit the float, ask HarakaPay support

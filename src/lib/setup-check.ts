@@ -570,13 +570,14 @@ async function probeHarakapay(): Promise<ProbeResult> {
       return { ...base, state: "fail", detail: `HTTP ${res.status} - the API key was rejected` };
     }
 
-    // The one blocker nobody can fix in code. With float 0 the gateway accepts
-    // the request, reports "USSD push sent", and never delivers the prompt.
+    // Where the float sits. This is a BALANCE on the merchant's HarakaPay
+    // account, not a broken credential: the key is valid, the gateway answers,
+    // and the app's collect path never reads the float — so it is reported as a
+    // warning, never a failure. A `fail` here turned every deploy and uptime
+    // check red for a state no code change fixes and nothing blocks on. A
+    // rejected key or an unresponsive gateway still fails (the branches above
+    // and below); this one only lowers the level.
     const float = Number(body.float_balance ?? 0);
-    // How close that is to happening. Below the operator's floor this is a
-    // warning rather than a failure: payments work today, and the recovery is a
-    // top-up somebody has to make (services/harakapay-float-alert.service.ts,
-    // which also raises the alarm on the supervisor's own schedule).
     const floor = floatFloorTzs();
     const level = assessFloat(float, floor);
     // The probe proves the gateway answers *now*; the breaker says whether this
@@ -585,14 +586,11 @@ async function probeHarakapay(): Promise<ProbeResult> {
     const breakerNotice = harakaBreakerNotice();
     return {
       ...base,
-      // A zero float stays a hard fail — it is the more severe problem and the
-      // one no code change can fix — so everything else here can only soften
-      // "ok" to a warning, never the other way round.
-      state: level === "empty" ? "fail" : level === "low" || breakerNotice ? "warn" : "ok",
+      state: level === "ok" && !breakerNotice ? "ok" : "warn",
       detail:
         `key valid · wallet ${body.wallet_balance ?? 0} · float ${float}` +
         (level === "empty"
-          ? ' · float is 0: it accepts collects and reports "USSD push sent", but orders never settle'
+          ? " · float is 0 — top up the merchant float so collections keep settling"
           : level === "low"
             ? ` · under the ${floor} TZS floor — top up before it reaches 0`
             : "") +
