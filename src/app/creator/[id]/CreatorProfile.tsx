@@ -17,9 +17,12 @@ import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { canOptimizeImage } from "@/lib/media";
 import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
+import { displayHandle } from "@/lib/usernames";
 
 interface CreatorProfile {
   id: string;
+  /** The unique public handle; shown as @username, with displayName as fallback. */
+  username: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   /**
@@ -314,7 +317,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
                   className="w-full h-full object-cover"
                 />
               ) : (
-                creator.displayName?.[0] || "C"
+                (creator.username?.[0] || creator.displayName?.[0] || "C").toUpperCase()
               )}
             </div>
 
@@ -334,13 +337,19 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
 
           <div className="flex-1 mt-2">
             <h1 className="text-2xl font-display font-bold flex items-center gap-2 flex-wrap">
-              {creator.displayName || "Creator"}
+              {displayHandle(creator, "Creator")}
               {creator.isVerified && (
                 <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-300">
                   <BadgeCheck className="w-3.5 h-3.5" /> Verified
                 </span>
               )}
             </h1>
+            {/* The display name is kept as a secondary line, so a creator who
+                is known by their real name does not lose it — the @handle is
+                the identity, the name is what people call them. */}
+            {creator.displayName && creator.username && (
+              <p className="text-sm text-white/50 mt-1">{creator.displayName}</p>
+            )}
             {creator.creatorProfile?.bio && (
               <p className="text-sm text-white/60 mt-1 max-w-xl">{creator.creatorProfile.bio}</p>
             )}
@@ -389,7 +398,9 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
         </div>
 
         {/* Videos Grid */}
-        <h2 className="font-display font-bold text-lg mb-1">Videos by {creator.displayName}</h2>
+        <h2 className="font-display font-bold text-lg mb-1">
+          Videos by {displayHandle(creator, "this creator")}
+        </h2>
         {/* What the viewer's money buys here, in one line. */}
         {subscribed ? (
           <p className="text-xs text-emerald-400 mb-4">
@@ -415,7 +426,12 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
               <VideoCard
                 key={v.id}
                 {...v}
-                creator={{ id: creator.id, displayName: creator.displayName, avatarUrl: creator.avatarUrl }}
+                creator={{
+                  id: creator.id,
+                  username: creator.username,
+                  displayName: creator.displayName,
+                  avatarUrl: creator.avatarUrl,
+                }}
                 teaserDuration={15}
               />
             ))}
@@ -429,7 +445,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
           <div className="glass-card w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-2">Subscribe</h2>
             <p className="text-white/60 text-sm mb-6">
-              {creator.displayName || "This creator"} — TZS {subPrice.toLocaleString()}/month.
+              {displayHandle(creator, "This creator")} — TZS {subPrice.toLocaleString()}/month.
               Cancel anytime.
             </p>
 
@@ -438,7 +454,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
                 <div className="flex items-center gap-3 p-3 rounded-xl border border-brand-500/30 bg-brand-500/10 mb-3">
                   <Smartphone className="w-5 h-5 text-brand-400 shrink-0" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-brand-400">HarakaPay</p>
+                    <p className="text-sm font-medium text-brand-400">Mobile money</p>
                     <p className="text-xs text-white/50">
                       USSD push — works with Vodacom, Tigo &amp; Airtel. Confirm with your PIN.
                     </p>
