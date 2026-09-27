@@ -8,9 +8,15 @@
 // enforces, and two copies of it is how a UI ends up offering an amount the API
 // refuses.
 //
-// There is no free chat and no exemption list. A subscription buys a creator's
-// videos for a month, not their inbox, so a subscriber pays to write like
-// everybody else — and so does a creator answering a fan.
+// There is no free chat and no exemption list on the buyer's side. A subscription
+// buys a creator's videos for a month, not their inbox, so a subscriber pays to
+// write like everybody else.
+//
+// A CREATOR (or an ADMIN) answering their own inbox is the one exception, and it
+// is the rule that makes an inbox a conversation: charging the reply too left a
+// creator with no way to answer unless they had topped up a wallet, since their
+// money sits in earnings. See the freeReply check in /api/messages. The floor
+// below still applies to every viewer-to-viewer or viewer-to-creator send.
 // =============================================================================
 
 /** The smallest amount a message can be sent for, on every send. */

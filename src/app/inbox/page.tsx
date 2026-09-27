@@ -10,9 +10,10 @@ import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { formatRelativeTime, cn, formatTZS } from "@/lib/utils";
 // The server enforces this floor; the composer renders it. One number, so the
-// form cannot offer an amount the API will refuse. Every message is charged, so
-// the amount box is always on screen — there is no subscriber exemption to hide
-// it behind.
+// form cannot offer an amount the API will refuse. The amount box is on screen
+// for anyone who pays to send — there is no subscriber exemption to hide it
+// behind. A creator answering their own inbox does not pay, so the box is
+// replaced by a line saying so; see `freeReply` below.
 import { MIN_PAID_MESSAGE } from "@/lib/pay-message";
 
 interface Partner {
