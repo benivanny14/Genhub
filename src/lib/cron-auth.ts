@@ -105,6 +105,17 @@ export function cronOrigin(request: NextRequest): string | undefined {
   return declared === WATCHDOG_ORIGIN_HEADER ? WATCHDOG_ORIGIN_LABEL : undefined;
 }
 
+/**
+ * Is this deployment running on somebody's machine rather than a host?
+ *
+ * Kept here beside the guard that depends on it, and deliberately about the URL
+ * rather than `config.nodeEnv`: an unset NODE_ENV reads as "development" and
+ * would answer "yes" for a server in a rack.
+ */
+function isLocalAppUrl(): boolean {
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/i.test(config.appUrl);
+}
+
 export function requireCronSecret(request: NextRequest): NextResponse | null {
   const expected = config.cron.secret;
 
@@ -112,7 +123,22 @@ export function requireCronSecret(request: NextRequest): NextResponse | null {
     // Refuse to run an unauthenticated money-moving job in production just
     // because CRON_SECRET was never set. Outside production, allow it so local
     // work needs no scheduler configured.
-    if (config.nodeEnv === "production") {
+    //
+    // WHICH production is asked of the app URL, not of NODE_ENV.
+    //
+    // `config.nodeEnv` DEFAULTS to "development" when NODE_ENV is unset, so
+    // `config.nodeEnv !== "production"` is not a test of where this is running
+    // — it is a test of whether anybody remembered to set a variable. On a
+    // deployment that forgot it, these routes would be open to anyone, and they
+    // are not read-only: one releases creator earnings into a withdrawable
+    // balance, and renew-subscriptions falls back to a USSD charge request on a
+    // customer's handset. Getting that wrong is not recoverable, so the guard
+    // fails closed unless the deployment is unmistakably a laptop.
+    //
+    // A localhost URL is the honest signal: no hosting provider hands one out,
+    // and `NEXT_PUBLIC_APP_URL` set to localhost still counts. Everywhere else —
+    // including a Vercel preview URL — refuses. Set CRON_SECRET to use them.
+    if (!isLocalAppUrl()) {
       return NextResponse.json(
         { success: false, error: "CRON_SECRET is not configured" },
         { status: 401 }

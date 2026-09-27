@@ -329,15 +329,21 @@ collection). Kwa hivyo:
    au barua pepe yao) — swali kuu: *float inaingizwa vipi kwenye akaunti hii, na
    je live collections zimewashwa?* Tuma reference zilizoshindwa kama ushahidi:
 
+> ⚠️ **Usiweke thamani halisi kwenye faili hii.** Repository hii ni ya **umma**.
+> Sehemu zenye `<…>` hapa chini ni sehemu ya kuweka namba yako halisi — kwenye
+> barua pepe unayotuma, si hapa. Nusu ya API key, namba ya simu ya merchant, au
+> order id halisi iliyochapishwa inamsaidia mtu kujifanya wewe mbele ya support.
+
 > **Subject: Float is 0 and there is no top-up in my dashboard — how is the float funded?**
 >
-> Our account (`hpk_57aa7c25…`, phone 0682642219) shows Wallet 0 / Float 0, and
-> the dashboard has no control that credits either balance. Collections do not
-> settle: `POST /api/v1/collect` answers `success: true` ("USSD push sent") with an
-> order id, then the order stays `processing` and finally `failed`.
+> Our account (`<your HarakaPay key prefix, e.g. hpk_xxxxxxxx…>`, phone
+> `<your merchant phone>`) shows Wallet 0 / Float 0, and the dashboard has no
+> control that credits either balance. Collections do not settle:
+> `POST /api/v1/collect` answers `success: true` ("USSD push sent") with an order
+> id, then the order stays `processing` and finally `failed`.
 >
-> Orders: `HP1790282912529` (1,000, 2026-09-24T20:48:32Z) ·
-> `HP1790361890397` (1,000, 2026-09-25T18:44:50Z) — both `failed`, `completed_at null`.
+> Orders: `<order id 1>` (1,000, <date/time>) · `<order id 2>` (1,000,
+> <date/time>) — both `failed`, `completed_at null`.
 >
 > Please confirm: (1) how is the float funded on this account if the dashboard
 > has no top-up? (2) is my merchant account **activated for live collections**?

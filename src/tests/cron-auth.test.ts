@@ -120,7 +120,13 @@ describe("requireCronSecret", () => {
   });
 
   it("fails closed in production when CRON_SECRET is unset", async () => {
-    const guard = await loadGuard({ CRON_SECRET: undefined, NODE_ENV: "production" });
+    // "Production" is now read off the app URL rather than NODE_ENV, so this is
+    // the deployment it describes: a public domain with no secret configured.
+    const guard = await loadGuard({
+      CRON_SECRET: undefined,
+      NODE_ENV: "production",
+      NEXT_PUBLIC_APP_URL: "https://genhub.example.com",
+    });
     const denied = guard(request({ headers: { "x-cron-secret": STRONG } }));
     expect(denied?.status).toBe(401);
     return denied!.json().then((body) => {
@@ -129,7 +135,51 @@ describe("requireCronSecret", () => {
   });
 
   it("stays usable outside production with no secret, so local cron needs no setup", async () => {
-    const guard = await loadGuard({ CRON_SECRET: undefined, NODE_ENV: "development" });
+    // The app URL is set explicitly rather than left to whatever the machine
+    // happens to have: the answer now depends on it, and a test that reads the
+    // ambient value is a test that passes here and fails on a runner.
+    const guard = await loadGuard({
+      CRON_SECRET: undefined,
+      NODE_ENV: "development",
+      NEXT_PUBLIC_APP_URL: "http://localhost:3000",
+    });
     expect(guard(request({}))).toBeNull();
+  });
+
+  it("stays usable on a laptop even with NODE_ENV unset", async () => {
+    const guard = await loadGuard({
+      CRON_SECRET: undefined,
+      NODE_ENV: undefined,
+      NEXT_PUBLIC_APP_URL: "http://127.0.0.1:3000",
+    });
+    expect(guard(request({}))).toBeNull();
+  });
+
+  // The hole this closes: `config.nodeEnv` falls back to "development", so a
+  // deployment that never set NODE_ENV used to read as a laptop. These routes
+  // release earnings and can send a USSD charge to a customer's phone, so the
+  // question has to be asked of something a host cannot fake — the URL.
+  it("fails closed on a public URL even when NODE_ENV was never set", async () => {
+    const guard = await loadGuard({
+      CRON_SECRET: undefined,
+      NODE_ENV: undefined,
+      NEXT_PUBLIC_APP_URL: "https://genhub.example.com",
+    });
+    const denied = guard(request({ headers: { "x-cron-secret": STRONG } }));
+
+    expect(denied?.status).toBe(401);
+    return denied!.json().then((body) => {
+      expect(body.error).toMatch(/CRON_SECRET is not configured/);
+    });
+  });
+
+  it("fails closed on a Vercel preview URL, which is public but not the domain", async () => {
+    const guard = await loadGuard({
+      CRON_SECRET: undefined,
+      NODE_ENV: undefined,
+      NEXT_PUBLIC_APP_URL: undefined,
+      VERCEL_URL: "genhub-git-branch-owner.vercel.app",
+    });
+    expect(guard(request({}))?.status).toBe(401);
   });
 });
