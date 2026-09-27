@@ -1,0 +1,176 @@
+// =============================================================================
+// GENHUB - Tests for POST /api/payments/purchase — the price that gets charged
+//
+// The rule pinned here: the amount charged is ALWAYS the number on the video
+// row. A request that sends its own amount is cross-checked against that row,
+// and a disagreement refuses the payment outright — nothing is charged, no
+// transaction row is written and the video stays locked — instead of quietly
+// collecting the correct figure or letting the client's number through.
+//
+// Prisma, auth, redis and the payment services are mocked: no database, no
+// gateway and no mail.
+// =============================================================================
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { NextRequest } from "next/server";
+
+const mocks = vi.hoisted(() => ({
+  videoFindUnique: vi.fn(),
+  accessFindUnique: vi.fn(),
+  transactionFindFirst: vi.fn(),
+  transactionCreate: vi.fn(),
+  transactionUpdate: vi.fn(),
+  requireAuth: vi.fn(),
+  checkRateLimit: vi.fn(),
+  purchaseVideoWithWallet: vi.fn(),
+  applyCoupon: vi.fn(),
+  consumeCoupon: vi.fn(),
+  notifyPaymentResult: vi.fn(),
+}));
+
+vi.mock("@/lib/db", () => ({
+  default: {
+    video: { findUnique: mocks.videoFindUnique },
+    videoAccess: { findUnique: mocks.accessFindUnique },
+    transaction: {
+      findFirst: mocks.transactionFindFirst,
+      create: mocks.transactionCreate,
+      update: mocks.transactionUpdate,
+    },
+  },
+}));
+
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth")>();
+  return { ...actual, requireAuth: () => mocks.requireAuth() };
+});
+
+vi.mock("@/lib/redis", () => ({
+  checkRateLimit: (...args: unknown[]) => mocks.checkRateLimit(...args),
+}));
+
+vi.mock("@/lib/payments/harakapay", () => ({
+  harakaCollect: vi.fn(),
+  harakaErrorReason: vi.fn(),
+  harakaStatus: vi.fn(),
+  harakaStatusToInternal: vi.fn(),
+}));
+
+vi.mock("@/lib/services/webhook.service", () => ({
+  processPaymentWebhook: vi.fn(),
+}));
+
+vi.mock("@/lib/services/balance.service", () => ({
+  purchaseVideoWithWallet: (...args: unknown[]) =>
+    mocks.purchaseVideoWithWallet(...args),
+}));
+
+vi.mock("@/lib/services/payment-notify.service", () => ({
+  notifyPaymentResult: (...args: unknown[]) => mocks.notifyPaymentResult(...args),
+}));
+
+vi.mock("@/lib/coupons", () => ({
+  applyCoupon: (...args: unknown[]) => mocks.applyCoupon(...args),
+  consumeCoupon: (...args: unknown[]) => mocks.consumeCoupon(...args),
+}));
+
+import { POST } from "./route";
+
+const VIEWER = "viewer-1";
+const CREATOR = "creator-1";
+const VIDEO_PRICE = 2_000;
+
+function request(body: Record<string, unknown>) {
+  return new NextRequest("https://genhub.test/api/payments/purchase", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function post(body: Record<string, unknown>) {
+  const res = await POST(request(body));
+  return { status: res.status, body: await res.json() };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.requireAuth.mockResolvedValue({ userId: VIEWER, role: "VIEWER" });
+  mocks.checkRateLimit.mockResolvedValue({ allowed: true });
+  mocks.videoFindUnique.mockResolvedValue({
+    id: "video-1",
+    title: "A scene",
+    price: VIDEO_PRICE,
+    creatorId: CREATOR,
+    isPublished: true,
+    isDeleted: false,
+  });
+  mocks.accessFindUnique.mockResolvedValue(null);
+  mocks.transactionFindFirst.mockResolvedValue(null);
+  mocks.purchaseVideoWithWallet.mockResolvedValue({
+    success: true,
+    transactionId: "tx-1",
+    newBalance: 8_000,
+  });
+});
+
+describe("POST /api/payments/purchase — amount tampering", () => {
+  it("refuses a payment whose amount differs from the video's price", async () => {
+    const { status, body } = await post({
+      videoId: "video-1",
+      method: "WALLET",
+      amount: 100,
+    });
+
+    expect(status).toBe(409);
+    expect(body.code).toBe("AMOUNT_MISMATCH");
+    // The refusal quotes the real price, so the customer is not left guessing
+    // which number was right.
+    expect(body.error).toContain("2,000");
+  });
+
+  it("charges nothing and writes nothing when the amount is refused", async () => {
+    await post({ videoId: "video-1", method: "WALLET", amount: 5_000 });
+
+    expect(mocks.purchaseVideoWithWallet).not.toHaveBeenCalled();
+    expect(mocks.transactionCreate).not.toHaveBeenCalled();
+    expect(mocks.accessFindUnique).not.toHaveBeenCalled();
+  });
+
+  it("refuses a mismatch on the phone path too, before any checkout is made", async () => {
+    const { status, body } = await post({
+      videoId: "video-1",
+      gateway: "HARAKAPAY",
+      phoneNumber: "0712345678",
+      amount: 999,
+    });
+
+    expect(status).toBe(409);
+    expect(body.code).toBe("AMOUNT_MISMATCH");
+    expect(mocks.transactionCreate).not.toHaveBeenCalled();
+  });
+
+  it("charges the video's price, never the amount in the request", async () => {
+    const { status } = await post({
+      videoId: "video-1",
+      method: "WALLET",
+      amount: VIDEO_PRICE,
+    });
+
+    expect(status).toBe(200);
+    expect(mocks.purchaseVideoWithWallet).toHaveBeenCalledTimes(1);
+    expect(mocks.purchaseVideoWithWallet.mock.calls[0][0]).toMatchObject({
+      amount: VIDEO_PRICE,
+      originalPrice: VIDEO_PRICE,
+    });
+  });
+
+  it("still works when no amount is sent at all — the normal client", async () => {
+    const { status } = await post({ videoId: "video-1", method: "WALLET" });
+
+    expect(status).toBe(200);
+    expect(mocks.purchaseVideoWithWallet.mock.calls[0][0]).toMatchObject({
+      amount: VIDEO_PRICE,
+    });
+  });
+});

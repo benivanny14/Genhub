@@ -90,6 +90,21 @@ export async function POST(request: NextRequest) {
       return api.error("This video is free — it unlocks without payment", 409, "FREE_VIDEO");
     }
 
+    // The price is the video's, and only the video's. A client that sends an
+    // amount is cross-checked against the row here, BEFORE anything is charged
+    // and before any lock is taken: a mismatch refuses the payment outright
+    // rather than quietly collecting the correct figure. Nothing is written, no
+    // access is granted, and the message quotes the real price so the customer
+    // is never left guessing which number was right. The amount itself is never
+    // used as the charge — see `finalAmount = video.price` below.
+    if (result.data.amount !== undefined && result.data.amount !== video.price) {
+      return api.error(
+        `This video costs TZS ${video.price.toLocaleString()}. The amount sent did not match, so you were not charged and the video stays locked.`,
+        409,
+        "AMOUNT_MISMATCH"
+      );
+    }
+
     // Check if already purchased
     const existingAccess = await prisma.videoAccess.findUnique({
       where: {

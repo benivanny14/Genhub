@@ -209,6 +209,13 @@ export const initiatePaymentSchema = z
       .optional(),
     email: z.string().email().optional(),
     couponCode: z.string().trim().max(32).optional(),
+    // Optional, and never the price that gets charged — the charge is always the
+    // number on the video row. It is accepted only so a client that sends an
+    // amount can be CHECKED against that row and refused when it disagrees; see
+    // the AMOUNT_MISMATCH refusal in /api/payments/purchase. Dropping the field
+    // silently (what an unknown key does) would leave the same client thinking
+    // it had paid one price while another was taken.
+    amount: z.number().int().min(0).max(10_000_000).optional(),
   })
   .refine((data) => data.method !== "PHONE" || !!data.phoneNumber, {
     message: "A phone number is required for mobile money payments",
