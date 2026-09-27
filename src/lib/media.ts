@@ -32,6 +32,8 @@
 // migration cannot disagree about what a key means — the failure mode of getting
 // that wrong is publishing somebody's ID document.
 
+import { isHeifExtension } from "./image-bytes";
+
 /** Every generated image URL starts here. */
 export const MEDIA_ROUTE_PREFIX = "/api/media/";
 
@@ -119,7 +121,15 @@ export function mediaUrlFor(key: string): string {
  */
 export function canOptimizeImage(src: string | null | undefined): boolean {
   if (!src) return false;
-  return src.startsWith(`${MEDIA_ROUTE_PREFIX}public/`);
+  if (!src.startsWith(`${MEDIA_ROUTE_PREFIX}public/`)) return false;
+  // Third kind that must not be: a HEIF container (AVIF, HEIC). Next 14 decodes
+  // those with sharp/libheif, which has a critical unauthenticated RCE on the
+  // AVIF path (GHSA-2xp9-vwfh-vxw4); the patched releases fix it by refusing to
+  // optimise AVIF at all, and Next 14 has no equivalent switch. The upload route
+  // already refuses a HEIF file wearing a non-HEIF name, so what reaches here is
+  // an honest HEIC/HEIF photo — which the browser is handed as-is. Safari
+  // displays it, other browsers do not, and that was already true.
+  return !isHeifExtension(src);
 }
 
 /**

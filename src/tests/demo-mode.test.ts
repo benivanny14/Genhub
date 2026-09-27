@@ -68,8 +68,19 @@ function sourceFiles(dir: string): string[] {
  */
 const isTestFile = (file: string) => /\.test\.tsx?$/.test(file);
 
-/** The two legitimate guards: the shared gate, or a direct production check. */
-const GATES = [/demoDataEnabled\s*\(/, /NODE_ENV\s*===\s*["']production["']/];
+/**
+ * The legitimate guards: the shared gate for rendering, the shared
+ * development-only gate for endpoints, or a direct production check.
+ *
+ * `developmentOnlyEnabled()` joined the list when the demo endpoints stopped
+ * trusting NODE_ENV alone — one unset variable on a self-hosted deployment used
+ * to be enough to expose the seed route (see lib/dev-only.ts).
+ */
+const GATES = [
+  /demoDataEnabled\s*\(/,
+  /developmentOnlyEnabled\s*\(/,
+  /NODE_ENV\s*===\s*["']production["']/,
+];
 
 describe("every file that can show demo content", () => {
   it("gates it on the environment, or it would ship fake scenes", () => {
@@ -92,14 +103,16 @@ describe("every file that can show demo content", () => {
     ).toEqual([]);
   });
 
-  it("keeps the seed endpoint refusing to run in production", () => {
+  it("keeps the seed endpoint out of every deployment that is not a laptop", () => {
     // The other direction of the same rule: demo data must not be writable to a
-    // live database either.
+    // live database either. The gate is deliberately stronger than a NODE_ENV
+    // check — it also requires an app URL no host would hand out.
     const seed = readFileSync(
       join(process.cwd(), "src", "app", "api", "demo", "seed", "route.ts"),
       "utf8"
     );
-    expect(seed).toMatch(/NODE_ENV\s*===\s*"production"/);
+    expect(seed).toMatch(/developmentOnlyEnabled\s*\(\)/);
+    expect(seed).toContain('from "@/lib/dev-only"');
   });
 });
 

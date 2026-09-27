@@ -56,7 +56,11 @@ const CommentsSection = dynamic(() => import("@/components/CommentsSection"), {
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/lib/currency";
 import { pickIntroMedium } from "@/lib/intro-trailer";
+// A creator's title and description end up in this page's JSON-LD; the
+// serializer is what stops them from closing the tag (see lib/json-ld.ts).
+import { serializeJsonLd } from "@/lib/json-ld";
 import IntroClipPlayer from "@/components/IntroClipPlayer";
+import { displayHandle } from "@/lib/usernames";
 
 /**
  * How many times the animated intro is asked for again before the page gives up
@@ -128,6 +132,8 @@ interface VideoData {
   galleryImages?: { id: string; url: string; position: number }[];
   creator: {
     id: string;
+    /** Unique public handle; shown as @username when present. Demo rows have none. */
+    username?: string | null;
     displayName: string | null;
     avatarUrl: string | null;
   };
@@ -150,7 +156,7 @@ interface RelatedVideo {
   viewsCount: number;
   category: string | null;
   createdAt: string;
-  creator: { id: string; displayName: string | null };
+  creator: { id: string; username?: string | null; displayName: string | null };
 }
 
 interface PlaylistSummary {
@@ -951,7 +957,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       <script
         type="application/ld+json"
         dangerouslySetInnerHTML={{
-          __html: JSON.stringify({
+          __html: serializeJsonLd({
             "@context": "https://schema.org",
             "@type": "VideoObject",
             name: video.title,
@@ -968,7 +974,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             ],
             creator: {
               "@type": "Person",
-              name: video.creator.displayName || "Creator",
+              name: displayHandle(video.creator, "Creator"),
             },
           }),
         }}
@@ -1387,10 +1393,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 glass-card p-4">
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-medium">
-                {video.creator.displayName?.[0] || "C"}
+                {(video.creator.username?.[0] || video.creator.displayName?.[0] || "C").toUpperCase()}
               </div>
               <div>
-                <p className="font-medium">{video.creator.displayName || "Creator"}</p>
+                <p className="font-medium">{displayHandle(video.creator, "Creator")}</p>
                 <p className="text-xs text-white/50">Creator</p>
               </div>
             </div>
@@ -1789,7 +1795,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                         {r.title}
                       </p>
                       <p className="text-xs text-white/50 mt-1 truncate">
-                        {r.creator.displayName || "Creator"}
+                        {displayHandle(r.creator, "Creator")}
                       </p>
                       <p className="text-xs text-white/30">{formatCount(r.viewsCount)} views</p>
                     </div>
@@ -1810,7 +1816,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               <Gift className="w-5 h-5 text-amber-400" /> Send a Tip
             </h2>
             <p className="text-white/60 text-sm mb-6">
-              Support {video.creator.displayName || "this creator"} — they keep 70% of every tip,
+              Support {displayHandle(video.creator, "this creator")} — they keep 70% of every tip,
               the same share they get from a sale.
             </p>
 
@@ -1948,13 +1954,13 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             </p>
 
             <div className="space-y-4">
-              {/* Payment method — HarakaPay USSD push (all networks supported) */}
+              {/* Payment method — mobile money USSD push (all networks supported) */}
               <div>
                 <label className="text-sm text-white/60 mb-2 block">Payment Method</label>
                 <div className="flex items-center gap-3 p-3 rounded-xl border border-brand-500/30 bg-brand-500/10">
                   <Smartphone className="w-5 h-5 text-brand-400 shrink-0" />
                   <div className="flex-1">
-                    <p className="text-sm font-medium text-brand-400">HarakaPay</p>
+                    <p className="text-sm font-medium text-brand-400">Mobile money</p>
                     <p className="text-xs text-white/50">
                       USSD push — works with Vodacom, Tigo &amp; Airtel. Confirm with your PIN.
                     </p>

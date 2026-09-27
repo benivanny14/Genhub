@@ -10,6 +10,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
 import { DEMO_CREATORS, DEMO_VIDEOS } from "@/lib/demo-data";
+import { developmentOnlyEnabled } from "@/lib/dev-only";
 
 const VIEWER_ID = "demo-viewer-1";
 const VIEWER_2_ID = "demo-creator-1"; // used as a second viewer for watch history
@@ -23,8 +24,10 @@ const daysAgo = (d: number, hour = 12) => {
 };
 
 export async function POST(request: NextRequest) {
-  if (process.env.NODE_ENV === "production") {
-    return api.error("Demo seeding is disabled in production", 403, "FORBIDDEN");
+  // NODE_ENV plus a local app URL: a self-hosted deployment that forgot to set
+  // NODE_ENV is not a development environment. See lib/dev-only.ts.
+  if (!developmentOnlyEnabled()) {
+    return api.error("Demo seeding is disabled here", 403, "FORBIDDEN");
   }
 
   try {

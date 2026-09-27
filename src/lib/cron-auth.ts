@@ -29,6 +29,10 @@ import config from "./config";
 // Shared with the HarakaPay webhook, which needed the same property (problem 2
 // below) and did not have it. One implementation, so neither can drift.
 import { secretMatches } from "./shared-secret";
+// The same question the development-only endpoints ask, asked once: a localhost
+// app URL is the honest signal that this is somebody's machine, and NODE_ENV is
+// not (it defaults to "development" when unset). See lib/dev-only.ts.
+import { isLocalAppUrl } from "./dev-only";
 
 /** The secret presented with the request, from headers only. */
 function presentedSecret(request: NextRequest): string {
@@ -105,16 +109,6 @@ export function cronOrigin(request: NextRequest): string | undefined {
   return declared === WATCHDOG_ORIGIN_HEADER ? WATCHDOG_ORIGIN_LABEL : undefined;
 }
 
-/**
- * Is this deployment running on somebody's machine rather than a host?
- *
- * Kept here beside the guard that depends on it, and deliberately about the URL
- * rather than `config.nodeEnv`: an unset NODE_ENV reads as "development" and
- * would answer "yes" for a server in a rack.
- */
-function isLocalAppUrl(): boolean {
-  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?\/?$/i.test(config.appUrl);
-}
 
 export function requireCronSecret(request: NextRequest): NextResponse | null {
   const expected = config.cron.secret;

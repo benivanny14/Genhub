@@ -197,6 +197,18 @@ describe("serving rules", () => {
     expect(canOptimizeImage(null)).toBe(false);
   });
 
+  it("never sends a HEIF container to the optimiser", () => {
+    // Next 14 decodes AVIF through sharp/libheif, which has a critical
+    // unauthenticated RCE on that path; the patched releases fix it by refusing
+    // to optimise AVIF at all, and Next 14 has no switch for it.
+    expect(canOptimizeImage("/api/media/public/images/a.avif")).toBe(false);
+    expect(canOptimizeImage("/api/media/public/images/a.HEIC")).toBe(false);
+    expect(canOptimizeImage("/api/media/public/images/a.heif")).toBe(false);
+    // A separator cannot be used to slip past the extension check.
+    expect(canOptimizeImage("/api/media/public/images/a.heic?x=.jpg")).toBe(false);
+    expect(canOptimizeImage("/api/media/public/images/a.jpg")).toBe(true);
+  });
+
   it("makes a private key uncacheable and a public one immutable", () => {
     expect(cacheControlFor("private/u1/kyc/id.png")).toContain("no-store");
     expect(cacheControlFor("public/images/a.jpg")).toContain("immutable");

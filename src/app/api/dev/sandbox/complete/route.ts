@@ -12,14 +12,20 @@ import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import config from "@/lib/config";
 import { processPaymentWebhook } from "@/lib/services/webhook.service";
+import { developmentOnlyEnabled } from "@/lib/dev-only";
 
 export async function POST(request: NextRequest) {
   // This endpoint marks a PENDING transaction as paid without any money moving,
   // so it may only exist while the gateway integration itself is in sandbox
   // mode. The moment PAYMENT_SANDBOX=false + an API key are configured (i.e.
   // real charges), it refuses — otherwise anyone could mint a free purchase.
+  // Two conditions, and both are needed. The gateway condition says the money
+  // here is not real; the location condition says this is somebody's machine.
+  // The second one closed a hole: `config.nodeEnv` DEFAULTS to "development"
+  // when NODE_ENV is unset, so on a deployment that forgot the variable this
+  // route minted free purchases for anyone who found it.
   const sandboxMode =
-    config.nodeEnv !== "production" &&
+    developmentOnlyEnabled() &&
     (!config.harakaPay.apiKey || config.harakaPay.sandbox);
 
   if (!sandboxMode) {

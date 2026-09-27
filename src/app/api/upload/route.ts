@@ -33,6 +33,7 @@ import { api } from "@/lib/api-response";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 import { mediaUrlFor, type MediaKind } from "@/lib/media";
+import { isHeifContainer } from "@/lib/image-bytes";
 
 const ALLOWED_TYPES: Record<string, string> = {
   "image/jpeg": ".jpg",
@@ -131,6 +132,22 @@ export async function POST(request: NextRequest) {
     const stamp = new Date().toISOString().slice(0, 7); // yyyy-mm
     const name = `${randomBytes(10).toString("hex")}${ext}`;
     const buffer = Buffer.from(await file.arrayBuffer());
+
+    // What the bytes are, not what the browser said. `file.type` decides only
+    // the extension, so without this a HEIF container can be stored as a .png —
+    // and this app hands its own public uploads to next/image's optimiser,
+    // which decodes by CONTENT. Next 14 decodes AVIF through sharp/libheif, the
+    // path with a critical unauthenticated RCE (GHSA-2xp9-vwfh-vxw4), so the
+    // disguise was a route from a free account to code execution.
+    //
+    // An honest HEIC/HEIF photo is still accepted (phones produce them); it is
+    // simply never optimised — see canOptimizeImage.
+    const declaredHeif = file.type === "image/heic" || file.type === "image/heif";
+    if (!declaredHeif && isHeifContainer(buffer)) {
+      return api.validation(
+        "That image could not be read — please upload a JPEG, PNG or WebP"
+      );
+    }
 
     // 1) Bunny storage (production)
     const { storageZone, storageAccessKey } = config.bunny;

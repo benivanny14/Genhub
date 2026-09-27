@@ -10,6 +10,8 @@ import prisma from "@/lib/db";
 import config from "@/lib/config";
 import { getCurrentUser } from "@/lib/auth";
 import VideoDetailPage from "./VideoDetail";
+import { displayHandle } from "@/lib/usernames";
+import { serializeJsonLd } from "@/lib/json-ld";
 
 interface Props {
   params: { id: string };
@@ -46,7 +48,7 @@ async function getVideo(id: string, viewer: Awaited<ReturnType<typeof getCurrent
         isPremium: true,
         isPublished: true,
         createdAt: true,
-        creator: { select: { id: true, displayName: true, avatarUrl: true } },
+        creator: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
       },
     });
 
@@ -72,7 +74,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const video = await getVideo(params.id, await getCurrentUser());
   if (!video) return { title: "Video not found" };
 
-  const creatorName = video.creator.displayName || "Creator";
+  const creatorName = displayHandle(video.creator, "Creator");
   // Layout applies the "%s | Genhub" template — don't repeat the brand
   const title = `${video.title} — ${creatorName}`;
   const description =
@@ -147,7 +149,12 @@ export default async function VideoRoute({ params }: Props) {
     },
     creator: {
       "@type": "Person",
-      name: video.creator.displayName || "Creator",
+      name: displayHandle(video.creator, "Creator"),
+      // Both names when the account has both, so a search for either one lands
+      // on the same person.
+      ...(video.creator.username && video.creator.displayName
+        ? { alternateName: video.creator.displayName }
+        : {}),
       url: `${base}/creator/${video.creator.id}`,
     },
   };
@@ -156,7 +163,7 @@ export default async function VideoRoute({ params }: Props) {
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
       />
       <VideoDetailPage params={params} />
     </>

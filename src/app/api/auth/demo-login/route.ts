@@ -17,6 +17,7 @@ import { api } from "@/lib/api-response";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
+import { developmentOnlyEnabled } from "@/lib/dev-only";
 
 const ACCOUNTS = {
   creator: "demo-creator-1",
@@ -25,8 +26,10 @@ const ACCOUNTS = {
 } as const;
 
 export async function POST(request: NextRequest) {
-  if (process.env.NODE_ENV === "production") {
-    return api.error("Demo login is disabled in production", 403, "FORBIDDEN");
+  // Two signals, not one: NODE_ENV alone is a single forgotten variable away
+  // from exposing an endpoint that mints an ADMIN session. See lib/dev-only.ts.
+  if (!developmentOnlyEnabled()) {
+    return api.error("Demo login is disabled here", 403, "FORBIDDEN");
   }
 
   try {

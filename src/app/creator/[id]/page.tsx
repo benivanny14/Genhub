@@ -8,6 +8,8 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import prisma from "@/lib/db";
 import config from "@/lib/config";
+import { displayHandle } from "@/lib/usernames";
+import { serializeJsonLd } from "@/lib/json-ld";
 import CreatorProfileClient from "./CreatorProfile";
 
 interface Props {
@@ -20,6 +22,7 @@ async function getCreator(id: string) {
       where: { id, role: "CREATOR", isBanned: false },
       select: {
         id: true,
+        username: true,
         displayName: true,
         avatarUrl: true,
         isVerified: true,
@@ -36,7 +39,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const creator = await getCreator(params.id);
   if (!creator) return { title: "Creator not found" };
 
-  const name = creator.displayName || "Creator";
+  const name = displayHandle(creator, "Creator");
   // Layout applies the "%s | Genhub" template — don't repeat the brand
   const title = `${name} — Creator`;
   const description =
@@ -72,7 +75,7 @@ export default async function CreatorPage({ params }: Props) {
   const creator = await getCreator(params.id);
   if (!creator) notFound();
 
-  const name = creator.displayName || "Creator";
+  const name = displayHandle(creator, "Creator");
   const base = config.appUrl.replace(/\/$/, "");
   const url = `${base}/creator/${creator.id}`;
   const image =
@@ -92,6 +95,9 @@ export default async function CreatorPage({ params }: Props) {
     mainEntity: {
       "@type": "Person",
       name,
+      // The display name is kept as an alternate, so a search engine still
+      // associates the real name with the handle it now shows.
+      ...(creator.displayName && creator.username ? { alternateName: creator.displayName } : {}),
       image,
       description: creator.creatorProfile?.bio || undefined,
       url,
@@ -103,7 +109,7 @@ export default async function CreatorPage({ params }: Props) {
     <>
       <script
         type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
       />
       <CreatorProfileClient params={params} />
     </>

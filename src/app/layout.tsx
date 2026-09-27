@@ -3,6 +3,7 @@ import { Inter, Poppins } from "next/font/google";
 import "./globals.css";
 import ClientProviders from "@/components/ClientProviders";
 import config from "@/lib/config";
+import { serializeJsonLd } from "@/lib/json-ld";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -77,7 +78,7 @@ export default function RootLayout({
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify({
+            __html: serializeJsonLd({
               "@context": "https://schema.org",
               "@type": "WebSite",
               name: "Genhub",
