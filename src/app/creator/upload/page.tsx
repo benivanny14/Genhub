@@ -33,7 +33,7 @@ import {
 
 export default function UploadPage() {
   const router = useRouter();
-  const { toast } = useToast();
+  const { toast, update: updateToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -121,25 +121,54 @@ export default function UploadPage() {
   /**
    * Send the file with TUS so a dropped mobile connection resumes instead of
    * restarting. `onProgress` is 0..100.
+   *
+   * The transfer also drives one small toast that lives exactly as long as the
+   * upload does: created sticky so it cannot time out mid-transfer, rewritten
+   * with the percentage on every chunk, finished off as a success with a real
+   * duration once the last byte lands. A creator who scrolls away from the
+   * progress bar inside the form still sees how far the upload got — a whole
+   * file can take minutes on a phone, and "it is still going" was previously
+   * only visible in one place on the page.
    */
   async function uploadToBunny(
     file: File,
     credentials: BunnyUploadCredentials,
     onProgress: (percent: number) => void
   ): Promise<boolean> {
+    const label = file.name.length > 28 ? `${file.name.slice(0, 27)}…` : file.name;
+    const toastId = toast("info", `Uploading ${label} — 0%`, 0);
+    const report = (percent: number) => {
+      onProgress(percent);
+      updateToast(toastId, {
+        message: `Uploading ${label} — ${percent}%`,
+        progress: percent,
+      });
+    };
+
     try {
       await uploadFileWithTus(file, credentials, {
-        onProgress: (uploaded, total) =>
-          onProgress(Math.round((uploaded / total) * 100)),
+        onProgress: (uploaded, total) => report(Math.round((uploaded / total) * 100)),
+      });
+      // Done: say so on the same toast, give it a real duration, and let it
+      // clear itself. `progress: 100` first so the bar finishes visibly rather
+      // than snapping away at 99%.
+      updateToast(toastId, {
+        type: "success",
+        message: `${label} uploaded — 100%`,
+        progress: 100,
+        duration: 5000,
       });
       return true;
     } catch (error) {
-      toast(
-        "error",
-        error instanceof TusUploadError
-          ? error.message
-          : "Upload failed. Please try again."
-      );
+      updateToast(toastId, {
+        type: "error",
+        message:
+          error instanceof TusUploadError
+            ? error.message
+            : "Upload failed. Please try again.",
+        progress: undefined,
+        duration: 8000,
+      });
       return false;
     }
   }
@@ -248,9 +277,9 @@ export default function UploadPage() {
             {awaitingProcessing ? (
               <>
                 <p className="text-white/60 mb-2 max-w-md">
-                  Bunny Stream is transcoding your video into the playback
-                  qualities viewers need. It publishes itself the moment it is
-                  ready, and you will get a notification when it goes live.
+                  Your video is being prepared into the playback qualities
+                  viewers need. It publishes itself the moment it is ready, and
+                  you will get a notification when it goes live.
                 </p>
                 <p className="text-white/40 text-sm mb-6">
                   You do not need to keep this page open — processing happens on
