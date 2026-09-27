@@ -180,6 +180,20 @@ describe("GET /api/videos/[id]/stream - what it returns", () => {
     expect(body).not.toContain("\nvideo0.ts");
   });
 
+  it("bounds the authorisation to a playback session, never to forever", async () => {
+    // The signature is what the CDN enforces, so its lifetime is the app's to
+    // set — and the one number that decides whether a URL that leaks is a
+    // nuisance or a permanent key to the file. Two hours covers a long scene and
+    // a seek or two; a token with no near horizon would not.
+    const before = Math.floor(Date.now() / 1000);
+
+    await GET(request(), params());
+
+    const expires = Number(new URL(urls[0]).searchParams.get("expires"));
+    expect(expires).toBeGreaterThanOrEqual(before + 119 * 60);
+    expect(expires).toBeLessThanOrEqual(before + 121 * 60 + 2);
+  });
+
   it("serves the teaser's own folder when asked for the teaser", async () => {
     mocks.videoFindFirst.mockResolvedValue({ ...ROW, price: 5000, teaserBunnyVideoId: TEASER_GUID });
 

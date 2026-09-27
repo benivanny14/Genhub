@@ -23,6 +23,25 @@ import {
   type QualityOption,
 } from "@/lib/quality";
 
+/**
+ * The brand mark: the platform's name over the picture for a moment at the START
+ * of a scene, then gone.
+ *
+ * It replaces the viewer watermark that used to sit here — no email, no phone
+ * number, nothing about the person watching, just the name of the place the clip
+ * came from, so a recording re-shared elsewhere still says where it was watched.
+ *
+ * Only near the beginning: `BRAND_MARK_START_WINDOW_SECONDS` is the playhead the
+ * viewer has to still be inside for it to appear, so somebody resuming an hour in
+ * does not get the logo dropped into the middle of a scene. Shown once per mount,
+ * so seeking back to the start does not bring it up again either.
+ */
+const BRAND_MARK_START_WINDOW_SECONDS = 10;
+/** How long it stays fully visible. */
+const BRAND_MARK_HOLD_MS = 2800;
+/** How long the fade-out lasts; the element unmounts after it. */
+const BRAND_MARK_FADE_MS = 700;
+
 interface VideoPlayerProps {
   src: string; // HLS stream URL
   poster?: string;
@@ -114,6 +133,39 @@ export default function VideoPlayer({
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resumedRef = useRef(false);
+
+  // `hidden` -> `on` -> `off` (fading out) -> `hidden`. Three states rather than
+  // a boolean so the fade has somewhere to happen: a component that unmounts the
+  // instant it is dismissed disappears rather than fades.
+  const [brandMark, setBrandMark] = useState<"hidden" | "on" | "off">("hidden");
+  /** Once per mount, whatever the viewer does with the scrub bar afterwards. */
+  const brandMarkShown = useRef(false);
+  const brandMarkTimers = useRef<NodeJS.Timeout[]>([]);
+
+  useEffect(
+    () => () => {
+      brandMarkTimers.current.forEach(clearTimeout);
+    },
+    []
+  );
+
+  /**
+   * Show the mark, if this playback started at the beginning of the scene.
+   *
+   * Called from `onPlay` rather than from mount, because the first frame of a
+   * paused player is the poster, and branding the poster is not the ask — the
+   * request is the mark at the start of the VIDEO.
+   */
+  const maybeShowBrandMark = useCallback((video: HTMLVideoElement) => {
+    if (brandMarkShown.current) return;
+    if (video.currentTime > BRAND_MARK_START_WINDOW_SECONDS) return;
+    brandMarkShown.current = true;
+    setBrandMark("on");
+    brandMarkTimers.current = [
+      setTimeout(() => setBrandMark("off"), BRAND_MARK_HOLD_MS),
+      setTimeout(() => setBrandMark("hidden"), BRAND_MARK_HOLD_MS + BRAND_MARK_FADE_MS),
+    ];
+  }, []);
 
   // =============================================================================
   // Resume playback from a saved position
@@ -528,7 +580,10 @@ export default function VideoPlayer({
         }}
         onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
         onDurationChange={(e) => setDuration(e.currentTarget.duration)}
-        onPlay={() => setIsPlaying(true)}
+        onPlay={(e) => {
+          setIsPlaying(true);
+          maybeShowBrandMark(e.currentTarget);
+        }}
         onPause={() => setIsPlaying(false)}
         onEnded={onEnded}
       >
@@ -577,6 +632,25 @@ export default function VideoPlayer({
           >
             Try again
           </button>
+        </div>
+      )}
+
+      {/* Brand mark — where this came from, never who is watching. It sits
+          above the picture and below the controls, and it takes no pointer
+          events, so a tap while it is up still reaches the player. */}
+      {brandMark !== "hidden" && (
+        <div
+          aria-hidden="true"
+          className={`pointer-events-none absolute inset-0 z-10 flex items-center justify-center transition-opacity duration-700 ${
+            brandMark === "off" ? "opacity-0" : "opacity-100"
+          }`}
+        >
+          <div className="flex items-center gap-2.5 rounded-2xl bg-black/30 px-4 py-2.5 backdrop-blur-sm">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600">
+              <Play className="h-4 w-4 fill-white text-white" />
+            </div>
+            <span className="text-gradient font-display text-xl font-bold">Genhub</span>
+          </div>
         </div>
       )}
 

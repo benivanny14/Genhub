@@ -51,6 +51,28 @@ describe("the video player", () => {
   });
 });
 
+describe("the brand mark", () => {
+  it("carries the platform's name, which is what a re-share should still say", () => {
+    expect(player).toContain("Genhub");
+  });
+
+  it("is shown only at the start of a scene", () => {
+    // The window is what keeps the logo out of the middle of a video somebody
+    // resumed, so it is pinned rather than left to the call site.
+    expect(player).toContain("BRAND_MARK_START_WINDOW_SECONDS");
+    expect(player).toContain("BRAND_MARK_HOLD_MS");
+    // Once per mount: seeking back to the beginning must not bring it back.
+    expect(player).toContain("brandMarkShown");
+  });
+
+  it("takes no pointer events and is hidden from assistive tech", () => {
+    // It sits over the picture for three seconds; a tap during that time has to
+    // reach the player, and a screen reader has nothing to gain from "Genhub".
+    expect(player).toContain("pointer-events-none absolute inset-0 z-10");
+    expect(player).toContain('aria-hidden="true"');
+  });
+});
+
 describe("the stylesheet", () => {
   it("carries no leftover watermark rule", () => {
     // Dead CSS is how a removed feature gets restored by accident: the next
