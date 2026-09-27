@@ -169,6 +169,15 @@ describe("GET /api/creator/balance", () => {
     expect(body.data.nextReleaseAt).toBe(expected);
   });
 
+  it("reports what cleared the holding period this week", async () => {
+    mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 4_321 } });
+
+    const res = await get();
+    const body = await res.json();
+
+    expect(body.data.releasedThisWeek).toBe(4_321);
+  });
+
   it("says nothing is clearing when no charge is still held", async () => {
     mocks.txFindFirst.mockResolvedValue(null);
 

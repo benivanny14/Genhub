@@ -145,6 +145,8 @@ export async function sendPasswordResetEmail(
 export interface EarningsDigestParams {
   to: string;
   displayName: string;
+  /** "sw" (Kiswahili, the default audience) or "en". */
+  locale: string;
   /** Creator cut that finished its holding period in the last seven days. */
   clearedThisWeek: number;
   /** Still inside the holding window. */
@@ -161,6 +163,51 @@ export interface EarningsDigestParams {
 const tzs = (amount: number) => `TZS ${amount.toLocaleString("en-US")}`;
 
 /**
+ * The digest in both languages, chosen by the creator's own setting.
+ *
+ * Kiswahili is the default (it is the locale the account is born with), because
+ * an English-only explanation of the 14-day hold is one the audience this rule
+ * confuses does not read.
+ */
+const DIGEST_COPY = {
+  sw: {
+    subject: (headline: string) => `Mapato yako Genhub: ${headline}`,
+    greeting: (name: string) =>
+      `${name ? `${name}, ` : ""}hii ni wiki yako Genhub.`,
+    clearedHeadline: (a: string) => `${a} yamefunguka`,
+    availableHeadline: (a: string) => `${a} tayari kutoa`,
+    pendingHeadline: (a: string) => `${a} yanakuja`,
+    clearedLabel: (days: number) => `Yaliyofunguka kwenye kipindi cha siku ${days}`,
+    availableLabel: "Yanayoweza kutolewa (available)",
+    pendingLabel: "Yaliyoshikiliwa (pending)",
+    nextPrefix: "Kufunguka ijayo",
+    nothingHeld: "Kufunguka ijayo: hakuna kilichoshikiliwa kwa sasa",
+    explain: (days: number, min: string) =>
+      `Kila malipo hushikiliwa siku ${days} kuanzia siku inayolipwa, hivyo pesa hufunguka yenyewe kadri muda unavyopita. Kutoa hakusubiri siku ${days} — unaweza kutoa kiasi chochote kilichofunguka mara kifikie ${min}.`,
+    cta: "Fungua dashboard yako",
+  },
+  en: {
+    subject: (headline: string) => `Genhub earnings: ${headline}`,
+    greeting: (name: string) => `${name ? `${name}, ` : ""}here is your week on Genhub.`,
+    clearedHeadline: (a: string) => `${a} just cleared`,
+    availableHeadline: (a: string) => `${a} ready to withdraw`,
+    pendingHeadline: (a: string) => `${a} on its way`,
+    clearedLabel: (days: number) => `Cleared the ${days}-day hold this week`,
+    availableLabel: "Available to withdraw",
+    pendingLabel: "Still held (pending)",
+    nextPrefix: "Next release",
+    nothingHeld: "Next release: nothing is being held right now",
+    explain: (days: number, min: string) =>
+      `Every sale is held ${days} days from the day it is paid, so money keeps unlocking as those windows close. Withdrawals do not wait ${days} days — you can withdraw any available balance once it reaches ${min}.`,
+    cta: "Open your dashboard",
+  },
+} as const;
+
+function digestCopy(locale: string) {
+  return locale === "en" ? DIGEST_COPY.en : DIGEST_COPY.sw;
+}
+
+/**
  * A Monday-morning summary, not a receipt: what cleared, what is still held and
  * when it unlocks. The 14-day rule is spelled out in the body because this email
  * is the one place a creator reads it without opening the dashboard.
@@ -169,61 +216,60 @@ export async function sendEarningsDigestEmail(
   params: EarningsDigestParams
 ): Promise<MailResult> {
   const home = config.appUrl;
+  const copy = digestCopy(params.locale);
   const where =
     params.clearedThisWeek > 0 ? "cleared" : params.available > 0 ? "available" : "held";
   const headline =
     where === "cleared"
-      ? `${tzs(params.clearedThisWeek)} just cleared`
+      ? copy.clearedHeadline(tzs(params.clearedThisWeek))
       : where === "available"
-        ? `${tzs(params.available)} ready to withdraw`
-        : `${tzs(params.pending)} on its way`;
+        ? copy.availableHeadline(tzs(params.available))
+        : copy.pendingHeadline(tzs(params.pending));
 
+  const explain = copy.explain(params.holdingDays, tzs(params.minWithdrawal));
   const nextLine = params.nextReleaseAt
-    ? `Next release: ${new Date(params.nextReleaseAt).toLocaleDateString("en-GB", {
+    ? `${copy.nextPrefix}: ${new Date(params.nextReleaseAt).toLocaleDateString("en-GB", {
         day: "numeric",
         month: "short",
         year: "numeric",
       })}`
-    : "Next release: nothing is being held right now";
+    : copy.nothingHeld;
 
   const text = [
-    `${params.displayName || "Creator"}, here is your week on Genhub.`,
+    copy.greeting(params.displayName || "Creator"),
     "",
-    `Cleared the 14-day hold this week: ${tzs(params.clearedThisWeek)}`,
-    `Available to withdraw: ${tzs(params.available)}`,
-    `Still held (pending): ${tzs(params.pending)}`,
+    `${copy.clearedLabel(params.holdingDays)}: ${tzs(params.clearedThisWeek)}`,
+    `${copy.availableLabel}: ${tzs(params.available)}`,
+    `${copy.pendingLabel}: ${tzs(params.pending)}`,
     nextLine,
     "",
-    `Every sale is held ${params.holdingDays} days from the day it is paid, so money keeps unlocking as those windows close. Withdrawals do not wait ${params.holdingDays} days — you can withdraw any available balance once it reaches ${tzs(params.minWithdrawal)}.`,
+    explain,
     "",
-    `Open your dashboard: ${home}/creator`,
+    `${copy.cta}: ${home}/creator`,
   ].join("\n");
 
   return sendMail({
     to: params.to,
-    subject: `Genhub earnings: ${headline}`,
+    subject: copy.subject(headline),
     text,
     html: `
       <div style="font-family:Arial,Helvetica,sans-serif;background:#0b0b14;padding:32px">
         <div style="max-width:520px;margin:auto;background:#15151f;border:1px solid #2a2a3d;border-radius:16px;padding:32px">
           <div style="font-size:24px;font-weight:bold;color:#a78bfa;margin-bottom:16px">Genhub</div>
           <p style="color:#d1d5db;font-size:15px;line-height:1.6">
-            ${params.displayName ? `${params.displayName}, ` : ""}here is your week on Genhub.
+            ${copy.greeting(params.displayName || "Creator")}
           </p>
           <p style="color:#e5e7eb;font-size:18px;font-weight:bold;margin:20px 0">${headline}</p>
           <table style="width:100%;border-collapse:collapse;color:#d1d5db;font-size:14px">
-            <tr><td style="padding:6px 0">Cleared the ${params.holdingDays}-day hold this week</td><td style="padding:6px 0;text-align:right;color:#34d399;font-weight:bold">${tzs(params.clearedThisWeek)}</td></tr>
-            <tr><td style="padding:6px 0">Available to withdraw</td><td style="padding:6px 0;text-align:right;color:#34d399;font-weight:bold">${tzs(params.available)}</td></tr>
-            <tr><td style="padding:6px 0">Still held (pending)</td><td style="padding:6px 0;text-align:right;color:#fbbf24;font-weight:bold">${tzs(params.pending)}</td></tr>
+            <tr><td style="padding:6px 0">${copy.clearedLabel(params.holdingDays)}</td><td style="padding:6px 0;text-align:right;color:#34d399;font-weight:bold">${tzs(params.clearedThisWeek)}</td></tr>
+            <tr><td style="padding:6px 0">${copy.availableLabel}</td><td style="padding:6px 0;text-align:right;color:#34d399;font-weight:bold">${tzs(params.available)}</td></tr>
+            <tr><td style="padding:6px 0">${copy.pendingLabel}</td><td style="padding:6px 0;text-align:right;color:#fbbf24;font-weight:bold">${tzs(params.pending)}</td></tr>
           </table>
           <p style="color:#9ca3af;font-size:13px;margin-top:16px">${nextLine}</p>
-          <p style="color:#9ca3af;font-size:13px;line-height:1.6">
-            Every sale is held ${params.holdingDays} days from the day it is paid, so money keeps unlocking as those windows close.
-            Withdrawals do not wait ${params.holdingDays} days — withdraw any available balance once it reaches ${tzs(params.minWithdrawal)}.
-          </p>
+          <p style="color:#9ca3af;font-size:13px;line-height:1.6">${explain}</p>
           <p style="text-align:center;margin:28px 0">
             <a href="${home}/creator" style="background:#7c3aed;color:#fff;padding:14px 28px;border-radius:999px;text-decoration:none;font-weight:bold">
-              Open your dashboard
+              ${copy.cta}
             </a>
           </p>
         </div>

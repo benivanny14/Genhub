@@ -164,6 +164,24 @@ export async function GET(request: NextRequest) {
       ? new Date(oldestHeld.createdAt.getTime() + holdingMs).toISOString()
       : null;
 
+    // What finished its holding period in the last seven days. Same window the
+    // weekly digest reports, so the email and the dashboard cannot disagree
+    // about how much cleared this week.
+    const weekMs = 7 * 86_400_000;
+    const clearedAgg = await prisma.transaction.aggregate({
+      where: {
+        creatorId: auth.userId,
+        status: "SUCCESS",
+        creatorCut: { not: null },
+        createdAt: {
+          gt: new Date(Date.now() - holdingMs - weekMs),
+          lte: new Date(Date.now() - holdingMs),
+        },
+      },
+      _sum: { creatorCut: true },
+    });
+    const releasedThisWeek = clearedAgg._sum.creatorCut ?? 0;
+
     return api.success({
       balance: balance || {
         pendingBalance: 0,
@@ -174,6 +192,7 @@ export async function GET(request: NextRequest) {
       // the creator sees the number, not only in a policy page they never open.
       holdingPeriodDays: config.business.holdingPeriodDays,
       nextReleaseAt,
+      releasedThisWeek,
       todayEarnings: todayTransactions._sum.creatorCut || 0,
       totalViews,
       videoStats: enrichedVideos,

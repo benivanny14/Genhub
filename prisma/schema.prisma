@@ -171,6 +171,10 @@ model User {
   // this column is both the cadence and the at-most-once guard (the job claims
   // it with a conditional update before it sends).
   lastEarningsDigestAt      DateTime?
+  // Whether the weekly earnings digest is sent to this creator. ON by default
+  // (opt-out), so an existing creator keeps getting the one email that explains
+  // the 14-day hold; a creator who does not want it can turn it off.
+  earningsDigestEnabled     Boolean  @default(true)
   locale       String   @default("sw") // sw = Kiswahili, en = English
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())

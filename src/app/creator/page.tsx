@@ -63,6 +63,8 @@ interface CreatorData {
   holdingPeriodDays?: number;
   /** When the oldest still-held earning clears. Null when nothing is held. */
   nextReleaseAt?: string | null;
+  /** Creator cut that finished its holding period in the last seven days. */
+  releasedThisWeek?: number;
   todayEarnings: number;
   totalViews: number;
   videoStats: {
@@ -1025,6 +1027,12 @@ export default function CreatorDashboard() {
             <div className="space-y-2">
               <p className="font-display font-bold">
                 Pesa yako inafika lini? (siku {holdingDays})
+              </p>
+              <p className="text-sm text-white/70">
+                <span className="text-emerald-400 font-bold">
+                  {formatTZS(creatorData?.releasedThisWeek || 0)}
+                </span>{" "}
+                ilifunguka wiki hii · released this week
               </p>
               <ul className="text-sm text-white/60 space-y-1.5 list-disc pl-5">
                 <li>

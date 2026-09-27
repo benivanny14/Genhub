@@ -35,6 +35,8 @@ export async function GET(request: NextRequest) {
         // upload screen compares it with CREATOR_GUIDELINES_VERSION to decide
         // whether to show the guidelines again.
         guidelinesAcceptedVersion: true,
+        // Creator preference: the weekly earnings digest (opt-out).
+        earningsDigestEnabled: true,
         createdAt: true,
         creatorBalance: {
           select: {

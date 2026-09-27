@@ -51,6 +51,7 @@ function creator(over: Record<string, unknown> = {}) {
     id: "creator-1",
     email: "creator@genhub.test",
     displayName: "Amina",
+    locale: "sw",
     lastEarningsDigestAt: null,
     creatorBalance: {
       pendingBalance: 7_000,
@@ -82,6 +83,17 @@ describe("sendDueEarningsDigests", () => {
     expect(params.pending).toBe(7_000);
     expect(params.available).toBe(12_000);
     expect(params.holdingDays).toBe(config.business.holdingPeriodDays);
+    // The creator's own language is carried through, so the email that explains
+    // the hold is in the language the rule confuses.
+    expect(params.locale).toBe("sw");
+  });
+
+  it("only considers creators who have not opted out", async () => {
+    await sendDueEarningsDigests(NOW);
+
+    const where = mocks.userFindMany.mock.calls[0][0].where;
+    expect(where.role).toBe("CREATOR");
+    expect(where.earningsDigestEnabled).toBe(true);
   });
 
   it("claims the week before it sends, so two pokes cannot both email", async () => {

@@ -47,6 +47,15 @@ export async function PATCH(request: NextRequest) {
     const updates: Record<string, unknown> = {};
     if (body.displayName !== undefined) updates.displayName = body.displayName;
     if (body.locale !== undefined) updates.locale = body.locale;
+    // The weekly earnings digest is opt-out, so this only ever turns it off (or
+    // back on). Coerced to a boolean so a stray string cannot silently disable
+    // the one email that explains the 14-day hold.
+    if (body.earningsDigestEnabled !== undefined) {
+      if (typeof body.earningsDigestEnabled !== "boolean") {
+        return api.validation("earningsDigestEnabled must be true or false");
+      }
+      updates.earningsDigestEnabled = body.earningsDigestEnabled;
+    }
     if (body.avatarUrl !== undefined) {
       // `avatarUrl: string` was taken straight from the request body, so any
       // string at all could be stored and then rendered as an <img src>. An
@@ -75,6 +84,7 @@ export async function PATCH(request: NextRequest) {
         displayName: true,
         locale: true,
         avatarUrl: true,
+        earningsDigestEnabled: true,
       },
     });
 

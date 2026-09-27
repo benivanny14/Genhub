@@ -31,7 +31,12 @@ export async function releaseMatureEarnings(
 
   const balances = await prisma.creatorBalance.findMany({
     where: creatorId ? { creatorId } : {},
-    select: { creatorId: true, pendingBalance: true, releasedTotal: true },
+    select: {
+      creatorId: true,
+      pendingBalance: true,
+      availableBalance: true,
+      releasedTotal: true,
+    },
   });
 
   let released = 0;
@@ -100,6 +105,36 @@ export async function releaseMatureEarnings(
           "[Earning Release] Notification failed:",
           (notifyError as Error)?.message
         );
+      }
+
+      // A creator whose withdrawable balance just crossed the floor can now
+      // actually take money out. Firing on the CROSSING (below before, at or
+      // above after) rather than on "is above the minimum" is what keeps this
+      // from nagging on every release — and it fires again only if a payout
+      // drops them back below and they earn past it once more.
+      const minPayout = config.business.minPayoutAmount;
+      if (
+        balance.availableBalance < minPayout &&
+        balance.availableBalance + amount >= minPayout
+      ) {
+        try {
+          await prisma.notification.create({
+            data: {
+              userId: balance.creatorId,
+              title: "You can withdraw now 💸",
+              message:
+                `Your available balance reached TZS ${minPayout.toLocaleString("en-US")}. ` +
+                "You can request a withdrawal to M-Pesa, Tigo Pesa, Airtel Money or your bank.",
+              type: "success",
+              link: "/creator",
+            },
+          });
+        } catch (nudgeError) {
+          console.error(
+            "[Earning Release] Withdrawal nudge failed:",
+            (nudgeError as Error)?.message
+          );
+        }
       }
     }
   }

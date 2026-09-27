@@ -50,11 +50,14 @@ export async function sendDueEarningsDigests(
   const holdingMs = holdingDays * 86_400_000;
 
   const creators = await prisma.user.findMany({
-    where: { role: "CREATOR", email: { not: null } },
+    // Opt-out: the digest is on unless a creator turned it off, and it needs an
+    // address to reach in the first place.
+    where: { role: "CREATOR", email: { not: null }, earningsDigestEnabled: true },
     select: {
       id: true,
       email: true,
       displayName: true,
+      locale: true,
       lastEarningsDigestAt: true,
       creatorBalance: {
         select: {
@@ -149,6 +152,7 @@ export async function sendDueEarningsDigests(
       await sendEarningsDigestEmail({
         to: creator.email!,
         displayName: creator.displayName ?? "",
+        locale: creator.locale,
         clearedThisWeek,
         pending: balance.pendingBalance,
         available: balance.availableBalance,

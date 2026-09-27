@@ -34,6 +34,7 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+import config from "@/lib/config";
 import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
 
 const CREATOR = "creator-1";
@@ -41,7 +42,7 @@ const CREATOR = "creator-1";
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.balanceFindMany.mockResolvedValue([
-    { creatorId: CREATOR, pendingBalance: 5000, releasedTotal: 0 },
+    { creatorId: CREATOR, pendingBalance: 5000, releasedTotal: 0, availableBalance: 0 },
   ]);
   mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 5000 } });
   mocks.balanceUpdateMany.mockResolvedValue({ count: 1 });
@@ -79,6 +80,43 @@ describe("releaseMatureEarnings notification", () => {
 
     expect(result.released).toBe(0);
     expect(mocks.notificationCreate).not.toHaveBeenCalled();
+  });
+
+  it("nudges the creator the moment their balance crosses the withdrawal floor", async () => {
+    // Below the floor before, at or above it after: this is the crossing, and it
+    // is the one moment the withdrawal actually becomes possible.
+    const floor = config.business.minPayoutAmount;
+    mocks.balanceFindMany.mockResolvedValue([
+      {
+        creatorId: CREATOR,
+        pendingBalance: 5000,
+        releasedTotal: 0,
+        availableBalance: floor - 5000,
+      },
+    ]);
+
+    await releaseMatureEarnings();
+
+    expect(mocks.notificationCreate).toHaveBeenCalledTimes(2);
+    const nudge = mocks.notificationCreate.mock.calls[1][0].data;
+    expect(nudge.userId).toBe(CREATOR);
+    expect(nudge.message).toContain(floor.toLocaleString("en-US"));
+  });
+
+  it("does not nudge a creator who is already above the floor", async () => {
+    mocks.balanceFindMany.mockResolvedValue([
+      {
+        creatorId: CREATOR,
+        pendingBalance: 5000,
+        releasedTotal: 0,
+        availableBalance: config.business.minPayoutAmount + 10_000,
+      },
+    ]);
+
+    await releaseMatureEarnings();
+
+    // Only the release notification, not a repeated "you can withdraw" nudge.
+    expect(mocks.notificationCreate).toHaveBeenCalledTimes(1);
   });
 
   it("still releases the money if the notification itself fails", async () => {

@@ -37,6 +37,8 @@ interface UserData {
   walletBalance: number;
   kycStatus: string;
   avatarUrl: string | null;
+  /** Weekly earnings digest preference (creators only). Opt-out. */
+  earningsDigestEnabled?: boolean;
 }
 
 interface ReferralRow {
@@ -71,6 +73,8 @@ export default function ProfilePage() {
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [locale, setLocale] = useState("en");
+  const [digestEnabled, setDigestEnabled] = useState(true);
+  const [savingDigest, setSavingDigest] = useState(false);
 
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -110,6 +114,7 @@ export default function ProfilePage() {
         setEmail(data.data.email || "");
         setPhone(data.data.phone || "");
         setLocale(data.data.locale || "en");
+        setDigestEnabled(data.data.earningsDigestEnabled !== false);
         setAvatarUrl(data.data.avatarUrl || null);
       } else {
         router.push("/login");
@@ -134,6 +139,35 @@ export default function ProfilePage() {
     fetchUser();
     fetchReferral();
   }, [fetchUser, fetchReferral]);
+
+  /** Flip the weekly earnings digest immediately; it is independent of Save. */
+  async function toggleDigest() {
+    const next = !digestEnabled;
+    setSavingDigest(true);
+    try {
+      const res = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ earningsDigestEnabled: next }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setDigestEnabled(next);
+        toast(
+          "success",
+          next
+            ? "Weekly earnings email turned on"
+            : "Weekly earnings email turned off"
+        );
+      } else {
+        toast("error", data.error || "Could not save that");
+      }
+    } catch {
+      toast("error", "Network error");
+    } finally {
+      setSavingDigest(false);
+    }
+  }
 
   async function handleProfileUpdate() {
     setSaving(true);
@@ -440,6 +474,44 @@ export default function ProfilePage() {
               <option value="sw">Kiswahili</option>
             </select>
           </div>
+
+          {/* Creators only: the one email that explains the 14-day hold. Opt-out,
+              so a creator who does not want it can switch it off. */}
+          {user?.role === "CREATOR" && (
+            <div className={cn("rounded-xl border p-4", isLight ? "border-gray-200" : "border-white/10")}>
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <Mail className={cn("w-4 h-4 mt-0.5 shrink-0", isLight ? "text-gray-400" : "text-white/50")} />
+                  <div>
+                    <p className="text-sm font-medium">Weekly earnings email</p>
+                    <p className={cn("text-xs leading-relaxed", isLight ? "text-gray-500" : "text-white/50")}>
+                      One email a week: what cleared the 14-day hold and is now available to
+                      withdraw, plus what is still pending and when it unlocks.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleDigest}
+                  disabled={savingDigest}
+                  role="switch"
+                  aria-checked={digestEnabled}
+                  aria-label="Weekly earnings email"
+                  className={cn(
+                    "relative w-12 h-7 rounded-full transition shrink-0",
+                    digestEnabled ? "bg-emerald-500" : isLight ? "bg-gray-300" : "bg-white/20"
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-1 w-5 h-5 rounded-full bg-white transition-all",
+                      digestEnabled ? "left-6" : "left-1"
+                    )}
+                  />
+                </button>
+              </div>
+            </div>
+          )}
 
           <button onClick={handleProfileUpdate} disabled={saving} className="btn-brand flex items-center gap-2">
             <Save className="w-4 h-4" />
