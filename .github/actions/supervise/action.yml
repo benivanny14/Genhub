@@ -15,6 +15,14 @@
 # The supervisor never runs `renew-subscriptions` (it can send a USSD charge
 # request to a fan's phone — that worker keeps its own schedule and its own
 # hourly workflow). See PRODUCTION.md §4.0.4.
+#
+# EVERY CALLER MUST `actions/checkout` FIRST. A local action is resolved from
+# the runner's workspace, and the workspace is empty until a checkout fills it:
+# without one the job fails in under a second with "Can't find 'action.yml' ...
+# Did you forget to run actions/checkout before running your local action?",
+# before this file is even read. Six workflows call this action; each one has
+# the step, and src/tests/workflow-local-actions.test.ts fails the build if a
+# new caller forgets it.
 # =============================================================================
 
 name: Supervise the schedules

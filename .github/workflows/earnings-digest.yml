@@ -23,6 +23,9 @@ on:
     - cron: "0 * * * *"
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   digest:
     runs-on: ubuntu-latest
@@ -43,6 +46,13 @@ jobs:
           curl -fsS -X POST "$BASE_URL/api/cron/earnings-digest" \
             -H "x-cron-secret: $CRON_SECRET" \
             --max-time 60
+
+      # A LOCAL action is read from the runner's workspace, and GitHub only
+      # fills that workspace when asked: without this step the job dies in under
+      # a second with "Can't find 'action.yml' ... Did you forget to run
+      # actions/checkout before running your local action?" — before a single
+      # request is made. The long version of why is in supervisor.yml.
+      - uses: actions/checkout@v4
 
       # Same scarce-delivery trick as the other worker workflows: this run also
       # pokes every worker that has fallen behind.

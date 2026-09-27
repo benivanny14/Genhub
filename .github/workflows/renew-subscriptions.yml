@@ -26,6 +26,9 @@ on:
     - cron: "15 * * * *"
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   renew:
     runs-on: ubuntu-latest
@@ -48,6 +51,13 @@ jobs:
           curl -fsS -X POST "$BASE_URL/api/cron/renew-subscriptions" \
             -H "x-cron-secret: $CRON_SECRET" \
             --max-time 300
+
+      # A LOCAL action is read from the runner's workspace, and GitHub only
+      # fills that workspace when asked: without this step the job dies in under
+      # a second with "Can't find 'action.yml' ... Did you forget to run
+      # actions/checkout before running your local action?" — before a single
+      # request is made. The long version of why is in supervisor.yml.
+      - uses: actions/checkout@v4
 
       # This delivery also runs every worker that has fallen behind (§4.0.4).
       # Renewals themselves are NOT run by the supervisor — only here, on their

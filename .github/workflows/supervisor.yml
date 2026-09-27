@@ -35,10 +35,36 @@ on:
     - cron: "*/10 * * * *"
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   supervise:
     runs-on: ubuntu-latest
     steps:
+      # THE LONG VERSION of why this step exists — every other workflow that
+      # calls ./.github/actions/supervise carries a one-line pointer to here.
+      #
+      # A local action (`uses: ./path`) is read from the RUNNER'S WORKSPACE, and
+      # GitHub does not put anything there unless `actions/checkout` asks it to.
+      # Without this step the run fails in under a second, before a single
+      # request is made, with:
+      #
+      #   Can't find 'action.yml', 'action.yaml' or 'Dockerfile' under
+      #   '.../.github/actions/supervise'. Did you forget to run actions/checkout
+      #   before running your local action?
+      #
+      # That is what every scheduled run of this repository looked like: the five
+      # workers and this file all red while the endpoints behind them were
+      # healthy, `backgroundJobs` read `never`, and the watchdog's alarm was the
+      # only thing telling the truth. Nothing inside the app is broken by this —
+      # it is a workflow that cannot start.
+      #
+      # `contents: read` above is the only permission a checkout needs, and it is
+      # stated rather than inherited so the requirement is visible next to the
+      # step that has it.
+      - uses: actions/checkout@v4
+
       # The same step the four worker workflows end with, so the guard and the
       # endpoint have one home: .github/actions/supervise/action.yml
       - name: Run whatever the schedule missed
