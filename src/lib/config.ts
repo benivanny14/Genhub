@@ -127,6 +127,14 @@ const config = {
     storageAccessKey: process.env.BUNNY_STORAGE_ACCESS_KEY || "",
     cdnHostname: process.env.BUNNY_CDN_HOSTNAME || "",
     tokenSecret: process.env.BUNNY_TOKEN_SECRET || "",
+    // Stream webhook signing secret. Bunny signs every Stream callback with
+    // HMAC-SHA256 over the raw body, keyed on the library's READ-ONLY API key
+    // (see /api/webhooks/bunny and lib/bunny-webhook.ts). It is a SEPARATE value
+    // from BUNNY_STREAM_API_KEY: that one is the read-write management key the
+    // server uses, this one only ever verifies inbound callbacks, so it can be
+    // rotated without breaking uploads. Empty disables signature checks in dev
+    // and fails the route closed in production.
+    webhookSecret: process.env.BUNNY_STREAM_WEBHOOK_SECRET || "",
   },
 
   // HarakaPay — the only payment gateway (USSD push via mobile money)

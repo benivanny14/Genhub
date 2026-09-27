@@ -37,6 +37,16 @@ export default function UploadPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  // True only once the bytes are actually stored at Bunny. `bunnyVideoId` is set
+  // earlier — when the slot is reserved — so it cannot be what the UI trusts to
+  // know the upload finished, or a failed transfer would look like a success.
+  const [uploadReady, setUploadReady] = useState(false);
+  // A failed transfer keeps its file AND credentials, so Retry re-sends into the
+  // SAME reserved slot instead of reserving a new one and orphaning this one.
+  const [failedUpload, setFailedUpload] = useState<{
+    file: File;
+    credentials: BunnyUploadCredentials;
+  } | null>(null);
   const [success, setSuccess] = useState(false);
   const [awaitingProcessing, setAwaitingProcessing] = useState(false);
   // The rules changed since this account last accepted them, so the upload
@@ -202,20 +212,36 @@ export default function UploadPage() {
       toast("error", sizeError);
       return;
     }
+    setFailedUpload(null);
     const credentials = await initiateUpload();
     if (!credentials) return;
+    await runVideoUpload(file, credentials);
+  }
+
+  /**
+   * Send one file into one already-reserved slot, and remember the pair if it
+   * fails.
+   *
+   * The old flow cleared the reserved id on any failure, which forced a full
+   * re-pick AND reserved a second slot while the first sat empty in the library
+   * — the "it removes itself, upload it again" the creator saw. Keeping the
+   * pair means Retry continues into the same slot.
+   */
+  async function runVideoUpload(file: File, credentials: BunnyUploadCredentials) {
+    setFailedUpload(null);
     const uploaded = await uploadToBunny(file, credentials, setUploadProgress);
-    if (!uploaded) {
-      // The slot is empty, so let the creator pick a file again instead of
-      // leaving them stuck on a reserved video id.
-      setBunnyVideoId("");
+    if (uploaded) {
+      setUploadProgress(100);
+      setUploadReady(true);
+    } else {
       setUploadProgress(0);
+      setFailedUpload({ file, credentials });
     }
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!bunnyVideoId || !title) return;
+    if (!uploadReady || !bunnyVideoId || !title) return;
 
     setUploading(true);
     try {
@@ -282,9 +308,9 @@ export default function UploadPage() {
                   you will get a notification when it goes live.
                 </p>
                 <p className="text-white/40 text-sm mb-6">
-                  You do not need to keep this page open — processing happens on
-                  our servers. You can also publish it early from your dashboard
-                  if you would rather not wait.
+                  You do not need to keep this page open — we keep working on it
+                  for you. You can also publish it early from your dashboard if
+                  you would rather not wait.
                 </p>
               </>
             ) : (
@@ -296,7 +322,17 @@ export default function UploadPage() {
               <Link href="/creator" className="btn-ghost">
                 Back to Dashboard
               </Link>
-              <button onClick={() => { setSuccess(false); setTitle(""); setBunnyVideoId(""); }} className="btn-brand">
+              <button
+                onClick={() => {
+                  setSuccess(false);
+                  setTitle("");
+                  setBunnyVideoId("");
+                  setUploadReady(false);
+                  setUploadProgress(0);
+                  setFailedUpload(null);
+                }}
+                className="btn-brand"
+              >
                 Upload Another Video
               </button>
             </div>
@@ -427,7 +463,7 @@ export default function UploadPage() {
 
         <form onSubmit={handleSubmit} className="glass-card p-6 space-y-5">
           {/* Video File */}
-          {!bunnyVideoId ? (
+          {!uploadReady ? (
             <div>
               <label className="text-sm text-white/60 mb-2 block">Select Video</label>
               <label className="border-2 border-dashed border-white/20 rounded-2xl p-8 text-center cursor-pointer hover:border-brand-500/50 transition">
@@ -448,6 +484,9 @@ export default function UploadPage() {
                   type="file"
                   accept="video/*"
                   className="hidden"
+                  // Locked while a transfer is running so a second pick cannot
+                  // start a second upload into the same slot.
+                  disabled={uploadProgress > 0 && uploadProgress < 100}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     // Reset so choosing the same file again still fires.
@@ -469,6 +508,21 @@ export default function UploadPage() {
                   <p className="text-xs text-white/50 mt-1 text-center">
                     Uploading... {uploadProgress}%
                   </p>
+                </div>
+              )}
+              {failedUpload && (
+                <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <p className="text-xs text-amber-200/80">
+                    The upload was interrupted before it finished. Your video is still
+                    reserved — try again, or pick a different file.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void runVideoUpload(failedUpload.file, failedUpload.credentials)}
+                    className="btn-ghost text-xs shrink-0"
+                  >
+                    Retry upload
+                  </button>
                 </div>
               )}
             </div>
@@ -744,7 +798,7 @@ export default function UploadPage() {
 
           <button
             type="submit"
-            disabled={uploading || !bunnyVideoId || !title || !complianceAttested}
+            disabled={uploading || !uploadReady || !title || !complianceAttested}
             className="btn-brand w-full"
           >
             {uploading ? "Creating..." : "Create Video"}

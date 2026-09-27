@@ -63,17 +63,20 @@ describe("checklist integrity", () => {
     const manual = SETUP_ITEMS.filter((i) => !i.key);
 
     expect(SETUP_GROUPS.length).toBeGreaterThan(0);
-    expect(itemsWithKeys.length).toBe(17);
-    // Two steps are work in someone else's dashboard, not a variable: the
-    // HarakaPay float, and the Bunny pull zone's Allowed Referrers list — which
+    expect(itemsWithKeys.length).toBe(18);
+    // Three steps are work in someone else's dashboard, not a variable: the
+    // HarakaPay float, the Bunny pull zone's Allowed Referrers list — which
     // refuses the manifest and every segment of any host it does not name, so a
-    // missing entry there is a video that only spins (see probeSignedPlayback).
-    expect(manual).toHaveLength(2);
+    // missing entry there is a video that only spins (see probeSignedPlayback) —
+    // and the library's Webhook URL, which is what makes a finished encode go
+    // live in seconds rather than at the next poll.
+    expect(manual).toHaveLength(3);
     const manualText = manual
       .map((i) => [i.title, ...(i.steps || [])].join(" "))
       .join(" ");
     expect(manualText).toMatch(/float/i);
     expect(manualText).toMatch(/Referrers/i);
+    expect(manualText).toMatch(/webhook/i);
   });
 
   it("never lists the same variable twice", () => {

@@ -9,6 +9,8 @@ import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import Image from "next/image";
 import ImageCropper from "@/components/ImageCropper";
+import RowMenu from "@/components/RowMenu";
+import { displayHandle } from "@/lib/usernames";
 import {
   Wallet,
   Eye,
@@ -125,7 +127,12 @@ interface CreatorData {
       createdAt: string;
       clearsAt: string;
       held: boolean;
-      sender: { id: string; displayName: string | null; avatarUrl: string | null };
+      sender: {
+        id: string;
+        username: string | null;
+        displayName: string | null;
+        avatarUrl: string | null;
+      };
     }[];
   };
 }
@@ -1352,12 +1359,17 @@ export default function CreatorDashboard() {
         {/* My Videos — everything this creator has posted, including the ones
             the public feed cannot show yet, with the actions they need on it.
 
-            NOT `overflow-hidden`: each row's action menu is absolutely
-            positioned and opens downward, so a clipping container cut the menu
-            off the bottom row entirely — the creator's last video had Edit,
-            Publish and Delete rendered outside the card and unreachable. The
-            corners are rounded on the header and the final row instead, which
-            is all `overflow-hidden` was doing here. */}
+            NOT `overflow-hidden`: each row's action menu used to open downward
+            from inside the card, so a clipping container cut the bottom row's
+            menu off entirely — the creator's last video had Edit, Publish and
+            Delete rendered outside the card and unreachable. The corners are
+            rounded on the header and the final row instead, which is all
+            `overflow-hidden` was doing here.
+
+            The menu itself is no longer laid out in this card at all; it is
+            portalled to the page (see RowMenu) so that neither this card's
+            clipping nor the `backdrop-blur` on the Video Performance card
+            below can paint over it. */}
         <div className="glass-card">
           <div className="p-4 border-b border-white/10 rounded-t-2xl flex items-center justify-between gap-3">
             <div>
@@ -1416,68 +1428,64 @@ export default function CreatorDashboard() {
                   </div>
                 </div>
 
-                {/* Actions */}
-                <div className="relative shrink-0">
-                  <button
-                    type="button"
-                    aria-label={`Actions for ${video.title}`}
-                    aria-expanded={openMenuId === video.id}
-                    onClick={() => setOpenMenuId(openMenuId === video.id ? null : video.id)}
-                    disabled={deletingId === video.id}
-                    className="p-2 rounded-lg hover:bg-white/10 transition disabled:opacity-50"
-                  >
-                    {deletingId === video.id ? (
+                {/* Actions. The menu leaves the card entirely (see
+                    RowMenu): inside it, the next card's backdrop blur painted
+                    over the panel and swallowed the last row's actions. */}
+                <RowMenu
+                  id={video.id}
+                  open={openMenuId === video.id}
+                  onOpenChange={setOpenMenuId}
+                  label={`Actions for ${video.title}`}
+                  disabled={deletingId === video.id}
+                  icon={
+                    deletingId === video.id ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
                     ) : (
                       <MoreVertical className="w-4 h-4" />
+                    )
+                  }
+                >
+                  <button
+                    type="button"
+                    onClick={() => openEditor(video)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition"
+                  >
+                    <Pencil className="w-3.5 h-3.5" /> Edit title & price
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOpenMenuId(null);
+                      void togglePublished(video);
+                    }}
+                    disabled={publishingId === video.id}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition disabled:opacity-50"
+                  >
+                    {video.isPublished ? (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5" /> Take out of the feed
+                      </>
+                    ) : (
+                      <>
+                        <Upload className="w-3.5 h-3.5" /> Publish now
+                      </>
                     )}
                   </button>
-
-                  {openMenuId === video.id && (
-                    <div className="absolute right-0 top-10 z-20 min-w-[180px] rounded-xl border border-white/10 bg-surface-200 py-1 shadow-xl">
-                      <button
-                        type="button"
-                        onClick={() => openEditor(video)}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition"
-                      >
-                        <Pencil className="w-3.5 h-3.5" /> Edit title & price
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOpenMenuId(null);
-                          void togglePublished(video);
-                        }}
-                        disabled={publishingId === video.id}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition disabled:opacity-50"
-                      >
-                        {video.isPublished ? (
-                          <>
-                            <EyeOff className="w-3.5 h-3.5" /> Take out of the feed
-                          </>
-                        ) : (
-                          <>
-                            <Upload className="w-3.5 h-3.5" /> Publish now
-                          </>
-                        )}
-                      </button>
-                      <Link
-                        href={`/video/${video.slug || video.id}`}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition"
-                        onClick={() => setOpenMenuId(null)}
-                      >
-                        <Eye className="w-3.5 h-3.5" /> View as a viewer
-                      </Link>
-                      <button
-                        type="button"
-                        onClick={() => void removeVideo(video)}
-                        className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 transition"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" /> Delete video
-                      </button>
-                    </div>
-                  )}
-                </div>
+                  <Link
+                    href={`/video/${video.slug || video.id}`}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs hover:bg-white/10 transition"
+                    onClick={() => setOpenMenuId(null)}
+                  >
+                    <Eye className="w-3.5 h-3.5" /> View as a viewer
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => void removeVideo(video)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-xs text-red-400 hover:bg-red-500/10 transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Delete video
+                  </button>
+                </RowMenu>
               </div>
             ))}
 
@@ -1633,11 +1641,11 @@ export default function CreatorDashboard() {
                       className="flex items-center gap-3 p-3 rounded-xl bg-surface-300/20"
                     >
                       <div className="w-9 h-9 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-bold text-sm shrink-0">
-                        {m.sender.displayName?.[0] || "U"}
+                        {(m.sender.username?.[0] || m.sender.displayName?.[0] || "U").toUpperCase()}
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm truncate">
-                          {m.sender.displayName || "A fan"}
+                          {displayHandle(m.sender, "A fan")}
                         </p>
                         <p className="text-xs text-white/40">
                           {formatRelativeTime(new Date(m.createdAt))}

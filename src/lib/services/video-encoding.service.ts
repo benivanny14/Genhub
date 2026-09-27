@@ -27,6 +27,7 @@ import {
   getBunnyVideoDetails,
   isBunnyConfigured,
 } from "@/lib/bunny";
+import type { BunnyWebhookIntent } from "@/lib/bunny-webhook";
 
 export type EncodingState = "pending" | "processing" | "ready" | "failed" | "untracked";
 
@@ -587,6 +588,59 @@ function pendingWhere() {
  * API call per render.
  */
 export const ENCODING_RECHECK_FLOOR_MS = 10_000;
+
+export interface BunnyEventOutcome {
+  /** False when the callback named a video we do not track. */
+  matched: boolean;
+  videoId: string | null;
+  state: EncodingState | null;
+  published: boolean;
+}
+
+/**
+ * Apply a verified Bunny Stream webhook to the database.
+ *
+ * The callback carries only a guid and a status code, so the authoritative
+ * details are read back through the SAME function the cron and the dashboard
+ * use — refreshVideoEncoding — rather than a second publish path that could
+ * drift from it. That is what makes the webhook a trigger and not a parallel
+ * implementation: publish, the 8-minute floor and the once-only notification
+ * stay in one place.
+ *
+ * The webhook is the fast path (Bunny calls us the instant a video finishes),
+ * but it is not the only one: the creator dashboard polls on read and the cron
+ * worker sweeps, so a webhook that never arrives (or arrives before the row is
+ * written) still resolves.
+ */
+export async function applyBunnyEncodingEvent(params: {
+  bunnyVideoId: string;
+  intent: BunnyWebhookIntent;
+}): Promise<BunnyEventOutcome> {
+  const none: BunnyEventOutcome = { matched: false, videoId: null, state: null, published: false };
+
+  // "ignore" is a callback for another library; nothing here owns it.
+  if (params.intent === "ignore") return none;
+
+  const video = await prisma.video.findFirst({
+    where: { bunnyVideoId: params.bunnyVideoId, isDeleted: false },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, encodingStatus: true },
+  });
+
+  // No row, or a row Bunny does not transcode (side-loaded/demo content): the
+  // lifecycle must not touch it, exactly as in refreshVideoEncoding.
+  if (!video || video.encodingStatus === null) return none;
+
+  const result = await refreshVideoEncoding(video.id);
+  if (!result) return { ...none, matched: true, videoId: video.id };
+
+  return {
+    matched: true,
+    videoId: result.id,
+    state: result.snapshot.state,
+    published: result.published,
+  };
+}
 
 /**
  * Poll one creator's unfinished videos. The creator dashboard calls this, so a

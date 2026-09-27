@@ -225,6 +225,30 @@
           "example": "BUNNY_TOKEN_SECRET=a1b2c3d4e5f6..."
         },
         {
+          "id": "bunny_webhook_secret",
+          "key": "BUNNY_STREAM_WEBHOOK_SECRET",
+          "title": "Encoding webhook signing secret",
+          "site": "https://bunny.net",
+          "sensitive": true,
+          "steps": [
+            "Library -> tab 'API' -> copy the 'Read-Only API Key'",
+            "This is a DIFFERENT key from the Stream API key, and can be rotated without breaking uploads",
+            "Bunny signs every encoding callback with it (HMAC-SHA256); /api/webhooks/bunny refuses an unsigned callback in production"
+          ],
+          "example": "BUNNY_STREAM_WEBHOOK_SECRET=a1b2c3d4-...."
+        },
+        {
+          "id": "bunny_webhook_url",
+          "title": "Point the library's webhook at this app",
+          "site": "https://bunny.net",
+          "steps": [
+            "Library -> tab 'API' or 'Webhooks' -> set the Webhook URL to https://<your-domain>/api/webhooks/bunny",
+            "Without it, a finished encode still goes live — the creator dashboard and the poll worker catch it — but only on the next check, not in seconds",
+            "The URL must be the public https:// domain: Bunny cannot reach localhost"
+          ],
+          "example": "Webhook URL: https://genhub.co.tz/api/webhooks/bunny"
+        },
+        {
           "id": "bunny_referrers",
           "title": "Allow your own domain to play video",
           "site": "https://bunny.net",

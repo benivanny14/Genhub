@@ -23,8 +23,27 @@ import type { BunnyUploadCredentials } from "./bunny";
 /** Chunk size. TUS requires a multiple of 256 KiB; 32 MiB keeps requests few. */
 const CHUNK_SIZE = 32 * 1024 * 1024;
 
-/** Backoff between attempts at the SAME chunk, in ms. */
-const RETRY_DELAYS = [0, 1_000, 3_000, 8_000];
+/**
+ * Backoff between attempts at the SAME chunk, in ms.
+ *
+ * Six attempts, up to 30s apart. The audience is on mobile data: a signal that
+ * dips for twenty seconds in a lift is ordinary, and giving up after ~12s (the
+ * old four-attempt ladder) is what made a creator re-upload a whole file — and
+ * reserve a second slot while the first sat orphaned in the library. The retry
+ * is cheap because the resume asks the server for its offset first.
+ */
+const RETRY_DELAYS = [0, 1_000, 3_000, 8_000, 15_000, 30_000];
+
+/**
+ * How long one chunk may sit with no progress before it is treated as a dropped
+ * connection and retried.
+ *
+ * Deliberately generous: a 32 MiB chunk on a slow phone connection is minutes,
+ * so this is a stall detector, not a throughput limit. Without it a connection
+ * that dies without an error event (a lost radio, a silent NAT timeout) leaves
+ * the upload hanging forever with the progress bar frozen.
+ */
+const CHUNK_STALL_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * The largest video a creator may send, matching the "Max 2GB" label on the
@@ -212,6 +231,10 @@ function sendChunk(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PATCH", location);
+    // A chunk that stops making progress without erroring is a dropped
+    // connection; time it out so it becomes a retryable failure. See
+    // CHUNK_STALL_TIMEOUT_MS.
+    xhr.timeout = CHUNK_STALL_TIMEOUT_MS;
     xhr.setRequestHeader("Tus-Resumable", "1.0.0");
     xhr.setRequestHeader("Upload-Offset", String(offset));
     xhr.setRequestHeader("Content-Type", "application/offset+octet-stream");
@@ -236,6 +259,13 @@ function sendChunk(
         new TusUploadError(
           "NETWORK",
           "The connection dropped during upload."
+        )
+      );
+    xhr.ontimeout = () =>
+      reject(
+        new TusUploadError(
+          "NETWORK",
+          "The upload stalled and was retried."
         )
       );
     xhr.onabort = () =>
