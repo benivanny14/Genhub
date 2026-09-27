@@ -107,40 +107,6 @@ jobs:
       - name: Tests
         run: npm test
 
-      # The trimmer's real behaviour — a <video> element's duration, pointer
-      # capture on a drag, MediaRecorder actually producing bytes — has no DOM
-      # to run in under Vitest, so it is proved in a real browser instead.
-      # Nothing here touches the database or an external service: the spec mounts
-      # one client component against a local Vite server.
-      #
-      # Keyed on the lockfile: the browser revision is pinned by the Playwright
-      # version in it, so a cached download is only reused while the version that
-      # needs it is unchanged.
-      - name: Cache the test browser
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
-      - name: Install the test browser
-        run: npx playwright install --with-deps chromium
-
-      - name: Browser tests (the creator trimmer)
-        run: npm run test:e2e
-
-      # A failed browser test is worth a screenshot and a DOM snapshot more than
-      # it is worth another read of the log, so keep them when it trips.
-      - name: Keep the browser test artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-artifacts
-          path: |
-            test-results/
-            playwright-report/
-          retention-days: 7
-          if-no-files-found: ignore
-
       # Runs after the suite on purpose: it looks at the rows the tests just
       # created and deleted, which is the only moment the database holds the
       # sort of half-finished state a money bug would show up in.

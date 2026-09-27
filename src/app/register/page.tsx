@@ -5,11 +5,18 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AuthBrandPanel from "@/components/AuthBrandPanel";
-import { Play, Mail, Phone, Lock, Eye, EyeOff, User, Film, Check, Loader2, ArrowRight } from "lucide-react";
+import { Play, Mail, Phone, Lock, Eye, EyeOff, User, Film, Check, Loader2, ArrowRight, ScrollText, ShieldAlert } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
+import {
+  CREATOR_GUIDELINES,
+  CREATOR_GUIDELINES_VERSION,
+  GUIDELINE_ACK_LABEL_EN,
+  GUIDELINE_ACK_LABEL_SW,
+  GUIDELINE_ACK_STORAGE_KEY,
+} from "@/lib/creator-guidelines";
 
 /** The form's life cycle — each phase has its own look and motion. */
 type Phase = "idle" | "loading" | "success" | "error";
@@ -51,6 +58,14 @@ export default function RegisterPage() {
   const [error, setError] = useState("");
   const [shaking, setShaking] = useState(false);
   const [referralCode, setReferralCode] = useState("");
+  // The creator guidelines. A creator agrees to these as part of signing up,
+  // not at the upload screen — the rules include things that decide whether a
+  // video can be made at all (on camera, at least 8 minutes long), so reading
+  // them has to happen before any work is done. Each rule is ticked
+  // individually: one "I agree" under a wall of text is how people accept rules
+  // they never read, and two of these cost a creator their account.
+  const [guidelineChecks, setGuidelineChecks] = useState<Record<string, boolean>>({});
+  const allGuidelinesChecked = CREATOR_GUIDELINES.every((g) => guidelineChecks[g.id]);
   const redirectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Capture ?ref= affiliate code and ?role= creator pref from the URL
@@ -93,6 +108,10 @@ export default function RegisterPage() {
       refuse("Enter an email address or a phone number");
       return;
     }
+    if (role === "CREATOR" && !allGuidelinesChecked) {
+      refuse("Soma na ukubali masharti yote ya creators kabla ya kujisajili");
+      return;
+    }
 
     setPhase("loading");
     setError("");
@@ -115,6 +134,20 @@ export default function RegisterPage() {
       const data = await res.json();
 
       if (data.success) {
+        // Record what this account agreed to, keyed by its id, so the receipt
+        // survives on the device the same way it did when the terms were read
+        // at the upload screen.
+        if (role === "CREATOR" && data.data?.id) {
+          try {
+            const raw = localStorage.getItem(GUIDELINE_ACK_STORAGE_KEY);
+            const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
+            map[data.data.id] = CREATOR_GUIDELINES_VERSION;
+            localStorage.setItem(GUIDELINE_ACK_STORAGE_KEY, JSON.stringify(map));
+          } catch {
+            // A browser that refuses storage must not block the sign-up; the
+            // terms were still read and ticked here.
+          }
+        }
         setPhase("success");
         toast(
           "success",
@@ -296,9 +329,76 @@ export default function RegisterPage() {
                 <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder={t("auth.confirmPassword")} className="input-field pl-10" autoComplete="new-password" required />
               </div>
 
+              {role === "CREATOR" && (
+                <p className="text-xs text-amber-400/80 text-center">
+                  {t("auth.kycWarning")}
+                </p>
+              )}
+
+              {/* Creator guidelines — read and ticked as part of signing up, so
+                  the conditions are known before any video is made. */}
+              {role === "CREATOR" && (
+                <div className="space-y-3 rounded-xl border border-white/10 p-4">
+                  <div className="flex items-start gap-2">
+                    <ScrollText className="mt-0.5 h-5 w-5 shrink-0 text-brand-400" />
+                    <div>
+                      <p className="text-sm font-medium">Masharti ya Creators</p>
+                      <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/40")}>
+                        Soma na ukubali kila sharti kabla ya kuanza kutengeneza video.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+                    {CREATOR_GUIDELINES.map((g, i) => (
+                      <label
+                        key={g.id}
+                        className={cn(
+                          "flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition",
+                          guidelineChecks[g.id]
+                            ? "border-emerald-500/40 bg-emerald-500/5"
+                            : g.severe
+                              ? "border-red-500/30 bg-red-500/5"
+                              : isLight
+                                ? "border-gray-200 hover:border-gray-300"
+                                : "border-white/10 hover:border-white/20"
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!!guidelineChecks[g.id]}
+                          onChange={(e) =>
+                            setGuidelineChecks((prev) => ({ ...prev, [g.id]: e.target.checked }))
+                          }
+                          className="mt-1 h-4 w-4 shrink-0 accent-emerald-500"
+                        />
+                        <div className="space-y-1">
+                          <p className="flex items-center gap-2 text-sm font-medium">
+                            <span className={isLight ? "text-gray-400" : "text-white/40"}>
+                              {i + 1}.
+                            </span>
+                            {g.severe && <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />}
+                            <span>{g.sw}</span>
+                          </p>
+                          <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/50")}>
+                            {g.en}
+                          </p>
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+
+                  <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/50")}>
+                    {GUIDELINE_ACK_LABEL_SW}
+                    <br />
+                    {GUIDELINE_ACK_LABEL_EN}
+                  </p>
+                </div>
+              )}
+
               <button
                 type="submit"
-                disabled={busy}
+                disabled={busy || (role === "CREATOR" && !allGuidelinesChecked)}
                 className={cn(
                   "btn-brand w-full inline-flex items-center justify-center gap-2",
                   phase === "loading" && "auth-busy"
@@ -321,12 +421,6 @@ export default function RegisterPage() {
                   </>
                 )}
               </button>
-
-              {role === "CREATOR" && (
-                <p className="text-xs text-amber-400/80 text-center">
-                  {t("auth.kycWarning")}
-                </p>
-              )}
 
               {/* Referral code */}
               <div>

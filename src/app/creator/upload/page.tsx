@@ -5,21 +5,13 @@ import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import Image from "next/image";
 import ImageCropper from "@/components/ImageCropper";
-import VideoTrimmer from "@/components/VideoTrimmer";
 import { canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
 import { CATEGORIES } from "@/lib/categories";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
-import {
-  CREATOR_GUIDELINES,
-  CREATOR_GUIDELINES_VERSION,
-  MIN_VIDEO_DURATION_SECONDS,
-  GUIDELINE_ACK_LABEL_EN,
-  GUIDELINE_ACK_LABEL_SW,
-  GUIDELINE_ACK_STORAGE_KEY,
-} from "@/lib/creator-guidelines";
+import { MIN_VIDEO_DURATION_SECONDS } from "@/lib/creator-guidelines";
 import Link from "next/link";
 import {
   Upload,
@@ -29,21 +21,11 @@ import {
   FileText,
   ArrowLeft,
   CheckCircle,
-  ShieldAlert,
-  ScrollText,
 } from "lucide-react";
-
-interface User {
-  id: string;
-  role: string;
-  kycStatus: string;
-  displayName: string | null;
-}
 
 export default function UploadPage() {
   const router = useRouter();
   const { toast } = useToast();
-  const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -57,9 +39,6 @@ export default function UploadPage() {
   const [category, setCategory] = useState("");
   const [tags, setTags] = useState("");
   const [bunnyVideoId, setBunnyVideoId] = useState("");
-  // The file the creator just picked, held while they cut it. Nothing is
-  // reserved or uploaded until they finish in the trimmer.
-  const [trimFile, setTrimFile] = useState<File | null>(null);
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [uploadingThumb, setUploadingThumb] = useState(false);
   // The picture the creator just chose, held while they frame it. The cover is
@@ -75,13 +54,6 @@ export default function UploadPage() {
   // 18 U.S.C. § 2257 — the creator must affirm this before the video is created.
   const [complianceAttested, setComplianceAttested] = useState(false);
 
-  // The creator guidelines gate. `null` = not read yet for this account; a
-  // number = the version this account accepted. Anything below the current
-  // version sends them back through the rules, so an edited rule is re-read.
-  const [ackVersion, setAckVersion] = useState<number | null>(null);
-  const [guidelineChecks, setGuidelineChecks] = useState<Record<string, boolean>>({});
-  const allGuidelinesChecked = CREATOR_GUIDELINES.every((g) => guidelineChecks[g.id]);
-
   const checkAccess = useCallback(async () => {
     try {
       const res = await fetchCurrentUser();
@@ -94,7 +66,6 @@ export default function UploadPage() {
         router.push("/creator/kyc");
         return;
       }
-      setUser(data.data);
     } catch {
       router.push("/login");
     } finally {
@@ -105,33 +76,6 @@ export default function UploadPage() {
   useEffect(() => {
     checkAccess();
   }, [checkAccess]);
-
-  /** Read what this account already accepted, keyed by user id. */
-  useEffect(() => {
-    if (!user) return;
-    try {
-      const raw = localStorage.getItem(GUIDELINE_ACK_STORAGE_KEY);
-      const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
-      setAckVersion(typeof map[user.id] === "number" ? map[user.id] : null);
-    } catch {
-      setAckVersion(null);
-    }
-  }, [user]);
-
-  /** Persist the acknowledgement so the gate is a one-time read, per version. */
-  function acceptGuidelines() {
-    if (!user || !allGuidelinesChecked) return;
-    try {
-      const raw = localStorage.getItem(GUIDELINE_ACK_STORAGE_KEY);
-      const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
-      map[user.id] = CREATOR_GUIDELINES_VERSION;
-      localStorage.setItem(GUIDELINE_ACK_STORAGE_KEY, JSON.stringify(map));
-    } catch {
-      // A browser that refuses storage should not block the upload; the gate
-      // still ran this session.
-    }
-    setAckVersion(CREATOR_GUIDELINES_VERSION);
-  }
 
   /** Reserve the slot and get the short-lived credentials to fill it. */
   async function initiateUpload(): Promise<BunnyUploadCredentials | null> {
@@ -264,85 +208,6 @@ export default function UploadPage() {
     );
   }
 
-  // ---- Creator guidelines gate --------------------------------------------
-  // Shown before the form and only once per guidelines version. Every rule is
-  // individually ticked, because a single "I agree" at the bottom of a wall of
-  // text is how people accept rules they never read — and rule #2 here costs a
-  // creator their account.
-  if (ackVersion !== CREATOR_GUIDELINES_VERSION) {
-    return (
-      <div className="min-h-screen">
-        <Header />
-        <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-          <div className="flex items-center gap-3">
-            <Link href="/creator" className="p-2 rounded-xl hover:bg-white/10 transition">
-              <ArrowLeft className="w-5 h-5" />
-            </Link>
-            <div>
-              <h1 className="text-2xl font-display font-bold flex items-center gap-2">
-                <ScrollText className="w-6 h-6 text-brand-400" />
-                Masharti ya Creators
-              </h1>
-              <p className="text-white/50 text-sm">
-                Soma masharti yote kabla ya ku-upload video yako
-              </p>
-            </div>
-          </div>
-
-          <div className="glass-card p-6 space-y-3">
-            {CREATOR_GUIDELINES.map((g, i) => (
-              <label
-                key={g.id}
-                className={`flex items-start gap-3 rounded-xl border p-4 cursor-pointer transition ${
-                  guidelineChecks[g.id]
-                    ? "border-emerald-500/40 bg-emerald-500/5"
-                    : g.severe
-                      ? "border-red-500/30 bg-red-500/5"
-                      : "border-white/10 hover:border-white/20"
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={!!guidelineChecks[g.id]}
-                  onChange={(e) =>
-                    setGuidelineChecks((prev) => ({ ...prev, [g.id]: e.target.checked }))
-                  }
-                  className="mt-1 w-4 h-4 accent-emerald-500 shrink-0"
-                />
-                <div className="space-y-1">
-                  <p className="text-sm font-medium flex items-center gap-2">
-                    <span className="text-white/40">
-                      {i + 1}.
-                    </span>
-                    {g.severe && <ShieldAlert className="w-4 h-4 text-red-400 shrink-0" />}
-                    <span>{g.sw}</span>
-                  </p>
-                  <p className="text-xs text-white/50">{g.en}</p>
-                </div>
-              </label>
-            ))}
-          </div>
-
-          <div className="glass-card p-4 space-y-3">
-            <p className="text-xs text-white/50">
-              {GUIDELINE_ACK_LABEL_SW}
-              <br />
-              {GUIDELINE_ACK_LABEL_EN}
-            </p>
-            <button
-              onClick={acceptGuidelines}
-              disabled={!allGuidelinesChecked}
-              className="btn-brand w-full disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-            >
-              <CheckCircle className="w-4 h-4" />
-              Endelea ku-upload
-            </button>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
   if (success) {
     return (
       <div className="min-h-screen">
@@ -411,14 +276,12 @@ export default function UploadPage() {
                   Click here to upload your video
                 </p>
                 <p className="text-xs text-white/40">
-                  MP4, MOV, AVI — Max 2GB. Next you will cut and preview it before
-                  it uploads.
+                  MP4, MOV, AVI — Max 2GB
                 </p>
                 {price > 0 && (
                   <p className="text-xs text-amber-200/80 mt-2">
                     A paid scene must be at least {MIN_VIDEO_DURATION_SECONDS / 60} minutes
-                    long or it never goes live — the trimmer shows the length of your
-                    cut while you drag.
+                    long or it never goes live.
                   </p>
                 )}
                 <input
@@ -430,9 +293,8 @@ export default function UploadPage() {
                     // Reset so choosing the same file again still fires.
                     e.target.value = "";
                     if (!file) return;
-                    // Open the cutter first: the creator marks and watches the
-                    // part worth keeping, and only that part is uploaded.
-                    setTrimFile(file);
+                    // Straight to the upload: the file is sent exactly as chosen.
+                    void startVideoUpload(file);
                   }}
                 />
               </label>
@@ -731,20 +593,6 @@ export default function UploadPage() {
           />
         )}
 
-        {trimFile && (
-          <VideoTrimmer
-            file={trimFile}
-            // A free scene has no length rule; a paid one is only published once
-            // it is long enough, so the trimmer has to say so while there is
-            // still time to do something about it.
-            minDurationSeconds={price > 0 ? MIN_VIDEO_DURATION_SECONDS : 0}
-            onCancel={() => setTrimFile(null)}
-            onConfirm={(chosen) => {
-              setTrimFile(null);
-              void startVideoUpload(chosen);
-            }}
-          />
-        )}
       </main>
     </div>
   );
