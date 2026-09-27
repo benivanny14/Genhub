@@ -315,8 +315,8 @@ export async function createVideoUpload(
 // as `?uid=`: Bunny folds every query parameter into the token signature, so an
 // extra one invalidates the URL, and the HLS player drops the query string
 // entirely for segment requests. The parameter is kept so callers do not have to
-// change, and the viewer identity reaches the player by other means (the moving
-// watermark in VideoPlayer).
+// change, and nothing replaces it — the picture is shown clean, and the viewer's
+// own phone number is never printed onto a scene (see VideoPlayer).
 export function generateSignedVideoUrl(
   bunnyVideoId: string,
   expirationMinutes: number = 10,

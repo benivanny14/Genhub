@@ -203,15 +203,6 @@
   .dark .glass-card:hover {
     border-color: rgba(255, 255, 255, 0.14);
   }
-
-  /* Watermark overlay for video player */
-  .watermark-overlay {
-    @apply pointer-events-none select-none z-10 absolute;
-    color: rgba(255, 255, 255, 0.08);
-    font-size: 14px;
-    font-weight: 500;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
-  }
 }
 
 @layer utilities {

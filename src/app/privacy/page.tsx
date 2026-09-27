@@ -49,7 +49,7 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-lg font-display font-bold mb-3">4. Content Protection</h2>
             <p className={cn("text-sm leading-relaxed", isLight ? "text-gray-600" : "text-white/60")}>
-              Video content is protected via signed HLS tokens with expiration, dynamic viewer watermarking, and DRM-ready delivery through Bunny.net. Watermarks display viewer identifiers to prevent screen recording.
+              Video content is protected by signed, short-lived HLS playback tokens, and every request is checked against your account on the server. A playback link that is shared stops working within minutes. We do not print your email, phone number or any other identifier onto the video.
             </p>
           </section>
 
