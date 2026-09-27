@@ -32,6 +32,31 @@ export function mediaOrExternalUrl(label: string) {
     );
 }
 
+/**
+ * A file WE stored, and nothing else — no pasted link from another host.
+ *
+ * Used where the point of the field is that the file was uploaded through
+ * /api/upload, into the bucket that belongs to this deployment. An identity
+ * document is the case that matters: `mediaOrExternalUrl` would happily accept
+ * `https://example.com/some-id.jpg`, which makes the submission a URL anybody
+ * can point at anything — the reviewer sees whatever that host serves at review
+ * time, the document is not held by us, and the audit trail records a link
+ * instead of a file. Photos for KYC come from a phone, so the picker is the only
+ * way in and this refuses the rest.
+ */
+export function ownMediaUrl(label: string) {
+  return z
+    .string()
+    .trim()
+    .min(1, `${label} is required`)
+    .refine(
+      (value) =>
+        value.startsWith(MEDIA_ROUTE_PREFIX) &&
+        isSafeMediaKey(value.slice(MEDIA_ROUTE_PREFIX.length)),
+      { message: `${label} must be a photo uploaded here` }
+    );
+}
+
 // =============================================================================
 // Auth Schemas
 // =============================================================================
@@ -70,10 +95,14 @@ export const loginSchema = z.object({
 export const createVideoSchema = z.object({
   title: z.string().min(3, "Title must be at least 3 characters").max(200),
   description: z.string().max(5000).optional(),
+  // The floor is TZS 500. A price under it is not worth the mobile-money fee
+  // that settles it — HarakaPay's cut on a TZS 100 collect is a large fraction
+  // of the sale — and the amount a buyer sees has to be a price a creator would
+  // actually charge, not a number that cannot pay for itself.
   price: z
     .number()
     .int()
-    .min(100, "The price must be at least TZS 100")
+    .min(500, "The price must be at least TZS 500")
     .max(1000000, "The price cannot exceed TZS 1,000,000"),
   teaserDuration: z.number().int().min(15).max(30).default(15),
   category: z.string().optional(),
@@ -207,8 +236,10 @@ export const tipCreatorSchema = z.object({
 // =============================================================================
 
 export const submitKycSchema = z.object({
-  idDocumentUrl: mediaOrExternalUrl("ID document URL"),
-  selfieUrl: mediaOrExternalUrl("selfie URL"),
+  // ownMediaUrl, not mediaOrExternalUrl: a pasted link to somebody else's host
+  // is not an identity document we hold. See ownMediaUrl above.
+  idDocumentUrl: ownMediaUrl("ID document"),
+  selfieUrl: ownMediaUrl("Selfie"),
   idDocumentType: z.enum(["NIDA", "PASSPORT", "DRIVING_LICENSE"]).optional(),
 });
 

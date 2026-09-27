@@ -180,6 +180,17 @@ describe("createVideoSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("should reject price below the TZS 500 floor", () => {
+    const result = createVideoSchema.safeParse({
+      title: "My Video",
+      price: 499,
+      teaserDuration: 15,
+      bunnyVideoId: "abc-123",
+      complianceAttested: true,
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("should reject title too short", () => {
     const result = createVideoSchema.safeParse({
       title: "Hi",
@@ -203,12 +214,28 @@ describe("createVideoSchema", () => {
   it("should accept minimum values", () => {
     const result = createVideoSchema.safeParse({
       title: "ABC",
-      price: 100,
+      price: 500,
       teaserDuration: 15,
       bunnyVideoId: "test",
       complianceAttested: true,
     });
     expect(result.success).toBe(true);
+  });
+
+  it("refuses a price below TZS 500", () => {
+    // The floor is 500, not 100: a collect that small is mostly mobile-money
+    // fee, so it is not a price the platform can settle.
+    const at = (price: number) =>
+      createVideoSchema.safeParse({
+        title: "ABC",
+        price,
+        teaserDuration: 15,
+        bunnyVideoId: "test",
+        complianceAttested: true,
+      }).success;
+
+    expect(at(499)).toBe(false);
+    expect(at(500)).toBe(true);
   });
 
   // 18 U.S.C. § 2257 — a video may not be created without the attestation
@@ -334,20 +361,36 @@ describe("reportVideoSchema", () => {
 });
 
 describe("submitKycSchema", () => {
-  it("should accept valid KYC submission", () => {
+  it("should accept photos uploaded here", () => {
     const result = submitKycSchema.safeParse({
-      idDocumentUrl: "https://storage.example.com/id.jpg",
-      selfieUrl: "https://storage.example.com/selfie.jpg",
+      idDocumentUrl: "/api/media/private/u1/kyc/id.jpg",
+      selfieUrl: "/api/media/private/u1/kyc/selfie.jpg",
       idDocumentType: "NIDA",
     });
     expect(result.success).toBe(true);
   });
 
-  it("should reject invalid URLs", () => {
-    const result = submitKycSchema.safeParse({
-      idDocumentUrl: "not-a-url",
-      selfieUrl: "https://storage.example.com/selfie.jpg",
-    });
-    expect(result.success).toBe(false);
+  // The form used to offer a "paste an image URL" box beside each picker. A
+  // link to somebody else's host is not an identity document we hold: the
+  // reviewer sees whatever that host serves at review time, and the audit trail
+  // records a URL instead of a file.
+  it("refuses a link to a photo hosted somewhere else", () => {
+    for (const url of [
+      "https://storage.example.com/id.jpg",
+      "http://example.com/selfie.jpg",
+      "//example.com/id.jpg",
+      "not-a-url",
+      "/api/media/../../secret",
+    ]) {
+      const result = submitKycSchema.safeParse({
+        idDocumentUrl: url,
+        selfieUrl: "/api/media/private/u1/kyc/selfie.jpg",
+      });
+      expect(result.success, url).toBe(false);
+    }
+  });
+
+  it("refuses a submission with no photos at all", () => {
+    expect(submitKycSchema.safeParse({}).success).toBe(false);
   });
 });

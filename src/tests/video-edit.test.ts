@@ -2,7 +2,8 @@
 // GENHUB - Editing a video's price
 //
 // The creator's edit form offers "0 makes it free" and its price field has no
-// lower bound. The schema behind it required at least TZS 100, so the promise
+// lower bound. The schema behind it required a minimum (TZS 100 then, TZS 500
+// now), so the promise
 // was broken by a validation error nobody could act on: there was no way to make
 // a scene free once it had been uploaded, even though the rest of the site has a
 // whole code path for free videos (price 0 skips the paywall, the entitlement
@@ -114,8 +115,9 @@ describe("createVideoSchema price", () => {
     complianceAttested: true,
   };
 
-  it("still requires at least TZS 100 at upload time", () => {
+  it("still requires at least TZS 500 at upload time", () => {
     expect(createVideoSchema.safeParse({ ...base, price: 0 }).success).toBe(false);
+    expect(createVideoSchema.safeParse({ ...base, price: 499 }).success).toBe(false);
     expect(createVideoSchema.safeParse(base).success).toBe(true);
   });
 });

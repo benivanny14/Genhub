@@ -489,11 +489,15 @@ export default function UploadPage() {
               <input
                 type="number"
                 value={price}
-                onChange={(e) => setPrice(parseInt(e.target.value) || 100)}
-                min={100}
+                // The fallback and the floor are the same 500 as the schema's — a
+                // form that lets a creator type 100 and then refuses it at submit
+                // is a validation error they cannot act on.
+                onChange={(e) => setPrice(parseInt(e.target.value) || 500)}
+                min={500}
                 max={1000000}
                 className="input-field"
               />
+              <p className="text-xs text-white/40 mt-1">Minimum TZS 500</p>
             </div>
             <div>
               <label className="text-sm text-white/60 mb-2 block">Preview (seconds)</label>

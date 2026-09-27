@@ -61,7 +61,12 @@ export default function KycPage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!idDocUrl || !selfieUrl) return;
+    // Both photos come from the picker now, so a submit with one of them missing
+    // is reachable — say which one is missing instead of doing nothing at all.
+    if (!idDocUrl || !selfieUrl) {
+      toast("error", "Upload both photos before submitting");
+      return;
+    }
     setSubmitting(true);
 
     try {
@@ -169,6 +174,9 @@ export default function KycPage() {
                 <li>Take a selfie holding a card / paper with:</li>
                 <li className="ml-4">&quot;Genhub + today&apos;s date&quot; handwritten</li>
                 <li>Upload a photo of each below — straight from your phone</li>
+                <li className="text-white/50">
+                  Both must be uploaded here. Links to photos hosted somewhere else are not accepted.
+                </li>
               </ol>
             </div>
 
@@ -182,7 +190,8 @@ export default function KycPage() {
               </select>
             </div>
 
-            {/* ID Document URL */}
+            {/* ID Document — upload only (see /api/creator/kyc: the schema takes
+                a file we stored, never a pasted link). */}
             <div>
               <label className="text-sm text-white/60 mb-2 block flex items-center gap-2">
                 <FileText className="w-4 h-4" /> ID Document
@@ -207,8 +216,8 @@ export default function KycPage() {
                 />
               </label>
               {idDocUrl && (
-                // Creator-supplied URL on an arbitrary host, so next/image
-                // cannot optimise it (an unconfigured remotePattern throws).
+                // Served from our own private bucket, so next/image cannot
+                // optimise it (an unconfigured remotePattern throws).
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={idDocUrl}
@@ -216,20 +225,12 @@ export default function KycPage() {
                   className="mt-2 h-24 rounded-lg object-cover"
                 />
               )}
-              <input
-                type="url"
-                value={idDocUrl}
-                onChange={(e) => setIdDocUrl(e.target.value)}
-                placeholder="…or paste an image URL"
-                className="input-field mt-2"
-                required
-              />
               <p className="text-xs text-white/40 mt-1">
                 Photo of your NIDA/Passport — JPG/PNG, max 10 MB
               </p>
             </div>
 
-            {/* Selfie URL */}
+            {/* Selfie — upload only, same rule. */}
             <div>
               <label className="text-sm text-white/60 mb-2 block flex items-center gap-2">
                 <Camera className="w-4 h-4" /> Selfie
@@ -256,7 +257,7 @@ export default function KycPage() {
                 />
               </label>
               {selfieUrl && (
-                // Creator-supplied URL on an arbitrary host (see above).
+                // Served from our own private bucket (see above).
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={selfieUrl}
@@ -264,14 +265,6 @@ export default function KycPage() {
                   className="mt-2 h-24 rounded-lg object-cover"
                 />
               )}
-              <input
-                type="url"
-                value={selfieUrl}
-                onChange={(e) => setSelfieUrl(e.target.value)}
-                placeholder="…or paste an image URL"
-                className="input-field mt-2"
-                required
-              />
               <p className="text-xs text-white/40 mt-1">
                 Selfie holding a paper with &quot;Genhub + today&apos;s date&quot;
               </p>
