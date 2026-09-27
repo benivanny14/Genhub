@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { formatTZS, formatCount, cn } from "@/lib/utils";
+import { displayHandle } from "@/lib/usernames";
 import { demoDataEnabled } from "@/lib/demo-mode";
 
 interface AnalyticsData {
@@ -55,6 +56,8 @@ interface AnalyticsData {
   }[];
   topFans?: {
     userId: string;
+    /** Public handle; the fallback to `displayName` is inside displayHandle. */
+    username?: string | null;
     displayName: string;
     avatarUrl: string | null;
     totalSpent: number;
@@ -407,10 +410,12 @@ export default function CreatorAnalyticsPage() {
                     {i + 1}
                   </span>
                   <div className="w-8 h-8 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 text-xs font-bold shrink-0">
-                    {fan.displayName?.[0] || "F"}
+                    {(fan.username?.[0] || fan.displayName?.[0] || "F").toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">{fan.displayName}</p>
+                    <p className="text-sm font-medium truncate">
+                      {displayHandle(fan, "A fan")}
+                    </p>
                     <p className="text-[10px] text-white/40">
                       {fan.purchases} purchase{fan.purchases === 1 ? "" : "s"}
                     </p>

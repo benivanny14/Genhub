@@ -20,6 +20,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { Search, BadgeCheck, Loader2 } from "lucide-react";
 import VideoCard from "@/components/VideoCard";
+import { displayHandle } from "@/lib/usernames";
 
 interface VideoResult {
   id: string;
@@ -36,6 +37,7 @@ interface VideoResult {
   createdAt: string;
   creator: {
     id: string;
+    username?: string | null;
     displayName: string | null;
     avatarUrl?: string | null;
     isVerified?: boolean;
@@ -44,6 +46,7 @@ interface VideoResult {
 
 interface CreatorResult {
   id: string;
+  username?: string | null;
   displayName: string | null;
   avatarUrl?: string | null;
   isVerified?: boolean;
@@ -184,20 +187,20 @@ export default function SearchResults({ query }: { query: string }) {
                   {creator.avatarUrl ? (
                     <Image
                       src={creator.avatarUrl}
-                      alt={creator.displayName || "Creator"}
+                      alt={displayHandle(creator, "Creator")}
                       fill
                       sizes="48px"
                       className="object-cover"
                     />
                   ) : (
                     <span className="flex h-full w-full items-center justify-center text-sm font-bold text-gray-300">
-                      {(creator.displayName || "?").charAt(0).toUpperCase()}
+                      {(creator.username || creator.displayName || "?").charAt(0).toUpperCase()}
                     </span>
                   )}
                 </div>
                 <div className="min-w-0">
                   <p className="flex items-center gap-1 truncate text-sm font-medium text-white">
-                    {creator.displayName || "Unnamed creator"}
+                    {displayHandle(creator, "Unnamed creator")}
                     {creator.isVerified && (
                       <BadgeCheck className="h-4 w-4 shrink-0 text-sky-400" />
                     )}

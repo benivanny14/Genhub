@@ -132,6 +132,17 @@ model User {
   id           String   @id @default(cuid())
   phone        String?  @unique
   email        String?  @unique
+  /// Public, unique handle: the one name on an account nobody else may take.
+  ///
+  /// `displayName` is free text and two accounts can share it, so it cannot stop
+  /// one person from passing as another. `username` is the stable, quoted,
+  /// lowercased handle (see lib/usernames.ts) and carries a UNIQUE index so the
+  /// database — not just the application — refuses a duplicate. New sign-ups are
+  /// required to choose one; existing rows are backfilled by the migration, so
+  /// in practice every account has a value. It stays nullable so a legacy row is
+  /// never the thing that blocks a deploy, and the app treats a missing handle
+  /// as "no handle yet" rather than crashing.
+  username     String?  @unique
   passwordHash String
   displayName  String?
   avatarUrl    String?

@@ -22,6 +22,7 @@ import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/lib/currency";
 import { cn, formatRelativeTime } from "@/lib/utils";
+import { displayHandle } from "@/lib/usernames";
 import {
   CreditCard,
   Loader2,
@@ -62,7 +63,7 @@ interface PaymentTransaction {
   videoId: string | null;
   creatorId: string | null;
   video: { id: string; title: string } | null;
-  creator: { id: string; displayName: string | null } | null;
+  creator: { id: string; username?: string | null; displayName: string | null } | null;
 }
 
 type Filter =
@@ -286,7 +287,7 @@ export default function PaymentsPage() {
         const orderId: string | undefined = data.data?.orderId;
         setRetryTarget(null);
         setRetryPhone("");
-        toast("info", "Check your phone — approve the HarakaPay prompt with your PIN.");
+        toast("info", "Check your phone — approve the mobile money prompt with your PIN.");
         if (orderId) pollOrder(orderId);
         else load();
         return;
@@ -381,8 +382,7 @@ export default function PaymentsPage() {
             <ReceiptText className="w-6 h-6 text-brand-400" /> My Payments
           </h1>
           <p className={cn("text-sm mt-1", muted)}>
-            Every HarakaPay charge you started — pending, completed, failed and being
-            checked.
+            Every charge you started — pending, completed, failed and being checked.
           </p>
           <p className={cn("text-xs mt-2 inline-flex items-center gap-1.5", muted)}>
             <Wallet className="w-3.5 h-3.5" /> Wallet balance: {format(walletBalance)}
@@ -472,7 +472,7 @@ export default function PaymentsPage() {
                       <p className={cn("text-sm font-medium truncate", heading)}>
                         {TYPE_LABELS[tx.type] || tx.type}
                         {tx.video?.title ? ` — ${tx.video.title}` : ""}
-                        {!tx.video && tx.creator?.displayName ? ` — ${tx.creator.displayName}` : ""}
+                        {!tx.video && tx.creator ? ` — ${displayHandle(tx.creator, "Creator")}` : ""}
                       </p>
                       <p className={cn("text-xs mt-0.5", muted)}>
                         {formatRelativeTime(new Date(tx.createdAt))}
@@ -679,8 +679,8 @@ export default function PaymentsPage() {
               <p className={cn("font-medium", heading)}>
                 {TYPE_LABELS[retryTarget.type] || retryTarget.type}
                 {retryTarget.video?.title ? ` — ${retryTarget.video.title}` : ""}
-                {!retryTarget.video && retryTarget.creator?.displayName
-                  ? ` — ${retryTarget.creator.displayName}`
+                {!retryTarget.video && retryTarget.creator
+                  ? ` — ${displayHandle(retryTarget.creator, "Creator")}`
                   : ""}
               </p>
               <p>{format(retryTarget.amount)}</p>

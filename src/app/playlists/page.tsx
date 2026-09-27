@@ -42,7 +42,13 @@ interface PlaylistVideo {
   duration: number | null;
   viewsCount: number;
   createdAt: string;
-  creator: { id: string; displayName: string | null; avatarUrl: string | null };
+  creator: {
+    id: string;
+    /** Public handle; the card prefers it over `displayName`. */
+    username?: string | null;
+    displayName: string | null;
+    avatarUrl: string | null;
+  };
 }
 
 export default function PlaylistsPage() {

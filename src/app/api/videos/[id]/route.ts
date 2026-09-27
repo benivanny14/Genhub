@@ -63,6 +63,7 @@ export async function GET(
         creator: {
           select: {
             id: true,
+            username: true,
             displayName: true,
             avatarUrl: true,
           },

@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
         },
         orderBy: { isVerified: "desc" },
         take: 4,
-        select: { id: true, displayName: true, avatarUrl: true, isVerified: true },
+        select: { id: true, username: true, displayName: true, avatarUrl: true, isVerified: true },
       }),
     ]);
 

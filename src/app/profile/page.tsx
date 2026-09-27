@@ -9,6 +9,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   User,
+  AtSign,
   Mail,
   Phone,
   Lock,
@@ -22,6 +23,7 @@ import {
   Loader2,
   TriangleAlert,
 } from "lucide-react";
+import { USERNAME_RULES_HINT, displayHandle, normalizeUsername } from "@/lib/usernames";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { canOptimizeImage } from "@/lib/media";
@@ -30,6 +32,8 @@ import { cn } from "@/lib/utils";
 interface UserData {
   id: string;
   displayName: string | null;
+  /** The unique public @handle. */
+  username: string | null;
   email: string | null;
   phone: string | null;
   role: string;
@@ -43,6 +47,8 @@ interface UserData {
 
 interface ReferralRow {
   id: string;
+  /** Public handle; shown as @username, with `displayName` as the fallback. */
+  username?: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   joinedAt: string;
@@ -70,6 +76,10 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
 
   const [displayName, setDisplayName] = useState("");
+  // The public handle, edited on its own endpoint (POST /api/account/username)
+  // because its rules — format, reserved names, uniqueness — are its own.
+  const [newUsername, setNewUsername] = useState("");
+  const [savingUsername, setSavingUsername] = useState(false);
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [locale, setLocale] = useState("en");
@@ -111,6 +121,7 @@ export default function ProfilePage() {
       if (data.success) {
         setUser(data.data);
         setDisplayName(data.data.displayName || "");
+        setNewUsername(data.data.username || "");
         setEmail(data.data.email || "");
         setPhone(data.data.phone || "");
         setLocale(data.data.locale || "en");
@@ -166,6 +177,45 @@ export default function ProfilePage() {
       toast("error", "Network error");
     } finally {
       setSavingDigest(false);
+    }
+  }
+
+  /**
+   * Save a new public handle.
+   *
+   * Separate from the profile save because a duplicate handle is a specific,
+   * actionable refusal ("already taken") rather than a generic failure, and
+   * because a change here is the one edit that can impersonate another account.
+   */
+  async function handleUsernameChange() {
+    const handle = normalizeUsername(newUsername);
+    if (!handle) {
+      toast("error", "Choose a username");
+      return;
+    }
+    if (handle === user?.username) {
+      toast("info", "That is already your username");
+      return;
+    }
+    setSavingUsername(true);
+    try {
+      const res = await fetch("/api/account/username", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: handle }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setUser((prev) => (prev ? { ...prev, username: data.data?.username ?? handle } : prev));
+        setNewUsername(data.data?.username ?? handle);
+        toast("success", "Username updated");
+      } else {
+        toast("error", data.error || "That username could not be saved");
+      }
+    } catch {
+      toast("error", "Network error");
+    } finally {
+      setSavingUsername(false);
     }
   }
 
@@ -520,6 +570,59 @@ export default function ProfilePage() {
           </button>
         </div>
 
+        {/* Username — the one name nobody else may take. Kept in its own card so
+            the change is a deliberate act, with its own rules and its own
+            "already taken" answer, not a side effect of saving the profile. */}
+        <div className="glass-card p-6 space-y-4">
+          <h2 className="font-display font-bold flex items-center gap-2">
+            <AtSign className="w-5 h-5 text-brand-400" /> Username
+          </h2>
+          <p className={cn("text-sm", isLight ? "text-gray-500" : "text-white/50")}>
+            Your public handle. It is unique, so nobody else can take it — which is what
+            keeps someone from passing as you. {USERNAME_RULES_HINT}.
+          </p>
+
+          {user?.username && (
+            <p className="text-sm">
+              <span className={cn(isLight ? "text-gray-400" : "text-white/40")}>Current: </span>
+              <span className="font-mono text-brand-300">@{user.username}</span>
+            </p>
+          )}
+
+          <div>
+            <label className={cn("text-sm mb-1 block", isLight ? "text-gray-500" : "text-white/60")}>
+              {user?.username ? "New username" : "Claim a username"}
+            </label>
+            <div className="relative">
+              <AtSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
+              <input
+                type="text"
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+                className="input-field pl-10 lowercase"
+                minLength={3}
+                maxLength={30}
+                autoCapitalize="none"
+                spellCheck={false}
+              />
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void handleUsernameChange()}
+            disabled={
+              savingUsername ||
+              !newUsername ||
+              normalizeUsername(newUsername) === (user?.username ?? "")
+            }
+            className="btn-brand flex items-center gap-2"
+          >
+            {savingUsername ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+            {savingUsername ? "Saving..." : "Save username"}
+          </button>
+        </div>
+
         {/* Password Change */}
         <div className="glass-card p-6 space-y-4">
           <h2 className="font-display font-bold flex items-center gap-2">
@@ -612,9 +715,9 @@ export default function ProfilePage() {
                       >
                         <span className="flex items-center gap-2 min-w-0">
                           <span className="w-6 h-6 rounded-full bg-brand-500/20 text-brand-300 flex items-center justify-center text-xs font-bold shrink-0">
-                            {(r.displayName || "U")[0].toUpperCase()}
+                            {(r.username?.[0] || r.displayName?.[0] || "U").toUpperCase()}
                           </span>
-                          <span className="truncate">{r.displayName || "New user"}</span>
+                          <span className="truncate">{displayHandle(r, "New user")}</span>
                         </span>
                         <span className="text-right shrink-0 pl-3">
                           <span className="text-emerald-400 text-xs font-medium block">

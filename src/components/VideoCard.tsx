@@ -8,6 +8,7 @@ import { formatTZS, formatDuration } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
+import { displayHandle } from "@/lib/usernames";
 
 interface VideoCardProps {
   id: string;
@@ -31,6 +32,8 @@ interface VideoCardProps {
   isPremium?: boolean;
   creator: {
     id: string;
+    /** Unique public handle; shown as @username when present. */
+    username?: string | null;
     displayName: string | null;
     avatarUrl?: string | null;
     isVerified?: boolean;
@@ -319,13 +322,13 @@ export default function VideoCard(video: VideoCardProps) {
               "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-medium",
               isLight ? "bg-brand-100 text-brand-600" : "bg-surface-300/60 text-white/70"
             )}>
-              {video.creator.displayName?.[0] || "C"}
+              {(video.creator.username?.[0] || video.creator.displayName?.[0] || "C").toUpperCase()}
             </div>
             <span className={cn(
               "text-xs truncate max-w-[120px]",
               isLight ? "text-gray-500" : "text-white/60"
             )}>
-              {video.creator.displayName || "Creator"}
+              {displayHandle(video.creator, "Creator")}
             </span>
             {video.creator.isVerified && (
               <BadgeCheck className="w-3.5 h-3.5 text-brand-400 shrink-0" />

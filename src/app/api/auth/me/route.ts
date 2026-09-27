@@ -20,6 +20,8 @@ export async function GET(request: NextRequest) {
       select: {
         id: true,
         displayName: true,
+        // The unique public handle, shown on the profile with a change control.
+        username: true,
         email: true,
         phone: true,
         avatarUrl: true,

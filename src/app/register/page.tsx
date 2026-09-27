@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AuthBrandPanel from "@/components/AuthBrandPanel";
-import { Play, Mail, Lock, Eye, EyeOff, User, Film, Check, Loader2, ArrowRight, ScrollText, ShieldAlert } from "lucide-react";
+import { Play, Mail, Lock, Eye, EyeOff, User, AtSign, Film, Check, Loader2, ArrowRight, ScrollText, ShieldAlert } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
@@ -15,6 +15,7 @@ import {
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
 } from "@/lib/creator-guidelines";
+import { USERNAME_RULES_HINT, normalizeUsername } from "@/lib/usernames";
 
 /** The form's life cycle — each phase has its own look and motion. */
 type Phase = "idle" | "loading" | "success" | "error";
@@ -47,6 +48,9 @@ export default function RegisterPage() {
 
   const [role, setRole] = useState<"VIEWER" | "CREATOR">("VIEWER");
   const [displayName, setDisplayName] = useState("");
+  // The public handle. Stored lowercase; typed as-is here so the person sees
+  // their own keystrokes, and normalised again on submit and on the server.
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -101,6 +105,14 @@ export default function RegisterPage() {
       refuse("Passwords do not match");
       return;
     }
+    // The username is the one name nobody else may take, so it is required and
+    // checked before the request goes out — the server checks it again, but a
+    // round trip that fails on "too short" is a bad first impression.
+    const handle = normalizeUsername(username);
+    if (!handle) {
+      refuse("Choose a username");
+      return;
+    }
     // Email only. Signing up with a phone number was removed along with the SMS
     // reset channel it depended on: the account it produced could not be
     // recovered. See registerSchema in lib/validation.ts.
@@ -122,6 +134,7 @@ export default function RegisterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           displayName,
+          username: handle,
           email: email.trim(),
           password,
           role,
@@ -259,6 +272,28 @@ export default function RegisterPage() {
               <div className="relative">
                 <User className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
                 <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={t("auth.displayName")} className="input-field pl-10" required minLength={2} autoComplete="name" />
+              </div>
+
+              <div>
+                <div className="relative">
+                  <AtSign className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
+                  <input
+                    type="text"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    placeholder="username"
+                    className="input-field pl-10"
+                    required
+                    minLength={3}
+                    maxLength={30}
+                    autoComplete="username"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                  />
+                </div>
+                <p className={cn("text-xs mt-1", isLight ? "text-gray-400" : "text-white/40")}>
+                  Your public @handle. {USERNAME_RULES_HINT}.
+                </p>
               </div>
 
               <div className="relative">

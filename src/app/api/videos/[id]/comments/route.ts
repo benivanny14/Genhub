@@ -13,6 +13,7 @@ import config from "@/lib/config";
 
 const userSelect = {
   id: true,
+  username: true,
   displayName: true,
   avatarUrl: true,
   role: true,

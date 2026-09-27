@@ -35,9 +35,12 @@ import { useCurrency } from "@/lib/currency";
 import Image from "next/image";
 import NotificationBell from "@/components/NotificationBell";
 import { canOptimizeImage } from "@/lib/media";
+import { displayHandle } from "@/lib/usernames";
 
 interface UserData {
   id: string;
+  /** Unique public handle; shown as @username when present. */
+  username?: string | null;
   displayName: string | null;
   email: string | null;
   phone: string | null;
@@ -55,6 +58,7 @@ interface SuggestVideo {
 }
 interface SuggestCreator {
   id: string;
+  username?: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   isVerified: boolean;
@@ -228,7 +232,7 @@ export default function Header() {
                           className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm hover:bg-white/10 text-left"
                         >
                           <User className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                          <span className="truncate flex-1">{c.displayName || "Creator"}</span>
+                          <span className="truncate flex-1">{displayHandle(c, "Creator")}</span>
                         </button>
                       ))}
                     </div>
@@ -346,7 +350,7 @@ export default function Header() {
                       />
                     ) : (
                       <div className="w-8 h-8 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-medium text-sm">
-                        {user.displayName?.[0] || "U"}
+                        {(user.username?.[0] || user.displayName?.[0] || "U").toUpperCase()}
                       </div>
                     )}
                     <ChevronDown className="w-4 h-4 text-white/60" />
@@ -355,7 +359,7 @@ export default function Header() {
                   {userMenuOpen && (
                     <div className="absolute right-0 top-full mt-2 w-56 glass-card p-2 animate-fade-in">
                       <div className="px-3 py-2 border-b border-white/10 mb-2">
-                        <p className="font-medium text-sm">{user.displayName}</p>
+                        <p className="font-medium text-sm">{displayHandle(user)}</p>
                         <p className="text-xs text-white/50">{user.email || user.phone}</p>
                       </div>
                       <Link
@@ -508,11 +512,11 @@ export default function Header() {
                     />
                   ) : (
                     <div className="w-10 h-10 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-medium">
-                      {user.displayName?.[0] || "U"}
+                      {(user.username?.[0] || user.displayName?.[0] || "U").toUpperCase()}
                     </div>
                   )}
                   <div>
-                    <p className="font-medium text-sm">{user.displayName}</p>
+                    <p className="font-medium text-sm">{displayHandle(user)}</p>
                     <p className="text-xs text-white/50">
                       {format(user.walletBalance)}
                     </p>

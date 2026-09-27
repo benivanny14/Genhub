@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
         video: {
           include: {
             creator: {
-              select: { id: true, displayName: true, avatarUrl: true },
+              select: { id: true, username: true, displayName: true, avatarUrl: true },
             },
           },
         },

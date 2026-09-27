@@ -257,10 +257,10 @@ export async function GET(request: NextRequest) {
         take: 300,
         include: {
           sender: {
-            select: { id: true, displayName: true, avatarUrl: true, role: true },
+            select: { id: true, username: true, displayName: true, avatarUrl: true, role: true },
           },
           receiver: {
-            select: { id: true, displayName: true, avatarUrl: true, role: true },
+            select: { id: true, username: true, displayName: true, avatarUrl: true, role: true },
           },
         },
       });
@@ -268,7 +268,13 @@ export async function GET(request: NextRequest) {
       const conversations = new Map<
         string,
         {
-          partner: { id: string; displayName: string | null; avatarUrl: string | null; role: string };
+          partner: {
+            id: string;
+            username: string | null;
+            displayName: string | null;
+            avatarUrl: string | null;
+            role: string;
+          };
           lastMessage: (typeof recent)[number];
           unreadCount: number;
         }
@@ -299,7 +305,7 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: "desc" },
       take: 50,
       include: {
-        sender: { select: { id: true, displayName: true, avatarUrl: true } },
+        sender: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
       },
     });
 

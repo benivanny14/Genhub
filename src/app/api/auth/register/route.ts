@@ -36,7 +36,8 @@ export async function POST(request: NextRequest) {
       return api.validation(result.error.errors[0].message);
     }
 
-    const { displayName, email, password, role, locale, referralCode } = result.data;
+    const { displayName, username, email, password, role, locale, referralCode } =
+      result.data;
 
     // Resolve referrer (affiliate attribution) before creating the user
     let referrer: { id: string; displayName: string | null } | null = null;
@@ -55,6 +56,19 @@ export async function POST(request: NextRequest) {
 
     if (existingUser) {
       return api.error("This email address is already in use", 409);
+    }
+
+    // The username is the handle nobody else may take. Checked here so the
+    // person gets a sentence instead of a database error; enforced again by the
+    // UNIQUE index, which is what actually makes it safe under a race between
+    // two sign-ups for the same name.
+    const existingUsername = await prisma.user.findUnique({
+      where: { username },
+      select: { id: true },
+    });
+
+    if (existingUsername) {
+      return api.error("That username is already taken — please choose another", 409);
     }
 
     // Hash password
@@ -87,6 +101,7 @@ export async function POST(request: NextRequest) {
     const user = await prisma.user.create({
       data: {
         displayName,
+        username,
         email,
         passwordHash,
         role,
@@ -108,6 +123,7 @@ export async function POST(request: NextRequest) {
       select: {
         id: true,
         displayName: true,
+        username: true,
         email: true,
         phone: true,
         role: true,
@@ -174,6 +190,16 @@ export async function POST(request: NextRequest) {
     }
     return api.success(user, "Sign-up successful", 201);
   } catch (error) {
+    // Two sign-ups can race for the same handle between the check above and the
+    // insert. The UNIQUE index is the real guard; this turns its error into the
+    // same sentence the pre-check gives, instead of an opaque 500.
+    const prismaError = error as { code?: string; meta?: { target?: string[] | string } };
+    const target = prismaError?.meta?.target;
+    const targetsUsername =
+      Array.isArray(target) ? target.includes("username") : target === "username";
+    if (prismaError?.code === "P2002" && targetsUsername) {
+      return api.error("That username is already taken — please choose another", 409);
+    }
     console.error("[Register Error]", error);
     return api.internal("Something went wrong during sign-up");
   }

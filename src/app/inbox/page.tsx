@@ -15,9 +15,12 @@ import { formatRelativeTime, cn, formatTZS } from "@/lib/utils";
 // behind. A creator answering their own inbox does not pay, so the box is
 // replaced by a line saying so; see `freeReply` below.
 import { MIN_PAID_MESSAGE } from "@/lib/pay-message";
+import { displayHandle } from "@/lib/usernames";
 
 interface Partner {
   id: string;
+  /** Unique public handle; shown as @username when present. */
+  username?: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   role: string;
@@ -427,12 +430,12 @@ export default function InboxPage() {
                         )}
                       >
                         <div className="w-10 h-10 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-bold shrink-0">
-                          {conv.partner.displayName?.[0] || "U"}
+                          {(conv.partner.username?.[0] || conv.partner.displayName?.[0] || "U").toUpperCase()}
                         </div>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center justify-between gap-2">
                             <span className={cn("text-sm font-medium truncate", isLight ? "text-gray-800" : "text-white")}>
-                              {conv.partner.displayName || "User"}
+                              {displayHandle(conv.partner, "User")}
                             </span>
                             <span className={cn("text-[10px] shrink-0", isLight ? "text-gray-400" : "text-white/30")}>
                               {formatRelativeTime(new Date(conv.lastMessage.createdAt))}
@@ -475,10 +478,10 @@ export default function InboxPage() {
                       isLight ? "border-gray-100" : "border-white/5"
                     )}>
                       <div className="w-8 h-8 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-bold text-sm">
-                        {activePartner.displayName?.[0] || "U"}
+                        {(activePartner.username?.[0] || activePartner.displayName?.[0] || "U").toUpperCase()}
                       </div>
                       <span className={cn("font-medium text-sm", isLight ? "text-gray-900" : "text-white")}>
-                        {activePartner.displayName || "User"}
+                        {displayHandle(activePartner, "User")}
                       </span>
                       <span className={cn("text-[10px] px-1.5 py-0.5 rounded", isLight ? "bg-gray-100 text-gray-500" : "bg-white/10 text-white/50")}>
                         {activePartner.role}
@@ -579,7 +582,7 @@ export default function InboxPage() {
                               href={`/creator/${activePartner.id}`}
                               className="text-brand-400 hover:underline"
                             >
-                              Subscribe to {activePartner.displayName || "this creator"} to watch their videos
+                              Subscribe to {displayHandle(activePartner, "this creator")} to watch their videos
                             </Link>
                           )}
                         </p>

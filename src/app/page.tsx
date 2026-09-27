@@ -22,6 +22,7 @@ import {
 import { CATEGORIES, categoryHref } from "@/lib/categories";
 import { demoDataEnabled } from "@/lib/demo-mode";
 import { pickFreshRows } from "@/lib/home-rows";
+import { displayHandle } from "@/lib/usernames";
 import { useInfiniteVideos, type InfiniteVideoQuery } from "@/hooks/useInfiniteVideos";
 
 interface HistoryItem {
@@ -53,6 +54,8 @@ interface Video {
   createdAt: string;
   creator: {
     id: string;
+    /** Public handle; shown as @username, with `displayName` as the fallback. */
+    username?: string | null;
     displayName: string | null;
     avatarUrl: string | null;
     isVerified?: boolean;
@@ -65,6 +68,8 @@ interface UserData {
 
 interface FeedCreator {
   id: string;
+  /** Public handle; shown as @username, with `displayName` as the fallback. */
+  username?: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   isVerified: boolean;
@@ -603,7 +608,7 @@ export default function HomePage() {
             <div className="absolute bottom-0 left-0 right-0 p-5 sm:p-7">
               <div className="flex items-center gap-2 text-xs text-gray-300 mb-2">
                 <span className="font-semibold text-brand-300">
-                  {feed.featured.creator.displayName}
+                  {displayHandle(feed.featured.creator, "Creator")}
                 </span>
                 {feed.featured.creator.isVerified && (
                   <BadgeCheck className="w-3.5 h-3.5 text-sky-400" />
@@ -671,7 +676,7 @@ export default function HomePage() {
                   "text-xs mt-0.5 truncate",
                   isLight ? "text-gray-400" : "text-white/40"
                 )}>
-                  {h.creator.displayName || "Creator"}
+                  {displayHandle(h.creator, "Creator")}
                 </p>
               </Link>
             ))}
@@ -716,14 +721,14 @@ export default function HomePage() {
                   {c.avatarUrl ? (
                     <Image
                       src={c.avatarUrl}
-                      alt={c.displayName || "Creator"}
+                      alt={displayHandle(c, "Creator")}
                       width={80}
                       height={80}
                       className="w-full h-full object-cover"
                     />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center bg-brand-600 font-bold text-xl text-white">
-                      {c.displayName?.[0]?.toUpperCase() || "C"}
+                      {(c.username?.[0] || c.displayName?.[0] || "C").toUpperCase()}
                     </div>
                   )}
                 </div>
@@ -733,7 +738,7 @@ export default function HomePage() {
                     isLight ? "text-gray-700" : "text-gray-300"
                   )}
                 >
-                  {c.displayName}
+                  {displayHandle(c, "Creator")}
                   {c.isVerified && <BadgeCheck className="w-3 h-3 text-sky-400 shrink-0" />}
                 </span>
                 <span className="text-[10px] text-gray-500">

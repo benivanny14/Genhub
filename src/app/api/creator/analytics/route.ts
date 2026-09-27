@@ -146,11 +146,12 @@ export async function GET(request: NextRequest) {
     const fanUsers = fanIds.length
       ? await prisma.user.findMany({
           where: { id: { in: fanIds } },
-          select: { id: true, displayName: true, avatarUrl: true },
+          select: { id: true, username: true, displayName: true, avatarUrl: true },
         })
       : [];
     const topFans = topFansRaw.map((f) => ({
       userId: f.userId,
+      username: fanUsers.find((u) => u.id === f.userId)?.username || null,
       displayName:
         fanUsers.find((u) => u.id === f.userId)?.displayName || "Anonymous fan",
       avatarUrl: fanUsers.find((u) => u.id === f.userId)?.avatarUrl || null,

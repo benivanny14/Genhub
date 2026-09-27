@@ -118,6 +118,9 @@ export async function GET(request: NextRequest) {
       creator: {
         select: {
           id: true,
+          // The public handle travels with the creator so a feed card can show
+          // @someone instead of a display name two accounts can share.
+          username: true,
           displayName: true,
           avatarUrl: true,
           isVerified: true,

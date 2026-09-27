@@ -19,6 +19,7 @@ describe("registerSchema", () => {
   it("should accept valid registration with email", () => {
     const result = registerSchema.safeParse({
       displayName: "Test User",
+      username: "test_user",
       email: "test@example.com",
       password: "password123",
       role: "VIEWER",
@@ -45,6 +46,7 @@ describe("registerSchema", () => {
     // put one on the row and re-create the account this rule exists to prevent.
     const result = registerSchema.safeParse({
       displayName: "Test User",
+      username: "test_user",
       email: "test@example.com",
       phone: "+255712345678",
       password: "password123",
@@ -83,9 +85,46 @@ describe("registerSchema", () => {
   it("should reject a registration with no email", () => {
     const result = registerSchema.safeParse({
       displayName: "Test User",
+      username: "test_user",
       password: "password123",
     });
     expect(result.success).toBe(false);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Username — the one name nobody else may take
+// -----------------------------------------------------------------------------
+describe("registerSchema username", () => {
+  const withUsername = (username: unknown) =>
+    registerSchema.safeParse({
+      displayName: "Test User",
+      username,
+      email: "test@example.com",
+      password: "password123",
+    });
+
+  it("requires a username", () => {
+    expect(withUsername(undefined).success).toBe(false);
+    expect(withUsername("").success).toBe(false);
+  });
+
+  it("normalises case, whitespace and a leading @", () => {
+    const result = withUsername("  @Test_User  ");
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.username).toBe("test_user");
+  });
+
+  it("refuses reserved names and impersonating prefixes", () => {
+    for (const name of ["admin", "ADMIN", "support", "genhub", "official", "genhub_support", "admin_hq"]) {
+      expect(withUsername(name).success, name).toBe(false);
+    }
+  });
+
+  it("refuses invalid characters and lengths", () => {
+    for (const name of ["ab", "has space", "dots.here", "dash-here", "emoji😀", "x".repeat(31)]) {
+      expect(withUsername(name).success, name).toBe(false);
+    }
   });
 });
 

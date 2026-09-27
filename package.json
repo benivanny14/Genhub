@@ -65,6 +65,7 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^22.20.4",
     "@types/nodemailer": "^8.0.2",

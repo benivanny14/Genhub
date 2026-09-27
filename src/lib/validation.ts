@@ -5,6 +5,7 @@
 
 import { z } from "zod";
 import { MEDIA_ROUTE_PREFIX, isSafeMediaKey } from "./media";
+import { normalizeUsername, usernameFormatError } from "./usernames";
 
 /**
  * A URL that we uploaded ourselves, or a plain external one.
@@ -71,14 +72,52 @@ export function ownMediaUrl(label: string) {
 // the operator. Requiring an email at sign-up is what makes "reset by email" a
 // promise the platform can keep. Phone numbers are still accepted at sign-IN,
 // for the accounts that predate this rule.
+/**
+ * The one name nobody else may take.
+ *
+ * Normalised (trimmed, `@` dropped, lowercased) and then judged by the shared
+ * rules in lib/usernames.ts, so the form, the API and the change flow all refuse
+ * the same things: too short, too long, invalid characters, or a reserved name.
+ * The uniqueness half of the rule cannot live here — it needs the database — so
+ * it is enforced by the UNIQUE index and checked in the routes.
+ *
+ * Its shape half is exported on its own because the change-username route has
+ * to recognise "this is already my username" BEFORE the rules above are applied
+ * — see /api/account/username.
+ */
+export const usernameShapeSchema = z
+  .string({
+    required_error: "Choose a username",
+    invalid_type_error: "Choose a username",
+  })
+  .trim();
+
+export const usernameSchema = usernameShapeSchema
+  .transform((value) => normalizeUsername(value))
+  // The message is derived from the value that failed, so the field explains
+  // exactly what is wrong ("reserved", "too short", "invalid characters")
+  // instead of one generic refusal.
+  .refine((value) => usernameFormatError(value) === null, (value) => ({
+    message: usernameFormatError(value) ?? "Choose a different username",
+  }));
+
 export const registerSchema = z.object({
   displayName: z.string().min(2, "Name must be at least 2 characters").max(50),
+  // Unique public handle (see lib/usernames.ts).
+  username: usernameSchema,
   email: z.string().trim().email("Enter a valid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
   role: z.enum(["VIEWER", "CREATOR"]).default("VIEWER"),
   locale: z.enum(["sw", "en"]).default("sw"),
   referralCode: z.string().trim().max(32).optional(),
 });
+
+// There is deliberately no `changeUsernameSchema` beside this one. Changing a
+// handle is the same rules applied to a NEW name, and the route that does it
+// needs those rules *after* it has compared the value with the account's
+// current handle (see /api/account/username). A second schema wrapping
+// `usernameSchema` would let the change flow drift away from the sign-up flow
+// without either one failing.
 
 export const loginSchema = z.object({
   email: z.string().email().optional(),

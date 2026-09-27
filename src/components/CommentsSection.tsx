@@ -8,9 +8,12 @@ import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { demoDataEnabled } from "@/lib/demo-mode";
 import { cn } from "@/lib/utils";
+import { displayHandle } from "@/lib/usernames";
 
 interface CommentUser {
   id: string;
+  /** Unique public handle; shown as @username when present. */
+  username?: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   role: string;
@@ -211,13 +214,13 @@ export default function CommentsSection({ videoId, user }: CommentsSectionProps)
               ? "bg-brand-500/20 text-brand-400"
               : isLight ? "bg-gray-100 text-gray-500" : "bg-surface-300/60 text-white/60"
           )}>
-            {comment.user.displayName?.[0] || "U"}
+            {(comment.user.username?.[0] || comment.user.displayName?.[0] || "U").toUpperCase()}
           </div>
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <span className={cn("text-sm font-medium", isLight ? "text-gray-800" : "text-white")}>
-                {comment.user.displayName || "Anonymous"}
+                {displayHandle(comment.user, "Anonymous")}
               </span>
               {comment.user.role === "CREATOR" && (
                 <span className="bg-brand-500/15 text-brand-400 text-[10px] font-bold px-1.5 py-0.5 rounded">

@@ -30,7 +30,7 @@ export async function GET(
           include: {
             video: {
               include: {
-                creator: { select: { id: true, displayName: true, avatarUrl: true } },
+                creator: { select: { id: true, username: true, displayName: true, avatarUrl: true } },
               },
             },
           },

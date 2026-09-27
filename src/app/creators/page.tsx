@@ -11,9 +11,12 @@ import { Search, Users, BadgeCheck, Film, UserPlus, Crown } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { cn } from "@/lib/utils";
 import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
+import { displayHandle } from "@/lib/usernames";
 
 interface DirectoryCreator {
   id: string;
+  /** Unique public handle; shown as @username when present. */
+  username: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   isVerified: boolean;
@@ -58,7 +61,7 @@ export default function CreatorDirectoryPage() {
   }
 
   const filtered = creators.filter((c) =>
-    letter ? (c.displayName || "").toUpperCase().startsWith(letter) : true
+    letter ? (c.username || c.displayName || "").toUpperCase().startsWith(letter) : true
   );
 
   return (
@@ -105,7 +108,9 @@ export default function CreatorDirectoryPage() {
             All
           </button>
           {LETTERS.map((l) => {
-            const has = creators.some((c) => (c.displayName || "").toUpperCase().startsWith(l));
+            const has = creators.some((c) =>
+              (c.username || c.displayName || "").toUpperCase().startsWith(l)
+            );
             return (
               <button
                 key={l}
@@ -160,11 +165,11 @@ export default function CreatorDirectoryPage() {
               >
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-400/30 to-brand-600/30 flex items-center justify-center text-brand-400 font-bold text-lg shrink-0">
-                    {c.displayName?.[0] || "C"}
+                    {(c.username?.[0] || c.displayName?.[0] || "C").toUpperCase()}
                   </div>
                   <div className="min-w-0">
                     <p className={cn("font-medium flex items-center gap-1.5", isLight ? "text-gray-900" : "text-white")}>
-                      <span className="truncate">{c.displayName || "Creator"}</span>
+                      <span className="truncate">{displayHandle(c, "Creator")}</span>
                       {c.isVerified && <BadgeCheck className="w-4 h-4 text-brand-400 shrink-0" />}
                     </p>
                     <p className={cn("text-xs flex items-center gap-1", isLight ? "text-gray-400" : "text-white/40")}>

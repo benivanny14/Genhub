@@ -21,7 +21,7 @@ export async function GET(_request: NextRequest) {
       take: 50,
       include: {
         video: { select: { id: true, title: true, slug: true } },
-        creator: { select: { id: true, displayName: true } },
+        creator: { select: { id: true, username: true, displayName: true } },
       },
     });
 

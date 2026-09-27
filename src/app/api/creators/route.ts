@@ -25,6 +25,9 @@ export async function GET(request: NextRequest) {
         ? {
             OR: [
               { displayName: { contains: search, mode: "insensitive" as const } },
+              // The handle is how people quote a creator (@name), so it has to
+              // find them too — and it is the only name that is unique.
+              { username: { contains: search, mode: "insensitive" as const } },
               { creatorProfile: { bio: { contains: search, mode: "insensitive" as const } } },
             ],
           }
@@ -40,6 +43,7 @@ export async function GET(request: NextRequest) {
       take: limit,
       select: {
         id: true,
+        username: true,
         displayName: true,
         avatarUrl: true,
         isVerified: true,

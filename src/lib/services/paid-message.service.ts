@@ -44,7 +44,13 @@ export interface PaidMessageRow {
   clearsAt: string;
   /** True while the money is still inside the holding period. */
   held: boolean;
-  sender: { id: string; displayName: string | null; avatarUrl: string | null };
+  sender: {
+    id: string;
+    /** Public handle, preferred over `displayName` wherever it exists. */
+    username: string | null;
+    displayName: string | null;
+    avatarUrl: string | null;
+  };
 }
 
 export interface PaidMessageEarnings {
@@ -108,7 +114,9 @@ export async function getPaidMessageEarnings(
         id: true,
         amount: true,
         createdAt: true,
-        sender: { select: { id: true, displayName: true, avatarUrl: true } },
+        sender: {
+          select: { id: true, username: true, displayName: true, avatarUrl: true },
+        },
       },
     }),
   ]);
@@ -150,6 +158,8 @@ export const CHAT_REVENUE_LIMIT = 20;
 
 export interface ChatRevenueRow {
   creatorId: string;
+  /** Public handle, preferred over `displayName` wherever it exists. */
+  username: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   /** Lifetime paid messages received. */
@@ -257,7 +267,7 @@ export async function getChatRevenue(
     }),
     prisma.user.findMany({
       where: { id: { in: ids } },
-      select: { id: true, displayName: true, avatarUrl: true },
+      select: { id: true, username: true, displayName: true, avatarUrl: true },
     }),
   ]);
 
@@ -279,6 +289,7 @@ export async function getChatRevenue(
       const heldRow = heldByCreator.get(creatorId);
       return {
         creatorId,
+        username: usersById.get(creatorId)?.username ?? null,
         displayName: usersById.get(creatorId)?.displayName ?? null,
         avatarUrl: usersById.get(creatorId)?.avatarUrl ?? null,
         messages: row._count._all,

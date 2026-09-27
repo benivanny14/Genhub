@@ -22,6 +22,8 @@ interface FavoriteItem {
     createdAt: string;
     creator: {
       id: string;
+      /** Public handle; the card prefers it over `displayName`. */
+      username?: string | null;
       displayName: string | null;
       avatarUrl: string | null;
     };

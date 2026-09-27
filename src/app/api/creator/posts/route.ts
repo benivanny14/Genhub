@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
       },
       include: {
         creator: {
-          select: { id: true, displayName: true, avatarUrl: true, isVerified: true },
+          select: { id: true, username: true, displayName: true, avatarUrl: true, isVerified: true },
         },
       },
     });

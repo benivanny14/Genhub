@@ -9,6 +9,7 @@ import { Users, UserPlus, Sparkles, Send, BadgeCheck } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { cn, formatRelativeTime } from "@/lib/utils";
+import { displayHandle } from "@/lib/usernames";
 import { DEMO_VIDEOS } from "@/lib/demo-data";
 import { demoDataEnabled } from "@/lib/demo-mode";
 
@@ -29,6 +30,8 @@ interface FeedVideo {
   createdAt: string;
   creator: {
     id: string;
+    /** The public handle; it is what identifies a creator when it exists. */
+    username?: string | null;
     displayName: string | null;
     avatarUrl: string | null;
     isVerified?: boolean;
@@ -37,6 +40,7 @@ interface FeedVideo {
 
 interface FeedCreator {
   id: string;
+  username?: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   isVerified?: boolean;
@@ -203,10 +207,10 @@ export default function FeedPage() {
                     )}
                   >
                     <div className="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 text-xs font-bold">
-                      {c.displayName?.[0] || "C"}
+                      {(c.username?.[0] || c.displayName?.[0] || "C").toUpperCase()}
                     </div>
                     <span className={cn("text-sm", isLight ? "text-gray-700" : "text-white/80")}>
-                      {c.displayName || "Creator"}
+                      {displayHandle(c, "Creator")}
                     </span>
                   </Link>
                 ))}
@@ -256,14 +260,14 @@ export default function FeedPage() {
                     <div className="flex items-center gap-3 mb-3">
                       <Link href={`/creator/${post.creator.id}`} className="flex items-center gap-3 min-w-0">
                         <div className="w-10 h-10 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-bold shrink-0">
-                          {post.creator.displayName?.[0] || "C"}
+                          {(post.creator.username?.[0] || post.creator.displayName?.[0] || "C").toUpperCase()}
                         </div>
                         <div className="min-w-0">
                           <p className={cn(
                             "font-medium text-sm flex items-center gap-1.5",
                             isLight ? "text-gray-900" : "text-white"
                           )}>
-                            <span className="truncate">{post.creator.displayName || "Creator"}</span>
+                            <span className="truncate">{displayHandle(post.creator, "Creator")}</span>
                             {post.creator.isVerified && (
                               <BadgeCheck className="w-4 h-4 text-brand-400 shrink-0" />
                             )}

@@ -18,6 +18,7 @@ import { useCurrency } from "@/lib/currency";
 import Image from "next/image";
 import { canOptimizeImage } from "@/lib/media";
 import { cn, formatRelativeTime } from "@/lib/utils";
+import { displayHandle } from "@/lib/usernames";
 import {
   CreditCard,
   Wallet,
@@ -40,7 +41,13 @@ interface Subscription {
   renewAttempts?: number;
   lastRenewError?: string | null;
   lastRenewedAt?: string | null;
-  creator: { id: string; displayName: string | null; avatarUrl: string | null };
+  creator: {
+    id: string;
+    /** The public handle; preferred over `displayName` wherever it exists. */
+    username?: string | null;
+    displayName: string | null;
+    avatarUrl: string | null;
+  };
 }
 
 interface Transaction {
@@ -51,7 +58,7 @@ interface Transaction {
   gateway: string | null;
   createdAt: string;
   video: { id: string; title: string } | null;
-  creator: { id: string; displayName: string | null } | null;
+  creator: { id: string; username?: string | null; displayName: string | null } | null;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -113,7 +120,7 @@ export default function BillingPage() {
   }
 
   async function cancelSubscription(sub: Subscription) {
-    const name = sub.creator.displayName || "this creator";
+    const name = displayHandle(sub.creator, "this creator");
     setPendingCancel(null);
     setCancelling(sub.creator.id);
     try {
@@ -238,19 +245,19 @@ export default function BillingPage() {
                       {sub.creator.avatarUrl ? (
                         <Image
                           src={sub.creator.avatarUrl}
-                          alt={sub.creator.displayName || "Creator"}
+                          alt={displayHandle(sub.creator, "Creator")}
                           width={40}
                           height={40}
                           unoptimized={!canOptimizeImage(sub.creator.avatarUrl)}
                           className="w-full h-full object-cover"
                         />
                       ) : (
-                        sub.creator.displayName?.[0] || "C"
+                        (sub.creator.username?.[0] || sub.creator.displayName?.[0] || "C").toUpperCase()
                       )}
                     </div>
                     <div>
                       <p className={cn("font-medium", heading)}>
-                        {sub.creator.displayName || "Creator"}
+                        {displayHandle(sub.creator, "Creator")}
                       </p>
                       <p className={cn("text-xs", muted)}>
                         {format(sub.price)}/month ·{" "}
@@ -348,7 +355,7 @@ export default function BillingPage() {
                       <p className={cn("text-sm font-medium truncate", heading)}>
                         {TYPE_LABELS[tx.type] || tx.type}
                         {tx.video?.title ? ` — ${tx.video.title}` : ""}
-                        {!tx.video && tx.creator?.displayName ? ` — ${tx.creator.displayName}` : ""}
+                        {!tx.video && tx.creator ? ` — ${displayHandle(tx.creator, "Creator")}` : ""}
                       </p>
                       <p className={cn("text-xs", muted)}>
                         {formatRelativeTime(new Date(tx.createdAt))}
@@ -409,7 +416,7 @@ export default function BillingPage() {
             </div>
 
             <p className={cn("text-sm mt-3", muted)}>
-              Your membership with {pendingCancel.creator.displayName || "this creator"} ends on{" "}
+              Your membership with {displayHandle(pendingCancel.creator, "this creator")} ends on{" "}
               {new Date(pendingCancel.expiresAt).toLocaleDateString(undefined, {
                 day: "numeric",
                 month: "short",

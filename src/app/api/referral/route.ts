@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
     // Conversion history: who joined with my code (most recent first)
     const referrals = await prisma.user.findMany({
       where: { referredById: user.id },
-      select: { id: true, displayName: true, avatarUrl: true, createdAt: true },
+      select: { id: true, username: true, displayName: true, avatarUrl: true, createdAt: true },
       orderBy: { createdAt: "desc" },
       take: 20,
     });

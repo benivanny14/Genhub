@@ -286,7 +286,7 @@ export async function GET(request: NextRequest) {
       where: { viewerId: auth.userId, isActive: true, expiresAt: { gt: new Date() } },
       include: {
         creator: {
-          select: { id: true, displayName: true, avatarUrl: true },
+          select: { id: true, username: true, displayName: true, avatarUrl: true },
         },
       },
       orderBy: { createdAt: "desc" },

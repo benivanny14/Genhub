@@ -36,7 +36,7 @@ const videoSelect = {
   isFeatured: true,
   createdAt: true,
   creator: {
-    select: { id: true, displayName: true, avatarUrl: true, isVerified: true },
+    select: { id: true, username: true, displayName: true, avatarUrl: true, isVerified: true },
   },
 } as const;
 
@@ -168,6 +168,7 @@ export async function GET(_request: NextRequest) {
         take: CREATOR_SIZE,
         select: {
           id: true,
+          username: true,
           displayName: true,
           avatarUrl: true,
           isVerified: true,
@@ -231,6 +232,7 @@ export async function GET(_request: NextRequest) {
       creators: activeCreators(
         creatorsRaw.map((c) => ({
           id: c.id,
+          username: c.username,
           displayName: c.displayName,
           avatarUrl: c.avatarUrl,
           isVerified: c.isVerified,

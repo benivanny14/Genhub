@@ -17,7 +17,7 @@ export async function GET(request: NextRequest) {
       where: { viewerId: auth.userId, isActive: true, expiresAt: { gt: new Date() } },
       include: {
         creator: {
-          select: { id: true, displayName: true, avatarUrl: true, isVerified: true },
+          select: { id: true, username: true, displayName: true, avatarUrl: true, isVerified: true },
         },
       },
       orderBy: { createdAt: "desc" },
@@ -55,7 +55,7 @@ export async function GET(request: NextRequest) {
               isFeatured: true,
               createdAt: true,
               creator: {
-                select: { id: true, displayName: true, avatarUrl: true, isVerified: true },
+                select: { id: true, username: true, displayName: true, avatarUrl: true, isVerified: true },
               },
             },
           })
@@ -68,7 +68,7 @@ export async function GET(request: NextRequest) {
             take: 30,
             include: {
               creator: {
-                select: { id: true, displayName: true, avatarUrl: true, isVerified: true },
+                select: { id: true, username: true, displayName: true, avatarUrl: true, isVerified: true },
               },
             },
           })

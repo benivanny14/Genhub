@@ -28,6 +28,7 @@ interface SortVideo {
   createdAt: string;
   creator: {
     id: string;
+    username?: string | null;
     displayName: string | null;
     avatarUrl: string | null;
     isVerified?: boolean;

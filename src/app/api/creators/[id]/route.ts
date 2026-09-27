@@ -22,6 +22,7 @@ export async function GET(
       where: { id, role: "CREATOR", isBanned: false },
       select: {
         id: true,
+        username: true,
         displayName: true,
         avatarUrl: true,
         isVerified: true,
