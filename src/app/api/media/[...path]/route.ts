@@ -46,8 +46,13 @@ export const dynamic = "force-dynamic";
  *  page's images open until the function timeout. */
 const STORAGE_TIMEOUT_MS = 15_000;
 
-/** Big enough for a 5 MB upload plus the JSON wrapper. */
-const MAX_UPSTREAM_BYTES = 8 * 1024 * 1024;
+/**
+ * Big enough for the largest image /api/upload accepts (10 MB) with headroom.
+ * If this were below the upload cap, a photo would upload successfully and then
+ * fail to DISPLAY, because serving it back goes through this route — a silent
+ * broken image with no error the uploader ever sees.
+ */
+const MAX_UPSTREAM_BYTES = 16 * 1024 * 1024;
 
 /**
  * Local-disk fallback. `private/...` lives in `.media/` (outside the static

@@ -39,7 +39,7 @@ import {
   Share2,
 } from "lucide-react";
 import { canOptimizeImage } from "@/lib/media";
-import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
+import { uploadFileWithTus, TusUploadError, videoSizeError } from "@/lib/tus-upload";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
 import {
   PAYOUT_METHODS,
@@ -542,6 +542,13 @@ export default function CreatorDashboard() {
    * this is the door that finally lets an existing scene grow an intro trailer.
    */
   async function uploadEditTeaser(file: File) {
+    // Same guard as the upload form: no slot is reserved for a file that can
+    // never be sent.
+    const sizeError = videoSizeError(file);
+    if (sizeError) {
+      toast("error", sizeError);
+      return;
+    }
     setUploadingEditTeaser(true);
     setEditTeaserProgress(0);
     try {
@@ -1805,7 +1812,8 @@ export default function CreatorDashboard() {
                       />
                     </label>
                     <p className="text-xs text-white/40">
-                      JPEG, PNG or WebP, up to 5 MB. This is the picture on the feed —
+                      JPEG, PNG or WebP, up to 10 MB — a big photo is shrunk to fit
+                      automatically. This is the picture on the feed —
                       you can move and zoom it before it is saved.
                     </p>
                   </div>

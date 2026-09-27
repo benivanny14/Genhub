@@ -19,7 +19,8 @@
 //   public  (default) — thumbnails, avatars, gallery photos
 //   private           — KYC documents, readable only by their owner and admins
 //
-// Guardrails: auth required, 5 uploads / 5 min, images or .vtt captions, 5 MB.
+// Guardrails: auth required, 5 uploads / 5 min, images or .vtt captions.
+// Size caps: images 10 MB (phone photos and HEIC files run large), captions 5 MB.
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -63,7 +64,13 @@ function extensionFor(file: File): string | null {
   return null;
 }
 
-const MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+// An avatar, a video cover or a KYC document all come straight off a phone, and
+// a modern phone photo is routinely 4-8 MB before it is cropped. 10 MB is the
+// ceiling that lets a real photo through while still bounding storage.
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
+// A WebVTT file is a list of timestamps — a feature-length scene is a few
+// hundred KB. 5 MB is already far past anything real, so it stays.
+const MAX_CAPTION_BYTES = 5 * 1024 * 1024; // 5 MB
 
 /**
  * Which bucket a key lands in. Anything else is refused rather than guessed: a
@@ -100,8 +107,13 @@ export async function POST(request: NextRequest) {
         "Only JPEG, PNG, WebP, HEIC or HEIF images, or a .vtt captions file, are allowed"
       );
     }
-    if (file.size > MAX_BYTES) {
-      return api.validation("File is too large (max 5 MB)");
+    const maxBytes = ext === ".vtt" ? MAX_CAPTION_BYTES : MAX_IMAGE_BYTES;
+    if (file.size > maxBytes) {
+      return api.validation(
+        ext === ".vtt"
+          ? "Captions file is too large (max 5 MB)"
+          : "Image is too large (max 10 MB)"
+      );
     }
 
     const kind = parseKind(form?.get("kind") ?? null);

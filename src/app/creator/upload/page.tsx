@@ -8,7 +8,7 @@ import ImageCropper from "@/components/ImageCropper";
 import { canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
-import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
+import { uploadFileWithTus, TusUploadError, videoSizeError } from "@/lib/tus-upload";
 import { CATEGORIES } from "@/lib/categories";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
 import {
@@ -166,6 +166,13 @@ export default function UploadPage() {
 
   /** Reproduce the upload once a file is final — full or already cut. */
   async function startVideoUpload(file: File) {
+    // Refuse an over-limit file BEFORE reserving a Bunny slot: an empty slot
+    // that can never be filled still counts against the creator's library.
+    const sizeError = videoSizeError(file);
+    if (sizeError) {
+      toast("error", sizeError);
+      return;
+    }
     const credentials = await initiateUpload();
     if (!credentials) return;
     const uploaded = await uploadToBunny(file, credentials, setUploadProgress);
@@ -570,7 +577,8 @@ export default function UploadPage() {
               />
             </label>
             <p className="text-xs text-white/40 mt-2">
-              JPEG, PNG or WebP, up to 5 MB. You can move and zoom the picture
+              JPEG, PNG or WebP, up to 10 MB — a big photo is shrunk to fit
+              automatically. You can move and zoom the picture
               before it is saved, so it looks exactly as you want it on the feed.
             </p>
             {thumbnailUrl && (
@@ -620,7 +628,14 @@ export default function UploadPage() {
                   disabled={uploadingTeaser}
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
+                    // Reset so choosing the same file again still fires.
+                    e.target.value = "";
                     if (!file) return;
+                    const sizeError = videoSizeError(file);
+                    if (sizeError) {
+                      toast("error", sizeError);
+                      return;
+                    }
                     setUploadingTeaser(true);
                     setTeaserProgress(0);
                     try {

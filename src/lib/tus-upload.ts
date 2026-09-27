@@ -26,6 +26,29 @@ const CHUNK_SIZE = 32 * 1024 * 1024;
 /** Backoff between attempts at the SAME chunk, in ms. */
 const RETRY_DELAYS = [0, 1_000, 3_000, 8_000];
 
+/**
+ * The largest video a creator may send, matching the "Max 2GB" label on the
+ * upload form. Bunny Stream accepts far more, but every GB a mobile creator
+ * pushes is time on a metered connection, and a file past this size almost
+ * always means the wrong file was chosen (a raw camera export, a folder of
+ * clips) rather than a scene someone meant to upload.
+ *
+ * Checked BEFORE the slot is reserved, so a file that is too large never
+ * creates a Bunny object — see videoSizeError and the call sites.
+ */
+export const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
+
+/**
+ * A creator-facing message when a file is over the limit, or null when it is
+ * fine. Shared so the form can refuse the file early (no wasted Bunny slot) and
+ * `uploadFileWithTus` can refuse it again as a last line of defence.
+ */
+export function videoSizeError(file: File): string | null {
+  if (file.size <= MAX_VIDEO_BYTES) return null;
+  const gb = file.size / (1024 * 1024 * 1024);
+  return `That video is ${gb.toFixed(2)} GB — the limit is 2 GB. Trim or compress it and try again.`;
+}
+
 export type TusErrorCode =
   | "NOT_CONFIGURED"
   | "EXPIRED"
@@ -252,6 +275,13 @@ export async function uploadFileWithTus(
 
   if (!file.size) {
     throw new TusUploadError("UNSUPPORTED", "That file is empty.");
+  }
+  // Refused here as well as in the form: a caller that skips the early check
+  // (the edit-trailer path, a future one) must not be able to push an unbounded
+  // file at Bunny on the creator's data plan.
+  const sizeError = videoSizeError(file);
+  if (sizeError) {
+    throw new TusUploadError("UNSUPPORTED", sizeError);
   }
   // Catch an expired authorization here rather than as an opaque 401 mid-upload.
   if (credentials.expirationTime <= Math.floor(Date.now() / 1000)) {

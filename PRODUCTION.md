@@ -341,12 +341,23 @@ guess at.
       `BUNNY_*`, `HARAKAPAY_*` or `DATABASE_URL` is referenced in any `.tsx`;
       those are read only in route handlers and services.
 - [ ] **Storage is not directly reachable.** `/api/upload` requires auth,
-      rate-limits to 5 per 5 minutes, restricts image types, caps 5 MB, and puts
+      rate-limits to 5 per 5 minutes, restricts image types, caps images at
+      10 MB (captions 5 MB), and puts
       KYC documents under `private/<userId>/`. `/api/media/[...path]` serves only
       safe keys, gates `private/...` to the owner or an admin, refuses
       `image/svg+xml`, and sends `nosniff` plus a sandbox CSP. Keep the Bunny
       **storage zone private** — a public zone makes a leaked key directly
       fetchable, outside every check above.
+- [ ] **Image uploads under the platform body cap.** Vercel caps a Serverless
+      Function request body at **4.5 MB**, and that limit sits *in front of* this
+      app — a larger request is rejected before any route runs, so no app-level
+      cap can help. Bunny Storage authenticates every request with the
+      `AccessKey` header and offers no presigned/direct browser upload, so the
+      bytes must pass through our server. The fix is client-side: `uploadImage`
+      runs `src/lib/image-downscale.ts`, which shrinks a big phone photo to a
+      2048px JPEG (~1-2 MB) before sending. Verify on a real device that a
+      12 MP photo uploads — if it fails with HTTP 413, the downscale step was
+      skipped (check the browser console) rather than the platform cap changing.
 - [ ] **Rate limits** (`src/lib/config.ts` → `rateLimit`): auth 10/min, upload
       5/5min, payment 20/min, general 100/min, applied per account on the money
       and interaction routes. When Redis is unreachable they fall back to

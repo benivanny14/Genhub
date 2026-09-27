@@ -225,7 +225,7 @@ export default function KycPage() {
                 required
               />
               <p className="text-xs text-white/40 mt-1">
-                Photo of your NIDA/Passport — JPG/PNG, max 5 MB
+                Photo of your NIDA/Passport — JPG/PNG, max 10 MB
               </p>
             </div>
 

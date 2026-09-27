@@ -11,6 +11,8 @@
 // callers are (a thumbnail, an avatar).
 // =============================================================================
 
+import { downscaleImage } from "./image-downscale";
+
 export class UploadError extends Error {}
 
 export interface UploadOptions {
@@ -18,7 +20,11 @@ export interface UploadOptions {
   kind?: "public" | "private";
 }
 
-const MAX_BYTES = 5 * 1024 * 1024;
+// A phone photo is routinely 4-8 MB before it is cropped, so the image ceiling
+// is 10 MB. Captions are text and stay at 5 MB — see /api/upload for the
+// server-side cap, which is what actually enforces this.
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_CAPTION_BYTES = 5 * 1024 * 1024;
 
 /** One POST, one failure message, shared by every caller in this file. */
 async function post(file: File, kind: "public" | "private", what: string): Promise<string> {
@@ -44,11 +50,17 @@ export async function uploadImage(file: File, options: UploadOptions = {}): Prom
   if (!file.type.startsWith("image/")) {
     throw new UploadError("Please choose an image file");
   }
-  if (file.size > MAX_BYTES) {
-    throw new UploadError("Image is too large (max 5 MB)");
+  // Shrink a big phone photo here, before it is sent. This is what keeps a
+  // normal picture under the hosting platform's request-body cap (4.5 MB on
+  // Vercel) and under our own 10 MB limit — and it means what the server
+  // receives is already the size it wants.
+  const prepared = await downscaleImage(file);
+
+  if (prepared.size > MAX_IMAGE_BYTES) {
+    throw new UploadError("Image is too large (max 10 MB)");
   }
 
-  return post(file, options.kind ?? "public", "image");
+  return post(prepared, options.kind ?? "public", "image");
 }
 
 /**
@@ -64,7 +76,7 @@ export async function uploadCaptions(file: File): Promise<string> {
   if (!/\.vtt$/i.test(file.name)) {
     throw new UploadError("Captions must be a .vtt (WebVTT) file — .srt will not play");
   }
-  if (file.size > MAX_BYTES) {
+  if (file.size > MAX_CAPTION_BYTES) {
     throw new UploadError("Captions file is too large (max 5 MB)");
   }
 

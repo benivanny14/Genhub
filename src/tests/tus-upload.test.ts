@@ -9,7 +9,13 @@
 // =============================================================================
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { encodeUploadMetadata, uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
+import {
+  encodeUploadMetadata,
+  uploadFileWithTus,
+  TusUploadError,
+  videoSizeError,
+  MAX_VIDEO_BYTES,
+} from "@/lib/tus-upload";
 
 const credentials = {
   endpoint: "https://video.bunnycdn.com/tusupload",
@@ -21,6 +27,10 @@ const credentials = {
 
 const fileOf = (bytes: number, name = "scene.mp4") =>
   new File([new Uint8Array(bytes)], name, { type: "video/mp4" });
+
+/** A File whose only real property is its size — 2 GB must not be allocated. */
+const bigFileOf = (bytes: number) =>
+  ({ size: bytes, type: "video/mp4", name: "scene.mp4" }) as unknown as File;
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -50,6 +60,16 @@ describe("TUS direct upload", () => {
     await expect(uploadFileWithTus(fileOf(0), credentials)).rejects.toMatchObject({
       code: "UNSUPPORTED",
     });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses a file over 2 GB before any bytes are sent", async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      uploadFileWithTus(bigFileOf(MAX_VIDEO_BYTES + 1), credentials)
+    ).rejects.toMatchObject({ code: "UNSUPPORTED" });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -146,5 +166,17 @@ describe("TUS direct upload", () => {
     );
     // A naive btoa(title) on this string throws; the encoder must not.
     expect(metadata).not.toMatch(/[\s,]=*$/);
+  });
+});
+
+describe("video size guard", () => {
+  it("accepts a file right at the 2 GB limit", () => {
+    expect(videoSizeError(bigFileOf(MAX_VIDEO_BYTES))).toBeNull();
+  });
+
+  it("names the size and the limit so the creator knows what to do", () => {
+    const message = videoSizeError(bigFileOf(3 * 1024 * 1024 * 1024));
+    expect(message).toMatch(/3\.00 GB/);
+    expect(message).toMatch(/2 GB/);
   });
 });

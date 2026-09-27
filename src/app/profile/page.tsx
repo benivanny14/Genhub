@@ -382,7 +382,8 @@ export default function ProfilePage() {
               </p>
               <p className={cn("text-xs", isLight ? "text-gray-500" : "text-white/40")}>
                 Shown next to your name on your profile, in the feed and on your videos.
-                JPEG, PNG or WebP, up to 5 MB. You can move and zoom the picture
+                JPEG, PNG or WebP, up to 10 MB — a big photo is shrunk to fit
+                automatically. You can move and zoom the picture
                 before it is saved.
               </p>
               <div className="flex items-center gap-2">
