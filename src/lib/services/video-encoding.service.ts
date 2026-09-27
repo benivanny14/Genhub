@@ -578,6 +578,17 @@ function pendingWhere() {
 }
 
 /**
+ * The shortest gap between two Bunny polls of the same video.
+ *
+ * Every caller that advances the lifecycle from a page load — the creator
+ * dashboard's 8-second poll, the creator's own video page — shares this floor.
+ * Bunny reports progress in whole percents, so a poll inside ten seconds cannot
+ * tell anyone anything new, and without a floor a page that polls would spend an
+ * API call per render.
+ */
+export const ENCODING_RECHECK_FLOOR_MS = 10_000;
+
+/**
  * Poll one creator's unfinished videos. The creator dashboard calls this, so a
  * creator watching the page advances their own video even when no scheduler is
  * configured — the cron is for when nobody is looking.
@@ -585,7 +596,7 @@ function pendingWhere() {
 export async function refreshCreatorPendingEncodings(
   creatorId: string,
   limit: number = 5,
-  minAgeMs: number = 10_000
+  minAgeMs: number = ENCODING_RECHECK_FLOOR_MS
 ): Promise<RefreshResult[]> {
   if (!isBunnyConfigured()) return [];
 

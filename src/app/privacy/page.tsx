@@ -42,14 +42,14 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-lg font-display font-bold mb-3">3. Data Security</h2>
             <p className={cn("text-sm leading-relaxed", isLight ? "text-gray-600" : "text-white/60")}>
-              We employ industry-standard encryption (TLS 1.3), secure HTTP-only cookies, HMAC webhook verification, and Redis-backed rate limiting to protect your data. KYC documents are encrypted at rest and reviewed by authorized personnel only.
+              We use industry-standard encryption in transit, secure session cookies, verified payment callbacks and abuse protection on every request. Identity documents are stored privately, readable only by their owner and the reviewers who must check them.
             </p>
           </section>
 
           <section>
             <h2 className="text-lg font-display font-bold mb-3">4. Content Protection</h2>
             <p className={cn("text-sm leading-relaxed", isLight ? "text-gray-600" : "text-white/60")}>
-              Video content is protected by signed, short-lived HLS playback tokens, and every request is checked against your account on the server. A playback link that is shared stops working within minutes. We do not print your email, phone number or any other identifier onto the video.
+              Video is delivered through short-lived playback links that are signed for your account and checked on every request. A playback link that is shared stops working within minutes. We do not print your email, phone number or any other identifier onto the video.
             </p>
           </section>
 

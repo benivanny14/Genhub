@@ -20,7 +20,11 @@ import {
 import { resolveVideoEntitlement, type EntitlementSource } from "@/lib/services/video-entitlement.service";
 import { normalizeMediaUrl } from "@/lib/media";
 import config from "@/lib/config";
-import { describeEncoding } from "@/lib/services/video-encoding.service";
+import {
+  describeEncoding,
+  refreshVideoEncoding,
+  ENCODING_RECHECK_FLOOR_MS,
+} from "@/lib/services/video-encoding.service";
 import { cacheDel, claimOnce } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 
@@ -80,6 +84,44 @@ export async function GET(
       authUser?.userId === video.creatorId || authUser?.role === "ADMIN";
     if (!video.isPublished && !maySeeUnpublished) {
       return api.notFound("Video not found");
+    }
+
+    // A creator who opens their own video to ask "why is this still queued?"
+    // deserves an answer, not a stale row. This route is the page they actually
+    // look at, so polling here means the lifecycle advances on the page they
+    // visit — instead of only on the dashboard poll and the cron worker, one of
+    // which nobody is watching and the other of which this deployment's
+    // scheduler runs hours late.
+    //
+    // Owner and admin only. A viewer's page load must never be able to spend a
+    // Bunny API call, and a refresh triggered by a stranger could publish a
+    // video its creator has not looked at yet.
+    if (maySeeUnpublished && video.encodingStatus !== null) {
+      const checkedAt = video.encodingCheckedAt;
+      const staleMs = checkedAt
+        ? Date.now() - checkedAt.getTime()
+        : Number.POSITIVE_INFINITY;
+
+      if (staleMs > ENCODING_RECHECK_FLOOR_MS) {
+        try {
+          const refreshed = await refreshVideoEncoding(video.id);
+          if (refreshed) {
+            // Patched in place rather than re-read: the response below is built
+            // from this object, and a second SELECT on every load of a video
+            // that is still encoding is not worth it.
+            video.encodingStatus = refreshed.snapshot.status;
+            video.encodeProgress = refreshed.snapshot.progress;
+            video.encodingError = refreshed.snapshot.error;
+            if (refreshed.published) video.isPublished = true;
+          }
+        } catch (error) {
+          // A Bunny outage must not take the video page down with it.
+          console.warn(
+            "[Video] Encoding refresh failed:",
+            (error as Error)?.message
+          );
+        }
+      }
     }
 
     // Count the view, once per viewer per hour.

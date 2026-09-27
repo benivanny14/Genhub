@@ -1024,7 +1024,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 </p>
                 <p className="text-sm text-white/45 max-w-md">
                   {isOwner
-                    ? "Bunny Stream could not encode the file, so it cannot play. Re-upload the file to try again."
+                    ? "Your file could not be prepared for playback. Re-upload it to try again."
                     : "It cannot be played yet. Please try another scene — the creator has been told."}
                 </p>
               </>
@@ -1036,7 +1036,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 </p>
                 <p className="text-sm text-white/45 max-w-md">
                   {isOwner
-                    ? "Bunny Stream is preparing the playback qualities. It plays as soon as processing finishes — nothing else is needed from you."
+                    ? "Your video is being prepared into its playback qualities. It plays as soon as processing finishes — nothing else is needed from you."
                     : "It is not playable just yet. Refresh in a few minutes."}
                 </p>
                 {typeof encoding?.progress === "number" && (
