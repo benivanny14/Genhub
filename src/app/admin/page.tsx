@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { formatTZS } from "@/lib/utils";
 import {
   Shield,
   HelpCircle,
@@ -79,6 +80,23 @@ interface SystemReadiness {
     failures?: number;
     skipped?: number;
     warning?: string | null;
+  };
+  /**
+   * The HarakaPay float on its own: the balance USSD prompts are delivered from,
+   * the floor it is judged against, where that puts it, and whether the alarm
+   * for the current episode has already fired.
+   *
+   * `read: false` is the third answer — a gateway that will not answer is
+   * neither healthy nor empty.
+   */
+  float?: {
+    read: boolean;
+    floatTzs: number | null;
+    walletTzs: number | null;
+    floorTzs: number;
+    level: "ok" | "low" | "empty" | null;
+    /** True once the admins have been told about this episode. */
+    alertPending: boolean;
   };
 }
 
@@ -649,6 +667,21 @@ function SetupGroupCard({
   );
 }
 
+/**
+ * The tone for the float widget, from the level the server assigned it.
+ *
+ * Amber, not red, for "low": the floor is the operator's own setting, so a float
+ * under it is a warning to top up rather than a fault — colouring it like a
+ * failure is how a card full of red stops being read. Only "empty" is a live
+ * problem, the state payments stop arriving in.
+ */
+function floatTone(level: "ok" | "low" | "empty" | null): string {
+  if (level === "empty") return "border-red-500/25 bg-red-500/5 text-red-200";
+  if (level === "low") return "border-amber-500/25 bg-amber-500/5 text-amber-100";
+  if (level === "ok") return "border-emerald-500/20 bg-emerald-500/5 text-emerald-100";
+  return "border-white/10 bg-white/[0.02] text-white/70";
+}
+
 export default function AdminDashboard() {
   const router = useRouter();
   const { toast } = useToast();
@@ -937,15 +970,10 @@ export default function AdminDashboard() {
         hint: "console = password-reset SMS never arrives",
       });
 
-      const balance = pay?.data?.balance;
-      if (balance) {
-        checks.push({
-          key: "gatewayFloat",
-          ok: Number(balance.float_balance ?? 0) > 0,
-          value: `float ${balance.float_balance ?? 0} · wallet ${balance.wallet_balance ?? 0}`,
-          hint: "Zero float — top up the merchant float so collections keep settling",
-        });
-      }
+      // The float is NOT a row here: it has its own card above, because a
+      // two-state tick cannot say what matters about it — the floor, and whether
+      // the alarm for this episode has already fired. A second, red-at-zero copy
+      // in this grid would only contradict it.
 
       const breaker = pay?.data?.gatewayBreaker;
       if (breaker) {
@@ -976,6 +1004,7 @@ export default function AdminDashboard() {
         ],
         delivery: pay?.data?.delivery,
         gatewayBreaker: pay?.data?.gatewayBreaker,
+        float: pay?.data?.float,
         launch: launch?.data,
       });
     } catch {
@@ -1957,6 +1986,59 @@ export default function AdminDashboard() {
                     The same list <code>npm run preflight:prod</code> prints, read from this
                     deployment&apos;s own environment.
                   </p>
+                </div>
+              )}
+
+              {/* The float, on its own line. It is the one gateway number an
+                  operator can act on and the only thing on this card that is a
+                  top-up rather than a setting, so it gets a face instead of a
+                  row in the grid below. */}
+              {system?.float && (
+                <div className={`mb-4 rounded-xl border px-4 py-3 ${floatTone(system.float.level)}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <Wallet className="w-4 h-4 shrink-0" />
+                      <p className="text-sm font-semibold">HarakaPay float</p>
+                    </div>
+                    <p className="text-xs font-medium uppercase tracking-wide">
+                      {system.float.level === "empty"
+                        ? "empty"
+                        : system.float.level === "low"
+                          ? "low"
+                          : system.float.level === "ok"
+                            ? "healthy"
+                            : "unreadable"}
+                    </p>
+                  </div>
+                  {system.float.read ? (
+                    <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+                      <p className="text-lg font-bold">{formatTZS(system.float.floatTzs ?? 0)}</p>
+                      <p className="text-xs text-white/50">
+                        floor {formatTZS(system.float.floorTzs)} · wallet{" "}
+                        {formatTZS(system.float.walletTzs ?? 0)}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-xs text-white/60">
+                      The gateway did not report a float, so its level is unknown.
+                    </p>
+                  )}
+                  <p className="text-xs text-white/60 mt-1.5">
+                    {system.float.alertPending
+                      ? "The admins have already been told about this drop — nothing more is sent until the float recovers."
+                      : "Alert armed: a drop to or under the floor notifies the admins, once."}
+                  </p>
+                  {system.float.level === "empty" && (
+                    <p className="text-xs text-white/50 mt-0.5">
+                      At 0 the gateway still accepts a collect and answers &quot;USSD push sent&quot;, but the
+                      prompt never reaches the customer. Top up the merchant float.
+                    </p>
+                  )}
+                  {system.float.level === "low" && (
+                    <p className="text-xs text-white/50 mt-0.5">
+                      Payments work today; at 0 they stop arriving without ever being refused.
+                    </p>
+                  )}
                 </div>
               )}
 

@@ -1578,6 +1578,8 @@ reads `GET /api/v1/balance` on every supervisor poke and, under
 |---|---|
 | `GET /api/health` | `payments: live`, and the services probe is `warn` below the floor **and at 0** — a warning never joins `failing`, so `launch:check --remote` still reports READY while the float is low or empty |
 | `/api/cron/supervisor` | a `float` field in every poke: `read`, `level`, `snapshot`, and what the alert did |
+| `GET /api/payments/health` | a `float` block: `read`, `floatTzs`, `walletTzs`, `floorTzs`, `level`, and `alertPending` — whether this episode has already been announced, which is the inverse of "armed" |
+| Admin → Overview (System readiness) | a **HarakaPay float** card: the balance, your floor, and whether the alarm is armed or has already fired, refreshed by **Re-check** |
 | The bell + email | the number, the floor, and *"top up the float on the HarakaPay merchant account"* — once per episode, not once per poke, and not again until the float recovers |
 
 Three rules worth keeping when this is changed again:
@@ -1599,10 +1601,14 @@ Three rules worth keeping when this is changed again:
   balance call that times out may cost the alarm, never the poke.
 
 - [ ] Set the floor for your own traffic and prove the alarm: with the float under
-      it, one poke should write one notification and one email.
+      it, one poke should write one notification and one email, and the
+      **HarakaPay float** card on Admin → Overview should flip to *already told*.
 - [ ] Prove the throttle: poke again immediately — the answer must report
       `alreadyTold` and nothing new may be sent. It stays silent regardless of how
       much time passes until the float recovers.
+- [ ] Prove the re-arm: top the float above the floor, re-check once (the card
+      must go back to *armed* and the old bell row must be gone), then let it drop
+      again — a second alert, not a silent one.
 - [ ] Confirm the empty case reads honestly: at 0, the message must say the
       gateway *accepts and never delivers*, not that a payment failed.
 - [ ] If the dashboard offers no way to credit the float, ask HarakaPay support

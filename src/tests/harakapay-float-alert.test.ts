@@ -50,6 +50,7 @@ import {
   alertFloat,
   assessFloat,
   floatAlertCopy,
+  floatAlertPending,
   floatFloorTzs,
   watchFloat,
   type FloatSnapshot,
@@ -277,6 +278,29 @@ describe("alertFloat", () => {
     expect(outcome.alerted).toBe(true);
     expect(outcome.notifications).toBe(1);
     errors.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Is the alarm armed?
+// ---------------------------------------------------------------------------
+
+describe("floatAlertPending", () => {
+  it("is false while nobody has been told, so the next drop will speak", async () => {
+    findFirst.mockResolvedValue(null);
+    expect(await floatAlertPending()).toBe(false);
+  });
+
+  it("is true once the current episode is already in the bell", async () => {
+    findFirst.mockResolvedValue({ id: "already" } as never);
+    expect(await floatAlertPending()).toBe(true);
+  });
+
+  it("does not throw when the database will not answer", async () => {
+    // It is read for the admin card. A health page that 500s because the alarm
+    // table is unreachable is a worse outage than a missing line on it.
+    findFirst.mockRejectedValueOnce(new Error("connection refused"));
+    expect(await floatAlertPending()).toBe(false);
   });
 });
 

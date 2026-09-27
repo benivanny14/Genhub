@@ -392,6 +392,30 @@ export async function watchFloat(
 }
 
 /**
+ * Is an alert for the current episode already in somebody's bell?
+ *
+ * The inverse of "armed": while a row exists, the next drop is not announced
+ * again because somebody has already been told. Exposed for the admin card,
+ * which has to say which of the two it is looking at — "the float is low and
+ * the alarm will fire" reads very differently from "the float is low and the
+ * admins were told hours ago".
+ *
+ * Read-only and never throws: a database that will not answer must not take a
+ * health page down with it.
+ */
+export async function floatAlertPending(): Promise<boolean> {
+  try {
+    const row = await prisma.notification.findFirst({
+      where: { title: FLOAT_ALERT_TITLE },
+      select: { id: true },
+    });
+    return !!row;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Forget the current episode so the next drop is reported again.
  *
  * The alert is one row per episode (see the header). Without this, the first time

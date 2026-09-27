@@ -20,6 +20,11 @@ import {
   harakaGatewayState,
   harakaBreakerNotice,
 } from "@/lib/payments/harakapay";
+import {
+  assessFloat,
+  floatAlertPending,
+  floatFloorTzs,
+} from "@/lib/services/harakapay-float-alert.service";
 
 export const dynamic = "force-dynamic";
 
@@ -95,6 +100,27 @@ export async function GET() {
       (balance.float_balance ?? 0) <= 0 &&
       (balance.wallet_balance ?? 0) <= 0;
 
+    // The float on its own, for the admin card: the number, the floor it is
+    // judged against, where that puts it, and whether the alarm for this episode
+    // has already fired. `read` is the third answer — a gateway that will not
+    // answer is neither healthy nor empty, and the card must say which it is.
+    const floorTzs = floatFloorTzs();
+    // `null`, never 0, when the gateway did not report a float: a missing number
+    // is unreadable, and reading it as an empty float would page somebody about
+    // a balance that is fine.
+    const floatTzs =
+      balance.ok && typeof balance.float_balance === "number" ? balance.float_balance : null;
+    const float = {
+      read: floatTzs !== null,
+      floatTzs,
+      walletTzs: balance.ok ? balance.wallet_balance ?? null : null,
+      floorTzs,
+      level: floatTzs === null ? null : assessFloat(floatTzs, floorTzs),
+      // True when somebody has already been told about this episode, so the next
+      // poke stays quiet until the float recovers.
+      alertPending: await floatAlertPending(),
+    };
+
     // Read AFTER the balance attempt, so a failure from this very call is
     // included — the state an operator is looking at is the state that produced
     // what they just saw.
@@ -142,6 +168,7 @@ export async function GET() {
       gateway: "HARAKAPAY",
       checks,
       balance,
+      float,
       floatWarning: floatEmpty
         ? "HarakaPay wallet and float are both 0 — top up your HarakaPay balance or collects may not settle."
         : null,
