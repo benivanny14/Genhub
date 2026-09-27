@@ -21,6 +21,7 @@ import {
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
   MIN_VIDEO_DURATION_SECONDS,
+  needsGuidelineAcceptance,
 } from "@/lib/creator-guidelines";
 
 describe("creator guidelines", () => {
@@ -62,6 +63,23 @@ describe("creator guidelines", () => {
   it("asks for the same acknowledgement in both languages", () => {
     expect(GUIDELINE_ACK_LABEL_SW.trim().length).toBeGreaterThan(0);
     expect(GUIDELINE_ACK_LABEL_EN.trim().length).toBeGreaterThan(0);
+  });
+
+  it("asks again when the account has never accepted any version", () => {
+    expect(needsGuidelineAcceptance(0)).toBe(true);
+    expect(needsGuidelineAcceptance(null)).toBe(true);
+    expect(needsGuidelineAcceptance(undefined)).toBe(true);
+  });
+
+  it("does not ask again once the current version is accepted", () => {
+    expect(needsGuidelineAcceptance(CREATOR_GUIDELINES_VERSION)).toBe(false);
+  });
+
+  it("asks again when the accepted version is older than the current rules", () => {
+    // The exact failure this guards against: a receipt from a previous wording
+    // must not count as consent to the new one. This is what makes bumping the
+    // version actually show creators the change.
+    expect(needsGuidelineAcceptance(CREATOR_GUIDELINES_VERSION - 1)).toBe(true);
   });
 
   it("keeps the acknowledgement version ahead of the first one", () => {

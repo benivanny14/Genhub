@@ -160,6 +160,12 @@ model User {
   // who forgets to unfreeze does not leave a creator locked out forever.
   payoutFrozenUntil  DateTime?
   payoutFrozenReason String?
+  // The version of the creator guidelines this account accepted, and when.
+  // 0 = never accepted. Kept on the account rather than in the browser so the
+  // re-acceptance gate is the same on every device the creator signs in on, and
+  // so bumping CREATOR_GUIDELINES_VERSION asks every creator again.
+  guidelinesAcceptedVersion Int       @default(0)
+  guidelinesAcceptedAt      DateTime?
   locale       String   @default("sw") // sw = Kiswahili, en = English
   lastLoginAt  DateTime?
   createdAt    DateTime @default(now())

@@ -31,6 +31,10 @@ export async function GET(request: NextRequest) {
         locale: true,
         referralCode: true,
         referralEarnings: true,
+        // Which version of the creator rules this account last accepted. The
+        // upload screen compares it with CREATOR_GUIDELINES_VERSION to decide
+        // whether to show the guidelines again.
+        guidelinesAcceptedVersion: true,
         createdAt: true,
         creatorBalance: {
           select: {

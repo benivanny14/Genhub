@@ -11,7 +11,13 @@ import { useToast } from "@/components/Toast";
 import { uploadFileWithTus, TusUploadError } from "@/lib/tus-upload";
 import { CATEGORIES } from "@/lib/categories";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
-import { MIN_VIDEO_DURATION_SECONDS } from "@/lib/creator-guidelines";
+import {
+  CREATOR_GUIDELINES,
+  GUIDELINE_ACK_LABEL_EN,
+  GUIDELINE_ACK_LABEL_SW,
+  MIN_VIDEO_DURATION_SECONDS,
+  needsGuidelineAcceptance,
+} from "@/lib/creator-guidelines";
 import Link from "next/link";
 import {
   Upload,
@@ -21,6 +27,8 @@ import {
   FileText,
   ArrowLeft,
   CheckCircle,
+  ScrollText,
+  ShieldAlert,
 } from "lucide-react";
 
 export default function UploadPage() {
@@ -31,6 +39,13 @@ export default function UploadPage() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [success, setSuccess] = useState(false);
   const [awaitingProcessing, setAwaitingProcessing] = useState(false);
+  // The rules changed since this account last accepted them, so the upload
+  // form stays closed until they are read and ticked again. Read from the
+  // account, not from this browser, so the gate is the same on every device.
+  const [reAcceptGuidelines, setReAcceptGuidelines] = useState(false);
+  const [acceptingGuidelines, setAcceptingGuidelines] = useState(false);
+  const [guidelineChecks, setGuidelineChecks] = useState<Record<string, boolean>>({});
+  const allGuidelinesChecked = CREATOR_GUIDELINES.every((g) => guidelineChecks[g.id]);
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -66,6 +81,11 @@ export default function UploadPage() {
         router.push("/creator/kyc");
         return;
       }
+      // Read-side re-check: a version bump invalidates the old receipt, so a
+      // creator who accepted the previous wording is shown the new one here.
+      setReAcceptGuidelines(
+        needsGuidelineAcceptance(data.data.guidelinesAcceptedVersion)
+      );
     } catch {
       router.push("/login");
     } finally {
@@ -246,6 +266,110 @@ export default function UploadPage() {
             </div>
           </div>
         </div>
+      </div>
+    );
+  }
+
+  // The wording of the rules changed after this creator accepted them. Nothing
+  // else on the page is reachable until the new version is ticked — the form is
+  // simply not rendered, which is stronger than a disabled button.
+  if (reAcceptGuidelines) {
+    return (
+      <div className="min-h-screen">
+        <Header />
+
+        <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
+          <div className="flex items-center gap-3">
+            <Link href="/creator" className="p-2 rounded-xl hover:bg-white/10 transition">
+              <ArrowLeft className="w-5 h-5" />
+            </Link>
+            <div>
+              <h1 className="text-2xl font-display font-bold">Masharti ya Creators</h1>
+              <p className="text-white/50 text-sm">
+                Tumebadilisha masharti ya creators. Soma na ukubali kila sharti
+                kabla ya kuendelea ku-upload.
+              </p>
+            </div>
+          </div>
+
+          <div className="glass-card p-6 space-y-4">
+            <div className="flex items-start gap-2">
+              <ScrollText className="mt-0.5 h-5 w-5 shrink-0 text-brand-400" />
+              <p className="text-sm text-white/60">
+                Sheria zilizosasishwa zinaanza kutumika mara moja. Bonyeza kila
+                sharti kuonyesha kuwa umelisoma.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              {CREATOR_GUIDELINES.map((g, i) => (
+                <label
+                  key={g.id}
+                  className={`flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition ${
+                    guidelineChecks[g.id]
+                      ? "border-emerald-500/40 bg-emerald-500/5"
+                      : g.severe
+                        ? "border-red-500/30 bg-red-500/5"
+                        : "border-white/10 hover:border-white/20"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!guidelineChecks[g.id]}
+                    onChange={(e) =>
+                      setGuidelineChecks((prev) => ({ ...prev, [g.id]: e.target.checked }))
+                    }
+                    className="mt-1 h-4 w-4 shrink-0 accent-emerald-500"
+                  />
+                  <div className="space-y-1">
+                    <p className="flex items-center gap-2 text-sm font-medium">
+                      <span className="text-white/40">{i + 1}.</span>
+                      {g.severe && <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />}
+                      <span>{g.sw}</span>
+                    </p>
+                    <p className="text-xs text-white/50">{g.en}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+
+            <p className="text-xs text-white/50">
+              {GUIDELINE_ACK_LABEL_SW}
+              <br />
+              {GUIDELINE_ACK_LABEL_EN}
+            </p>
+
+            <button
+              type="button"
+              disabled={!allGuidelinesChecked || acceptingGuidelines}
+              onClick={async () => {
+                setAcceptingGuidelines(true);
+                try {
+                  const res = await fetch("/api/creator/guidelines/accept", {
+                    method: "POST",
+                  });
+                  const data = await res.json();
+                  if (!data.success) {
+                    toast("error", data.error || "Could not save your acceptance");
+                    return;
+                  }
+                  setReAcceptGuidelines(false);
+                } catch {
+                  toast("error", "Network error");
+                } finally {
+                  setAcceptingGuidelines(false);
+                }
+              }}
+              className="btn-brand w-full"
+            >
+              {acceptingGuidelines
+                ? "Inatuma..."
+                : allGuidelinesChecked
+                  ? "Nimekubali — endelea"
+                  : "Tiki masharti yote ili kuendelea"}
+            </button>
+          </div>
+        </main>
       </div>
     );
   }

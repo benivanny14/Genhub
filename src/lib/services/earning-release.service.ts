@@ -77,6 +77,30 @@ export async function releaseMatureEarnings(
     if (count > 0) {
       released += amount;
       creators += 1;
+
+      // Tell the creator the money is now theirs to withdraw. This is the moment
+      // the 14-day rule stops being abstract — without it the creator only sees
+      // pending sit still and assumes the platform is keeping it. Best effort:
+      // a notification must never undo a release that already happened.
+      try {
+        await prisma.notification.create({
+          data: {
+            userId: balance.creatorId,
+            title: "Earnings released 💰",
+            message:
+              `TZS ${amount.toLocaleString("en-US")} finished its ` +
+              `${config.business.holdingPeriodDays}-day holding period and is now ` +
+              `available to withdraw.`,
+            type: "success",
+            link: "/creator",
+          },
+        });
+      } catch (notifyError) {
+        console.error(
+          "[Earning Release] Notification failed:",
+          (notifyError as Error)?.message
+        );
+      }
     }
   }
 

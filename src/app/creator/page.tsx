@@ -59,6 +59,10 @@ interface CreatorData {
     availableBalance: number;
     totalEarned: number;
   };
+  /** Days a sale is held before it becomes withdrawable. Optional for old payloads. */
+  holdingPeriodDays?: number;
+  /** When the oldest still-held earning clears. Null when nothing is held. */
+  nextReleaseAt?: string | null;
   todayEarnings: number;
   totalViews: number;
   videoStats: {
@@ -791,6 +795,9 @@ export default function CreatorDashboard() {
   }
 
   const balance = creatorData?.balance;
+  // The holding window and the next clear date, with the same defaults the
+  // server uses, so the copy below is right even before the payload arrives.
+  const holdingDays = creatorData?.holdingPeriodDays ?? 14;
   // Null when the endpoint could not read the ledger, which is a different
   // statement from "nobody has messaged you": a failed read renders zeros that
   // look like the truth, so it renders an apology instead.
@@ -973,11 +980,20 @@ export default function CreatorDashboard() {
               <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
                 <Clock className="w-5 h-5 text-amber-400" />
               </div>
-              <span className="text-sm text-white/60">Pending (14 days)</span>
+              <span className="text-sm text-white/60">Pending ({holdingDays} days)</span>
             </div>
             <p className="text-2xl font-bold text-amber-400">
               {formatTZS(balance?.pendingBalance || 0)}
             </p>
+            {creatorData?.nextReleaseAt ? (
+              <p className="text-xs text-white/45 mt-1">
+                Next clears {formatDay(creatorData.nextReleaseAt)}
+              </p>
+            ) : (
+              <p className="text-xs text-white/45 mt-1">
+                Clears {holdingDays} days after each sale
+              </p>
+            )}
           </div>
 
           <div className="glass-card p-5">
@@ -990,6 +1006,58 @@ export default function CreatorDashboard() {
             <p className="text-2xl font-bold text-brand-400">
               {formatTZS(creatorData?.todayEarnings || 0)}
             </p>
+          </div>
+        </div>
+
+        {/* Why the pending figure cannot be withdrawn yet, in the creator's own
+            words. Without this the 14-day rule is invisible: the number just
+            sits there, and a creator who does not know the rule reads it as
+            money the platform is keeping. */}
+        <div className="glass-card p-5">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5 text-amber-400" />
+            </div>
+            <div className="space-y-2">
+              <p className="font-display font-bold">
+                Pesa yako inafika lini? (siku {holdingDays})
+              </p>
+              <ul className="text-sm text-white/60 space-y-1.5 list-disc pl-5">
+                <li>
+                  <span className="text-white/80 font-medium">
+                    Pesa inaingia mara moja.
+                  </span>{" "}
+                  Kila malipo ya mtu inaingia kwenye akaunti yako papo hapo, lakini
+                  inakaa kwenye eneo la{" "}
+                  <span className="text-amber-300 font-medium">Pending</span> kwa
+                  siku {holdingDays}.
+                </li>
+                <li>
+                  <span className="text-white/80 font-medium">
+                    Siku {holdingDays} ni kwa kila malipo yenyewe.
+                  </span>{" "}
+                  Hiki ni kipindi cha mwanunuzi kurudisha pesa (refund). Hivyo kila
+                  malipo inafunguliwa siku {holdingDays} baada ya <em>hiyo</em>{" "}
+                  malipo — sio siku {holdingDays} moja kwa akaunti yako yote. Ukisha
+                  uza kwa siku kadhaa, baada ya siku {holdingDays} pesa huanza
+                  kufunguka kila siku.
+                </li>
+                <li>
+                  <span className="text-white/80 font-medium">
+                    Kutoa pesa (withdraw) hakusubiri siku {holdingDays}.
+                  </span>{" "}
+                  Unaweza kutoa{" "}
+                  <span className="text-emerald-300 font-medium">Available</span>{" "}
+                  yoyote mara moja, mradi ifikie TZS 30,000.
+                </li>
+              </ul>
+              <p className="text-xs text-white/40">
+                Sales are held for {holdingDays} days after each sale, then unlock
+                on their own — pending becomes available automatically, no button
+                to press. Withdrawals have no wait of their own beyond the TZS
+                30,000 minimum.
+              </p>
+            </div>
           </div>
         </div>
 

@@ -5,6 +5,7 @@
 
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
+import config from "@/lib/config";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
@@ -141,12 +142,35 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // When the money currently held starts to unlock. Every charge matures on
+    // its OWN clock, so this is the oldest still-held one plus the holding
+    // window — and it answers the question a creator actually asks ("when do I
+    // get paid?") without making them count days from a sale they cannot date.
+    const holdingMs = config.business.holdingPeriodDays * 86_400_000;
+    const oldestHeld = await prisma.transaction.findFirst({
+      where: {
+        creatorId: auth.userId,
+        status: "SUCCESS",
+        creatorCut: { not: null },
+        createdAt: { gt: new Date(Date.now() - holdingMs) },
+      },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    });
+    const nextReleaseAt = oldestHeld
+      ? new Date(oldestHeld.createdAt.getTime() + holdingMs).toISOString()
+      : null;
+
     return api.success({
       balance: balance || {
         pendingBalance: 0,
         availableBalance: 0,
         totalEarned: 0,
       },
+      // Shown next to the pending figure so the 14-day rule is explained where
+      // the creator sees the number, not only in a policy page they never open.
+      holdingPeriodDays: config.business.holdingPeriodDays,
+      nextReleaseAt,
       todayEarnings: todayTransactions._sum.creatorCut || 0,
       totalViews,
       videoStats: enrichedVideos,

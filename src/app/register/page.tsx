@@ -12,10 +12,8 @@ import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
 import {
   CREATOR_GUIDELINES,
-  CREATOR_GUIDELINES_VERSION,
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
-  GUIDELINE_ACK_STORAGE_KEY,
 } from "@/lib/creator-guidelines";
 
 /** The form's life cycle — each phase has its own look and motion. */
@@ -134,20 +132,9 @@ export default function RegisterPage() {
       const data = await res.json();
 
       if (data.success) {
-        // Record what this account agreed to, keyed by its id, so the receipt
-        // survives on the device the same way it did when the terms were read
-        // at the upload screen.
-        if (role === "CREATOR" && data.data?.id) {
-          try {
-            const raw = localStorage.getItem(GUIDELINE_ACK_STORAGE_KEY);
-            const map = raw ? (JSON.parse(raw) as Record<string, number>) : {};
-            map[data.data.id] = CREATOR_GUIDELINES_VERSION;
-            localStorage.setItem(GUIDELINE_ACK_STORAGE_KEY, JSON.stringify(map));
-          } catch {
-            // A browser that refuses storage must not block the sign-up; the
-            // terms were still read and ticked here.
-          }
-        }
+        // The acceptance is recorded server-side at registration — the account
+        // is created with the current guidelines version — so there is nothing
+        // to store in this browser.
         setPhase("success");
         toast(
           "success",

@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   earningFindMany: vi.fn(),
   txAggregate: vi.fn(),
   txFindMany: vi.fn(),
+  txFindFirst: vi.fn(),
   payoutFindMany: vi.fn(),
 }));
 
@@ -40,6 +41,7 @@ vi.mock("@/lib/db", () => ({
     transaction: {
       aggregate: (...a: unknown[]) => mocks.txAggregate(...a),
       findMany: (...a: unknown[]) => mocks.txFindMany(...a),
+      findFirst: (...a: unknown[]) => mocks.txFindFirst(...a),
     },
     payoutRequest: { findMany: (...a: unknown[]) => mocks.payoutFindMany(...a) },
   },
@@ -101,6 +103,7 @@ beforeEach(() => {
   mocks.earningFindMany.mockResolvedValue([]);
   mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 900 } });
   mocks.txFindMany.mockResolvedValue([]);
+  mocks.txFindFirst.mockResolvedValue(null);
   mocks.payoutFindMany.mockResolvedValue([]);
 });
 
@@ -146,6 +149,33 @@ describe("GET /api/creator/balance", () => {
       availableBalance: 0,
       totalEarned: 0,
     });
+  });
+
+  it("tells the creator when the held money starts to clear", async () => {
+    // The pending figure is useless on its own — the creator's question is
+    // "when do I get paid?". The route answers it from the OLDEST still-held
+    // charge plus the holding window, so it is a real date, not a fixed guess.
+    const soldAt = new Date(Date.now() - 3 * 86_400_000);
+    mocks.txFindFirst.mockResolvedValue({ createdAt: soldAt });
+
+    const res = await get();
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.holdingPeriodDays).toBeGreaterThan(0);
+    const expected = new Date(
+      soldAt.getTime() + body.data.holdingPeriodDays * 86_400_000
+    ).toISOString();
+    expect(body.data.nextReleaseAt).toBe(expected);
+  });
+
+  it("says nothing is clearing when no charge is still held", async () => {
+    mocks.txFindFirst.mockResolvedValue(null);
+
+    const res = await get();
+    const body = await res.json();
+
+    expect(body.data.nextReleaseAt).toBeNull();
   });
 
   it("carries the receipt number for a paid withdrawal", async () => {

@@ -12,6 +12,7 @@ import { registerSchema } from "@/lib/validation";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
+import { CREATOR_GUIDELINES_VERSION } from "@/lib/creator-guidelines";
 
 export async function POST(request: NextRequest) {
   try {
@@ -102,9 +103,16 @@ export async function POST(request: NextRequest) {
         locale,
         referralCode: myReferralCode,
         referredById: referrer?.id,
-        // Create creator balance if registering as creator
+        // A creator cannot reach the sign-up form without ticking every rule,
+        // so the account is born with the current version accepted. Recorded
+        // server-side so it holds on every device, and so the upload screen can
+        // tell whether the rules have moved on since.
         ...(role === "CREATOR"
-          ? { creatorBalance: { create: {} } }
+          ? {
+              creatorBalance: { create: {} },
+              guidelinesAcceptedVersion: CREATOR_GUIDELINES_VERSION,
+              guidelinesAcceptedAt: new Date(),
+            }
           : {}),
       },
       select: {

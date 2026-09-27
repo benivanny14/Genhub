@@ -102,5 +102,19 @@ export const GUIDELINE_ACK_LABEL_EN =
  */
 export const CREATOR_GUIDELINES_VERSION = 2;
 
-/** localStorage key holding `{ [userId]: version }` of what each account accepted. */
-export const GUIDELINE_ACK_STORAGE_KEY = "genhub.creatorGuidelines.v1";
+/**
+ * True when an account's accepted version is behind the rules as they stand
+ * now, so the guidelines must be shown and ticked again. This is the whole point
+ * of the version number: bump it and every creator who accepted the previous
+ * wording is asked again.
+ *
+ * The acceptance is stored on the account (`User.guidelinesAcceptedVersion`),
+ * not in the browser, so the gate is the same on every device — a receipt in
+ * localStorage alone let a creator who accepted on their phone sail past the
+ * new rules on their laptop.
+ */
+export function needsGuidelineAcceptance(
+  acceptedVersion: number | null | undefined
+): boolean {
+  return (acceptedVersion ?? 0) < CREATOR_GUIDELINES_VERSION;
+}
