@@ -181,6 +181,9 @@ describeDB("refreshVideoEncoding (real database)", () => {
       where: { id: videoId },
       data: {
         isPublished: false,
+        // The stranded-upload rule below is about age, so every case starts from
+        // a slot that was reserved a moment ago unless it says otherwise.
+        createdAt: new Date(),
         encodingStatus: 0,
         encodeProgress: 0,
         encodingError: null,
@@ -372,5 +375,68 @@ describeDB("refreshVideoEncoding (real database)", () => {
 
     // Null encoding status = side-loaded content: the lifecycle must not touch it.
     expect(await refreshVideoEncoding(videoId)).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
+  // An upload that never arrived
+  //
+  // The row says "Queued", Bunny says status 0, and neither will ever change:
+  // the slot was reserved and no byte was ever stored. Left alone it reads as a
+  // video that is about to start, for as long as the account exists.
+  // ---------------------------------------------------------------------------
+
+  const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000);
+
+  it("calls off an upload that never delivered a byte", async () => {
+    bunnyState.details = { status: 0, encodeProgress: 0, storageSize: 0 };
+    await prisma.video.update({
+      where: { id: videoId },
+      data: { createdAt: hoursAgo(7) },
+    });
+
+    const result = await refreshVideoEncoding(videoId);
+
+    expect(result?.snapshot.state).toBe("failed");
+    expect(result?.snapshot.error).toMatch(/never reached the video host/i);
+
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.isPublished).toBe(false);
+    // Error, not Bunny's 0: the dashboard reads this column for the badge, and
+    // "Queued" is the answer that hides a dead upload.
+    expect(video.encodingStatus).toBe(5);
+    expect(video.encodingError).toMatch(/upload this video again/i);
+
+    const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].type).toBe("error");
+  });
+
+  it("leaves a fresh upload alone while it is still transferring", async () => {
+    // The same empty slot, minutes old: this is what an upload in progress looks
+    // like from Bunny's side, and calling it failed would tell a creator to
+    // re-upload a file that is halfway there.
+    bunnyState.details = { status: 0, encodeProgress: 0, storageSize: 0 };
+
+    const result = await refreshVideoEncoding(videoId);
+
+    expect(result?.snapshot.state).toBe("pending");
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.encodingStatus).toBe(0);
+    expect(video.encodingError).toBeNull();
+    expect(await prisma.notification.count({ where: { userId: creatorId } })).toBe(0);
+  });
+
+  it("does not call off an upload when Bunny did not report a size", async () => {
+    // Absent is not zero: a response without storageSize says nothing about how
+    // many bytes are held, and guessing would fail a good upload.
+    bunnyState.details = { status: 1, encodeProgress: 0 };
+    await prisma.video.update({
+      where: { id: videoId },
+      data: { createdAt: hoursAgo(7) },
+    });
+
+    const result = await refreshVideoEncoding(videoId);
+
+    expect(result?.snapshot.state).toBe("pending");
   });
 });

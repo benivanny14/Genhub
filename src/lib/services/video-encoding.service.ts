@@ -116,6 +116,14 @@ export interface BunnyEncodingResult {
   snapshot: EncodingSnapshot;
   /** Real duration in seconds, when Bunny knows it. */
   lengthSeconds: number | null;
+  /**
+   * How many bytes Bunny actually holds, or null when it did not say.
+   *
+   * Distinct from 0 on purpose: 0 is the answer that matters — the slot exists
+   * and the file never arrived — while null means the API response did not carry
+   * the field and nothing may be concluded from it.
+   */
+  storageBytes: number | null;
 }
 
 /**
@@ -154,6 +162,8 @@ export async function fetchEncodingFromBunny(
           ? { ...snapshot, error: readBunnyError(details) }
           : snapshot,
       lengthSeconds: length,
+      storageBytes:
+        typeof details.storageSize === "number" ? details.storageSize : null,
     };
   } catch (error) {
     console.error("[Encoding] Bunny lookup failed:", bunnyVideoId, error);
@@ -495,6 +505,26 @@ export interface RefreshResult {
 }
 
 /**
+ * How long a reserved slot may hold zero bytes before the upload is called off.
+ *
+ * A slot Bunny never received a byte for cannot encode, and nothing on our side
+ * will ever change that: status stays at "Queued" and the creator waits for a
+ * video that is not coming. The most common cause is an upload that was
+ * abandoned (closed tab, lost signal) after the slot was reserved, which leaves
+ * no trace at all — the row looks exactly like one that is about to start.
+ *
+ * Six hours is deliberately beyond any honest transfer: the limit is 2 GB, so
+ * even a 1 Mbit/s connection finishes inside five. A file slower than that is a
+ * connection that died, not a connection working.
+ */
+export const UPLOAD_STRANDED_AFTER_MS = 6 * 60 * 60 * 1000;
+
+/** What the creator is told when a slot never received the file. */
+export const STRANDED_UPLOAD_MESSAGE =
+  "The file never reached the video host, so there is nothing to process. The " +
+  "upload was interrupted or never started — please upload this video again.";
+
+/**
  * Poll one video and act on the answer.
  *
  * Rows with `encodingStatus === null` are never touched: those are side-loaded
@@ -510,6 +540,7 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
       title: true,
       slug: true,
       bunnyVideoId: true,
+      createdAt: true,
       isPublished: true,
       isDeleted: true,
       encodingStatus: true,
@@ -522,7 +553,20 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
   const result = await fetchEncodingFromBunny(video.bunnyVideoId);
   if (!result) return null;
 
-  const { snapshot } = result;
+  // A slot Bunny has received nothing for is reported as a failed upload once
+  // enough time has passed to rule out a slow transfer — see
+  // UPLOAD_STRANDED_AFTER_MS. Everything below works off `snapshot`, so the
+  // strand is applied here, once, instead of being threaded through each rule:
+  // publishing, the duration floor and the once-only notification then all
+  // behave exactly as they do for a file Bunny itself rejected.
+  const stranded =
+    result.storageBytes === 0 &&
+    (result.snapshot.state === "pending" || result.snapshot.state === "processing") &&
+    Date.now() - video.createdAt.getTime() > UPLOAD_STRANDED_AFTER_MS;
+
+  const snapshot: EncodingSnapshot = stranded
+    ? { ...result.snapshot, state: "failed", error: STRANDED_UPLOAD_MESSAGE, progress: 0 }
+    : result.snapshot;
 
   // The 8-minute floor, enforced where the real duration finally exists: Bunny
   // only reports `lengthSeconds` once it has encoded the file, so this is the
@@ -543,7 +587,10 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
   await prisma.video.update({
     where: { id: video.id },
     data: {
-      encodingStatus: snapshot.status,
+      // 5 (Error) rather than Bunny's 0 when the upload never arrived: the column
+      // answers "will this finish on its own?", and for an empty slot the answer
+      // is no. The reason the creator reads comes from encodingError below.
+      encodingStatus: stranded ? BUNNY_STATUS_ERROR : snapshot.status,
       encodeProgress: snapshot.progress,
       encodingError: snapshot.error,
       encodingCheckedAt: new Date(),
