@@ -112,11 +112,35 @@ export function looksLikeMobile(): boolean {
  * away and comes back, not one that is gone.
  *
  * A ladder of [0, 1s, 3s, 8s] gives up twelve seconds after the first failure,
- * which cannot tell those two cases apart. Six attempts, with the last three
- * minutes-ish apart, is long enough for a real drop to return and short enough
- * that a genuinely dead connection still says so inside a minute of waiting.
+ * which cannot tell those two cases apart.
+ *
+ * The last two rungs were added after the resume path was driven against the
+ * live API from a real device (Android emulator, the link cut in the middle of a
+ * 48 MB upload). Two measurements came out of it, and both argue for patience
+ * rather than a shorter ladder:
+ *
+ *   * the outage itself spends rungs quickly — 26 seconds offline used five of
+ *     the six, so the first attempt that reached the server again was the last
+ *     one left; and
+ *   * Bunny keeps the upload session LOCKED for about a minute after the PATCH
+ *     it lost, answering 423 until it lets go.
+ *
+ * Six attempts therefore ended a transfer that had a healthy connection, bytes
+ * already on the server, and a quarter of the file still to send. Eight attempts
+ * span ~2.7 minutes, which outlasts the lock instead of racing it, and a
+ * genuinely dead connection is still reported — with the offset, the chunk and
+ * the reason — well inside that.
  */
-export const CHUNK_RETRY_DELAYS = [0, 1_000, 3_000, 8_000, 15_000, 30_000] as const;
+export const CHUNK_RETRY_DELAYS = [
+  0,
+  1_000,
+  3_000,
+  8_000,
+  15_000,
+  30_000,
+  45_000,
+  60_000,
+] as const;
 const RESERVE_RETRY_DELAYS = [0, 1_000, 3_000];
 
 /**
@@ -336,6 +360,27 @@ function authHeaders(credentials: BunnyUploadCredentials): Record<string, string
 }
 
 /**
+ * The 4xx answers that mean "send the same bytes again", as opposed to "this
+ * request is wrong".
+ *
+ * Listed once because two places have to agree about it: `describe()` decides
+ * whether a failure is NETWORK at all, and `isRetryable()` decides whether it
+ * spends an attempt. When the two lists drifted apart, a status could be
+ * classified transient and still not be retried, which reads as a broken ladder.
+ *
+ *   408 the server gave up reading the request
+ *   409 the offset we sent does not match what it holds
+ *   423 Locked — Bunny holds the upload session while the PATCH that the
+ *       connection just lost is still running. Measured against the live API on
+ *       a real device (Android emulator, network cut in the middle of a 60 MB
+ *       upload): the first attempt that reaches the server after the link comes
+ *       back is refused with exactly this. Read as permanent, it ended an upload
+ *       that was a quarter sent, on a connection that was working again.
+ *   429 too many requests
+ */
+const TRANSIENT_4XX: ReadonlySet<number> = new Set([408, 409, 423, 429]);
+
+/**
  * Turn a Bunny/socket failure into something a creator can act on. The 401 case
  * is called out by name because Bunny's own docs list an expired authorization
  * as the most common cause, and "Upload failed" sends people hunting for the
@@ -367,10 +412,10 @@ function describe(
       { stage, providerBody, reason: "provider" }
     );
   }
-  // A client-side 4xx (other than transient 408/409/429) will not improve by
-  // sending the same bytes again. Keeping it out of NETWORK also makes the
-  // admin panel distinguish provider validation from a dropped connection.
-  if (status >= 400 && status < 500 && status !== 408 && status !== 409 && status !== 429) {
+  // A client-side 4xx outside TRANSIENT_4XX will not improve by sending the
+  // same bytes again. Keeping it out of NETWORK also makes the admin panel
+  // distinguish provider validation from a dropped connection.
+  if (status >= 400 && status < 500 && !TRANSIENT_4XX.has(status)) {
     return new TusUploadError(
       "REJECTED",
       `Bunny rejected the upload (HTTP ${status})${body ? `: ${body.slice(0, 160)}` : ""}`,
@@ -777,11 +822,16 @@ function withProgress(
   return error;
 }
 
-/** Only transient transport/provider responses should consume a retry. */
+/**
+ * Only transient transport/provider responses should consume a retry.
+ *
+ * The transient 4xx list is shared with `describe()` so a status cannot be
+ * called transient in one place and permanent in the other — see TRANSIENT_4XX.
+ */
 function isRetryable(error: TusUploadError): boolean {
   if (error.code !== "NETWORK") return false;
   if (error.status === undefined || error.status === null) return true;
-  return error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500;
+  return TRANSIENT_4XX.has(error.status) || error.status >= 500;
 }
 
 /**

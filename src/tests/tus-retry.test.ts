@@ -253,6 +253,21 @@ describe("retrying a dropped chunk", () => {
     expect(sends).toHaveLength(3);
   });
 
+  it("keeps retrying a 423 Locked, which is what Bunny says about a session the lost PATCH still holds", async () => {
+    // Measured on a real device (Android emulator, network cut in the middle of
+    // a 60 MB upload): the first attempt that reaches Bunny after the
+    // connection comes back is refused with 423, because the aborted PATCH is
+    // still locked on the server. Read as permanent it ends an upload that was
+    // a quarter sent, on a connection that was working again.
+    const { error, sends } = await run(fileOf(CHUNK), [
+      { status: 423, body: "Locked" },
+      {},
+    ]);
+
+    expect(error).toBeNull();
+    expect(sends).toHaveLength(2);
+  });
+
   it("says what it is doing between the attempts", async () => {
     const seen: TusUploadRetryInfo[] = [];
     const { error } = await run(fileOf(CHUNK), [{ drop: true }, {}], {
