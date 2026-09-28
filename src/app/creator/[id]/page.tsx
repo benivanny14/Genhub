@@ -13,7 +13,8 @@ import { serializeJsonLd } from "@/lib/json-ld";
 import CreatorProfileClient from "./CreatorProfile";
 
 interface Props {
-  params: { id: string };
+  // Next 15 hands route params over as a promise.
+  params: Promise<{ id: string }>;
 }
 
 async function getCreator(id: string) {
@@ -36,7 +37,8 @@ async function getCreator(id: string) {
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const creator = await getCreator(params.id);
+  const { id } = await params;
+  const creator = await getCreator(id);
   if (!creator) return { title: "Creator not found" };
 
   const name = displayHandle(creator, "Creator");
@@ -72,7 +74,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function CreatorPage({ params }: Props) {
-  const creator = await getCreator(params.id);
+  const { id } = await params;
+  const creator = await getCreator(id);
   if (!creator) notFound();
 
   const name = displayHandle(creator, "Creator");
@@ -111,7 +114,9 @@ export default async function CreatorPage({ params }: Props) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
       />
-      <CreatorProfileClient params={params} />
+      {/* `params` arrives as a promise now, so the id is unpacked here and the
+          client component is handed the plain value it actually needs. */}
+      <CreatorProfileClient params={{ id }} />
     </>
   );
 }

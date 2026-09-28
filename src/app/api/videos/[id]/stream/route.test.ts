@@ -125,7 +125,8 @@ function request(query = "", id = "row-1") {
   return new NextRequest(`http://localhost:3000/api/videos/${id}/stream${query}`);
 }
 
-const params = (id = "row-1") => ({ params: { id } });
+// Next 15 route handlers receive params as a promise.
+const params = (id = "row-1") => ({ params: Promise.resolve({ id }) });
 
 let urls: string[] = [];
 

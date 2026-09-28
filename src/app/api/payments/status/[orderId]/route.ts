@@ -16,11 +16,12 @@ import { processPaymentWebhook } from "@/lib/services/webhook.service";
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: { orderId: string } }
+  { params }: { params: Promise<{ orderId: string }> }
 ) {
   try {
     const auth = await requireAuth();
-    const { orderId } = params;
+    // Next 15 hands route params over as a promise.
+    const { orderId } = await params;
 
     // Accept both our internal id AND the gateway order id (providerRef) —
     // clients receive HarakaPay's hp_* order id from /payments/purchase.

@@ -12,13 +12,15 @@ import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const auth = await requireAuth();
+    // Next 15 hands route params over as a promise.
+    const { id } = await params;
 
     const comment = await prisma.comment.findUnique({
-      where: { id: params.id },
+      where: { id },
       select: {
         id: true,
         userId: true,
@@ -36,7 +38,7 @@ export async function DELETE(
     }
 
     await prisma.comment.update({
-      where: { id: params.id },
+      where: { id },
       data: { isDeleted: true },
     });
 

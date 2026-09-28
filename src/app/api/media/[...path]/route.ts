@@ -111,7 +111,7 @@ async function kycOwnerOfLegacyKey(key: string): Promise<string | null | undefin
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { path: string[] } }
+  { params }: { params: Promise<{ path: string[] }> }
 ) {
   const { path } = await params;
   const key = (path || []).map((segment) => decodeURIComponent(segment)).join("/");

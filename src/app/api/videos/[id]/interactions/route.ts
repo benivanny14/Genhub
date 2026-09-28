@@ -14,7 +14,7 @@ import config from "@/lib/config";
 // GET /api/videos/[id]/interactions
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
@@ -63,7 +63,7 @@ export async function GET(
 // POST /api/videos/[id]/interactions { type: "like" | "dislike" | "favorite" }
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;

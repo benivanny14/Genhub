@@ -14,10 +14,12 @@ import config from "@/lib/config";
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const auth = await requireAuth();
+    // Next 15 hands route params over as a promise.
+    const { id } = await params;
 
     // Moderation queues are human-reviewed: an unlimited report button lets one
     // account bury genuine reports under noise.
@@ -34,7 +36,7 @@ export async function POST(
       : "SPAM";
 
     const comment = await prisma.comment.findUnique({
-      where: { id: params.id },
+      where: { id },
       select: { id: true, videoId: true, body: true, isDeleted: true },
     });
 

@@ -146,7 +146,8 @@ describeE2E("HarakaPay E2E: purchase -> webhook -> status -> DB", () => {
 
   it("status polling reports PENDING before the webhook lands", async () => {
     const res = await statusGet(get(`/api/payments/status/${orderId}`), {
-      params: { orderId },
+      // Next 15 route handlers receive params as a promise.
+      params: Promise.resolve({ orderId }),
     });
     const body = await res.json();
 
@@ -232,7 +233,8 @@ describeE2E("HarakaPay E2E: purchase -> webhook -> status -> DB", () => {
 
   it("status polling reports SUCCESS after the webhook", async () => {
     const res = await statusGet(get(`/api/payments/status/${orderId}`), {
-      params: { orderId },
+      // Next 15 route handlers receive params as a promise.
+      params: Promise.resolve({ orderId }),
     });
     const body = await res.json();
     expect(body.data.status).toBe("SUCCESS");

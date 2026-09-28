@@ -23,10 +23,12 @@ import { describeEncoding } from "@/lib/services/video-encoding.service";
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const auth = await requireRole("CREATOR");
+    // Next 15 hands route params over as a promise.
+    const { id } = await params;
 
     const body = await request.json().catch(() => ({}));
     if (typeof body?.published !== "boolean") {
@@ -36,7 +38,7 @@ export async function POST(
     // Scoped by creatorId, so this cannot be used to touch someone else's video
     // even with a valid id.
     const video = await prisma.video.findFirst({
-      where: { id: params.id, creatorId: auth.userId, isDeleted: false },
+      where: { id, creatorId: auth.userId, isDeleted: false },
       select: {
         id: true,
         title: true,

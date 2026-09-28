@@ -30,11 +30,12 @@ import BottomNav from "@/components/BottomNav";
 import SearchResults from "./SearchResults";
 
 interface SearchPageProps {
-  searchParams?: { q?: string };
+  // Next 15 hands search params over as a promise.
+  searchParams?: Promise<{ q?: string }>;
 }
 
-export function generateMetadata({ searchParams }: SearchPageProps): Metadata {
-  const query = (searchParams?.q || "").trim();
+export async function generateMetadata({ searchParams }: SearchPageProps): Promise<Metadata> {
+  const query = ((await searchParams)?.q || "").trim();
 
   return {
     title: query ? `${query} — Search | Genhub` : "Search | Genhub",
@@ -48,8 +49,8 @@ export function generateMetadata({ searchParams }: SearchPageProps): Metadata {
   };
 }
 
-export default function SearchPage({ searchParams }: SearchPageProps) {
-  const query = (searchParams?.q || "").trim();
+export default async function SearchPage({ searchParams }: SearchPageProps) {
+  const query = ((await searchParams)?.q || "").trim();
 
   return (
     <>

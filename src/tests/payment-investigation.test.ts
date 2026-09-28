@@ -151,7 +151,8 @@ describeDb("Payment under investigation", () => {
   async function fetchVideo() {
     const res = await videoGet(
       new NextRequest(`http://localhost/api/videos/${videoId}`),
-      { params: { id: videoId } }
+      // Next 15 route handlers receive params as a promise.
+      { params: Promise.resolve({ id: videoId }) }
     );
     return { status: res.status, body: await res.json() };
   }

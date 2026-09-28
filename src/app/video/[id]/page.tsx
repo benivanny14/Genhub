@@ -14,7 +14,8 @@ import { displayHandle } from "@/lib/usernames";
 import { serializeJsonLd } from "@/lib/json-ld";
 
 interface Props {
-  params: { id: string };
+  // Next 15 hands route params over as a promise.
+  params: Promise<{ id: string }>;
 }
 
 /**
@@ -71,7 +72,8 @@ function isoDuration(seconds: number | null): string | undefined {
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
-  const video = await getVideo(params.id, await getCurrentUser());
+  const { id } = await params;
+  const video = await getVideo(id, await getCurrentUser());
   if (!video) return { title: "Video not found" };
 
   const creatorName = displayHandle(video.creator, "Creator");
@@ -110,7 +112,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function VideoRoute({ params }: Props) {
-  const video = await getVideo(params.id, await getCurrentUser());
+  const { id } = await params;
+  const video = await getVideo(id, await getCurrentUser());
   if (!video) notFound();
 
   const base = config.appUrl.replace(/\/$/, "");
@@ -165,7 +168,9 @@ export default async function VideoRoute({ params }: Props) {
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: serializeJsonLd(jsonLd) }}
       />
-      <VideoDetailPage params={params} />
+      {/* `params` arrives as a promise now, so the id is unpacked here and the
+          client component is handed the plain value it actually needs. */}
+      <VideoDetailPage params={{ id }} />
     </>
   );
 }

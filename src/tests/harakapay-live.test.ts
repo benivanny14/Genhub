@@ -235,7 +235,8 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
     status.mockResolvedValueOnce(gatewayPayment(data.orderId, "completed", 4_000));
 
     const polled = await statusGet(get(`/api/payments/status/${data.orderId}`), {
-      params: { orderId: data.orderId },
+      // Next 15 route handlers receive params as a promise.
+      params: Promise.resolve({ orderId: data.orderId }),
     });
     const polledBody = await polled.json();
 

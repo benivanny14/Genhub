@@ -11,16 +11,19 @@ import { api } from "@/lib/api-response";
 // GET /api/videos/[id]/progress - Saved position (for resume playback)
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Next 15 hands route params over as a promise — read before the session,
+    // so a signed-out viewer takes the same path as one with an account.
+    const { id } = await params;
     const user = await getCurrentUser();
     if (!user) {
       return api.success({ positionSeconds: 0, percent: 0 });
     }
 
     const progress = await prisma.watchProgress.findUnique({
-      where: { userId_videoId: { userId: user.userId, videoId: params.id } },
+      where: { userId_videoId: { userId: user.userId, videoId: id } },
       select: { positionSeconds: true, percent: true },
     });
 
@@ -33,11 +36,11 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const auth = await requireAuth();
-    const id = params.id;
+    const { id } = await params;
 
     const body = await request.json().catch(() => ({}));
     const positionSeconds = Math.max(0, Math.floor(Number(body?.positionSeconds) || 0));

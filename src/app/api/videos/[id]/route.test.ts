@@ -63,7 +63,8 @@ import { GET, PATCH } from "./route";
 const CREATOR = "creator-1";
 const VIEWER = "viewer-9";
 
-const params = { params: { id: "video-1" } };
+// Next 15 route handlers receive params as a promise.
+const params = { params: Promise.resolve({ id: "video-1" }) };
 
 function videoRow(overrides: Record<string, unknown> = {}) {
   return {

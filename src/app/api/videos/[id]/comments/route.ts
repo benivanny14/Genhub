@@ -21,10 +21,11 @@ const userSelect = {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const id = params.id;
+    // Next 15 hands route params over as a promise.
+    const { id } = await params;
 
     const comments = await prisma.comment.findMany({
       where: { videoId: id, parentId: null, isDeleted: false },
@@ -53,11 +54,12 @@ export async function GET(
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const auth = await requireAuth();
-    const id = params.id;
+    // Next 15 hands route params over as a promise.
+    const { id } = await params;
 
     const { allowed } = await checkRateLimit(
       `comment:${auth.userId}`,

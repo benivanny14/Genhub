@@ -13,7 +13,8 @@ import { CATEGORIES, getCategory, categoryHref } from "@/lib/categories";
 import BrowseGrid from "./BrowseGrid";
 
 interface Props {
-  params: { category: string };
+  // Next 15 hands route params over as a promise.
+  params: Promise<{ category: string }>;
 }
 
 // Prerender every category page at build time
@@ -21,8 +22,9 @@ export function generateStaticParams() {
   return CATEGORIES.map((c) => ({ category: c.id }));
 }
 
-export function generateMetadata({ params }: Props): Promise<Metadata> {
-  const category = getCategory(params.category);
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { category: categoryId } = await params;
+  const category = getCategory(categoryId);
   // Layout applies the "%s | Genhub" title template — don't repeat the brand
   if (!category) return Promise.resolve({ title: "Category not found" });
 
@@ -50,8 +52,9 @@ export function generateMetadata({ params }: Props): Promise<Metadata> {
   });
 }
 
-export default function BrowseCategoryPage({ params }: Props) {
-  const category = getCategory(params.category);
+export default async function BrowseCategoryPage({ params }: Props) {
+  const { category: categoryId } = await params;
+  const category = getCategory(categoryId);
   if (!category) notFound();
 
   const others = CATEGORIES.filter((c) => c.id !== category.id);
