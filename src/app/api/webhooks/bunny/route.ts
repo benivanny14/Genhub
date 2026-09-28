@@ -30,10 +30,12 @@ import config from "@/lib/config";
 import {
   bunnyWebhookIntent,
   bunnyWebhookVideoId,
+  describeBunnyWebhookStatus,
   parseBunnyWebhook,
   verifyBunnySignature,
 } from "@/lib/bunny-webhook";
 import { applyBunnyEncodingEvent } from "@/lib/services/video-encoding.service";
+import { recordBunnyWebhookDelivery } from "@/lib/services/bunny-webhook.service";
 
 export async function POST(request: NextRequest) {
   try {
@@ -77,6 +79,19 @@ export async function POST(request: NextRequest) {
 
     const intent = bunnyWebhookIntent(payload, config.bunny.libraryId);
     const outcome = await applyBunnyEncodingEvent({ bunnyVideoId, intent });
+
+    // Stamp the arrival, so "is Bunny actually calling this deployment?" is
+    // answerable on the admin Setup tab instead of unanswerable. Best effort: a
+    // cache that cannot be written must never affect a callback that worked.
+    const { status, label } = describeBunnyWebhookStatus(payload);
+    await recordBunnyWebhookDelivery({
+      status,
+      label,
+      intent,
+      matched: outcome.matched,
+      published: outcome.published,
+      videoId: outcome.videoId,
+    });
 
     console.log(
       `[Bunny Webhook] ${intent} · video ${bunnyVideoId.slice(0, 8)}… → ` +

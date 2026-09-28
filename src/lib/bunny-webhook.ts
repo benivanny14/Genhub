@@ -159,6 +159,142 @@ export function bunnyWebhookLibraryId(payload: BunnyWebhookPayload): string | nu
  * different library is ignored rather than acted on, so a secret shared across
  * several libraries cannot move another library's videos.
  */
+/**
+ * The status from a callback, with its label, or nulls when it carries none.
+ *
+ * Kept here rather than in the route because the admin panel reports the same
+ * pair ("12 min ago · Status 3 — Finished") and two copies of that reading would
+ * eventually disagree about what Bunny sent.
+ */
+export function describeBunnyWebhookStatus(payload: BunnyWebhookPayload): {
+  status: number | null;
+  label: string | null;
+} {
+  const status = Number(payload.Status);
+  if (!Number.isFinite(status)) return { status: null, label: null };
+  return { status, label: BUNNY_WEBHOOK_STATUS_LABELS[status] ?? null };
+}
+
+/**
+ * A guid no real video can have.
+ *
+ * The endpoint test below posts a genuine `Status 3` callback — the one that
+ * publishes — so the id it names must match nothing, or the test would publish
+ * somebody's scene. All zeroes is a valid GUID shape that Bunny never issues.
+ */
+export const BUNNY_WEBHOOK_TEST_GUID = "00000000-0000-0000-0000-000000000000";
+
+export interface SignedBunnyWebhookTest {
+  /** The exact bytes that must be signed and posted; never re-serialised. */
+  rawBody: string;
+  signature: string;
+  headers: Record<string, string>;
+}
+
+/**
+ * Build and sign the callback this deployment posts to ITSELF.
+ *
+ * A configured secret proves nothing on its own: the value can be wrong, the
+ * route can be missing from the build, and the host can be refusing the path.
+ * Posting one signed callback through the real route answers all three at once,
+ * which is the difference between "it is set" and "it works".
+ *
+ * It is a `Status 3` (Finished) event for {@link BUNNY_WEBHOOK_TEST_GUID}, so it
+ * exercises the publishing intent while being incapable of publishing anything.
+ */
+export function signBunnyWebhookTest(
+  secret: string,
+  libraryId: string | null | undefined
+): SignedBunnyWebhookTest {
+  const numeric = Number(libraryId);
+  const rawBody = JSON.stringify({
+    VideoLibraryId: libraryId && Number.isFinite(numeric) ? numeric : 0,
+    VideoGuid: BUNNY_WEBHOOK_TEST_GUID,
+    Status: 3,
+  });
+  const signature = computeBunnySignature(rawBody, secret);
+
+  return {
+    rawBody,
+    signature,
+    headers: {
+      "Content-Type": "application/json",
+      "X-BunnyStream-Signature": signature,
+      "X-BunnyStream-Signature-Version": "v1",
+      "X-BunnyStream-Signature-Algorithm": "hmac-sha256",
+    },
+  };
+}
+
+export interface BunnyWebhookSecretReport {
+  configured: boolean;
+  /** A body signed with this secret is accepted, judged as production would. */
+  acceptsGenuine: boolean;
+  /** The same body signed with anything else is refused. */
+  refusesForged: boolean;
+  /**
+   * The secret IS the library's read-write management key.
+   *
+   * This is the mistake the panel exists to catch: Bunny signs Stream callbacks
+   * with the library's READ-ONLY key, and pasting the main key looks configured
+   * while every real callback is refused. The value can never be read back from
+   * Bunny (its library endpoint returns only counts — measured), so an equality
+   * check against the key we already hold is the only warning available.
+   */
+  matchesMainKey: boolean;
+}
+
+/**
+ * What the configured secret can and cannot prove, without any network work.
+ *
+ * Deliberately judged with `nodeEnv: "production"`: this is the rule the
+ * deployed site will apply, and a development deployment accepts unsigned
+ * callbacks, which would make every report read healthy.
+ */
+export function inspectBunnyWebhookSecret(options: {
+  secret: string;
+  /** `config.bunny.apiKey` — the read-write key, for the equality warning. */
+  mainKey?: string;
+  nodeEnv?: string;
+}): BunnyWebhookSecretReport {
+  const { secret, mainKey = "", nodeEnv = "production" } = options;
+
+  if (!secret) {
+    return {
+      configured: false,
+      acceptsGenuine: false,
+      refusesForged: false,
+      matchesMainKey: false,
+    };
+  }
+
+  const sample = JSON.stringify({
+    VideoLibraryId: 0,
+    VideoGuid: BUNNY_WEBHOOK_TEST_GUID,
+    Status: 3,
+  });
+
+  const genuine = verifyBunnySignature({
+    rawBody: sample,
+    signature: computeBunnySignature(sample, secret),
+    secret,
+    nodeEnv,
+  });
+  const forged = verifyBunnySignature({
+    rawBody: sample,
+    signature: computeBunnySignature(sample, `${secret}-not-the-secret`),
+    secret,
+    nodeEnv,
+  });
+
+  return {
+    configured: true,
+    acceptsGenuine: genuine.ok,
+    refusesForged: !forged.ok,
+    matchesMainKey: !!mainKey && mainKey === secret,
+  };
+}
+
 export function bunnyWebhookIntent(
   payload: BunnyWebhookPayload,
   libraryId?: string | null

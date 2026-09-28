@@ -47,6 +47,7 @@ import {
   Gavel,
   Sparkles,
   Mail,
+  Webhook,
 } from "lucide-react";
 import SystemReference from "./SystemReference";
 
@@ -487,6 +488,16 @@ interface PipelineTest {
   steps: { label: string; ok: boolean; detail: string }[];
 }
 
+/** Result of the webhook round trip (POST /api/admin/bunny-webhook-test). */
+interface WebhookTest {
+  verdict: "ok" | "not-configured" | "failed";
+  headline: string;
+  detail: string;
+  /** The URL that was tested, so it can be compared with Bunny's setting. */
+  target: string;
+  steps: { label: string; ok: boolean; detail: string }[];
+}
+
 function SetupStateIcon({ state }: { state: SetupItem["state"] }) {
   if (state === "ok") return <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />;
   // "wrong" is a value that fails the shape this variable must have, so it is a
@@ -785,6 +796,8 @@ export default function AdminDashboard() {
   const [stepBusy, setStepBusy] = useState<string | null>(null);
   const [pipeline, setPipeline] = useState<PipelineTest | null>(null);
   const [pipelineBusy, setPipelineBusy] = useState(false);
+  const [webhookTest, setWebhookTest] = useState<WebhookTest | null>(null);
+  const [webhookBusy, setWebhookBusy] = useState(false);
   // Native window.prompt is blocked in some embedded browsers, so the flows that
   // need a typed reason (ban, KYC / payout rejection) use this in-app dialog.
   const [reasonDialog, setReasonDialog] = useState<{
@@ -1753,6 +1766,32 @@ export default function AdminDashboard() {
       toast("error", "Network error while testing the pipeline");
     } finally {
       setPipelineBusy(false);
+    }
+  }
+
+  /**
+   * The receiving half of instant publishing: post a signed callback to this
+   * deployment's own endpoint, and a forged one to prove it is refused.
+   *
+   * Bunny is never asked anything — its API cannot report the Webhook URL — so
+   * the answer is entirely about our own side, which is the half that can be
+   * broken by a wrong secret, a stale build or a blocked host.
+   */
+  async function runWebhookTest() {
+    setWebhookBusy(true);
+    setWebhookTest(null);
+    try {
+      const res = await adminFetch("/api/admin/bunny-webhook-test", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        setWebhookTest(data.data as WebhookTest);
+      } else {
+        toast("error", data.error || "The webhook test could not run");
+      }
+    } catch {
+      toast("error", "Network error while testing the webhook");
+    } finally {
+      setWebhookBusy(false);
     }
   }
 
@@ -3911,6 +3950,72 @@ export default function AdminDashboard() {
                               step.ok ? "text-emerald-400" : "text-red-400"
                             }
                           >
+                            {step.ok ? "✓" : "✗"}
+                          </span>
+                          <span className="text-white/70">
+                            <span className="font-medium">{step.label}</span>
+                            <span className="text-white/40"> — {step.detail}</span>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* The other half of instant publishing. A secret in the environment
+                proves nothing on its own — this posts one genuinely signed
+                callback to our own endpoint and one forged one, so "configured"
+                becomes "accepted, and forgeries refused". */}
+            <div className="glass-card p-5">
+              <h2 className="font-display font-bold flex items-center gap-2">
+                <Webhook className="w-5 h-5 text-brand-400" />
+                Webhook test
+              </h2>
+              <p className="text-sm text-white/50 mt-1">
+                Posts a signed callback to this deployment&apos;s own webhook endpoint, then a
+                forged one. Bunny cannot be asked whether its Webhook URL is right, so this proves
+                everything on our side: the secret, the route, and the rule that refuses a body
+                which does not match its signature.
+              </p>
+              <button
+                onClick={runWebhookTest}
+                disabled={webhookBusy}
+                className="btn-brand text-sm mt-3 disabled:opacity-50 inline-flex items-center gap-2"
+              >
+                {webhookBusy ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Calling…
+                  </>
+                ) : (
+                  <>
+                    <Webhook className="w-4 h-4" /> Test webhook endpoint
+                  </>
+                )}
+              </button>
+
+              {webhookTest && (
+                <div
+                  className={`mt-4 rounded-xl border p-3 ${
+                    webhookTest.verdict === "ok"
+                      ? "border-emerald-500/30 bg-emerald-500/5"
+                      : webhookTest.verdict === "not-configured"
+                        ? "border-amber-500/30 bg-amber-500/5"
+                        : "border-red-500/30 bg-red-500/5"
+                  }`}
+                >
+                  <p className="text-sm font-semibold">
+                    {webhookTest.verdict === "ok" ? "✓ " : "✗ "}
+                    {webhookTest.headline}
+                  </p>
+                  <p className="text-xs text-white/60 mt-1">{webhookTest.detail}</p>
+
+                  {webhookTest.steps.length > 0 && (
+                    <ul className="mt-3 space-y-1">
+                      {webhookTest.steps.map((step, i) => (
+                        <li key={i} className="flex items-start gap-2 text-xs">
+                          <span className={step.ok ? "text-emerald-400" : "text-red-400"}>
                             {step.ok ? "✓" : "✗"}
                           </span>
                           <span className="text-white/70">

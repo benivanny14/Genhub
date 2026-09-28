@@ -142,6 +142,16 @@ export default function SystemReference() {
             in development it accepts unsigned callbacks so local work needs no
             secret.
           </li>
+          <li>
+            Verifying it: the Setup tab has a <Code>Bunny webhook</Code> check that
+            reports the secret&apos;s state and when a real callback last arrived
+            (every verified one is recorded), plus a button that posts a signed
+            callback to this deployment&apos;s own endpoint and a forged one beside
+            it. Bunny&apos;s library API cannot report the Webhook URL it holds —
+            it answers with counts and nothing else — so that single setting is
+            confirmed by eye against <Code>/api/webhooks/bunny</Code>, and then by
+            the first callback that appears in the check.
+          </li>
         </ul>
         <div className="mt-2 rounded-xl border border-white/10 overflow-hidden">
           <table className="w-full text-xs">

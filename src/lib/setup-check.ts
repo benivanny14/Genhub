@@ -28,6 +28,7 @@ import prisma from "./db";
 import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./redis";
 import { harakaBreakerNotice } from "./payments/harakapay";
 import { assessFloat, floatFloorTzs } from "./services/harakapay-float-alert.service";
+import { bunnyWebhookUrl, lastBunnyWebhookDelivery } from "./services/bunny-webhook.service";
 import config from "./config";
 
 // ---------------------------------------------------------------- checklist
@@ -507,6 +508,88 @@ async function probeBunny(): Promise<ProbeResult> {
   }
 }
 
+/**
+ * The webhook secret, and whether Bunny has ever actually called us.
+ *
+ * A signature cannot be verified without seeing one, and Bunny's library API
+ * cannot report the Webhook URL it is configured with, so both halves are asked
+ * here from the evidence that does exist: does the secret verify a correctly
+ * signed body, and when did a callback last arrive (`recordBunnyWebhookDelivery`
+ * stamps every verified one). "No callback yet" is a warning rather than a
+ * failure — a deployment with nothing uploaded yet has nothing to hear from —
+ * but it is the one line that distinguishes a wired webhook from a hopeful one.
+ */
+async function probeWebhook(): Promise<ProbeResult> {
+  const base = { id: "bunnyWebhook", name: "Bunny webhook" };
+  const secret = env("BUNNY_STREAM_WEBHOOK_SECRET");
+
+  if (!secret) {
+    return process.env.NODE_ENV === "production"
+      ? {
+          ...base,
+          state: "fail",
+          detail:
+            "BUNNY_STREAM_WEBHOOK_SECRET is not set, so production refuses every callback (401). " +
+            "A finished upload still publishes, but only on the next dashboard visit or worker sweep.",
+        }
+      : {
+          ...base,
+          state: "skip",
+          detail: "not set — unsigned callbacks are accepted in development only",
+        };
+  }
+
+  if (secret === env("BUNNY_STREAM_API_KEY")) {
+    return {
+      ...base,
+      state: "warn",
+      // The mistake the panel exists to catch: it looks configured, and every
+      // real callback is refused.
+      detail:
+        "this is the library's MAIN API key. Callbacks are signed with the library's Read-Only " +
+        "key, so every genuine callback would be refused — copy the Read-Only key instead.",
+    };
+  }
+
+  const last = await lastBunnyWebhookDelivery();
+  const target = bunnyWebhookUrl(config.appUrl);
+
+  if (!last) {
+    return {
+      ...base,
+      state: "warn",
+      detail:
+        `secret set (not the main API key) but no callback has ever been recorded — set the Stream ` +
+        `library's Webhook URL to ${target}, then the next finished upload appears here.`,
+    };
+  }
+
+  const event = last.label ? `Status ${last.status} — ${last.label}` : "no status in the body";
+  const outcome = last.matched
+    ? last.published
+      ? "published a video"
+      : "no change to the row"
+    : "no matching video";
+
+  return {
+    ...base,
+    state: "ok",
+    detail: `secret set · last callback ${relativeAge(last.at)} (${event}, ${outcome})`,
+  };
+}
+
+/** "12 min ago" — enough for a card, and never a wall of digits. */
+function relativeAge(iso: string, now: number = Date.now()): string {
+  const ms = now - new Date(iso).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return "just now";
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return "moments ago";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours} h ago`;
+  return `${Math.round(hours / 24)} d ago`;
+}
+
 async function probeCdn(): Promise<ProbeResult> {
   const base = { id: "cdn", name: "Bunny CDN" };
   const host = env("BUNNY_CDN_HOSTNAME").replace(/^https?:\/\//, "").replace(/\/$/, "");
@@ -685,6 +768,7 @@ export async function runLiveProbes(): Promise<ProbeResult[]> {
     probeDatabase(),
     probeRedis(),
     probeBunny(),
+    probeWebhook(),
     probeCdn(),
     probeSmtp(),
     probeHarakapay(),
