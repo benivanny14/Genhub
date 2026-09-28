@@ -41,10 +41,10 @@ import type { BunnyUploadCredentials } from "./bunny";
 export const TUS_CHUNK_ALIGNMENT = 256 * 1024;
 /** What a phone starts with: cheap to lose, quick to show progress. */
 export const MOBILE_CHUNK_SIZE = 5 * 1024 * 1024;
-/** What a desktop starts with. */
-export const DESKTOP_CHUNK_SIZE = 16 * 1024 * 1024;
+/** What a desktop starts with; small enough to survive ordinary resets. */
+export const DESKTOP_CHUNK_SIZE = 8 * 1024 * 1024;
 /** What a proven-fast connection is allowed to climb to. */
-export const FAST_CHUNK_SIZE = 32 * 1024 * 1024;
+export const FAST_CHUNK_SIZE = 16 * 1024 * 1024;
 
 /**
  * Chunk size to START with, before anything is known about the connection.
@@ -103,13 +103,12 @@ export function looksLikeMobile(): boolean {
 /**
  * Backoff between attempts at the SAME chunk, in ms.
  *
- * Six attempts, up to 30s apart. The audience is on mobile data: a signal that
- * dips for twenty seconds in a lift is ordinary, and giving up after ~12s (the
- * old four-attempt ladder) is what made a creator re-upload a whole file — and
- * reserve a second slot while the first sat orphaned in the library. The retry
- * is cheap because the resume asks the server for its offset first.
+ * Four attempts with a short exponential backoff. The upload is resumable, so
+ * retries should recover a brief network dip without keeping a creator waiting
+ * through a 20-minute ladder after a dead connection.
  */
-const RETRY_DELAYS = [0, 1_000, 3_000, 8_000, 15_000, 30_000];
+const RETRY_DELAYS = [0, 1_000, 3_000, 8_000];
+const RESERVE_RETRY_DELAYS = [0, 1_000, 3_000];
 
 /**
  * How long one chunk may sit with no progress before it is treated as a dropped
@@ -120,14 +119,9 @@ const RETRY_DELAYS = [0, 1_000, 3_000, 8_000, 15_000, 30_000];
  * dies without an error event (a lost radio, a silent NAT timeout) leaves the
  * upload hanging forever with the progress bar frozen.
  *
- * Shortened from ten minutes, which was set when every chunk was 32 MiB. Now
- * that a phone sends 5 MiB at a time, ten minutes of silence cannot be a slow
- * transfer — it is a dead one, and the retry ladder should start while the
- * creator is still looking at the screen. Ten minutes of a frozen bar is what
- * makes somebody close the tab and give up on an upload that would have
- * finished. A genuinely slow link is still covered: this is time with ZERO
- * bytes moved, and the page warns the creator long before it fires (see
- * UPLOAD_STALL_WARNING_MS).
+ * This is deliberately a silence detector, not a total request timeout. A
+ * genuinely slow link is allowed to finish while the browser keeps reporting
+ * progress; a dead connection is retried after a reasonable pause.
  *
  * THAT SENTENCE WAS ASPIRATION UNTIL RECENTLY. The value used to be assigned to
  * `xhr.timeout`, which is a cap on the WHOLE request — a throughput limit wearing
@@ -139,7 +133,7 @@ const RETRY_DELAYS = [0, 1_000, 3_000, 8_000, 15_000, 30_000];
  * is not theoretical. It is now enforced by a watchdog in sendChunk that every
  * progress event re-arms, which is what the paragraph above has always described.
  */
-export const CHUNK_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+export const CHUNK_STALL_TIMEOUT_MS = 90 * 1000;
 
 /**
  * How long the form waits, with no bytes moving, before telling the creator so.
@@ -149,7 +143,7 @@ export const CHUNK_STALL_TIMEOUT_MS = 3 * 60 * 1000;
  * the creator can only act on the difference (come back to the page, move to
  * better signal) if we say something.
  */
-export const UPLOAD_STALL_WARNING_MS = 45 * 1000;
+export const UPLOAD_STALL_WARNING_MS = 30 * 1000;
 
 /**
  * The largest video a creator may send, matching the "Max 2GB" label on the
@@ -161,7 +155,10 @@ export const UPLOAD_STALL_WARNING_MS = 45 * 1000;
  * Checked BEFORE the slot is reserved, so a file that is too large never
  * creates a Bunny object — see videoSizeError and the call sites.
  */
-export const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
+// PostgreSQL/Prisma stores uploadSizeBytes as a signed INTEGER. Keep the public
+// limit one byte below INTEGER_MAX so a video that Bunny accepts cannot fail
+// later during finalization with a database overflow.
+export const MAX_VIDEO_BYTES = 2_147_483_647; // just under 2 GiB
 
 /**
  * A creator-facing message when a file is over the limit, or null when it is
@@ -181,6 +178,42 @@ export type TusErrorCode =
   | "NETWORK"
   | "ABORTED"
   | "UNSUPPORTED";
+
+/**
+ * WHY a transfer died, in one word.
+ *
+ * `code` says what the uploader decided (NETWORK, REJECTED); this says which
+ * physical fact produced that verdict. They are not interchangeable: an offline
+ * phone needs nothing from us but time, a reset connection wants a smaller
+ * chunk, a stall usually means the tab was sent to the background, and a
+ * provider error needs Bunny's own body read. Before this field every one of
+ * them arrived as the same word — NETWORK, with a null status — and the reader
+ * could not tell which fault they were looking at.
+ */
+export const TUS_FAILURE_REASONS = [
+  "offline",
+  "reset",
+  "stall",
+  "timeout",
+  "provider",
+  "cancelled",
+  "preflight",
+] as const;
+
+export type TusFailureReason = (typeof TUS_FAILURE_REASONS)[number];
+
+/**
+ * True when the browser itself knows there is no connection.
+ *
+ * `navigator.onLine` is a hint, not the truth — it is false precisely when the
+ * OS has no interface, which is the one case where telling the creator "you are
+ * offline" is both correct and actionable. Anywhere else the honest report is
+ * that the connection dropped, so this is only ever used to add detail to a
+ * failure that has already happened.
+ */
+function offlineNow(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
 
 export class TusUploadError extends Error {
   code: TusErrorCode;
@@ -221,11 +254,37 @@ export class TusUploadError extends Error {
   /** The size of the file being sent, so `bytesSent` reads as a fraction of it. */
   bytesTotal?: number;
 
+  /**
+   * Where the transfer died: the offset the failing chunk started at, as the
+   * server last confirmed it.
+   *
+   * This is the number a retry resumes from, and it is the one fact that
+   * survives independently of the browser's own (coalesced) progress events —
+   * so "died at 96 MB" here is a server-confirmed floor, while `bytesSent` is a
+   * client-reported estimate.
+   */
+  offset?: number;
+  /** Which chunk this was, counting from zero. */
+  chunkIndex?: number;
+  /**
+   * How many retries at THIS chunk preceded the one that died. Zero means the
+   * first attempt failed; three (with the current ladder) means the connection
+   * refused the same chunk four times, which is a different finding from a
+   * single drop.
+   */
+  retryCount?: number;
+  /** Which physical fault this was — see TusFailureReason. */
+  reason?: TusFailureReason;
+
   constructor(
     code: TusErrorCode,
     message: string,
     status?: number,
-    extra?: { stage?: "reserve" | "chunk"; providerBody?: string }
+    extra?: {
+      stage?: "reserve" | "chunk";
+      providerBody?: string;
+      reason?: TusFailureReason;
+    }
   ) {
     super(message);
     this.name = "TusUploadError";
@@ -233,6 +292,7 @@ export class TusUploadError extends Error {
     this.status = status;
     this.stage = extra?.stage;
     this.providerBody = extra?.providerBody;
+    this.reason = extra?.reason;
   }
 }
 
@@ -287,7 +347,7 @@ function describe(
       "REJECTED",
       "Bunny rejected the upload authorization (it may have expired). Please retry the upload.",
       status,
-      { stage, providerBody }
+      { stage, providerBody, reason: "provider" }
     );
   }
   if (status === 413) {
@@ -295,14 +355,27 @@ function describe(
       "UNSUPPORTED",
       "Bunny refused the file as too large for this plan.",
       status,
-      { stage, providerBody }
+      { stage, providerBody, reason: "provider" }
+    );
+  }
+  // A client-side 4xx (other than transient 408/409/429) will not improve by
+  // sending the same bytes again. Keeping it out of NETWORK also makes the
+  // admin panel distinguish provider validation from a dropped connection.
+  if (status >= 400 && status < 500 && status !== 408 && status !== 409 && status !== 429) {
+    return new TusUploadError(
+      "REJECTED",
+      `Bunny rejected the upload (HTTP ${status})${body ? `: ${body.slice(0, 160)}` : ""}`,
+      status,
+      { stage, providerBody, reason: "provider" }
     );
   }
   return new TusUploadError(
     "NETWORK",
     `Upload failed (HTTP ${status})${body ? `: ${body.slice(0, 160)}` : ""}`,
     status,
-    { stage, providerBody }
+    // A 408 answering a chunk the server was still reading is a request
+    // timeout, not a dropped link: same retry, different diagnosis.
+    { stage, providerBody, reason: status === 408 ? "timeout" : "provider" }
   );
 }
 
@@ -314,7 +387,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
-      reject(new TusUploadError("ABORTED", "Upload cancelled"));
+      reject(new TusUploadError("ABORTED", "Upload cancelled", undefined, { reason: "cancelled" }));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -323,7 +396,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 /** Reserve the upload and return the URL the chunks are PATCHed to. */
 async function createUpload(
   file: File,
-  credentials: BunnyUploadCredentials
+  credentials: BunnyUploadCredentials,
+  signal?: AbortSignal
 ): Promise<string> {
   let res: Response;
   try {
@@ -338,13 +412,35 @@ async function createUpload(
         }),
         ...authHeaders(credentials),
       },
+      // The signal belongs to the REQUEST, not to the headers. It was added to
+      // the object above, where TypeScript read it as a header named "signal"
+      // and the browser sent nothing — so pressing Cancel left a reserve POST
+      // in flight, and the slot it created was an orphan nobody had stopped.
+      signal,
     });
-  } catch {
+  } catch (error) {
+    if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+      throw new TusUploadError("ABORTED", "Upload cancelled", undefined, {
+        stage: "reserve",
+        reason: "cancelled",
+      });
+    }
+    // Distinguishing this from an ordinary reset is the difference between
+    // "wait for signal" and "something is refusing the connection" — the two
+    // look identical in every other field of the report.
+    if (offlineNow()) {
+      throw new TusUploadError(
+        "NETWORK",
+        "Your device is offline. Reconnect and retry — the upload resumes where it stopped.",
+        undefined,
+        { stage: "reserve", reason: "offline" }
+      );
+    }
     throw new TusUploadError(
       "NETWORK",
       "Could not reach the upload server. Check your connection and retry.",
       undefined,
-      { stage: "reserve" }
+      { stage: "reserve", reason: "reset" }
     );
   }
 
@@ -365,19 +461,61 @@ async function createUpload(
   return new URL(location, credentials.endpoint).toString();
 }
 
+/** Recover a lost reserve response without creating another Bunny video slot. */
+async function createUploadWithRetry(
+  file: File,
+  credentials: BunnyUploadCredentials,
+  signal?: AbortSignal
+): Promise<string> {
+  let lastError: TusUploadError | null = null;
+
+  for (let attempt = 0; attempt < RESERVE_RETRY_DELAYS.length; attempt++) {
+    try {
+      if (RESERVE_RETRY_DELAYS[attempt] > 0) {
+        await sleep(RESERVE_RETRY_DELAYS[attempt], signal);
+      }
+      return await createUpload(file, credentials, signal);
+    } catch (error) {
+      const tusError =
+        error instanceof TusUploadError
+          ? error
+          : new TusUploadError("NETWORK", "Could not reserve the upload target.", undefined, {
+              stage: "reserve",
+              reason: "reset",
+            });
+
+      // Stamped here rather than at the end: a refusal (401, an abort) leaves
+      // the loop at this same point, and "which try died" is what makes the
+      // difference between an expired key and a flapping network readable.
+      tusError.retryCount = attempt;
+
+      if (!isRetryable(tusError)) throw tusError;
+      lastError = tusError;
+    }
+  }
+
+  throw lastError ?? new TusUploadError("NETWORK", "Could not reserve the upload target.", undefined, {
+    stage: "reserve",
+  });
+}
+
 /** Ask the server how many bytes it already holds, so a retry resumes. */
 async function remoteOffset(
   location: string,
-  credentials: BunnyUploadCredentials
+  credentials: BunnyUploadCredentials,
+  signal?: AbortSignal
 ): Promise<number | null> {
   try {
     const res = await fetch(location, {
       method: "HEAD",
       headers: { "Tus-Resumable": "1.0.0", ...authHeaders(credentials) },
+      signal,
     });
     if (!res.ok) return null;
     const offset = res.headers.get("Upload-Offset");
-    return offset === null ? null : Number(offset);
+    if (offset === null) return null;
+    const parsed = Number(offset);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
   } catch {
     return null;
   }
@@ -444,7 +582,23 @@ function sendChunk(
       stopWatchdog();
       if (xhr.status >= 200 && xhr.status < 300) {
         const next = xhr.getResponseHeader("Upload-Offset");
-        resolve(next === null ? offset + blob.size : Number(next));
+        const parsed = next === null ? offset + blob.size : Number(next);
+        if (
+          !Number.isInteger(parsed) ||
+          parsed < offset ||
+          parsed > offset + blob.size
+        ) {
+          reject(
+            new TusUploadError(
+              "UNSUPPORTED",
+              "The upload server returned an invalid upload offset.",
+              undefined,
+              { stage: "chunk", reason: "provider" }
+            )
+          );
+          return;
+        }
+        resolve(parsed);
         return;
       }
       reject(describe(xhr.status, xhr.responseText || "", "chunk"));
@@ -456,13 +610,23 @@ function sendChunk(
     // `describe()`; these three are the ones where nothing answered at all.
     xhr.onerror = () => {
       stopWatchdog();
+      // A phone that has lost its radio and one behind a proxy that reset the
+      // socket arrive here identically. Only the browser knows which it is, and
+      // it says so in `onLine`.
       reject(
-        new TusUploadError(
-          "NETWORK",
-          "The connection dropped during upload.",
-          undefined,
-          { stage: "chunk" }
-        )
+        offlineNow()
+          ? new TusUploadError(
+              "NETWORK",
+              "Your device went offline during the upload. Reconnect and retry — it resumes where it stopped.",
+              undefined,
+              { stage: "chunk", reason: "offline" }
+            )
+          : new TusUploadError(
+              "NETWORK",
+              "The connection dropped during upload.",
+              undefined,
+              { stage: "chunk", reason: "reset" }
+            )
       );
     };
     // Kept although nothing sets `xhr.timeout` any more: it costs nothing, and a
@@ -475,7 +639,7 @@ function sendChunk(
           "NETWORK",
           "The upload stalled and was retried.",
           undefined,
-          { stage: "chunk" }
+          { stage: "chunk", reason: "timeout" }
         )
       );
     };
@@ -487,9 +651,12 @@ function sendChunk(
               "NETWORK",
               "The upload stalled and was retried.",
               undefined,
-              { stage: "chunk" }
+              { stage: "chunk", reason: "stall" }
             )
-          : new TusUploadError("ABORTED", "Upload cancelled", undefined, { stage: "chunk" })
+          : new TusUploadError("ABORTED", "Upload cancelled", undefined, {
+              stage: "chunk",
+              reason: "cancelled",
+            })
       );
     };
 
@@ -497,7 +664,10 @@ function sendChunk(
       if (signal.aborted) {
         stopWatchdog();
         reject(
-          new TusUploadError("ABORTED", "Upload cancelled", undefined, { stage: "chunk" })
+          new TusUploadError("ABORTED", "Upload cancelled", undefined, {
+            stage: "chunk",
+            reason: "cancelled",
+          })
         );
         return;
       }
@@ -511,8 +681,56 @@ function sendChunk(
   });
 }
 
+export interface TusUploadRetryInfo {
+  /** Which chunk is being retried, counting from zero. */
+  chunkIndex: number;
+  /** The retry that is about to happen: 1 for the second attempt at a chunk. */
+  attempt: number;
+  /** How many attempts this chunk is allowed in total. */
+  totalAttempts: number;
+  /** The offset the chunk is retried from — the server's own figure. */
+  offset: number;
+  /** The fault that spent the attempt, so the message can name it. */
+  reason?: TusFailureReason;
+}
+
+/**
+ * A creator-facing sentence for the retry that is about to happen.
+ *
+ * The form used to sit at the same percentage through a backoff, which reads as
+ * a hang — the creator cannot tell "still working" from "dead". Naming the
+ * fault is the point: "you are offline" and "the host refused that attempt"
+ * lead to different actions (move to better signal, or stop and tell us), while
+ * a silent bar leads to giving up on a file that was one chunk from done.
+ *
+ * Pure, so the wording is pinned by a test rather than by a screenshot.
+ */
+export function describeRetry(info: TusUploadRetryInfo): string {
+  const attempt = `${info.attempt} of ${info.totalAttempts}`;
+  switch (info.reason) {
+    case "offline":
+      return `You are offline — retrying (${attempt})`;
+    case "reset":
+      return `The connection dropped — retrying (${attempt})`;
+    case "stall":
+      return `No data moved for a while — retrying (${attempt})`;
+    case "timeout":
+      return `The upload timed out — retrying (${attempt})`;
+    case "provider":
+      return `The host refused that attempt — retrying (${attempt})`;
+    default:
+      return `Retrying (${attempt})`;
+  }
+}
+
 export interface TusUploadOptions {
   onProgress?: (uploaded: number, total: number) => void;
+  /**
+   * Called between a failed attempt and the next one, so the form can say
+   * "retrying" instead of leaving a frozen percentage on screen for the length
+   * of the backoff. Reporting only — nothing here can change the upload.
+   */
+  onRetry?: (info: TusUploadRetryInfo) => void;
   signal?: AbortSignal;
   /**
    * Fixes the chunk size and switches off the adaptation below. Overridable for
@@ -534,11 +752,27 @@ export interface TusUploadOptions {
 function withProgress(
   error: TusUploadError,
   bytesSent: number,
-  bytesTotal: number
+  bytesTotal: number,
+  /**
+   * Where the failure happened, when the caller knows. Every one of these is
+   * optional so the pre-flight guards (which have no chunk and no offset) still
+   * produce a report with an honest byte count and nothing invented.
+   */
+  where?: { offset?: number; chunkIndex?: number; retryCount?: number }
 ): TusUploadError {
   error.bytesSent = Math.max(0, Math.min(bytesSent, bytesTotal));
   error.bytesTotal = bytesTotal;
+  if (where?.offset !== undefined) error.offset = where.offset;
+  if (where?.chunkIndex !== undefined) error.chunkIndex = where.chunkIndex;
+  if (where?.retryCount !== undefined) error.retryCount = where.retryCount;
   return error;
+}
+
+/** Only transient transport/provider responses should consume a retry. */
+function isRetryable(error: TusUploadError): boolean {
+  if (error.code !== "NETWORK") return false;
+  if (error.status === undefined || error.status === null) return true;
+  return error.status === 408 || error.status === 409 || error.status === 429 || error.status >= 500;
 }
 
 /**
@@ -552,11 +786,13 @@ export async function uploadFileWithTus(
   credentials: BunnyUploadCredentials,
   options: TusUploadOptions = {}
 ): Promise<void> {
-  const { onProgress, signal } = options;
+  const { onProgress, onRetry, signal } = options;
 
   if (!file.size) {
     throw withProgress(
-      new TusUploadError("UNSUPPORTED", "That file is empty."),
+      new TusUploadError("UNSUPPORTED", "That file is empty.", undefined, {
+        reason: "preflight",
+      }),
       0,
       0
     );
@@ -566,14 +802,20 @@ export async function uploadFileWithTus(
   // file at Bunny on the creator's data plan.
   const sizeError = videoSizeError(file);
   if (sizeError) {
-    throw withProgress(new TusUploadError("UNSUPPORTED", sizeError), 0, file.size);
+    throw withProgress(
+      new TusUploadError("UNSUPPORTED", sizeError, undefined, { reason: "preflight" }),
+      0,
+      file.size
+    );
   }
   // Catch an expired authorization here rather than as an opaque 401 mid-upload.
   if (credentials.expirationTime <= Math.floor(Date.now() / 1000)) {
     throw withProgress(
       new TusUploadError(
         "EXPIRED",
-        "The upload authorization expired before the upload started. Please retry."
+        "The upload authorization expired before the upload started. Please retry.",
+        undefined,
+        { reason: "preflight" }
       ),
       0,
       file.size
@@ -586,11 +828,28 @@ export async function uploadFileWithTus(
   // only sometimes would make its absence meaningless.
   let location: string;
   try {
-    location = await createUpload(file, credentials);
+    location = await createUploadWithRetry(file, credentials, signal);
   } catch (error) {
-    throw error instanceof TusUploadError ? withProgress(error, 0, file.size) : error;
+    // No chunk was ever offered, so the offset is a true zero rather than an
+    // unknown — and `offset: 0` is what makes that visible beside bytesSent.
+    throw error instanceof TusUploadError
+      ? withProgress(error, 0, file.size, { offset: 0 })
+      : error;
   }
   let offset = 0;
+  let reportedOffset = 0;
+  /** Which chunk is in flight, counting from zero. Carried into the report. */
+  let chunkIndex = 0;
+  const reportProgress = (candidate: number) => {
+    // A retry can emit a smaller per-request `loaded` value than the failed
+    // attempt. The UI must never visibly move backwards while the server
+    // offset is being reconciled.
+    reportedOffset = Math.max(
+      reportedOffset,
+      Math.min(Math.max(0, candidate), file.size)
+    );
+    onProgress?.(reportedOffset, file.size);
+  };
 
   // A caller-supplied size wins (tests pin it); otherwise start from what the
   // device looks like and let the measurements below take over.
@@ -609,11 +868,12 @@ export async function uploadFileWithTus(
     // means nothing left the browser — a request that was never sent, which is a
     // different fault from one that was (see bytesSent on TusUploadError).
     let attemptSent = 0;
+    let maxAttemptSent = 0;
 
     for (let attempt = 0; attempt < RETRY_DELAYS.length; attempt++) {
-      if (RETRY_DELAYS[attempt] > 0) await sleep(RETRY_DELAYS[attempt], signal);
       attemptSent = 0;
       try {
+        if (RETRY_DELAYS[attempt] > 0) await sleep(RETRY_DELAYS[attempt], signal);
         attemptStartedAt = Date.now();
         offset = await sendChunk(
           location,
@@ -621,8 +881,9 @@ export async function uploadFileWithTus(
           chunkStart,
           credentials,
           (loaded) => {
-            attemptSent = loaded;
-            onProgress?.(chunkStart + loaded, file.size);
+            attemptSent = Math.max(0, Math.min(loaded, blob.size));
+            maxAttemptSent = Math.max(maxAttemptSent, attemptSent);
+            reportProgress(chunkStart + attemptSent);
           },
           signal
         );
@@ -635,31 +896,55 @@ export async function uploadFileWithTus(
             : new TusUploadError("NETWORK", "Upload failed");
 
         // Cancelled or refused outright: retrying cannot help.
-        if (tusError.code === "ABORTED" || tusError.code === "UNSUPPORTED") {
-          throw withProgress(tusError, chunkStart + attemptSent, file.size);
-        }
-        // An expired signature fails identically forever.
-        if (tusError.status === 401 || tusError.status === 403) {
-          throw withProgress(tusError, chunkStart + attemptSent, file.size);
+        if (!isRetryable(tusError)) {
+          throw withProgress(tusError, chunkStart + maxAttemptSent, file.size, {
+            offset: chunkStart,
+            chunkIndex,
+            retryCount: attempt,
+          });
         }
 
         lastError = tusError;
 
         // The server may already hold part of this chunk — ask before resending
         // from the old offset, otherwise the chunk is written twice.
-        const serverOffset = await remoteOffset(location, credentials);
-        if (serverOffset !== null && serverOffset > chunkStart) {
+        const serverOffset = await remoteOffset(location, credentials, signal);
+        if (
+          serverOffset !== null &&
+          serverOffset > chunkStart &&
+          Number.isInteger(serverOffset) &&
+          serverOffset <= chunkStart + blob.size &&
+          serverOffset <= file.size
+        ) {
           offset = serverOffset;
           lastError = null;
           break;
         }
+
+        // Said out loud before the backoff, because the alternative is a
+        // percentage that sits still for eight seconds and reads as a hang.
+        onRetry?.({
+          chunkIndex,
+          attempt: attempt + 1,
+          totalAttempts: RETRY_DELAYS.length,
+          offset: chunkStart,
+          reason: tusError.reason,
+        });
       }
     }
 
     if (lastError) {
-      throw withProgress(lastError, chunkStart + attemptSent, file.size);
+      throw withProgress(lastError, chunkStart + maxAttemptSent, file.size, {
+        offset: chunkStart,
+        chunkIndex,
+        // Every attempt in the ladder was spent on this one chunk. Zero means
+        // the first try died, which is a different finding from a connection
+        // that refused it four times.
+        retryCount: RETRY_DELAYS.length - 1,
+      });
     }
-    onProgress?.(offset, file.size);
+    reportProgress(offset);
+    chunkIndex += 1;
 
     // Decide the next chunk from what this one achieved — see adaptChunkSize.
     // Skipped when the caller pinned a size, so tests stay deterministic.

@@ -8,7 +8,7 @@ import { MEDIA_ROUTE_PREFIX, isSafeMediaKey } from "./media";
 // The same 2 GB ceiling the upload form and the TUS client enforce. One number,
 // three places it is checked, so a file that passes the picker cannot be refused
 // by the schema that stores it.
-import { MAX_VIDEO_BYTES } from "./tus-upload";
+import { MAX_VIDEO_BYTES, TUS_FAILURE_REASONS } from "./tus-upload";
 import { normalizeUsername, usernameFormatError } from "./usernames";
 
 /**
@@ -461,6 +461,20 @@ export const uploadFailureSchema = z.object({
    */
   bytesSent: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
   bytesTotal: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
+  /**
+   * Which physical fault it was. Bounded to the closed set the uploader can
+   * produce, so the admin panel never renders a word this codebase did not
+   * write — an enum, not free text, for the same reason `stage` is one.
+   */
+  reason: z.enum(TUS_FAILURE_REASONS).nullish(),
+  /**
+   * Where the failing chunk started, which chunk it was, and how many retries
+   * had been spent on it. Bounded generously: these are read by a human, and a
+   * value outside the file's own size is already refused by the byte counts.
+   */
+  offset: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
+  chunkIndex: z.number().int().min(0).max(100_000).nullish(),
+  retryCount: z.number().int().min(0).max(100).nullish(),
 });
 
 // =============================================================================

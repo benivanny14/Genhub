@@ -44,7 +44,8 @@ export type CronWorkerId =
   | "release-earnings"
   | "reconcile-payments"
   | "renew-subscriptions"
-  | "earnings-digest";
+  | "earnings-digest"
+  | "video-encoding";
 
 export interface CronWorkerDef {
   id: CronWorkerId;
@@ -178,6 +179,17 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     inFlightGraceMinutes: 5,
     schedule: "vercel.json or .github/workflows/earnings-digest.yml",
+    sendsCustomerRequests: false,
+  },
+  {
+    id: "video-encoding",
+    name: "Refresh video encoding",
+    consequence:
+      "A missed Bunny callback can leave an uploaded video showing as processing longer than necessary.",
+    everyMinutes: 10,
+    staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
+    inFlightGraceMinutes: 10,
+    schedule: "vercel.json or .github/workflows/video-encoding.yml",
     sendsCustomerRequests: false,
   },
 ] as const;

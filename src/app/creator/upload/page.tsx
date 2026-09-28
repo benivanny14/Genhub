@@ -10,10 +10,13 @@ import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import {
   uploadFileWithTus,
+  describeRetry,
   TusUploadError,
   videoSizeError,
   UPLOAD_STALL_WARNING_MS,
+  type TusUploadRetryInfo,
 } from "@/lib/tus-upload";
+import { ScreenWakeLock } from "@/lib/screen-wake-lock";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
 import { CATEGORIES } from "@/lib/categories";
@@ -43,6 +46,10 @@ export default function UploadPage() {
   const { toast, update: updateToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  // This is separate from progress: the first PATCH can be in flight before
+  // the browser emits its first progress event. Wake Lock and the stall warning
+  // must already be active during that window.
+  const [mainUploadActive, setMainUploadActive] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   // True when no byte has moved for a while. Reported, never acted on: on a
   // phone this is usually the screen locking or the browser being sent to the
@@ -52,8 +59,15 @@ export default function UploadPage() {
   // When progress last moved, in ms. A ref because it changes on every chunk
   // and must not re-render the form.
   const lastProgressAt = useRef<number | null>(null);
-  // The screen wake lock held for the duration of a transfer.
-  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  // The screen wake lock held for the duration of a transfer. One instance per
+  // page, created on first use — see lib/screen-wake-lock.ts for the rules it
+  // owns (requested before the reserve call, retaken when the tab returns,
+  // released on every ending, silent on browsers without the API).
+  const wakeLockRef = useRef<ScreenWakeLock | null>(null);
+  const screenWakeLock = () => (wakeLockRef.current ??= new ScreenWakeLock());
+  // Aborting on unmount prevents an invisible XHR from continuing after the
+  // creator leaves the page and makes the reserved slot eligible for cleanup.
+  const uploadAbortRef = useRef<AbortController | null>(null);
   // True only once the bytes are actually stored at Bunny. `bunnyVideoId` is set
   // earlier — when the slot is reserved — so it cannot be what the UI trusts to
   // know the upload finished, or a failed transfer would look like a success.
@@ -152,31 +166,35 @@ export default function UploadPage() {
   // slot means a dropped transfer resumes where it stopped instead of starting
   // again from byte zero.
 
+  /** Give the lock back and stop watching. Every ending lands here. */
   const releaseScreenWake = useCallback(() => {
-    const lock = wakeLockRef.current;
-    wakeLockRef.current = null;
-    try {
-      void lock?.release();
-    } catch {
-      // Already released (the browser does this when the tab is hidden).
-    }
+    screenWakeLock().stop();
   }, []);
-
+  /**
+   * Take the lock now. Never throws and is never awaited for its own sake: the
+   * API is an optimisation, so a browser without it simply continues.
+   */
   const holdScreenAwake = useCallback(async () => {
-    try {
-      if (wakeLockRef.current) return;
-      if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
-      wakeLockRef.current = await navigator.wakeLock.request("screen");
-    } catch {
-      // Unsupported, or the browser refused. Not an error worth showing: the
-      // on-screen warning below is the fallback, and the upload works without
-      // it (it just survives less).
-    }
+    await screenWakeLock().acquire();
+  }, []);
+  /**
+   * The same, plus the rule that matters on a phone: a hidden tab has its lock
+   * dropped BY THE BROWSER, so coming back to the page has to take it again.
+   */
+  const watchScreenWake = useCallback(async () => {
+    await screenWakeLock().watch();
   }, []);
 
-  /** A transfer is in flight whenever a bar is moving towards 100%. */
-  const transferring =
-    (uploadProgress > 0 && uploadProgress < 100) || uploadingTeaser;
+  useEffect(() => {
+    return () => {
+      uploadAbortRef.current?.abort();
+      uploadAbortRef.current = null;
+      releaseScreenWake();
+    };
+  }, [releaseScreenWake]);
+
+  /** A transfer is in flight from before the first byte until it settles. */
+  const transferring = mainUploadActive || uploadingTeaser;
 
   useEffect(() => {
     if (!transferring) {
@@ -187,15 +205,10 @@ export default function UploadPage() {
     }
 
     lastProgressAt.current = lastProgressAt.current ?? Date.now();
-    void holdScreenAwake();
-
-    // A hidden tab has its wake lock released by the browser, so take it again
-    // the moment the creator comes back — that is exactly the situation the
-    // lock exists for.
-    const onVisible = () => {
-      if (!document.hidden) void holdScreenAwake();
-    };
-    document.addEventListener("visibilitychange", onVisible);
+    // Takes the lock AND registers the re-acquire-on-return rule — which is why
+    // this is not the same call the reserve path makes. The timer below is
+    // reporting only; the module owns every decision about the lock itself.
+    void watchScreenWake();
 
     const timer = setInterval(() => {
       const last = lastProgressAt.current ?? Date.now();
@@ -204,9 +217,8 @@ export default function UploadPage() {
 
     return () => {
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [transferring, holdScreenAwake, releaseScreenWake]);
+  }, [transferring, watchScreenWake, releaseScreenWake]);
 
   /** Reserve the slot and get the short-lived credentials to fill it. */
   async function initiateUpload(): Promise<BunnyUploadCredentials | null> {
@@ -244,14 +256,20 @@ export default function UploadPage() {
   async function uploadToBunny(
     file: File,
     credentials: BunnyUploadCredentials,
-    onProgress: (percent: number) => void
+    onProgress: (percent: number) => void,
+    signal?: AbortSignal
   ): Promise<boolean> {
     const label = file.name.length > 28 ? `${file.name.slice(0, 27)}…` : file.name;
     const toastId = toast("info", `Uploading ${label} — 0%`, 0);
+    // Kept so a retry message can carry the percentage the bar is already
+    // showing: a toast rewritten without one drops the bar back to nothing and
+    // reads as "it started again".
+    let lastPercent = 0;
     const report = (percent: number) => {
       // Every callback is proof the connection is alive — the stall warning is
       // built from these timestamps, so it clears itself the moment bytes move
       // again (a phone coming back from the background resumes here).
+      lastPercent = percent;
       lastProgressAt.current = Date.now();
       setUploadStalled(false);
       onProgress(percent);
@@ -260,10 +278,27 @@ export default function UploadPage() {
         progress: percent,
       });
     };
+    /**
+     * Between one failed attempt and the next, say so. The backoff is seconds
+     * long, and a bar that sits still for that long with no explanation is
+     * indistinguishable from the hang this whole file keeps running into — so
+     * the retry names the fault (offline, dropped, stalled) instead of waiting
+     * silently.
+     */
+    const onRetry = (info: TusUploadRetryInfo) => {
+      lastProgressAt.current = Date.now();
+      setUploadStalled(false);
+      updateToast(toastId, {
+        message: `${describeRetry(info)} · ${label} at ${lastPercent}%`,
+        progress: lastPercent,
+      });
+    };
 
     try {
       await uploadFileWithTus(file, credentials, {
         onProgress: (uploaded, total) => report(Math.round((uploaded / total) * 100)),
+        onRetry,
+        signal,
       });
       // Done: say so on the same toast, give it a real duration, and let it
       // clear itself. `progress: 100` first so the bar finishes visibly rather
@@ -352,9 +387,28 @@ export default function UploadPage() {
     }
 
     setFailedUpload(null);
-    const credentials = await initiateUpload();
-    if (!credentials) return;
-    await runVideoUpload(file, credentials);
+
+    // The wake lock is requested HERE, before the reserve POST — not after it,
+    // and not when progress starts. Reserve and the first PATCH are one
+    // transfer, and the first PATCH can be in flight before the browser emits a
+    // single progress event; a screen that locks in that window produces a
+    // frozen bar with no error at all, which is the fault this is here to
+    // prevent. `mainUploadActive` goes up first so the form reflects it and the
+    // file picker locks. (Both guards above have already run, so a file that is
+    // refused never wakes the screen for nothing.)
+    setMainUploadActive(true);
+    await holdScreenAwake();
+    try {
+      const credentials = await initiateUpload();
+      if (!credentials) return;
+      await runVideoUpload(file, credentials);
+    } finally {
+      // A reserve that never produced credentials has no path through
+      // runVideoUpload, so the flag would otherwise stay up with nothing behind
+      // it — and along with it the wake lock. runVideoUpload clears it on the
+      // paths that reach it; clearing twice is harmless.
+      setMainUploadActive(false);
+    }
   }
 
   /**
@@ -368,14 +422,29 @@ export default function UploadPage() {
    */
   async function runVideoUpload(file: File, credentials: BunnyUploadCredentials) {
     setFailedUpload(null);
-    const uploaded = await uploadToBunny(file, credentials, setUploadProgress);
-    if (uploaded) {
-      setUploadProgress(100);
-      setUploadedBytes(file.size);
-      setUploadReady(true);
-    } else {
-      setUploadProgress(0);
-      setFailedUpload({ file, credentials });
+    setMainUploadActive(true);
+    setUploadStalled(false);
+    lastProgressAt.current = Date.now();
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
+
+    // The same request as the first path, and not a duplicate of it: this is
+    // where the RETRY button lands, with the slot already reserved, so it never
+    // passes through startVideoUpload. Both are awaited before a byte is sent.
+    await holdScreenAwake();
+    try {
+      const uploaded = await uploadToBunny(file, credentials, setUploadProgress, controller.signal);
+      if (uploaded) {
+        setUploadProgress(100);
+        setUploadedBytes(file.size);
+        setUploadReady(true);
+      } else {
+        setUploadProgress(0);
+        setFailedUpload({ file, credentials });
+      }
+    } finally {
+      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
+      setMainUploadActive(false);
     }
   }
 
@@ -415,10 +484,16 @@ export default function UploadPage() {
         setCreatedSlug(data.data?.slug || data.data?.id || "");
         setSuccess(true);
       } else {
-        toast("error", data.error || "An error occurred");
+        toast(
+          "error",
+          data.error || "The video reached the host, but the post could not be finalized. Submit again to retry."
+        );
       }
     } catch {
-      toast("error", "Network error");
+      // The POST response may have been lost after the database committed. The
+      // server finalizer is idempotent by Bunny video id, so submitting again is
+      // safe and does not upload the large file a second time.
+      toast("error", "Post finalization was interrupted. Submit again; the video upload is still safe.");
     } finally {
       setUploading(false);
     }
@@ -646,7 +721,7 @@ export default function UploadPage() {
                   className="hidden"
                   // Locked while a transfer is running so a second pick cannot
                   // start a second upload into the same slot.
-                  disabled={uploadProgress > 0 && uploadProgress < 100}
+                  disabled={mainUploadActive || uploadingTeaser}
                   onChange={(e) => {
                     const file = e.target.files?.[0];
                     // Reset so choosing the same file again still fires.
@@ -657,7 +732,7 @@ export default function UploadPage() {
                   }}
                 />
               </label>
-              {uploadProgress > 0 && uploadProgress < 100 && (
+              {mainUploadActive && (
                 <div className="mt-3">
                   <div className="bg-surface-300/40 rounded-full h-2 overflow-hidden">
                     <div
@@ -908,6 +983,8 @@ export default function UploadPage() {
                     }
                     setUploadingTeaser(true);
                     setTeaserProgress(0);
+                    const controller = new AbortController();
+                    uploadAbortRef.current = controller;
                     // Named out here so the catch below can report the slot that
                     // was reserved and then abandoned.
                     let teaserSlot: BunnyUploadCredentials | null = null;
@@ -917,6 +994,7 @@ export default function UploadPage() {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ title: `${title || "teaser"} (teaser)` }),
+                        signal: controller.signal,
                       });
                       const data = await res.json();
                       if (!data.success) {
@@ -928,6 +1006,7 @@ export default function UploadPage() {
                       await uploadFileWithTus(file, teaserSlot, {
                         onProgress: (uploaded, total) =>
                           setTeaserProgress(Math.round((uploaded / total) * 100)),
+                        signal: controller.signal,
                       });
 
                       setTeaserBunnyVideoId(teaserSlot.videoId);
@@ -949,6 +1028,7 @@ export default function UploadPage() {
                         })
                       );
                     } finally {
+                      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
                       setUploadingTeaser(false);
                     }
                   }}

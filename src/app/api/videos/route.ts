@@ -11,7 +11,13 @@ import { requireAuth, requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { createVideoSchema } from "@/lib/validation";
 import { generateSlug, intParam } from "@/lib/utils";
-import { introClipPath, isBunnyConfigured, isBunnyVideoId, resolveTeaserUrl } from "@/lib/bunny";
+import {
+  getBunnyVideoDetails,
+  introClipPath,
+  isBunnyConfigured,
+  isBunnyVideoId,
+  resolveTeaserUrl,
+} from "@/lib/bunny";
 import { cacheGet, cacheSet, cacheDel } from "@/lib/redis";
 import { rankTrending, type TrendingItem } from "@/lib/trending";
 import { normalizeMediaUrl } from "@/lib/media";
@@ -342,6 +348,81 @@ export async function POST(request: NextRequest) {
       thumbnailUrl,
       fileSize,
     } = result.data;
+
+    // The file is uploaded before this request. If the response is lost, the
+    // creator retries finalization with the same Bunny id; creating a second
+    // row (or surfacing a unique-constraint 500) makes a successful upload look
+    // lost and encourages a second Bunny upload. Treat the Bunny id as the
+    // idempotency key and only allow its original creator to replay it.
+    const existing = await prisma.video.findUnique({
+      where: { bunnyVideoId },
+      select: {
+        id: true,
+        creatorId: true,
+        title: true,
+        slug: true,
+        bunnyVideoId: true,
+        price: true,
+        isPublished: true,
+        encodingStatus: true,
+        encodeProgress: true,
+        createdAt: true,
+      },
+    });
+
+    if (existing) {
+      const { creatorId: existingCreatorId, ...existingPublic } = existing;
+      if (existingCreatorId !== auth.userId) {
+        return api.forbidden("This Bunny video is already linked to another creator");
+      }
+
+      const awaitingTranscode = existingPublic.encodingStatus !== null;
+      return api.success(
+        {
+          ...existingPublic,
+          status: videoStatus(existingPublic.encodingStatus, existingPublic.encodeProgress),
+        },
+        awaitingTranscode
+          ? "Video post already finalized and is still processing"
+          : "Video post already finalized",
+        200
+      );
+    }
+
+    // A browser supplies the id, but it must not be allowed to turn an
+    // arbitrary string (or another creator's asset) into a published row. The
+    // signed upload path is the source of truth; this finalization check makes
+    // sure Bunny still knows both assets before the database commit.
+    if (isBunnyConfigured()) {
+      if (!isBunnyVideoId(bunnyVideoId)) {
+        return api.validation("The uploaded video id is not a valid Bunny asset");
+      }
+      if (teaserBunnyVideoId && !isBunnyVideoId(teaserBunnyVideoId)) {
+        return api.validation("The teaser id is not a valid Bunny asset");
+      }
+      try {
+        const assets = await Promise.all([
+          getBunnyVideoDetails(bunnyVideoId),
+          ...(teaserBunnyVideoId && isBunnyVideoId(teaserBunnyVideoId)
+            ? [getBunnyVideoDetails(teaserBunnyVideoId)]
+            : []),
+        ]);
+        for (const [index, asset] of assets.entries()) {
+          const expected = index === 0 ? bunnyVideoId : teaserBunnyVideoId;
+          const returned = String((asset as { guid?: unknown })?.guid ?? "");
+          if (expected && returned && returned.toLowerCase() !== expected.toLowerCase()) {
+            return api.error("Bunny returned a different video asset", 502, "BUNNY_ASSET_MISMATCH");
+          }
+        }
+      } catch (error) {
+        console.error("[Create Video] Bunny asset verification failed", error);
+        return api.error(
+          "The video host could not verify this upload yet. Please submit again shortly.",
+          503,
+          "BUNNY_VERIFY_FAILED"
+        );
+      }
+    }
 
     const slug = await uniqueVideoSlug(title);
 

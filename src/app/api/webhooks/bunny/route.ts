@@ -27,8 +27,9 @@
 //     status from Bunny, so a spoofed `Status` cannot publish a video that is
 //     not actually ready — it can, at worst, cause a refresh.
 //
-// Always answers 200 once the signature is accepted, so Bunny records delivery
-// and does not retry a callback we have already acted on.
+// Answers 2xx for accepted/ignored callbacks, but returns a retryable 5xx when
+// database or lifecycle processing fails. The lifecycle is idempotent, so a
+// repeated callback is safe and is preferable to silently losing a transition.
 // =============================================================================
 
 import { NextRequest, NextResponse } from "next/server";
@@ -113,8 +114,9 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("[Bunny Webhook Error]", error);
-    // 200 even on error: Bunny retries on failure, and this route is an
-    // optimisation — the dashboard and cron sweeps still resolve the video.
-    return NextResponse.json({ status: "ok" });
+    return NextResponse.json(
+      { status: "retryable_error", error: "Webhook processing failed" },
+      { status: 500, headers: { "Retry-After": "10" } }
+    );
   }
 }

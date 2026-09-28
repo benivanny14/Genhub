@@ -12,7 +12,7 @@
 // =============================================================================
 
 import { downscaleImage } from "./image-downscale";
-import { TusUploadError } from "./tus-upload";
+import { TusUploadError, type TusFailureReason } from "./tus-upload";
 
 export class UploadError extends Error {}
 
@@ -128,6 +128,27 @@ export interface UploadFailureReport {
    */
   bytesSent?: number | null;
   bytesTotal?: number | null;
+  /**
+   * Which physical fault it was: offline, reset, stall, timeout, provider,
+   * cancelled or preflight.
+   *
+   * The code alone cannot say: offline and reset are both NETWORK with no
+   * status, a stall and a timeout are both "the upload stalled", and a phone
+   * that has lost signal reads exactly like a proxy that reset the socket.
+   * Whoever reads the report needs that distinction to know whether to wait,
+   * to retry, or to go and look at Bunny.
+   */
+  reason?: TusFailureReason | null;
+  /**
+   * The offset the failing chunk started at — what a retry would resume from.
+   * Unlike `bytesSent` this is the SERVER's figure, so it is a floor rather
+   * than a client-side estimate.
+   */
+  offset?: number | null;
+  /** Which chunk died, counting from zero. */
+  chunkIndex?: number | null;
+  /** How many retries at that chunk had already been spent. */
+  retryCount?: number | null;
 }
 
 /**
@@ -155,6 +176,10 @@ export function describeUploadFailure(
       providerBody: error.providerBody ?? null,
       bytesSent: error.bytesSent ?? null,
       bytesTotal: error.bytesTotal ?? null,
+      reason: error.reason ?? null,
+      offset: error.offset ?? null,
+      chunkIndex: error.chunkIndex ?? null,
+      retryCount: error.retryCount ?? null,
       ...context,
     };
   }
@@ -167,6 +192,10 @@ export function describeUploadFailure(
     providerBody: null,
     bytesSent: null,
     bytesTotal: null,
+    reason: null,
+    offset: null,
+    chunkIndex: null,
+    retryCount: null,
     ...context,
   };
 }

@@ -32,6 +32,16 @@ const mocks = vi.hoisted(() => ({
   cacheGet: vi.fn(),
   cacheSet: vi.fn(),
   cacheDel: vi.fn(),
+  /**
+   * What the host answers when the finalizer asks it to confirm an asset.
+   *
+   * `bunnyFails` models Bunny being unreachable or refusing; `bunnyGuid` models
+   * the provider returning a DIFFERENT video than the id the browser sent, which
+   * is the case a client-supplied id makes possible and the one that must never
+   * reach a database write.
+   */
+  bunnyFails: false,
+  bunnyGuid: null as string | null,
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -62,6 +72,10 @@ vi.mock("@/lib/bunny", async (importOriginal) => {
     ...actual,
     isBunnyConfigured: () => true,
     isBunnyVideoId: (id: string) => !!id,
+    getBunnyVideoDetails: async (id: string) => {
+      if (mocks.bunnyFails) throw new Error("bunny is unreachable");
+      return { guid: mocks.bunnyGuid ?? id };
+    },
   };
 });
 
@@ -214,6 +228,8 @@ describe("POST /api/videos", () => {
       id: "video-1",
       ...data,
     }));
+    mocks.bunnyFails = false;
+    mocks.bunnyGuid = null;
   });
 
   it("gives a second video with the same title its own slug instead of failing", async () => {
@@ -270,5 +286,115 @@ describe("POST /api/videos", () => {
     await POST(postRequest());
 
     expect(mocks.cacheDel).toHaveBeenCalledWith("videos:*");
+  });
+});
+
+// =============================================================================
+// POST /api/videos — finalizing a transfer that already happened
+//
+// The bytes go to Bunny before this request is ever made, so a lost response
+// used to be unrecoverable in the worst possible way: the creator saw "Network
+// error" after a 700 MB upload, and their options were to give up or to push the
+// whole file again. Retrying the POST now returns the row that already exists,
+// keyed on the Bunny id — and the id is verified against the host first, because
+// a browser-supplied id must never be able to publish a row for an asset that is
+// not its own.
+// =============================================================================
+
+describe("POST /api/videos — finalization is idempotent", () => {
+  const body = {
+    title: "Same title",
+    price: 1000,
+    teaserDuration: 15,
+    bunnyVideoId: "abc-123",
+    complianceAttested: true,
+  };
+
+  function postRequest(payload: Record<string, unknown> = body) {
+    return new NextRequest("https://app.test/api/videos", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  /** An already-finalized row, as the idempotency lookup would find it. */
+  const existingRow = {
+    id: "video-1",
+    creatorId: "creator-1",
+    title: "Same title",
+    slug: "same-title",
+    bunnyVideoId: "abc-123",
+    price: 1000,
+    isPublished: true,
+    encodingStatus: 0,
+    encodeProgress: 0,
+    createdAt: new Date(),
+  };
+
+  beforeEach(() => {
+    mocks.userFindUnique.mockResolvedValue({ kycStatus: "APPROVED", isBanned: false });
+    mocks.create.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
+      id: "video-1",
+      ...data,
+    }));
+    mocks.bunnyFails = false;
+    mocks.bunnyGuid = null;
+  });
+
+  it("returns the existing post instead of writing a second row", async () => {
+    mocks.findUnique.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+      where.bunnyVideoId ? existingRow : null
+    );
+
+    const response = await POST(postRequest());
+    const data = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(data.data.id).toBe("video-1");
+    // The row is still transcoding, and the replay says so rather than claiming
+    // the video is ready — the creator is about to be told what to expect.
+    expect(data.data.status).toBe("PROCESSING");
+    expect(data.message).toMatch(/already finalized/i);
+  });
+
+  it("refuses a Bunny id that belongs to another creator", async () => {
+    // The id is a client-supplied key into somebody else's upload. Replaying it
+    // must not hand this creator a row pointing at an asset they do not own.
+    mocks.findUnique.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
+      where.bunnyVideoId ? { ...existingRow, creatorId: "someone-else" } : null
+    );
+
+    const response = await POST(postRequest());
+
+    expect(response.status).toBe(403);
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses to write a row when the host will not confirm the asset", async () => {
+    // Unreachable or refusing is the one answer that must not be treated as
+    // success: a row written without it points at an asset nobody has checked.
+    mocks.findUnique.mockResolvedValue(null);
+    mocks.bunnyFails = true;
+
+    const response = await POST(postRequest());
+    const data = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(data.code).toBe("BUNNY_VERIFY_FAILED");
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses an id the host says belongs to a different video", async () => {
+    mocks.findUnique.mockResolvedValue(null);
+    mocks.bunnyGuid = "a-different-guid";
+
+    const response = await POST(postRequest());
+    const data = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(data.code).toBe("BUNNY_ASSET_MISMATCH");
+    expect(mocks.create).not.toHaveBeenCalled();
   });
 });

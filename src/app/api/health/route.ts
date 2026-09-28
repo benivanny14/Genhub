@@ -22,6 +22,29 @@ export const dynamic = "force-dynamic";
 
 const startedAt = Date.now();
 
+/**
+ * The video columns this deployment cannot run without, checked by NAME.
+ *
+ * `SELECT 1` answers "is there a database", which is not the question that
+ * matters after a deploy. A build can ship code that reads `uploadSizeBytes` or
+ * `bunnyStorageBytes` while the migration that adds them was never applied — and
+ * then the database is reachable, the health check is green, and every creator
+ * upload fails at the last step with a column-not-found error nobody is looking
+ * for. That is exactly how a schema change shipped without its migration on
+ * 2026-09-25 (see the header of scripts/db-migrate.mjs).
+ *
+ * These four are the upload/encoding fields of `Video`: one from the signed
+ * upload path and three from the encoding lifecycle. A `select` of them is what
+ * makes the check real — Prisma resolves the column list against the deployed
+ * schema, so a missing column throws even on an empty table.
+ */
+const REQUIRED_VIDEO_COLUMNS = [
+  "uploadSizeBytes",
+  "bunnyStorageBytes",
+  "encodingStatus",
+  "encodeProgress",
+] as const;
+
 export async function GET(_request: NextRequest) {
   let database: "up" | "down" = "down";
   try {
@@ -29,6 +52,21 @@ export async function GET(_request: NextRequest) {
     database = "up";
   } catch {
     database = "down";
+  }
+
+  // Separate from `database` on purpose: the difference between "cannot reach
+  // Postgres" and "reached it, it is the wrong shape" decides whether somebody
+  // restarts a service or runs a migration. `take: 1` keeps it one indexed row,
+  // and the explicit select is the whole point — the columns are what is checked.
+  let schema: "up" | "down" = "down";
+  try {
+    await prisma.video.findFirst({
+      select: { uploadSizeBytes: true, bunnyStorageBytes: true, encodingStatus: true, encodeProgress: true },
+      orderBy: { createdAt: "desc" },
+    });
+    schema = "up";
+  } catch {
+    schema = "down";
   }
 
   // Background workers. Exposed here because an uptime monitor is the only
@@ -44,6 +82,17 @@ export async function GET(_request: NextRequest) {
 
   const warnings = productionConfigWarnings();
 
+  // Named with the command that fixes it: a health check that says "degraded"
+  // and stops there costs the operator the ten minutes it takes to find out
+  // which of five things is wrong.
+  if (schema === "down" && database === "up") {
+    warnings.push(
+      `The database is missing a video column this build needs (${REQUIRED_VIDEO_COLUMNS.join(
+        ", "
+      )}) — apply pending migrations with \`npm run db:deploy\`.`
+    );
+  }
+
   // Degraded only when something that *was* running has gone quiet. A worker
   // that has never run means no scheduler is configured yet, which is setup
   // work, not an outage — folding that in would make every fresh deploy report
@@ -51,7 +100,10 @@ export async function GET(_request: NextRequest) {
   // alarm nobody reads.
   const jobsDegraded =
     backgroundJobs === "late" || backgroundJobs === "stalled" || backgroundJobs === "failing";
-  const healthy = database === "up" && !jobsDegraded;
+  // `schema` is part of healthy, not a note beside it: an upload path whose
+  // database cannot store the result is not "degraded", it is down for the one
+  // thing this deployment exists to do.
+  const healthy = database === "up" && schema === "up" && !jobsDegraded;
 
   return Response.json(
     {
@@ -60,6 +112,7 @@ export async function GET(_request: NextRequest) {
       nodeEnv: config.nodeEnv,
       checks: {
         database,
+        schema,
         email: config.email.host ? "smtp" : "console",
         sms: config.sms.apiKey ? "africastalking" : "console",
         // "sandbox" = no USSD push and no real money moves (dev default)

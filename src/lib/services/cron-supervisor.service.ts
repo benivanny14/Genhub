@@ -56,6 +56,13 @@ export const SUPERVISOR_WORKERS: readonly CronWorkerId[] = [
   // Safe to start automatically: it sends an email, reaches no phone, and sends
   // at most one digest per creator per week no matter how often it runs.
   "earnings-digest",
+  // The safety net for a missed Bunny callback: it reads Bunny's own state for
+  // videos still encoding and publishes the ones that are finished. Bounded
+  // (nine at a time, three at once), idempotent, and read-only at the provider,
+  // so running it too often costs a few API reads and nothing else. Leaving it
+  // out would register a worker that no scheduler is allowed to start, which is
+  // how a heartbeat reads `late` forever with nothing able to fix it.
+  "video-encoding",
 ];
 
 export interface SupervisorDecision {

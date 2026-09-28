@@ -364,9 +364,9 @@ describe("what a failed upload reports about itself", () => {
   /**
    * Run one doomed upload to completion.
    *
-   * The retry ladder is six attempts and ~57s of backoff, so the clock is moved
-   * rather than waited on — the point of the test is the error that comes out
-   * the other end, not how long the browser politely waited between tries.
+   * The retry ladder is bounded and includes the silence watchdog, so the clock
+   * is moved rather than waited on — the point of the test is the error that
+   * comes out the other end, not how long the browser politely waits.
    */
   async function runToFailure(): Promise<TusUploadError> {
     vi.useFakeTimers();
@@ -383,7 +383,7 @@ describe("what a failed upload reports about itself", () => {
         },
         (error: TusUploadError) => error
       );
-      await vi.advanceTimersByTimeAsync(120_000);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
       return await settled;
     } finally {
       vi.useRealTimers();
@@ -596,8 +596,8 @@ describe("the stall watchdog", () => {
         },
         (error: TusUploadError) => error
       );
-      // Six attempts of one stall window each, plus the backoff between them.
-      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      // Four attempts of one stall window each, plus the backoff between them.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
       await expect(settled).resolves.toMatchObject({
         code: "NETWORK",
         stage: "chunk",

@@ -779,6 +779,13 @@ function pendingWhere() {
  */
 export const ENCODING_RECHECK_FLOOR_MS = 10_000;
 
+/**
+ * Bunny lookups are network-bound. A creator with five pending uploads should
+ * not wait five sequential provider timeouts before receiving the list, but a
+ * fully unbounded Promise.all would turn a large account into an API burst.
+ */
+export const ENCODING_REFRESH_CONCURRENCY = 3;
+
 export interface BunnyEventOutcome {
   /** False when the callback named a video we do not track. */
   matched: boolean;
@@ -866,30 +873,77 @@ export async function refreshCreatorPendingEncodings(
   });
 
   const results: RefreshResult[] = [];
-  for (const { id } of pending) {
-    const result = await refreshVideoEncoding(id);
-    if (result) results.push(result);
+  for (let start = 0; start < pending.length; start += ENCODING_REFRESH_CONCURRENCY) {
+    const batch = pending.slice(start, start + ENCODING_REFRESH_CONCURRENCY);
+    const settled = await Promise.allSettled(
+      batch.map(({ id }) => refreshVideoEncoding(id))
+    );
+
+    settled.forEach((outcome, index) => {
+      if (outcome.status === "fulfilled") {
+        if (outcome.value) results.push(outcome.value);
+        return;
+      }
+
+      // One Bunny timeout must not hide the creator's other videos. The stored
+      // state remains intact and the next poll/cron can retry this one.
+      console.warn(
+        `[Video Encoding] Refresh failed for ${batch[index].id}:`,
+        outcome.reason instanceof Error ? outcome.reason.message : outcome.reason
+      );
+    });
   }
   return results;
 }
 
-// NOTE — there is deliberately no sibling `refreshPendingEncodings` sweep here.
-//
-// There used to be: a cron worker that walked every creator's unfinished
-// uploads on a schedule, publishing and notifying. It has been removed, because
-// it was a SECOND source of truth for the same fact and the only one that could
-// disagree with the first. Readiness is decided by "can Bunny serve this yet",
-// and three things already answer that without a clock:
-//
-//   1. POST /api/webhooks/bunny — Bunny calls us the instant an encode finishes;
-//      this is the source of truth for the transition to READY.
-//   2. GET /api/videos/[id] — the owner's or an admin's own page read refreshes a
-//      stale row (see ENCODING_RECHECK_FLOOR_MS).
-//   3. GET /api/creator/videos — a creator looking at their dashboard refreshes
-//      their own pending uploads.
-//
-// refreshVideoEncoding() below stays the one place any of them acts through, so
-// publication, the 8-minute floor and the once-only notification cannot drift.
-// Removing the sweep costs nothing on the happy path and removes a worker whose
-// absence would otherwise read as "the platform is broken" on a schedule nobody
-// was watching — which is exactly what happened.
+export interface PendingEncodingSweepResult {
+  checked: number;
+  refreshed: number;
+  failed: number;
+}
+
+/**
+ * Refresh pending videos without requiring a creator to have the dashboard
+ * open. Bunny webhooks remain the fast path; this bounded sweep is the safety
+ * net for a missed callback or a callback that arrived before finalization.
+ */
+export async function refreshPendingVideoEncodings(
+  limit: number = 9
+): Promise<PendingEncodingSweepResult> {
+  if (!isBunnyConfigured()) return { checked: 0, refreshed: 0, failed: 0 };
+
+  const pending = await prisma.video.findMany({
+    where: pendingWhere(),
+    orderBy: { createdAt: "asc" },
+    take: Math.max(1, Math.min(limit, 25)),
+    select: { id: true },
+  });
+
+  let refreshed = 0;
+  let failed = 0;
+  for (let start = 0; start < pending.length; start += ENCODING_REFRESH_CONCURRENCY) {
+    const batch = pending.slice(start, start + ENCODING_REFRESH_CONCURRENCY);
+    const settled = await Promise.allSettled(
+      batch.map(({ id }) => refreshVideoEncoding(id))
+    );
+
+    for (const outcome of settled) {
+      if (outcome.status === "fulfilled") {
+        if (outcome.value) refreshed += 1;
+      } else {
+        failed += 1;
+        console.warn(
+          "[Video Encoding Sweep] Refresh failed:",
+          outcome.reason instanceof Error ? outcome.reason.message : outcome.reason
+        );
+      }
+    }
+  }
+
+  return { checked: pending.length, refreshed, failed };
+}
+
+// The webhook and all pull paths converge on refreshVideoEncoding(), so the
+// scheduled sweep is a safety net, not a second publication implementation.
+// Keeping it bounded and idempotent lets a missed callback recover even when no
+// creator is currently watching a dashboard.

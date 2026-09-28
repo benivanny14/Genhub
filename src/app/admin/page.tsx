@@ -525,6 +525,20 @@ interface UploadFailure {
    */
   bytesSent?: number | null;
   bytesTotal?: number | null;
+  /**
+   * Which physical fault it was, where the failing chunk started, which chunk
+   * it was, and how many retries it had already cost.
+   *
+   * Optional for the same reason the byte counts are: an entry written before
+   * these existed has no such field at all. `reason` is the one that turns a
+   * shrug into an instruction — offline means wait, reset means the connection,
+   * stall means the tab went to the background, provider means read Bunny's
+   * body below.
+   */
+  reason?: string | null;
+  offset?: number | null;
+  chunkIndex?: number | null;
+  retryCount?: number | null;
   creatorId: string;
 }
 
@@ -4148,6 +4162,7 @@ export default function AdminDashboard() {
                       <div className="flex items-start justify-between gap-3 flex-wrap">
                         <span className="text-xs font-medium text-red-300">
                           {failure.code}
+                          {failure.reason ? ` · ${failure.reason}` : ""}
                           {failure.stage ? ` · ${failure.stage}` : ""}
                           {failure.status !== null ? ` · HTTP ${failure.status}` : ""}
                         </span>
@@ -4174,6 +4189,28 @@ export default function AdminDashboard() {
                                 ).toFixed(1)} MB — the transfer was already moving.`}
                           </p>
                         )}
+                      {/*
+                        Where in the FILE this died, which is a different
+                        question from how many bytes had moved: `offset` is the
+                        server's confirmed figure, so it survives the browser's
+                        coalesced progress events. Chunk and retry counts say
+                        whether this was one drop or a connection refusing the
+                        same bytes repeatedly. */}
+                      {(typeof failure.chunkIndex === "number" ||
+                        typeof failure.offset === "number" ||
+                        typeof failure.retryCount === "number") && (
+                        <p className="text-[11px] text-white/45 mt-1">
+                          {typeof failure.chunkIndex === "number"
+                            ? `chunk ${failure.chunkIndex}`
+                            : ""}
+                          {typeof failure.offset === "number"
+                            ? `${typeof failure.chunkIndex === "number" ? " · " : ""}server offset ${(failure.offset / 1024 / 1024).toFixed(1)} MB`
+                            : ""}
+                          {typeof failure.retryCount === "number"
+                            ? `${typeof failure.chunkIndex === "number" || typeof failure.offset === "number" ? " · " : ""}${failure.retryCount} retry(ies) spent`
+                            : ""}
+                        </p>
+                      )}
                       {failure.providerBody && (
                         <p className="text-[11px] text-amber-200/80 mt-1 break-all">
                           Bunny: {failure.providerBody}

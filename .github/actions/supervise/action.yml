@@ -20,9 +20,9 @@
 # the runner's workspace, and the workspace is empty until a checkout fills it:
 # without one the job fails in under a second with "Can't find 'action.yml' ...
 # Did you forget to run actions/checkout before running your local action?",
-# before this file is even read. Six workflows call this action; each one has
-# the step, and src/tests/workflow-local-actions.test.ts fails the build if a
-# new caller forgets it.
+# before this file is even read. Every worker workflow calls this action; each
+# one has the step, and src/tests/workflow-local-actions.test.ts fails the build
+# if a new caller forgets it.
 # =============================================================================
 
 name: Supervise the schedules

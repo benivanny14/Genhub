@@ -45,6 +45,10 @@ const failure = {
   fileSize: 650 * 1024 * 1024,
   bytesSent: 12 * 1024 * 1024,
   bytesTotal: 650 * 1024 * 1024,
+  reason: "provider" as const,
+  offset: 12 * 1024 * 1024,
+  chunkIndex: 3,
+  retryCount: 1,
   creatorId: "creator-1",
 };
 
@@ -66,6 +70,22 @@ afterEach(() => {
 });
 
 describe("recordUploadFailure", () => {
+  it("names the fault and the chunk, not only the verdict", async () => {
+    // "NETWORK" is a verdict; "offline" is a cause, and they lead to different
+    // actions. The chunk and retry counts say whether this was one drop or a
+    // connection refusing the same bytes over and over.
+    const entry = await recordUploadFailure({ ...failure, reason: "offline", retryCount: 3 });
+
+    expect(entry.reason).toBe("offline");
+    expect(entry.chunkIndex).toBe(3);
+    expect(entry.retryCount).toBe(3);
+
+    const line = logged.join("\n");
+    expect(line).toContain("(offline)");
+    expect(line).toContain("chunk 3");
+    expect(line).toContain("retry 3");
+  });
+
   it("keeps Bunny's status and body, which are the reason the record exists", async () => {
     const entry = await recordUploadFailure(failure);
 
@@ -149,12 +169,22 @@ describe("listUploadFailures", () => {
     const older = { ...failure, at: new Date().toISOString() };
     delete (older as { bytesSent?: unknown }).bytesSent;
     delete (older as { bytesTotal?: unknown }).bytesTotal;
+    // The same hazard for the fields added with them — the panel prints the
+    // server offset with arithmetic, so an absent number there is another NaN.
+    delete (older as { reason?: unknown }).reason;
+    delete (older as { offset?: unknown }).offset;
+    delete (older as { chunkIndex?: unknown }).chunkIndex;
+    delete (older as { retryCount?: unknown }).retryCount;
     mocks.cacheGet.mockResolvedValue([older]);
 
     const [entry] = await listUploadFailures();
 
     expect(entry.bytesSent).toBeNull();
     expect(entry.bytesTotal).toBeNull();
+    expect(entry.reason).toBeNull();
+    expect(entry.offset).toBeNull();
+    expect(entry.chunkIndex).toBeNull();
+    expect(entry.retryCount).toBeNull();
   });
 
   it("never hands a malformed entry to the panel", async () => {

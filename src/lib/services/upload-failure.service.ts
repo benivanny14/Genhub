@@ -32,6 +32,7 @@
 // =============================================================================
 
 import { cacheGet, cacheSet } from "@/lib/redis";
+import type { TusFailureReason } from "@/lib/tus-upload";
 
 /** One key, so this cannot grow without bound. */
 const FAILURES_KEY = "bunny:upload:failures";
@@ -77,6 +78,28 @@ export interface UploadFailure {
    */
   bytesSent: number | null;
   bytesTotal: number | null;
+  /**
+   * Which physical fault it was: offline, reset, stall, timeout, provider,
+   * cancelled or preflight.
+   *
+   * The code is a verdict and this is the cause, and one is often not enough.
+   * `NETWORK` with a null status covers a phone that lost signal, a proxy that
+   * reset the socket, and a tab that went to the background — three problems
+   * with three different answers, and before this field the record could not
+   * say which one had happened.
+   */
+  reason: TusFailureReason | null;
+  /**
+   * The offset the failing chunk started at, which chunk it was, and how many
+   * retries had already been spent on it.
+   *
+   * `offset` is the server's own figure (what a retry resumes from), so it is a
+   * floor under the client-reported `bytesSent`; the pair together says whether
+   * the connection died at the beginning or ninety per cent of the way in.
+   */
+  offset: number | null;
+  chunkIndex: number | null;
+  retryCount: number | null;
   /** Who was uploading. The admin panel already knows every creator id. */
   creatorId: string;
 }
@@ -95,8 +118,12 @@ export async function recordUploadFailure(
 
   console.error(
     `[Upload Failure] ${entry.code}` +
+      // Right beside the code, because it is what turns "NETWORK" into a cause.
+      `${entry.reason ? ` (${entry.reason})` : ""}` +
       `${entry.stage ? ` at ${entry.stage}` : ""}` +
       `${entry.status !== null ? ` · HTTP ${entry.status}` : ""}` +
+      `${typeof entry.chunkIndex === "number" ? ` · chunk ${entry.chunkIndex}` : ""}` +
+      `${typeof entry.retryCount === "number" ? ` · retry ${entry.retryCount}` : ""}` +
       ` · creator ${entry.creatorId}` +
       `${entry.fileName ? ` · ${entry.fileName}` : ""}` +
       `${entry.fileSize !== null ? ` (${(entry.fileSize / 1024 / 1024).toFixed(1)} MB)` : ""}` +
@@ -153,6 +180,13 @@ export async function listUploadFailures(): Promise<UploadFailure[]> {
         ...entry,
         bytesSent: typeof entry.bytesSent === "number" ? entry.bytesSent : null,
         bytesTotal: typeof entry.bytesTotal === "number" ? entry.bytesTotal : null,
+        // Same rule for the fields added after the first entries were written:
+        // absent is not null, and a missing number that reaches arithmetic
+        // prints as NaN on the one screen meant to be read during an incident.
+        reason: typeof entry.reason === "string" ? entry.reason : null,
+        offset: typeof entry.offset === "number" ? entry.offset : null,
+        chunkIndex: typeof entry.chunkIndex === "number" ? entry.chunkIndex : null,
+        retryCount: typeof entry.retryCount === "number" ? entry.retryCount : null,
       }))
   );
 }

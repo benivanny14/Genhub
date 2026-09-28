@@ -58,6 +58,10 @@ export async function POST(request: NextRequest) {
       fileSize,
       bytesSent,
       bytesTotal,
+      reason,
+      offset,
+      chunkIndex,
+      retryCount,
     } = parsed.data;
 
     await recordUploadFailure({
@@ -71,6 +75,10 @@ export async function POST(request: NextRequest) {
       fileSize: fileSize ?? null,
       bytesSent: bytesSent ?? null,
       bytesTotal: bytesTotal ?? null,
+      reason: reason ?? null,
+      offset: offset ?? null,
+      chunkIndex: chunkIndex ?? null,
+      retryCount: retryCount ?? null,
       creatorId: auth.userId,
     });
 

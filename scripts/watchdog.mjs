@@ -260,11 +260,19 @@ export function alertMessage(baseUrl, report, extras = []) {
 // old watchdog until somebody adds it here on purpose.
 // ---------------------------------------------------------------------------
 
+// `video-encoding` is on the list and needs no reasoning beyond the same one
+// `earnings-digest` gets: it is read-only against Bunny, idempotent, reaches no
+// customer, and a missed pass only means a video waits longer for a badge it
+// would have got anyway. (The comment lives here rather than inside the array
+// because the supervisor test reads this list with a regex, and a comma in a
+// comment between the brackets reads as another worker.)
+
 /** Workers this script may start by itself. See the note above. */
 export const RECOVERABLE_WORKERS = [
   "release-earnings",
   "reconcile-payments",
   "earnings-digest",
+  "video-encoding",
 ];
 
 /**
