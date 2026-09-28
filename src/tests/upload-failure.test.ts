@@ -43,6 +43,8 @@ const failure = {
   bunnyVideoId: "3d2229c4-7187-4e8c-bee2-d2e8ddca6d9a",
   fileName: "scene.mp4",
   fileSize: 650 * 1024 * 1024,
+  bytesSent: 12 * 1024 * 1024,
+  bytesTotal: 650 * 1024 * 1024,
   creatorId: "creator-1",
 };
 
@@ -86,6 +88,23 @@ describe("recordUploadFailure", () => {
     expect(logged.join("\n")).toContain("[Upload Failure]");
     expect(logged.join("\n")).toContain("HTTP 400");
     expect(logged.join("\n")).toContain("Library ID missing");
+  });
+
+  it("records how far the transfer got, which is what a report could not say before", async () => {
+    // The shape of the four reports that prompted this: NETWORK, no HTTP status,
+    // no Bunny body. Nothing in the entry said whether the browser had ever put
+    // a byte on the wire.
+    const entry = await recordUploadFailure({
+      ...failure,
+      status: null,
+      providerBody: null,
+      bytesSent: 0,
+    });
+
+    expect(entry.bytesSent).toBe(0);
+    expect(entry.bytesTotal).toBe(failure.bytesTotal);
+    // Said out loud in the log, because a bare "NETWORK" is the whole problem.
+    expect(logged.join("\n")).toContain("died at 0.0 of 650.0 MB");
   });
 
   it("puts the newest first and never grows past the cap", async () => {
@@ -175,5 +194,21 @@ describe("uploadFailureSchema", () => {
   it("requires a code and a message to render", () => {
     expect(uploadFailureSchema.safeParse({ message: "x" }).success).toBe(false);
     expect(uploadFailureSchema.safeParse({ code: "NETWORK" }).success).toBe(false);
+  });
+
+  it("accepts how far the transfer got, and bounds a negative", () => {
+    expect(
+      uploadFailureSchema.safeParse({
+        code: "NETWORK",
+        message: "The connection dropped during upload.",
+        stage: "chunk",
+        bytesSent: 0,
+        bytesTotal: 650 * 1024 * 1024,
+      }).success
+    ).toBe(true);
+
+    expect(
+      uploadFailureSchema.safeParse({ code: "NETWORK", message: "x", bytesSent: -1 }).success
+    ).toBe(false);
   });
 });

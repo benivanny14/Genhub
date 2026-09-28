@@ -505,6 +505,15 @@ interface UploadFailure {
   bunnyVideoId: string | null;
   fileName: string | null;
   fileSize: number | null;
+  /**
+   * How far the transfer got, and how big the file was.
+   *
+   * Zero with a null status is a request that never left the browser; tens of
+   * megabytes with the same null status is a transfer that was already moving.
+   * Both used to read as the single word "NETWORK".
+   */
+  bytesSent: number | null;
+  bytesTotal: number | null;
   creatorId: string;
 }
 
@@ -4139,6 +4148,20 @@ export default function AdminDashboard() {
                         </span>
                       </div>
                       <p className="text-xs text-white/70 mt-1">{failure.message}</p>
+                      {/*
+                        The two numbers that turn "NETWORK" into a diagnosis.
+                        A read-only list of the same word tells the operator
+                        nothing they can act on, so the byte count is spelled
+                        out rather than left as arithmetic. */}
+                      {failure.bytesTotal !== null && failure.bytesSent !== null && (
+                        <p className="text-[11px] text-white/50 mt-1">
+                          {failure.bytesSent === 0
+                            ? "Died before a byte left the browser — this request was never sent (blocked, offline, or refused before it went out)."
+                            : `Died after ${(failure.bytesSent / 1024 / 1024).toFixed(1)} MB of ${(
+                                failure.bytesTotal / 1024 / 1024
+                              ).toFixed(1)} MB — the transfer was already moving.`}
+                        </p>
+                      )}
                       {failure.providerBody && (
                         <p className="text-[11px] text-amber-200/80 mt-1 break-all">
                           Bunny: {failure.providerBody}

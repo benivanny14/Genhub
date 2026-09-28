@@ -56,6 +56,8 @@ export async function POST(request: NextRequest) {
       bunnyVideoId,
       fileName,
       fileSize,
+      bytesSent,
+      bytesTotal,
     } = parsed.data;
 
     await recordUploadFailure({
@@ -67,6 +69,8 @@ export async function POST(request: NextRequest) {
       bunnyVideoId: bunnyVideoId ?? null,
       fileName: fileName ?? null,
       fileSize: fileSize ?? null,
+      bytesSent: bytesSent ?? null,
+      bytesTotal: bytesTotal ?? null,
       creatorId: auth.userId,
     });
 

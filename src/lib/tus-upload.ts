@@ -192,6 +192,21 @@ export class TusUploadError extends Error {
    */
   providerBody?: string;
 
+  /**
+   * How far the transfer had got when it died, counted from the bytes the
+   * browser had handed to the socket.
+   *
+   * This is the one fact that separates the two failures that are otherwise
+   * identical in a report. A request the browser never sent leaves zero bytes
+   * and no HTTP status; a transfer that died with the file already moving
+   * leaves tens of megabytes and the same absent status. Both are NETWORK,
+   * both have a null status, and nothing else in the report tells them apart —
+   * which is exactly the question a report exists to answer.
+   */
+  bytesSent?: number;
+  /** The size of the file being sent, so `bytesSent` reads as a fraction of it. */
+  bytesTotal?: number;
+
   constructor(
     code: TusErrorCode,
     message: string,
@@ -313,7 +328,9 @@ async function createUpload(
   } catch {
     throw new TusUploadError(
       "NETWORK",
-      "Could not reach the upload server. Check your connection and retry."
+      "Could not reach the upload server. Check your connection and retry.",
+      undefined,
+      { stage: "reserve" }
     );
   }
 
@@ -325,7 +342,9 @@ async function createUpload(
   if (!location) {
     throw new TusUploadError(
       "UNSUPPORTED",
-      "Upload server did not return a location to upload to."
+      "Upload server did not return a location to upload to.",
+      undefined,
+      { stage: "reserve" }
     );
   }
   // Bunny may answer with an absolute URL or a path; both must resolve.
@@ -385,26 +404,39 @@ function sendChunk(
       }
       reject(describe(xhr.status, xhr.responseText || "", "chunk"));
     };
+    // Every failure below is stamped `chunk`: it is the request that died, and
+    // without it a report says only "NETWORK" — the same words the reserve POST
+    // produces — so the reader cannot tell a slot that was never reserved from a
+    // transfer that was already moving. The HTTP-status path gets it from
+    // `describe()`; these three are the ones where nothing answered at all.
     xhr.onerror = () =>
       reject(
         new TusUploadError(
           "NETWORK",
-          "The connection dropped during upload."
+          "The connection dropped during upload.",
+          undefined,
+          { stage: "chunk" }
         )
       );
     xhr.ontimeout = () =>
       reject(
         new TusUploadError(
           "NETWORK",
-          "The upload stalled and was retried."
+          "The upload stalled and was retried.",
+          undefined,
+          { stage: "chunk" }
         )
       );
     xhr.onabort = () =>
-      reject(new TusUploadError("ABORTED", "Upload cancelled"));
+      reject(
+        new TusUploadError("ABORTED", "Upload cancelled", undefined, { stage: "chunk" })
+      );
 
     if (signal) {
       if (signal.aborted) {
-        reject(new TusUploadError("ABORTED", "Upload cancelled"));
+        reject(
+          new TusUploadError("ABORTED", "Upload cancelled", undefined, { stage: "chunk" })
+        );
         return;
       }
       signal.addEventListener("abort", () => xhr.abort(), { once: true });
@@ -425,6 +457,23 @@ export interface TusUploadOptions {
 }
 
 /**
+ * Stamp a failure with how far it got, and how big the file is.
+ *
+ * One function rather than the same two assignments at each `throw`, because a
+ * report that only SOMETIMES carries a byte count is worse than one that never
+ * does: its absence would stop meaning anything.
+ */
+function withProgress(
+  error: TusUploadError,
+  bytesSent: number,
+  bytesTotal: number
+): TusUploadError {
+  error.bytesSent = Math.max(0, Math.min(bytesSent, bytesTotal));
+  error.bytesTotal = bytesTotal;
+  return error;
+}
+
+/**
  * Stream `file` into the reserved Bunny slot.
  *
  * Resolves once the last byte is stored. Throws TusUploadError on failure — the
@@ -438,24 +487,41 @@ export async function uploadFileWithTus(
   const { onProgress, signal } = options;
 
   if (!file.size) {
-    throw new TusUploadError("UNSUPPORTED", "That file is empty.");
+    throw withProgress(
+      new TusUploadError("UNSUPPORTED", "That file is empty."),
+      0,
+      0
+    );
   }
   // Refused here as well as in the form: a caller that skips the early check
   // (the edit-trailer path, a future one) must not be able to push an unbounded
   // file at Bunny on the creator's data plan.
   const sizeError = videoSizeError(file);
   if (sizeError) {
-    throw new TusUploadError("UNSUPPORTED", sizeError);
+    throw withProgress(new TusUploadError("UNSUPPORTED", sizeError), 0, file.size);
   }
   // Catch an expired authorization here rather than as an opaque 401 mid-upload.
   if (credentials.expirationTime <= Math.floor(Date.now() / 1000)) {
-    throw new TusUploadError(
-      "EXPIRED",
-      "The upload authorization expired before the upload started. Please retry."
+    throw withProgress(
+      new TusUploadError(
+        "EXPIRED",
+        "The upload authorization expired before the upload started. Please retry."
+      ),
+      0,
+      file.size
     );
   }
 
-  const location = await createUpload(file, credentials);
+  // The reserve call is stamped here rather than at each of its own throws: it
+  // is the one failure that can happen before a single byte is offered, so
+  // "zero of N" is the honest reading, and a report that carried the byte count
+  // only sometimes would make its absence meaningless.
+  let location: string;
+  try {
+    location = await createUpload(file, credentials);
+  } catch (error) {
+    throw error instanceof TusUploadError ? withProgress(error, 0, file.size) : error;
+  }
   let offset = 0;
 
   // A caller-supplied size wins (tests pin it); otherwise start from what the
@@ -471,9 +537,14 @@ export async function uploadFileWithTus(
     // Not the time the whole chunk took: retries and their backoff sleeps are
     // the connection failing, not the connection's speed.
     let attemptStartedAt = 0;
+    // How much of THIS chunk the dying attempt had handed to the socket. Zero
+    // means nothing left the browser — a request that was never sent, which is a
+    // different fault from one that was (see bytesSent on TusUploadError).
+    let attemptSent = 0;
 
     for (let attempt = 0; attempt < RETRY_DELAYS.length; attempt++) {
       if (RETRY_DELAYS[attempt] > 0) await sleep(RETRY_DELAYS[attempt], signal);
+      attemptSent = 0;
       try {
         attemptStartedAt = Date.now();
         offset = await sendChunk(
@@ -481,7 +552,10 @@ export async function uploadFileWithTus(
           blob,
           chunkStart,
           credentials,
-          (loaded) => onProgress?.(chunkStart + loaded, file.size),
+          (loaded) => {
+            attemptSent = loaded;
+            onProgress?.(chunkStart + loaded, file.size);
+          },
           signal
         );
         lastError = null;
@@ -494,10 +568,12 @@ export async function uploadFileWithTus(
 
         // Cancelled or refused outright: retrying cannot help.
         if (tusError.code === "ABORTED" || tusError.code === "UNSUPPORTED") {
-          throw tusError;
+          throw withProgress(tusError, chunkStart + attemptSent, file.size);
         }
         // An expired signature fails identically forever.
-        if (tusError.status === 401 || tusError.status === 403) throw tusError;
+        if (tusError.status === 401 || tusError.status === 403) {
+          throw withProgress(tusError, chunkStart + attemptSent, file.size);
+        }
 
         lastError = tusError;
 
@@ -512,7 +588,9 @@ export async function uploadFileWithTus(
       }
     }
 
-    if (lastError) throw lastError;
+    if (lastError) {
+      throw withProgress(lastError, chunkStart + attemptSent, file.size);
+    }
     onProgress?.(offset, file.size);
 
     // Decide the next chunk from what this one achieved — see adaptChunkSize.

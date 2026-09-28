@@ -450,6 +450,16 @@ export const uploadFailureSchema = z.object({
     // Twice the ceiling the client enforces: a bound, not a policy.
     .max(MAX_VIDEO_BYTES * 2)
     .nullish(),
+  /**
+   * Bytes that had left the browser when the transfer died, and the file size.
+   *
+   * Bounded the same way — and for the same reason — as `fileSize`. These two
+   * are what separate a request that was never sent (zero bytes, no status)
+   * from a transfer that was already moving (tens of megabytes, no status);
+   * without them both read as a bare "NETWORK".
+   */
+  bytesSent: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
+  bytesTotal: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
 });
 
 // =============================================================================

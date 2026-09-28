@@ -65,6 +65,16 @@ export interface UploadFailure {
   bunnyVideoId: string | null;
   fileName: string | null;
   fileSize: number | null;
+  /**
+   * How far the transfer got, and how big the file is.
+   *
+   * Zero with a null status is a request that never left the browser; tens of
+   * megabytes with the same null status is a transfer that was already moving.
+   * Those are different faults with different fixes, and before these two fields
+   * both were the single word "NETWORK".
+   */
+  bytesSent: number | null;
+  bytesTotal: number | null;
   /** Who was uploading. The admin panel already knows every creator id. */
   creatorId: string;
 }
@@ -88,6 +98,10 @@ export async function recordUploadFailure(
       ` · creator ${entry.creatorId}` +
       `${entry.fileName ? ` · ${entry.fileName}` : ""}` +
       `${entry.fileSize !== null ? ` (${(entry.fileSize / 1024 / 1024).toFixed(1)} MB)` : ""}` +
+      // The number that says whether the request was ever sent. On a chunk that
+      // died at zero the browser never put a byte on the wire, which no other
+      // field in the entry can say.
+      `${entry.bytesTotal !== null && entry.bytesSent !== null ? ` · died at ${(entry.bytesSent / 1024 / 1024).toFixed(1)} of ${(entry.bytesTotal / 1024 / 1024).toFixed(1)} MB` : ""}` +
       `${entry.bunnyVideoId ? ` · slot ${entry.bunnyVideoId}` : ""}` +
       `\n                 ${entry.message}` +
       (entry.providerBody ? `\n                 Bunny said: ${entry.providerBody}` : "")

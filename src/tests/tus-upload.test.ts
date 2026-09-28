@@ -297,3 +297,160 @@ describe("video size guard", () => {
     expect(message).toMatch(/2 GB/);
   });
 });
+
+// =============================================================================
+// What a failed upload says about itself
+//
+// Every report that reached the admin panel read as the same single word —
+// NETWORK — with no HTTP status and no Bunny response body, so nothing in the
+// record said WHICH request died, or whether a byte had ever left the browser.
+// Four identical lines cannot be diagnosed. These pin the two facts that can.
+// =============================================================================
+
+describe("what a failed upload reports about itself", () => {
+  const FOUR_MIB = 4 * 1024 * 1024;
+
+  /**
+   * A PATCH that dies the way the creator's did: no response at all.
+   *
+   * `sentBytes` is what the browser had handed to the socket when it gave up,
+   * which is the whole distinction the report now carries. The handlers are set
+   * before `send()` in sendChunk, so failing synchronously here is the same
+   * order a real socket failure arrives in.
+   */
+  function XhrThatDrops(sentBytes: number) {
+    return class {
+      upload = {
+        onprogress: undefined as
+          | ((event: { lengthComputable: boolean; loaded: number }) => void)
+          | undefined,
+      };
+      status = 0;
+      responseText = "";
+      timeout = 0;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      open() {}
+      setRequestHeader() {}
+      getResponseHeader() {
+        // Nothing answered, so there is no offset to read — which also stops the
+        // retry from deciding the server already holds this chunk.
+        return null;
+      }
+      abort() {}
+      send() {
+        if (sentBytes > 0) {
+          this.upload.onprogress?.({ lengthComputable: true, loaded: sentBytes });
+        }
+        this.onerror?.();
+      }
+    };
+  }
+
+  /** Reserve answers normally, so only the chunk transfer can fail. */
+  function stubReserve() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("", { status: 201, headers: { Location: "/tusupload/abc" } })
+      )
+    );
+  }
+
+  /**
+   * Run one doomed upload to completion.
+   *
+   * The retry ladder is six attempts and ~57s of backoff, so the clock is moved
+   * rather than waited on — the point of the test is the error that comes out
+   * the other end, not how long the browser politely waited between tries.
+   */
+  async function runToFailure(): Promise<TusUploadError> {
+    vi.useFakeTimers();
+    try {
+      const attempt = uploadFileWithTus(fileOf(FOUR_MIB), credentials, {
+        chunkSize: TUS_CHUNK_ALIGNMENT,
+      });
+      // Handled the moment it exists: the rejection lands while the clock below
+      // is being advanced, and a bare promise would be reported unhandled long
+      // before the assertion ever sees it.
+      const settled = attempt.then(
+        () => {
+          throw new Error("this upload was supposed to fail");
+        },
+        (error: TusUploadError) => error
+      );
+      await vi.advanceTimersByTimeAsync(120_000);
+      return await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("names the request that died, not just the code", async () => {
+    // Without `stage` the panel prints "NETWORK" and nothing else — the same
+    // words a failed RESERVE produces, and a completely different fault.
+    stubReserve();
+    vi.stubGlobal("XMLHttpRequest", XhrThatDrops(0) as unknown as typeof XMLHttpRequest);
+
+    await expect(runToFailure()).resolves.toMatchObject({
+      code: "NETWORK",
+      stage: "chunk",
+    });
+  });
+
+  it("counts the bytes that had left the browser when the connection dropped", async () => {
+    stubReserve();
+    const SENT = 128 * 1024;
+    vi.stubGlobal("XMLHttpRequest", XhrThatDrops(SENT) as unknown as typeof XMLHttpRequest);
+
+    await expect(runToFailure()).resolves.toMatchObject({
+      stage: "chunk",
+      bytesSent: SENT,
+      bytesTotal: FOUR_MIB,
+    });
+  });
+
+  it("records nothing sent when the request never reached the wire", async () => {
+    // Zero with no HTTP status is the signature of a request that was never
+    // sent — blocked, offline, or refused before it left. It is not the same
+    // finding as a transfer that was moving, and the byte count is what says so.
+    stubReserve();
+    vi.stubGlobal("XMLHttpRequest", XhrThatDrops(0) as unknown as typeof XMLHttpRequest);
+
+    await expect(runToFailure()).resolves.toMatchObject({
+      bytesSent: 0,
+      bytesTotal: FOUR_MIB,
+    });
+  });
+
+  it("blames the reserve call when the slot was never created", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("offline");
+      })
+    );
+
+    await expect(uploadFileWithTus(fileOf(FOUR_MIB), credentials)).rejects.toMatchObject({
+      code: "NETWORK",
+      stage: "reserve",
+      bytesSent: 0,
+      bytesTotal: FOUR_MIB,
+    });
+  });
+
+  it("still carries the file size when the refusal precedes any request", async () => {
+    // A report with a size and no bytes reads as "none of it moved"; a report
+    // with neither reads as nothing at all.
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      uploadFileWithTus(bigFileOf(MAX_VIDEO_BYTES + 1), credentials)
+    ).rejects.toMatchObject({ bytesSent: 0, bytesTotal: MAX_VIDEO_BYTES + 1 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

@@ -115,6 +115,17 @@ export interface UploadFailureReport {
   bunnyVideoId?: string | null;
   fileName?: string | null;
   fileSize?: number | null;
+  /**
+   * How many bytes had left the browser when it died, and the file's size.
+   *
+   * The two facts that turn "NETWORK" into an answer: zero bytes with no HTTP
+   * status is a request that was never sent (blocked, offline, refused before it
+   * left), while tens of megabytes with the same absent status is a transfer
+   * that was already moving and stopped. Everything else in a report is the same
+   * for both.
+   */
+  bytesSent?: number | null;
+  bytesTotal?: number | null;
 }
 
 /**
@@ -140,6 +151,8 @@ export function describeUploadFailure(
       status: error.status ?? null,
       message: error.message,
       providerBody: error.providerBody ?? null,
+      bytesSent: error.bytesSent ?? null,
+      bytesTotal: error.bytesTotal ?? null,
       ...context,
     };
   }
@@ -150,6 +163,8 @@ export function describeUploadFailure(
     status: null,
     message: error instanceof Error ? error.message : "Upload failed",
     providerBody: null,
+    bytesSent: null,
+    bytesTotal: null,
     ...context,
   };
 }
