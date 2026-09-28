@@ -119,8 +119,9 @@ export default function SystemReference() {
             the creator is notified once. It is already published, so nothing has
             to flip: the badge is what changes. Open pages learn it by polling{" "}
             <Code>POST /api/videos/status</Code> and swap the placeholder for the
-            player in place; the cron sweep and the creator&apos;s own page read
-            cover the case where no webhook is configured.
+            player in place; the two on-read refreshes — a creator&apos;s own
+            dashboard and an owner&apos;s or an admin&apos;s read of the video
+            page — cover the case where no webhook is configured.
           </Step>
         </div>
       </Section>
@@ -174,7 +175,7 @@ export default function SystemReference() {
             <tbody className="text-white/70">
               {[
                 ["0/1/2", "Queued / processing / encoding", "refresh quietly"],
-                ["3", "Finished — fully playable", "refresh + publish + notify"],
+                ["3", "Finished — fully playable", "refresh + notify (already published)"],
                 ["4", "One resolution finished (playable)", "refresh"],
                 ["5", "Encoding failed", "refresh + notify the creator"],
                 ["6/7", "Presigned upload started / finished", "refresh"],
@@ -191,10 +192,10 @@ export default function SystemReference() {
           </table>
         </div>
         <p className="text-white/50 text-xs mt-2">
-          Note: the webhook status codes are Bunny&apos;s event codes and are NOT
-          the same numbers as the video object&apos;s own status field (where 4 =
-          Finished). The lifecycle always re-reads the object, so the two can never
-          be confused.
+          Note: this is Bunny&apos;s own numbering, and the same one it reports as
+          a video object&apos;s <Code>status</Code> — 3 means Finished in both.
+          The lifecycle still re-reads the object rather than trusting the
+          callback, so a stale or forged payload cannot make a video look ready.
         </p>
       </Section>
 
@@ -214,6 +215,12 @@ export default function SystemReference() {
             <Code>GET /api/creator/videos</Code> refreshes that creator&apos;s own
             pending uploads on read (with a re-check floor), so a creator watching
             their page advances their own video.
+          </li>
+          <li>
+            <strong>Video page read</strong> —{" "}
+            <Code>GET /api/videos/&lt;id&gt;</Code> refreshes a stale row when the
+            video&apos;s owner or an admin opens its own page, so the person with
+            the most reason to care can always advance it.
           </li>
         </ul>
         <p className="text-white/60">
