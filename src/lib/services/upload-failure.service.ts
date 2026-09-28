@@ -101,7 +101,7 @@ export async function recordUploadFailure(
       // The number that says whether the request was ever sent. On a chunk that
       // died at zero the browser never put a byte on the wire, which no other
       // field in the entry can say.
-      `${entry.bytesTotal !== null && entry.bytesSent !== null ? ` · died at ${(entry.bytesSent / 1024 / 1024).toFixed(1)} of ${(entry.bytesTotal / 1024 / 1024).toFixed(1)} MB` : ""}` +
+      `${typeof entry.bytesSent === "number" && typeof entry.bytesTotal === "number" ? ` · died at ${(entry.bytesSent / 1024 / 1024).toFixed(1)} of ${(entry.bytesTotal / 1024 / 1024).toFixed(1)} MB` : ""}` +
       `${entry.bunnyVideoId ? ` · slot ${entry.bunnyVideoId}` : ""}` +
       `\n                 ${entry.message}` +
       (entry.providerBody ? `\n                 Bunny said: ${entry.providerBody}` : "")
@@ -135,8 +135,22 @@ export async function listUploadFailures(): Promise<UploadFailure[]> {
 
   // Anything written by an older build, or by hand, is still rendered as a row
   // — but never trusted as a shape.
-  return stored.filter(
-    (entry): entry is UploadFailure =>
-      !!entry && typeof entry === "object" && typeof entry.at === "string"
+  return (
+    stored
+      .filter(
+        (entry): entry is UploadFailure =>
+          !!entry && typeof entry === "object" && typeof entry.at === "string"
+      )
+      // The byte counts were added after these entries existed, so a row written
+      // by an older build has no such field at all — and a MISSING field is not
+      // `null`. Without this the panel's own `!== null` guard passes, the
+      // arithmetic runs on `undefined`, and a real incident renders as "Died
+      // after NaN MB of NaN MB". Normalised here so the shape the panel reads
+      // matches the shape its type promises.
+      .map((entry) => ({
+        ...entry,
+        bytesSent: typeof entry.bytesSent === "number" ? entry.bytesSent : null,
+        bytesTotal: typeof entry.bytesTotal === "number" ? entry.bytesTotal : null,
+      }))
   );
 }

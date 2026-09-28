@@ -140,6 +140,23 @@ describe("listUploadFailures", () => {
     expect(await listUploadFailures()).toEqual([]);
   });
 
+  it("normalises an entry written before the byte counts existed", async () => {
+    // A real incident, not a hypothetical: the first entries in the live list
+    // predate these fields, so they arrive with them ABSENT — and `undefined`
+    // passes a `!== null` guard, which is how four genuine failures rendered as
+    // "Died after NaN MB of NaN MB". The panel tests for a number; this makes
+    // that test the only thing it needs.
+    const older = { ...failure, at: new Date().toISOString() };
+    delete (older as { bytesSent?: unknown }).bytesSent;
+    delete (older as { bytesTotal?: unknown }).bytesTotal;
+    mocks.cacheGet.mockResolvedValue([older]);
+
+    const [entry] = await listUploadFailures();
+
+    expect(entry.bytesSent).toBeNull();
+    expect(entry.bytesTotal).toBeNull();
+  });
+
   it("never hands a malformed entry to the panel", async () => {
     const good = { ...failure, at: new Date().toISOString() };
     mocks.cacheGet.mockResolvedValue([good, null, "junk", { noAt: true }]);
