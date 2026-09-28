@@ -43,6 +43,12 @@ import { POST as webhookPost } from "@/app/api/webhooks/harakapay/route";
 import { POST as completePost } from "@/app/api/dev/sandbox/complete/route";
 import { POST as subscriptionsPost } from "@/app/api/subscriptions/route";
 import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
+// The monthly price, read from the one place that defines it. This suite used
+// to spell 5,000 out by hand in eight places, so raising the price turned every
+// one of them into a stale fixture — and the first failed assertion took
+// `orderId` down with it, so the two webhook cases after it failed with a 400
+// "order_id missing" for a reason that had nothing to do with webhooks.
+import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
 
 const describeE2E = process.env.DATABASE_URL ? describe : describe.skip;
 
@@ -369,6 +375,13 @@ describeE2E("HarakaPay E2E: subscription by phone", () => {
   let transactionId = "";
   let firstExpiresAt: Date | null = null;
 
+  // What the gateway charges and keeps, on the callback HarakaPay sends. The
+  // route records net/fee as metadata and splits OUR stored amount, so these are
+  // fixture values — kept at the same 6% cut as before so they cannot read as a
+  // different plan.
+  const GATEWAY_FEE = Math.round(SUBSCRIPTION_PRICE_TZS * 0.06);
+  const NET_AMOUNT = SUBSCRIPTION_PRICE_TZS - GATEWAY_FEE;
+
   beforeAll(async () => {
     // The auth mock reads ctx.viewerId on every request
     ctx.viewerId = viewerA;
@@ -416,7 +429,7 @@ describeE2E("HarakaPay E2E: subscription by phone", () => {
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
     expect(body.data.sandbox).toBe(true);
-    expect(body.data.amount).toBe(5000); // default monthly price
+    expect(body.data.amount).toBe(SUBSCRIPTION_PRICE_TZS); // the default monthly price
     expect(body.data.orderId).toMatch(/^hp_sbx_/);
 
     orderId = body.data.orderId;
@@ -427,7 +440,7 @@ describeE2E("HarakaPay E2E: subscription by phone", () => {
     expect(tx!.status).toBe("PENDING");
     expect(tx!.type).toBe("SUBSCRIPTION");
     expect(tx!.creatorId).toBe(creatorA);
-    expect(tx!.amount).toBe(5000);
+    expect(tx!.amount).toBe(SUBSCRIPTION_PRICE_TZS);
 
     // Not subscribed yet — no money has moved
     const sub = await prisma.creatorSubscription.findUnique({
@@ -458,9 +471,9 @@ describeE2E("HarakaPay E2E: subscription by phone", () => {
           body: JSON.stringify({
             order_id: orderId,
             status: "completed",
-            amount: 5000,
-            net_amount: 4700,
-            fee_amount: 300,
+            amount: SUBSCRIPTION_PRICE_TZS,
+            net_amount: NET_AMOUNT,
+            fee_amount: GATEWAY_FEE,
             created_at: new Date().toISOString(),
           }),
         }
@@ -474,7 +487,7 @@ describeE2E("HarakaPay E2E: subscription by phone", () => {
     });
     expect(sub).not.toBeNull();
     expect(sub!.isActive).toBe(true);
-    expect(sub!.price).toBe(5000);
+    expect(sub!.price).toBe(SUBSCRIPTION_PRICE_TZS);
     const in20Days = Date.now() + 20 * 86_400_000;
     const in40Days = Date.now() + 40 * 86_400_000;
     expect(sub!.expiresAt.getTime()).toBeGreaterThan(in20Days);
@@ -484,18 +497,20 @@ describeE2E("HarakaPay E2E: subscription by phone", () => {
     // Transaction fulfilled with the 70/30 split recorded
     const tx = await prisma.transaction.findUnique({ where: { id: transactionId } });
     expect(tx!.status).toBe("SUCCESS");
-    const platformFee = Math.round(5000 * (config.business.platformFeePercent / 100));
+    const platformFee = Math.round(
+      SUBSCRIPTION_PRICE_TZS * (config.business.platformFeePercent / 100)
+    );
     expect(tx!.platformFee).toBe(platformFee);
-    expect(tx!.creatorCut).toBe(5000 - platformFee);
+    expect(tx!.creatorCut).toBe(SUBSCRIPTION_PRICE_TZS - platformFee);
     expect(tx!.providerRef).toBeTruthy();
 
     // Creator credited into the 14-day holding (nothing available yet)
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: creatorA },
     });
-    expect(balance!.pendingBalance).toBe(5000 - platformFee);
+    expect(balance!.pendingBalance).toBe(SUBSCRIPTION_PRICE_TZS - platformFee);
     expect(balance!.availableBalance).toBe(0);
-    expect(balance!.totalEarned).toBe(5000 - platformFee);
+    expect(balance!.totalEarned).toBe(SUBSCRIPTION_PRICE_TZS - platformFee);
 
     // Public subscriber counter resynced from real rows
     const profile = await prisma.creatorProfile.findUnique({
@@ -521,9 +536,9 @@ describeE2E("HarakaPay E2E: subscription by phone", () => {
           body: JSON.stringify({
             order_id: orderId,
             status: "completed",
-            amount: 5000,
-            net_amount: 4700,
-            fee_amount: 300,
+            amount: SUBSCRIPTION_PRICE_TZS,
+            net_amount: NET_AMOUNT,
+            fee_amount: GATEWAY_FEE,
             created_at: new Date().toISOString(),
           }),
         }
@@ -531,11 +546,13 @@ describeE2E("HarakaPay E2E: subscription by phone", () => {
     );
     expect(res.status).toBe(200);
 
-    const platformFee = Math.round(5000 * (config.business.platformFeePercent / 100));
+    const platformFee = Math.round(
+      SUBSCRIPTION_PRICE_TZS * (config.business.platformFeePercent / 100)
+    );
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: creatorA },
     });
-    expect(balance!.pendingBalance).toBe(5000 - platformFee); // unchanged
+    expect(balance!.pendingBalance).toBe(SUBSCRIPTION_PRICE_TZS - platformFee); // unchanged
 
     const profile = await prisma.creatorProfile.findUnique({
       where: { userId: creatorA },
