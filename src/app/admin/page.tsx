@@ -489,6 +489,25 @@ interface PipelineTest {
 }
 
 /** Result of the webhook round trip (POST /api/admin/bunny-webhook-test). */
+/** One failed video upload, as reported by the creator's browser. */
+interface UploadFailure {
+  at: string;
+  /** TusUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED. */
+  code: string;
+  /** Which request died: the reserve POST, or a chunk PATCH. */
+  stage: "reserve" | "chunk" | null;
+  /** Bunny's HTTP status, or null when nothing answered. */
+  status: number | null;
+  /** What the creator was shown. */
+  message: string;
+  /** Bunny's own response body — the half that names the cause. */
+  providerBody: string | null;
+  bunnyVideoId: string | null;
+  fileName: string | null;
+  fileSize: number | null;
+  creatorId: string;
+}
+
 interface WebhookTest {
   verdict: "ok" | "not-configured" | "failed";
   headline: string;
@@ -798,6 +817,10 @@ export default function AdminDashboard() {
   const [pipelineBusy, setPipelineBusy] = useState(false);
   const [webhookTest, setWebhookTest] = useState<WebhookTest | null>(null);
   const [webhookBusy, setWebhookBusy] = useState(false);
+  // Recent failed uploads, newest first — the record a failed transfer never had.
+  // See lib/services/upload-failure.service.ts.
+  const [uploadFailures, setUploadFailures] = useState<UploadFailure[]>([]);
+  const [failuresBusy, setFailuresBusy] = useState(false);
   // Native window.prompt is blocked in some embedded browsers, so the flows that
   // need a typed reason (ban, KYC / payout rejection) use this in-app dialog.
   const [reasonDialog, setReasonDialog] = useState<{
@@ -914,6 +937,8 @@ export default function AdminDashboard() {
       fetchSetup();
     }
     if (activeTab === "setup" && !setup) fetchSetup();
+    // Same tab, read-only and cheap: the list a failed upload leaves behind.
+    if (activeTab === "setup") fetchUploadFailures();
     if (activeTab === "kyc") fetchKyc();
     if (activeTab === "reports") fetchReports();
     if (activeTab === "payouts") fetchPayouts();
@@ -1725,6 +1750,28 @@ export default function AdminDashboard() {
       toast("error", "Could not save that step");
     } finally {
       setStepBusy(null);
+    }
+  }
+
+  /**
+   * The failed uploads that actually happened.
+   *
+   * Read-only and cache-backed, so it costs nothing to call when the tab opens.
+   * Deliberately not one of the Re-check probes: this is a list, not a
+   * pass/fail, and it is the one screen that can answer "why did that creator's
+   * upload fail?" without asking for a screenshot.
+   */
+  async function fetchUploadFailures() {
+    setFailuresBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/upload-failures");
+      const data = await res.json();
+      if (data.success) setUploadFailures(data.data.failures || []);
+    } catch {
+      // A list that cannot be read is not worth a toast: the empty state says as
+      // much, and a broken diagnostic must not become an error on screen.
+    } finally {
+      setFailuresBusy(false);
     }
   }
 
@@ -4027,6 +4074,84 @@ export default function AdminDashboard() {
                     </ul>
                   )}
                 </div>
+              )}
+            </div>
+
+            {/*
+              Failed uploads.
+
+              The byte transfer runs in the creator's browser and goes straight to
+              Bunny, so a failure leaves no row, no log line and nothing else on
+              this page. Each entry below is a report the browser sent: the code,
+              which request died, Bunny's HTTP status and Bunny's own response
+              body. It is the difference between "some videos refuse" and knowing
+              why. */}
+            <div className="glass-card p-5">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="min-w-0">
+                  <h2 className="font-display font-bold flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 text-brand-400" />
+                    Failed uploads
+                  </h2>
+                  <p className="text-sm text-white/50 mt-1">
+                    Reported by the creator&apos;s browser, because the bytes go straight
+                    to Bunny and never pass through this server. Newest first.
+                  </p>
+                </div>
+                <button
+                  onClick={fetchUploadFailures}
+                  disabled={failuresBusy}
+                  className="btn-ghost text-sm flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {failuresBusy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="w-4 h-4" />
+                  )}
+                  Refresh
+                </button>
+              </div>
+
+              {uploadFailures.length === 0 ? (
+                <p className="text-sm text-white/40 mt-3">
+                  {failuresBusy
+                    ? "Reading…"
+                    : "Nothing has failed since this was deployed."}
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-2">
+                  {uploadFailures.map((failure, i) => (
+                    <li
+                      key={`${failure.at}-${i}`}
+                      className="rounded-xl border border-red-500/20 bg-red-500/5 p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <span className="text-xs font-medium text-red-300">
+                          {failure.code}
+                          {failure.stage ? ` · ${failure.stage}` : ""}
+                          {failure.status !== null ? ` · HTTP ${failure.status}` : ""}
+                        </span>
+                        <span className="text-[11px] text-white/40">
+                          {failure.at.replace("T", " ").slice(0, 16)}
+                          {failure.fileSize !== null
+                            ? ` · ${(failure.fileSize / 1024 / 1024).toFixed(1)} MB`
+                            : ""}
+                        </span>
+                      </div>
+                      <p className="text-xs text-white/70 mt-1">{failure.message}</p>
+                      {failure.providerBody && (
+                        <p className="text-[11px] text-amber-200/80 mt-1 break-all">
+                          Bunny: {failure.providerBody}
+                        </p>
+                      )}
+                      <p className="text-[11px] text-white/35 mt-1">
+                        {failure.fileName ? `${failure.fileName} · ` : ""}
+                        creator {failure.creatorId}
+                        {failure.bunnyVideoId ? ` · slot ${failure.bunnyVideoId}` : ""}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
 

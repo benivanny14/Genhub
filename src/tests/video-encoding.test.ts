@@ -68,11 +68,17 @@ describe("describeEncoding", () => {
   });
 
   it("maps every Bunny code in the observed range", () => {
+    // Bunny's list, verbatim: 0 Queued · 1 Processing · 2 Encoding ·
+    // 3 Finished · 4 Resolution finished · 5 Failed.
+    //
+    // 3 is the one that publishes, and it is asserted with a LOW progress on
+    // purpose: reading 3 as "Transcoding" and waiting for status 4 (or 100%) is
+    // what left finished videos spinning on the dashboard forever.
     expect(describeEncoding(0, 0).state).toBe("pending"); // queued at upload
-    expect(describeEncoding(1, 0).state).toBe("pending"); // uploaded, not started
-    expect(describeEncoding(2, 0).state).toBe("processing");
-    expect(describeEncoding(3, 40).state).toBe("processing");
-    expect(describeEncoding(4, 100).state).toBe("ready");
+    expect(describeEncoding(1, 0).state).toBe("processing"); // preview/format
+    expect(describeEncoding(2, 0).state).toBe("processing"); // encoding
+    expect(describeEncoding(3, 40).state).toBe("ready"); // finished
+    expect(describeEncoding(4, 40).state).toBe("ready"); // one resolution done
     expect(describeEncoding(5, 0).state).toBe("failed");
   });
 
@@ -96,14 +102,14 @@ describe("describeEncoding", () => {
     expect(describeEncoding(2, NaN).progress).toBe(0);
   });
 
-  it("gives every known code a readable label", () => {
+  it("gives every known code Bunny's own name for it", () => {
     for (const [code, label] of Object.entries({
       0: "Queued",
-      1: "Uploaded",
-      2: "Processing",
-      3: "Transcoding",
-      4: "Finished",
-      5: "Error",
+      1: "Processing",
+      2: "Encoding",
+      3: "Finished",
+      4: "Resolution finished",
+      5: "Failed",
     })) {
       expect(describeEncoding(Number(code), 0).label).toBe(label);
     }
@@ -234,6 +240,22 @@ describeDB("refreshVideoEncoding (real database)", () => {
     expect(notifications).toHaveLength(1);
     expect(notifications[0].type).toBe("success");
     expect(notifications[0].message).toContain("Encoding probe");
+  });
+
+  it("publishes a finished video even when Bunny reports it below 100%", async () => {
+    // Status 3 (Finished) means the video is fully available. It used to be read
+    // as "Transcoding" and held back until status 4 or 100%, so a finished scene
+    // sat on the creator's dashboard spinning and never went live — which is
+    // exactly what a creator reports as "it says transcoding and never uploads".
+    bunnyState.details = { status: 3, encodeProgress: 62, length: 480 };
+
+    const result = await refreshVideoEncoding(videoId);
+
+    expect(result?.snapshot.state).toBe("ready");
+    expect(result?.published).toBe(true);
+
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.isPublished).toBe(true);
   });
 
   it("holds back a ready video shorter than the 8-minute guidelines floor", async () => {
@@ -398,7 +420,8 @@ describeDB("refreshVideoEncoding (real database)", () => {
     expect(body.data.encoding).toMatchObject({
       state: "processing",
       progress: 42,
-      label: "Processing",
+      // Status 2 is Bunny's "Encoding" — the label the viewer's page shows.
+      label: "Encoding",
     });
 
     const raw = JSON.stringify(body);
@@ -488,6 +511,8 @@ describeDB("refreshVideoEncoding (real database)", () => {
 
     const result = await refreshVideoEncoding(videoId);
 
-    expect(result?.snapshot.state).toBe("pending");
+    // 1 is Bunny's "Processing", so this is a video in flight, not a queue
+    // entry — either way it is not a failed upload, which is what matters here.
+    expect(result?.snapshot.state).toBe("processing");
   });
 });

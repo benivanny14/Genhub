@@ -42,6 +42,7 @@ import {
 } from "lucide-react";
 import { canOptimizeImage } from "@/lib/media";
 import { uploadFileWithTus, TusUploadError, videoSizeError } from "@/lib/tus-upload";
+import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
 import {
   PAYOUT_METHODS,
@@ -628,6 +629,9 @@ export default function CreatorDashboard() {
     }
     setUploadingEditTeaser(true);
     setEditTeaserProgress(0);
+    // Declared out here so the catch below can name the slot that was reserved
+    // and abandoned — it is the only handle on the orphan left in the library.
+    let credentials: BunnyUploadCredentials | null = null;
     try {
       const res = await fetch("/api/videos/upload-signature", {
         method: "POST",
@@ -640,7 +644,7 @@ export default function CreatorDashboard() {
         return;
       }
 
-      const credentials = data.data as BunnyUploadCredentials;
+      credentials = data.data as BunnyUploadCredentials;
       await uploadFileWithTus(file, credentials, {
         onProgress: (uploaded, total) =>
           setEditTeaserProgress(Math.round((uploaded / total) * 100)),
@@ -654,6 +658,15 @@ export default function CreatorDashboard() {
         error instanceof TusUploadError
           ? error.message
           : "Network error while uploading the trailer"
+      );
+      // This transfer went straight to Bunny, so the server never saw it fail.
+      // Report it before the reason is lost — see lib/upload-client.ts.
+      void reportUploadFailure(
+        describeUploadFailure(error, {
+          bunnyVideoId: credentials?.videoId ?? null,
+          fileName: file.name,
+          fileSize: file.size,
+        })
       );
     } finally {
       setUploadingEditTeaser(false);

@@ -9,6 +9,7 @@ import { canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { uploadFileWithTus, TusUploadError, videoSizeError } from "@/lib/tus-upload";
+import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import { CATEGORIES } from "@/lib/categories";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
 import {
@@ -183,6 +184,16 @@ export default function UploadPage() {
         progress: undefined,
         duration: 8000,
       });
+      // The bytes went straight to Bunny, so nothing on our side saw this — and
+      // the reserved slot is now an orphan in the library. Report it, with
+      // Bunny's own status and body, before the tab takes it away.
+      void reportUploadFailure(
+        describeUploadFailure(error, {
+          bunnyVideoId: credentials.videoId,
+          fileName: file.name,
+          fileSize: file.size,
+        })
+      );
       return false;
     }
   }
@@ -733,6 +744,9 @@ export default function UploadPage() {
                     }
                     setUploadingTeaser(true);
                     setTeaserProgress(0);
+                    // Named out here so the catch below can report the slot that
+                    // was reserved and then abandoned.
+                    let teaserSlot: BunnyUploadCredentials | null = null;
                     try {
                       // Same flow as the main video: reserve a slot, then TUS.
                       const res = await fetch("/api/videos/upload-signature", {
@@ -746,13 +760,13 @@ export default function UploadPage() {
                         return;
                       }
 
-                      const credentials = data.data as BunnyUploadCredentials;
-                      await uploadFileWithTus(file, credentials, {
+                      teaserSlot = data.data as BunnyUploadCredentials;
+                      await uploadFileWithTus(file, teaserSlot, {
                         onProgress: (uploaded, total) =>
                           setTeaserProgress(Math.round((uploaded / total) * 100)),
                       });
 
-                      setTeaserBunnyVideoId(credentials.videoId);
+                      setTeaserBunnyVideoId(teaserSlot.videoId);
                       toast("success", "Teaser clip uploaded");
                     } catch (error) {
                       toast(
@@ -760,6 +774,15 @@ export default function UploadPage() {
                         error instanceof TusUploadError
                           ? error.message
                           : "Network error while uploading the teaser"
+                      );
+                      // Same reason as the main upload: this transfer also went
+                      // straight to Bunny, and a failed one is invisible here.
+                      void reportUploadFailure(
+                        describeUploadFailure(error, {
+                          bunnyVideoId: teaserSlot?.videoId ?? null,
+                          fileName: file.name,
+                          fileSize: file.size,
+                        })
                       );
                     } finally {
                       setUploadingTeaser(false);

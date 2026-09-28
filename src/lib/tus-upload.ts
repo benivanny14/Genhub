@@ -79,12 +79,35 @@ export type TusErrorCode =
 export class TusUploadError extends Error {
   code: TusErrorCode;
   status?: number;
+  /**
+   * Which request died, when the failure came off the wire rather than from one
+   * of the pre-flight checks above. Reported to the server so the failure leaves
+   * a record — see lib/services/upload-failure.service.ts.
+   */
+  stage?: "reserve" | "chunk";
+  /**
+   * Bunny's response body, verbatim.
+   *
+   * Its own field rather than only text inside the message, because the two are
+   * written for different readers: the message is a sentence for the creator,
+   * clipped for a toast, while this is the line that NAMES the cause —
+   * "Library ID missing or invalid.", "File size too large." — and it is what
+   * makes a report actionable without reproducing the upload.
+   */
+  providerBody?: string;
 
-  constructor(code: TusErrorCode, message: string, status?: number) {
+  constructor(
+    code: TusErrorCode,
+    message: string,
+    status?: number,
+    extra?: { stage?: "reserve" | "chunk"; providerBody?: string }
+  ) {
     super(message);
     this.name = "TusUploadError";
     this.code = code;
     this.status = status;
+    this.stage = extra?.stage;
+    this.providerBody = extra?.providerBody;
   }
 }
 
@@ -124,25 +147,37 @@ function authHeaders(credentials: BunnyUploadCredentials): Record<string, string
  * as the most common cause, and "Upload failed" sends people hunting for the
  * wrong problem.
  */
-function describe(status: number, body: string): TusUploadError {
+function describe(
+  status: number,
+  body: string,
+  stage: "reserve" | "chunk"
+): TusUploadError {
+  // Kept whole (clipped only at 500) while the message below clips at 160: the
+  // report is read by whoever is diagnosing, and a truncated JSON body is often
+  // missing the one field that explains it.
+  const providerBody = body ? body.slice(0, 500) : undefined;
+
   if (status === 401 || status === 403) {
     return new TusUploadError(
       "REJECTED",
       "Bunny rejected the upload authorization (it may have expired). Please retry the upload.",
-      status
+      status,
+      { stage, providerBody }
     );
   }
   if (status === 413) {
     return new TusUploadError(
       "UNSUPPORTED",
       "Bunny refused the file as too large for this plan.",
-      status
+      status,
+      { stage, providerBody }
     );
   }
   return new TusUploadError(
     "NETWORK",
     `Upload failed (HTTP ${status})${body ? `: ${body.slice(0, 160)}` : ""}`,
-    status
+    status,
+    { stage, providerBody }
   );
 }
 
@@ -187,7 +222,7 @@ async function createUpload(
   }
 
   if (res.status !== 201 && !res.ok) {
-    throw describe(res.status, await res.text().catch(() => ""));
+    throw describe(res.status, await res.text().catch(() => ""), "reserve");
   }
 
   const location = res.headers.get("Location");
@@ -252,7 +287,7 @@ function sendChunk(
         resolve(next === null ? offset + blob.size : Number(next));
         return;
       }
-      reject(describe(xhr.status, xhr.responseText || ""));
+      reject(describe(xhr.status, xhr.responseText || "", "chunk"));
     };
     xhr.onerror = () =>
       reject(

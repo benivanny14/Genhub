@@ -5,6 +5,7 @@
 // =============================================================================
 
 import { NextRequest } from "next/server";
+import { randomBytes } from "crypto";
 import prisma from "@/lib/db";
 import { requireAuth, requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
@@ -219,6 +220,39 @@ export async function GET(request: NextRequest) {
 // POST /api/videos - Create video (Creator only)
 // =============================================================================
 
+/**
+ * A slug nobody else holds.
+ *
+ * `Video.slug` is `@unique`, and `generateSlug` is a pure function of the
+ * title — so two videos with the same title computed the SAME slug and the
+ * insert died on the unique constraint. The route answered a generic 500
+ * AFTER the creator's file had already been uploaded in full: no video
+ * appeared anywhere, and the natural retry reserved ANOTHER Bunny slot and
+ * abandoned the first one. Two creators naming a scene the same thing, or one
+ * creator re-submitting after that first failure, was enough to lose a 1.8 GB
+ * upload and pay for two of them.
+ *
+ * The title keeps its meaning; only the URL suffix moves. "-2", "-3", … up to
+ * a bound, then a random tail so an unlucky run cannot spin here.
+ *
+ * A title with nothing slug-worthy in it ("🌶️") slugs to the empty string,
+ * which is as collidable as any other value — hence the "video" floor.
+ */
+async function uniqueVideoSlug(title: string): Promise<string> {
+  const base = generateSlug(title) || "video";
+
+  for (let suffix = 1; suffix <= 25; suffix += 1) {
+    const candidate = (suffix === 1 ? base : `${base}-${suffix}`).slice(0, 100);
+    const taken = await prisma.video.findUnique({
+      where: { slug: candidate },
+      select: { id: true },
+    });
+    if (!taken) return candidate;
+  }
+
+  return `${base.slice(0, 88)}-${randomBytes(4).toString("hex")}`;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("CREATOR");
@@ -261,7 +295,7 @@ export async function POST(request: NextRequest) {
       fileSize,
     } = result.data;
 
-    const slug = generateSlug(title);
+    const slug = await uniqueVideoSlug(title);
 
     // Bunny accepts an upload seconds after the creator's browser starts
     // sending, but the video is unplayable until transcoding finishes. A video

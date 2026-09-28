@@ -28,7 +28,15 @@
 import { createHmac } from "node:crypto";
 import { secretMatches } from "./shared-secret";
 
-/** Bunny's own status codes for a Stream webhook — NOT the GET-video codes. */
+/**
+ * Bunny's own status codes.
+ *
+ * ONE list, not two: Bunny sends the same numbering in the webhook body and as
+ * the `status` field of a video object from the API. Kept in step with
+ * BUNNY_STATUS_LABELS in services/video-encoding.service.ts — the two maps
+ * disagreeing is how status 3 came to be read as "Transcoding" in one file while
+ * it means "Finished".
+ */
 export const BUNNY_WEBHOOK_STATUS_LABELS: Record<number, string> = {
   0: "Queued",
   1: "Processing",

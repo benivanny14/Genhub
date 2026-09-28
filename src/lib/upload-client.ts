@@ -12,6 +12,7 @@
 // =============================================================================
 
 import { downscaleImage } from "./image-downscale";
+import { TusUploadError } from "./tus-upload";
 
 export class UploadError extends Error {}
 
@@ -81,4 +82,91 @@ export async function uploadCaptions(file: File): Promise<string> {
   }
 
   return post(file, "public", "captions file");
+}
+
+// =============================================================================
+// Reporting a failed VIDEO upload
+// =============================================================================
+// Video bytes never pass through this app's server — the browser streams them
+// straight to Bunny — so a transfer that dies leaves no server-side trace at
+// all. The video row is created only AFTER the upload finishes, which means a
+// failed one produces no row, no log line and nothing on any admin screen. The
+// creator gets a toast, and the reason is gone the moment the tab closes.
+//
+// That is how a live library ended up with more orphaned slots (14) than video
+// rows (9), ten of them holding zero bytes, with the only description of the
+// fault being a screenshot. These two functions are the other half: they post
+// what actually happened — Bunny's HTTP status, Bunny's own response body, which
+// request died, and the reserved slot — so /admin can answer "why is this
+// failing?" for itself.
+//
+// Best effort by design. It never throws and never delays the message the
+// creator is already reading: a report that cannot be delivered is one missing
+// line in a list, which is strictly better than a second error on top of the
+// first.
+
+export interface UploadFailureReport {
+  /** TusUploadError.code, or UNKNOWN for anything else. */
+  code: string;
+  stage?: "reserve" | "chunk" | null;
+  status?: number | null;
+  message: string;
+  providerBody?: string | null;
+  bunnyVideoId?: string | null;
+  fileName?: string | null;
+  fileSize?: number | null;
+}
+
+/**
+ * Turn whatever was thrown into a report, keeping Bunny's own words.
+ *
+ * A TusUploadError carries the parts worth keeping — the code, the HTTP status
+ * and the provider's body — and everything else is summarised. The message is
+ * still sent, because it is what the creator read on screen, and a report that
+ * does not match the complaint is hard to trust.
+ */
+export function describeUploadFailure(
+  error: unknown,
+  context: {
+    bunnyVideoId?: string | null;
+    fileName?: string | null;
+    fileSize?: number | null;
+  } = {}
+): UploadFailureReport {
+  if (error instanceof TusUploadError) {
+    return {
+      code: error.code,
+      stage: error.stage ?? null,
+      status: error.status ?? null,
+      message: error.message,
+      providerBody: error.providerBody ?? null,
+      ...context,
+    };
+  }
+
+  return {
+    code: "UNKNOWN",
+    stage: null,
+    status: null,
+    message: error instanceof Error ? error.message : "Upload failed",
+    providerBody: null,
+    ...context,
+  };
+}
+
+/** POST one report to the server. Never throws. */
+export async function reportUploadFailure(report: UploadFailureReport): Promise<void> {
+  try {
+    await fetch("/api/videos/upload-failure", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(report),
+      // The creator is usually staring at the failure when this goes out, and
+      // the next thing they do is close the tab or hit retry. keepalive lets the
+      // request finish anyway.
+      keepalive: true,
+    });
+  } catch {
+    // Deliberately silent — see the note above.
+  }
 }

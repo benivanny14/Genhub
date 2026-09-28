@@ -10,12 +10,23 @@
 // So a Bunny-hosted video is held back until Bunny says it can play, and the
 // creator is told once — not once per poll — when it is ready.
 //
-// Observed against the live API while this was written:
-//   a fresh slot                 -> status 0
-//   after a complete upload      -> status 2, encodeProgress 0
-// "Finished" is therefore detected from EITHER signal (status 4 or progress
-// 100) rather than trusting one number, because a single wrong constant here
-// would hold every video back forever.
+// STATUS CODES. Bunny numbers them 0..10 and uses ONE list for both the webhook
+// body and the `status` field of a video object returned by the API:
+//
+//   0 Queued · 1 Processing · 2 Encoding · 3 Finished · 4 Resolution finished
+//   · 5 Failed · 6-8 presigned-upload events · 9 captions · 10 title/description
+//
+// 3 is the code that matters: "the video encoding has finished and the video is
+// FULLY AVAILABLE". This map used to shift every code after 2 by one — 3 was
+// read as "Transcoding" and only 4 counted as finished — so a video Bunny had
+// already finished sat on the creator's dashboard as a spinning "Transcoding X%"
+// and was never published, however long it was watched. That is what a creator
+// reports as "it says transcoding and the video never goes up".
+//
+// Three signals mean "can play", and any one is enough: status 3 (finished),
+// status 4 (one resolution finished — Bunny: the first of these means the video
+// is playable) or encodeProgress 100. Checking all three means one wrong number
+// cannot hold every upload back forever.
 // =============================================================================
 
 import prisma from "@/lib/db";
@@ -31,19 +42,33 @@ import type { BunnyWebhookIntent } from "@/lib/bunny-webhook";
 
 export type EncodingState = "pending" | "processing" | "ready" | "failed" | "untracked";
 
-/** Bunny's own status codes, for the raw number shown to admins. */
+/**
+ * Bunny's own status codes, for the raw number shown to admins.
+ *
+ * Must stay identical to BUNNY_WEBHOOK_STATUS_LABELS in lib/bunny-webhook.ts.
+ * Bunny uses one list for the webhook body and for the video object's `status`,
+ * and two copies that disagree are exactly how status 3 came to mean "Finished"
+ * in one file and "Transcoding" in the other.
+ */
 export const BUNNY_STATUS_LABELS: Record<number, string> = {
   0: "Queued",
-  1: "Uploaded",
-  2: "Processing",
-  3: "Transcoding",
-  4: "Finished",
-  5: "Error",
+  1: "Processing",
+  2: "Encoding",
+  3: "Finished",
+  4: "Resolution finished",
+  5: "Failed",
+  6: "Upload started",
+  7: "Upload finished",
+  8: "Upload failed",
+  9: "Captions generated",
+  10: "Title/description generated",
 };
 
-/** Bunny sends 1 (queued-ish) either side of an upload; both are "not playable yet". */
 const BUNNY_STATUS_ERROR = 5;
-const BUNNY_STATUS_FINISHED = 4;
+/** 3 — encoding finished; the video is fully available. */
+const BUNNY_STATUS_FINISHED = 3;
+/** 4 — one resolution is done; Bunny: the first of these means it can play. */
+const BUNNY_STATUS_PLAYABLE = 4;
 
 export interface EncodingSnapshot {
   state: EncodingState;
@@ -57,8 +82,9 @@ export interface EncodingSnapshot {
 /**
  * Map Bunny's raw numbers to something the product can act on.
  *
- * `ready` when Bunny says finished OR when it reports 100% — the two are checked
- * together so a shifted code cannot silently strand every future upload.
+ * `ready` when Bunny says finished (3), when a resolution is done (4), or when
+ * it reports 100% — all three are checked so a shifted code cannot silently
+ * strand every future upload.
  */
 export function describeEncoding(
   status: number | null | undefined,
@@ -80,7 +106,11 @@ export function describeEncoding(
     };
   }
 
-  if (status === BUNNY_STATUS_FINISHED || percent >= 100) {
+  if (
+    status === BUNNY_STATUS_FINISHED ||
+    status === BUNNY_STATUS_PLAYABLE ||
+    percent >= 100
+  ) {
     return {
       state: "ready",
       status,
@@ -91,7 +121,8 @@ export function describeEncoding(
   }
 
   return {
-    state: status <= 1 ? "pending" : "processing",
+    // Only 0 (Queued) is "not started" now that 1 really is "Processing".
+    state: status <= 0 ? "pending" : "processing",
     status,
     progress: percent,
     label: BUNNY_STATUS_LABELS[status] ?? "Processing",
@@ -484,13 +515,13 @@ export async function runBunnyPipelineSelfTest(): Promise<BunnyPipelineSelfTest>
     steps.push({
       label: "Bunny takes the file",
       ok: kept,
-      // Read by a person, so say which observation decided it: an Error on THIS
-      // probe is expected (the payload is not a video) and is not the same thing
-      // as the silent 0-bytes fault the probe exists to catch.
+      // Read by a person, so say which observation decided it: a Failed code on
+      // THIS probe is expected (the payload is not a video) and is not the same
+      // thing as the silent 0-bytes fault the probe exists to catch.
       detail: !kept
         ? `still Queued(0) with storageSize ${stored} after the read-back window — the bytes never completed arriving`
         : status === BUNNY_STATUS_ERROR
-        ? `status 5 (Error) · storageSize ${stored} bytes — Bunny read the bytes; a probe payload is not a video, so an Error on this file is expected`
+        ? `status 5 (Failed) · storageSize ${stored} bytes — Bunny read the bytes; a probe payload is not a video, so a Failed code on this file is expected`
         : `status ${status} (${BUNNY_STATUS_LABELS[status] ?? "unknown"}) · storageSize ${stored} bytes`,
     });
 

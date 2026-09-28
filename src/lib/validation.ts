@@ -376,6 +376,44 @@ export const creatorPostSchema = z.object({
 });
 
 // =============================================================================
+// A failed video upload, reported by the browser
+// =============================================================================
+// The byte transfer runs in the CREATOR'S browser, so a failure leaves the
+// server with no evidence at all: the video row is created only after the
+// upload completes, which means a failed one produces no row, no log line and
+// nothing on any dashboard. The creator sees a toast and the reason dies with
+// the tab — which is exactly why "some videos refuse, and we do not know why"
+// stayed unanswerable while orphaned slots piled up in the Bunny library.
+//
+// This is what the client sends instead. Lenient about the strings on purpose:
+// this is a diagnostic, and refusing a report because Bunny phrased something
+// unexpectedly would discard the evidence it exists to keep. Strict about the
+// SHAPE, so the stored list cannot be used to smuggle arbitrary blobs into the
+// admin panel.
+export const uploadFailureSchema = z.object({
+  /** TusUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED / ABORTED. */
+  code: z.string().trim().min(1).max(40),
+  /** Which request died: the reserve POST, or a chunk PATCH. */
+  stage: z.enum(["reserve", "chunk"]).nullish(),
+  /** Bunny's HTTP status, or null when nothing answered. */
+  status: z.number().int().min(0).max(599).nullish(),
+  /** What the creator was shown. */
+  message: z.string().trim().min(1).max(300),
+  /** Bunny's own response body, verbatim — the half that names the cause. */
+  providerBody: z.string().max(600).nullish(),
+  /** The reserved slot, so an operator can find the orphan in the library. */
+  bunnyVideoId: z.string().trim().max(64).nullish(),
+  fileName: z.string().trim().max(200).nullish(),
+  fileSize: z
+    .number()
+    .int()
+    .min(0)
+    // Twice the ceiling the client enforces: a bound, not a policy.
+    .max(MAX_VIDEO_BYTES * 2)
+    .nullish(),
+});
+
+// =============================================================================
 // Type exports
 // =============================================================================
 
@@ -387,3 +425,4 @@ export type InitiatePaymentInput = z.infer<typeof initiatePaymentSchema>;
 export type TopUpWalletInput = z.infer<typeof topUpWalletSchema>;
 export type SubmitKycInput = z.infer<typeof submitKycSchema>;
 export type RequestPayoutInput = z.infer<typeof requestPayoutSchema>;
+export type UploadFailureInput = z.infer<typeof uploadFailureSchema>;
