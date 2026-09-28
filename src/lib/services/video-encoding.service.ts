@@ -39,8 +39,21 @@ import {
   isBunnyConfigured,
 } from "@/lib/bunny";
 import type { BunnyWebhookIntent } from "@/lib/bunny-webhook";
+import {
+  BUNNY_FINISHED,
+  BUNNY_RESOLUTION_FINISHED,
+  videoStatus,
+  type VideoStatus,
+} from "@/lib/video-status";
 
 export type EncodingState = "pending" | "processing" | "ready" | "failed" | "untracked";
+
+/**
+ * Re-exported so the API routes and the client can name the publication state
+ * from the same module the encoder lifecycle judges it in.
+ */
+export { videoStatus };
+export type { VideoStatus };
 
 /**
  * Bunny's own status codes, for the raw number shown to admins.
@@ -65,10 +78,15 @@ export const BUNNY_STATUS_LABELS: Record<number, string> = {
 };
 
 const BUNNY_STATUS_ERROR = 5;
-/** 3 — encoding finished; the video is fully available. */
-const BUNNY_STATUS_FINISHED = 3;
-/** 4 — one resolution is done; Bunny: the first of these means it can play. */
-const BUNNY_STATUS_PLAYABLE = 4;
+/**
+ * The three codes that decide readiness live in lib/video-status.ts, which is
+ * the rule every screen reads; these aliases keep the older call sites here
+ * readable. They are the SAME numbers on purpose — two copies of "3 means
+ * finished" is how status 3 came to mean "Transcoding" in one file once
+ * already.
+ */
+const BUNNY_STATUS_FINISHED = BUNNY_FINISHED;
+const BUNNY_STATUS_PLAYABLE = BUNNY_RESOLUTION_FINISHED;
 
 export interface EncodingSnapshot {
   state: EncodingState;
@@ -92,11 +110,16 @@ export function describeEncoding(
 ): EncodingSnapshot {
   const percent = Math.max(0, Math.min(100, Number(progress) || 0));
 
+  // Which of the three publication states this is — decided by the one shared
+  // rule (lib/video-status.ts), so the badge the feed shows and the state this
+  // service acts on can never drift apart.
+  const publication = videoStatus(status, percent);
+
   if (status === null || status === undefined) {
     return { state: "untracked", status: null, progress: 0, label: "Not tracked", error: null };
   }
 
-  if (status === BUNNY_STATUS_ERROR) {
+  if (publication === "FAILED") {
     return {
       state: "failed",
       status,
@@ -106,11 +129,7 @@ export function describeEncoding(
     };
   }
 
-  if (
-    status === BUNNY_STATUS_FINISHED ||
-    status === BUNNY_STATUS_PLAYABLE ||
-    percent >= 100
-  ) {
+  if (publication === "READY") {
     return {
       state: "ready",
       status,
@@ -209,11 +228,16 @@ async function notifyReady(video: {
   title: string;
   slug: string | null;
 }): Promise<void> {
+  // "Ready" and "live" are no longer the same moment. The post went live the
+  // instant it was uploaded (see /api/videos POST), so telling the creator it
+  // "is now live" would describe something that happened minutes ago — and
+  // send them looking for a change that already happened. What is new is that
+  // it can be PLAYED.
   await prisma.notification.create({
     data: {
       userId: video.creatorId,
-      title: "Your video is ready",
-      message: `“${video.title}” finished processing and is now live on Genhub.`,
+      title: "Your video is ready to play",
+      message: `“${video.title}” finished processing, so the “Inachakatwa...” badge is gone and viewers can watch it.`,
       type: "success",
       link: video.slug ? `/video/${video.slug}` : `/video/${video.id}`,
     },
@@ -252,11 +276,15 @@ async function notifyTooShort(video: {
   await prisma.notification.create({
     data: {
       userId: video.creatorId,
-      title: "Your video is too short to publish",
+      // "Stays unpublished" was true when a post was only created once the
+      // encode finished. Now the post was live for the minutes it took to learn
+      // the length, so the creator is told what actually happened to it.
+      title: "Your video is too short to stay published",
       message:
         `“${video.title}” is about ${minutes} minute(s) long. Creator guidelines ` +
-        `require at least ${MIN_VIDEO_DURATION_SECONDS / 60} minutes, so it stays ` +
-        `unpublished. Upload a longer version to go live.`,
+        `require at least ${MIN_VIDEO_DURATION_SECONDS / 60} minutes, so it has ` +
+        `been taken down and cannot be watched. Upload a longer version to put it ` +
+        `back up.`,
       type: "error",
       link: "/creator",
     },
@@ -663,17 +691,32 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
   // The 8-minute floor, enforced where the real duration finally exists: Bunny
   // only reports `lengthSeconds` once it has encoded the file, so this is the
   // first moment the rule can be checked at all. A ready-but-too-short video is
-  // held back instead of published.
+  // held back instead of published (and taken down if it is already up — see
+  // `shouldUnpublish` below).
   const tooShort =
     snapshot.state === "ready" &&
     typeof result.lengthSeconds === "number" &&
     result.lengthSeconds > 0 &&
     result.lengthSeconds < MIN_VIDEO_DURATION_SECONDS;
 
-  // Publish when it becomes playable — and long enough. Only ever flips
-  // false -> true, so a creator who unpublishes is never overridden by the next
-  // poll.
+  // Publish when it becomes playable — and long enough.
   const shouldPublish = snapshot.state === "ready" && !video.isPublished && !tooShort;
+
+  // ...and take down a video that turns out to break the length rule.
+  //
+  // This is the ONE case where the lifecycle moves a video the other way, and
+  // it exists because publication is now instant: a post is live from the
+  // moment it is uploaded, so the old behaviour — never publish it at all —
+  // would leave a two-minute scene sitting in the public feed for the minutes
+  // Bunny needs to report its length. The length rule is a platform rule, not
+  // the creator's preference, so it is not the creator overruling themselves;
+  // their own unpublish is still never reversed by a poll.
+  //
+  // Once only, by construction: this keeps `encodingNotifiedAt`, which takes
+  // the video out of `pendingWhere()`, so the takedown and its notification
+  // happen together exactly once — and a creator who then publishes it by hand
+  // (the documented override) is not fought by the next sweep.
+  const shouldUnpublish = tooShort && video.isPublished;
   const shouldNotify = snapshot.state === "ready" && !video.encodingNotifiedAt && !tooShort;
 
   await prisma.video.update({
@@ -695,6 +738,7 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
         : {}),
       ...(result.lengthSeconds ? { duration: result.lengthSeconds } : {}),
       ...(shouldPublish ? { isPublished: true } : {}),
+      ...(shouldUnpublish ? { isPublished: false } : {}),
       ...((shouldNotify || tooShort) ? { encodingNotifiedAt: new Date() } : {}),
     },
   });
@@ -829,34 +873,23 @@ export async function refreshCreatorPendingEncodings(
   return results;
 }
 
-/** Cron entry point: every creator, oldest first so nothing is starved. */
-export async function refreshPendingEncodings(limit: number = 25): Promise<{
-  checked: number;
-  published: number;
-  ready: number;
-  failed: number;
-}> {
-  const pending = await prisma.video.findMany({
-    // The cron runs on its own schedule, so it bypasses the re-check floor and
-    // takes whatever has been waiting longest first — nothing gets starved by a
-    // burst of new uploads.
-    where: pendingWhere(),
-    orderBy: { encodingCheckedAt: "asc" },
-    take: limit,
-    select: { id: true },
-  });
-
-  let published = 0;
-  let ready = 0;
-  let failed = 0;
-
-  for (const { id } of pending) {
-    const result = await refreshVideoEncoding(id);
-    if (!result) continue;
-    if (result.published) published++;
-    if (result.snapshot.state === "ready") ready++;
-    if (result.snapshot.state === "failed") failed++;
-  }
-
-  return { checked: pending.length, published, ready, failed };
-}
+// NOTE — there is deliberately no sibling `refreshPendingEncodings` sweep here.
+//
+// There used to be: a cron worker that walked every creator's unfinished
+// uploads on a schedule, publishing and notifying. It has been removed, because
+// it was a SECOND source of truth for the same fact and the only one that could
+// disagree with the first. Readiness is decided by "can Bunny serve this yet",
+// and three things already answer that without a clock:
+//
+//   1. POST /api/webhooks/bunny — Bunny calls us the instant an encode finishes;
+//      this is the source of truth for the transition to READY.
+//   2. GET /api/videos/[id] — the owner's or an admin's own page read refreshes a
+//      stale row (see ENCODING_RECHECK_FLOOR_MS).
+//   3. GET /api/creator/videos — a creator looking at their dashboard refreshes
+//      their own pending uploads.
+//
+// refreshVideoEncoding() below stays the one place any of them acts through, so
+// publication, the 8-minute floor and the once-only notification cannot drift.
+// Removing the sweep costs nothing on the happy path and removes a worker whose
+// absence would otherwise read as "the platform is broken" on a schedule nobody
+// was watching — which is exactly what happened.

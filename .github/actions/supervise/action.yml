@@ -2,13 +2,13 @@
 # GENHUB - "Run anything the schedule missed", for any workflow to reuse
 #
 # Every scheduled worker also pokes the supervisor, so a delivery of *any* file
-# does the work of all four (§4.0.4). GitHub Actions does not keep the intervals
-# §4.0.1 asks for — measured on this repository, a `*/5` schedule arrived every
-# 138-341 minutes — so a worker that only ran when its own file arrived sat
-# hours past its budget, and an alarm that is red most of the day stops being
-# read.
+# does the work of all of them (§4.0.4). GitHub Actions does not keep the
+# intervals §4.0.1 asks for — measured on this repository, a `*/10` schedule
+# arrived every 137-336 minutes — so a worker that only ran when its own file
+# arrived sat hours past its budget, and an alarm that is red most of the day
+# stops being read.
 #
-# A composite action rather than the same ten lines pasted into five workflows:
+# A composite action rather than the same ten lines pasted into every workflow:
 # the guard is the part that must not drift, and the endpoint is the part that
 # will change if the scheduler ever moves off GitHub.
 #

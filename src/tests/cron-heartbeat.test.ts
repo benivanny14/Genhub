@@ -46,7 +46,7 @@ async function waitFor(check: () => Promise<boolean>, timeoutMs = 5000) {
   throw new Error("waitFor timed out");
 }
 
-const WORKER = "poll-encoding" as const;
+const WORKER = "earnings-digest" as const;
 
 /**
  * Clear the whole table, not just this file's worker.
@@ -540,7 +540,7 @@ describe("attention: which worker, and for how long", () => {
   }
 
   const healthy = row({ id: "release-earnings", state: "ok", silentForMinutes: 5 });
-  const never = row({ id: "poll-encoding", state: "never", silentForMinutes: null });
+  const never = row({ id: "earnings-digest", state: "never", silentForMinutes: null });
   const running = row({ id: "renew-subscriptions", state: "running", silentForMinutes: 2 });
   const late = row({
     id: "reconcile-payments",
@@ -581,10 +581,10 @@ describe("attention: which worker, and for how long", () => {
   });
 
   it("puts the longest silence first when two workers are in the same state", () => {
-    const older = row({ id: "poll-encoding", state: "late", silentForMinutes: 600 });
+    const older = row({ id: "earnings-digest", state: "late", silentForMinutes: 600 });
     const newer = row({ id: "reconcile-payments", state: "late", silentForMinutes: 45 });
     expect(workersNeedingAttention([newer, older]).map((w) => w.id)).toEqual([
-      "poll-encoding",
+      "earnings-digest",
       "reconcile-payments",
     ]);
   });
@@ -667,11 +667,11 @@ describe("recovery: what the notice says", () => {
 
   it("names every worker, so one line covers a whole recovery", () => {
     const line = recoverySummary([
-      rec({ id: "poll-encoding", name: "Publish finished uploads" }),
+      rec({ id: "earnings-digest", name: "Weekly earnings digest" }),
       rec({ id: "release-earnings", name: "Release matured earnings" }),
     ]);
     expect(line.split(" · ")).toHaveLength(2);
-    expect(line).toContain("Publish finished uploads");
+    expect(line).toContain("Weekly earnings digest");
     expect(line).toContain("Release matured earnings");
   });
 });

@@ -33,7 +33,7 @@
 // that worker was supposed to keep — it can never run a job more often than its
 // schedule would have.
 //
-// Three of the four workers may be restarted this way; `renew-subscriptions`
+// Every worker but one may be restarted this way; `renew-subscriptions`
 // may not, ever. It sends a USSD charge request to a fan's phone when their
 // wallet cannot cover a renewal, which makes it the one run that can cost
 // somebody money they did not ask to spend. A missed renewal is recoverable by a
@@ -87,7 +87,7 @@
 //
 // The blind spot, stated rather than hidden: GitHub disables *every* scheduled
 // workflow in a repository after 60 days without activity — this one included,
-// at the same moment as the four workers it watches. For that specific failure
+// at the same moment as the workers it watches. For that specific failure
 // only a monitor outside GitHub helps, which is why /api/health answers 503.
 // See PRODUCTION.md §4.0.2.
 // =============================================================================
@@ -264,7 +264,6 @@ export function alertMessage(baseUrl, report, extras = []) {
 export const RECOVERABLE_WORKERS = [
   "release-earnings",
   "reconcile-payments",
-  "poll-encoding",
   "earnings-digest",
 ];
 
@@ -453,7 +452,7 @@ if (isCli) {
     .replace(/\/+$/, "");
 
   if (!baseUrl) {
-    // Skips clean rather than failing, like the four worker workflows: not
+    // Skips clean rather than failing, like the worker workflows: not
     // configured yet is not the same as broken.
     console.log("APP_URL is not set — nothing to watch. See PRODUCTION.md §4.0.1.");
     process.exit(0);

@@ -52,12 +52,12 @@ export async function POST(request: NextRequest) {
     try {
       body = await request.json();
     } catch {
-      return api.validation("Expected a JSON body like { \"worker\": \"poll-encoding\" }.");
+      return api.validation("Expected a JSON body like { \"worker\": \"release-earnings\" }.");
     }
 
     const parsed = bodySchema.safeParse(body);
     if (!parsed.success) {
-      return api.validation("Expected a JSON body like { \"worker\": \"poll-encoding\" }.");
+      return api.validation("Expected a JSON body like { \"worker\": \"release-earnings\" }.");
     }
 
     const def = findWorker(parsed.data.worker);

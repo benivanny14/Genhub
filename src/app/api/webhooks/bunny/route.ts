@@ -5,12 +5,18 @@
 // Bunny posts a tiny callback whenever a video changes state — most importantly
 // `Status: 3` (Finished), which is the moment a scene becomes playable. This
 // route is what turns that callback into a database write, so a finished encode
-// goes live within seconds instead of waiting for a scheduled poll.
+// goes playable within seconds.
 //
-// It is the fast path, not the only path: the creator dashboard refreshes a
-// creator's own pending uploads on read (see /api/creator/videos) and the
-// poll-encoding worker sweeps everyone, so a missed callback delays publication
-// at most until the next read — it never strands a video.
+// THIS IS THE SOURCE OF TRUTH for the transition to READY. There is no
+// scheduled encoding poller any more (see the note in
+// lib/services/video-encoding.service.ts): a push is the only thing that can
+// observe an encode finishing the moment it finishes, and everything else — the
+// creator's dashboard read, the owner's page read — is a fallback for a
+// deployment whose callbacks are misconfigured.
+//
+// A missed callback therefore degrades, rather than strands: the two on-read
+// paths still refresh the row (with a re-check floor), and the client poller on
+// an open page picks the new state up as soon as any of them writes it.
 //
 // SECURITY
 //   * The body is signature-checked BEFORE it is parsed. Bunny signs the exact

@@ -46,6 +46,13 @@ import {
 import Link from "next/link";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
+import {
+  PROCESSING_BADGE_LABEL,
+  PROCESSING_BADGE_TITLE,
+  PROCESSING_POLL_MAX_MS,
+  PROCESSING_POLL_MS,
+  type VideoStatus,
+} from "@/lib/video-status";
 import { DEMO_VIDEOS } from "@/lib/demo-data";
 import { demoDataEnabled } from "@/lib/demo-mode";
 // Comments render below the fold — split them out of the initial bundle too
@@ -129,6 +136,13 @@ interface VideoData {
     label: string;
     error: string | null;
   };
+  /**
+   * The publication state in one word (see lib/video-status.ts). `PROCESSING`
+   * is a post that exists and is visible but cannot be played yet — the page
+   * shows its cover with an "Inachakatwa..." badge and mounts the player in
+   * place, without a reload, the moment it turns READY.
+   */
+  status?: VideoStatus;
   galleryImages?: { id: string; url: string; position: number }[];
   creator: {
     id: string;
@@ -527,6 +541,45 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     fetchUser();
   }, [fetchVideo, fetchUser]);
 
+  //
+  // The post is published the moment the upload lands (see /api/videos POST),
+  // so the page can be open on a video that is still being transcoded — and
+  // "refresh in a few minutes" is not an answer when the finishing line is
+  // seconds away and the page cannot see it. This re-reads the video while it
+  // is in flight; the response carries a playback URL as soon as there is one,
+  // and the render below then swaps the placeholder for the player with no
+  // navigation and no lost scroll position.
+  //
+  // It is deliberately bounded and quiet: nothing happens while the tab is
+  // hidden, nothing happens for a video that has settled, and after
+  // PROCESSING_POLL_MAX_MS (a stuck encode, an upload that never arrived) the
+  // polling stops rather than asking a question with no answer for hours. For
+  // a viewer who is not the owner this reads the stored state — advancement
+  // stays where it belongs, in the webhook, the cron sweep and the owner's own
+  // read, so a stranger's open tab can never spend an API call at the host.
+  useEffect(() => {
+    if (!video) return;
+    const inFlightState =
+      video.encoding?.state === "pending" ||
+      video.encoding?.state === "processing" ||
+      video.status === "PROCESSING";
+    if (!inFlightState) return;
+
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (Date.now() - startedAt > PROCESSING_POLL_MAX_MS) {
+        clearInterval(timer);
+        return;
+      }
+      if (document.hidden) return;
+      void fetchVideo();
+    }, PROCESSING_POLL_MS);
+    return () => clearInterval(timer);
+    // The id and the state, not the whole object: every poll replaces the video
+    // object, and depending on it would restart the interval on every answer.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [video?.id, video?.encoding?.state, video?.status, fetchVideo]);
+
   function rankRelated<T extends RelatedVideo>(pool: T[], current: RelatedVideo): T[] {
     return [...pool].sort((a, b) => score(b) - score(a));
     function score(v: T): number {
@@ -881,8 +934,12 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   // site rather than a video that is on its way. So say what is true instead.
   const encoding = video.encoding;
   const stillProcessing =
-    encoding?.state === "pending" || encoding?.state === "processing";
-  const processingFailed = encoding?.state === "failed";
+    encoding?.state === "pending" ||
+    encoding?.state === "processing" ||
+    // Belt and braces with the derived state: the two are computed from the
+    // same row, so they can only disagree if one of them lags a render behind.
+    video.status === "PROCESSING";
+  const processingFailed = encoding?.state === "failed" || video.status === "FAILED";
   const isOwner = user?.id === video.creator.id;
   const notPlayable = stillProcessing || processingFailed;
 
@@ -925,6 +982,29 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
    * the viewer to sign in or open the purchase sheet, which is the whole point
    * of the intro: entice, then charge.
    */
+  /**
+   * The checkout door, with the one rule the page's own state enforces.
+   *
+   * A post is published the moment it is uploaded, so its price is on screen
+   * while Bunny is still transcoding it — and a customer who taps Buy on a
+   * scene with no manifest would pay for something they cannot watch. The
+   * server refuses the charge outright (see /api/payments/purchase), and this
+   * is the same refusal where the customer can actually read it, before a USSD
+   * prompt reaches their phone.
+   */
+  function openPurchase() {
+    if (notPlayable) {
+      toast(
+        "info",
+        processingFailed
+          ? "This scene could not be prepared for playback, so it cannot be bought."
+          : "This scene is still being prepared — it becomes available to buy in a few minutes."
+      );
+      return;
+    }
+    setShowPurchaseModal(true);
+  }
+
   function unlockFullScene() {
     if (!effectiveUser) {
       router.push(
@@ -936,7 +1016,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       toast("info", "We are still checking your last payment — please do not pay again.");
       return;
     }
-    setShowPurchaseModal(true);
+    openPurchase();
   }
 
   /** The trailer ran to its end — that is the moment to make the offer. */
@@ -1021,7 +1101,33 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
         {/* Video Player */}
         {notPlayable ? (
-          <div className="aspect-video bg-surface-400/40 rounded-2xl flex flex-col items-center justify-center gap-3 px-6 text-center">
+          /*
+            A post that exists but cannot be played yet. It shows what the post
+            IS — its cover — with the "Inachakatwa..." badge over it, instead of
+            an empty box that makes a working upload look like a broken site.
+            Nothing here plays: there is no manifest to play and no controls to
+            press, which is the whole point of the state.
+
+            The page re-reads the video in the background (see the polling
+            effect), so this branch is replaced by the real player in place —
+            no reload, no lost scroll position — the moment the host finishes.
+          */
+          <div className="relative aspect-video overflow-hidden rounded-2xl bg-surface-400/40">
+            {video.thumbnailUrl && !processingFailed && (
+              <Image
+                src={video.thumbnailUrl}
+                alt={video.title}
+                fill
+                className="object-cover opacity-60"
+                sizes="(max-width: 1024px) 100vw, 1024px"
+                priority
+              />
+            )}
+            <div
+              className={`absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center ${
+                processingFailed ? "" : "bg-black/45 backdrop-blur-[2px]"
+              }`}
+            >
             {processingFailed ? (
               <>
                 <XCircle className="w-12 h-12 text-red-400/70" />
@@ -1036,30 +1142,30 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               </>
             ) : (
               <>
-                <Loader2 className="w-12 h-12 text-amber-400/80 animate-spin" />
-                <p className="text-base font-medium text-white/90">
-                  This video is still processing
+                <span
+                  className="inline-flex items-center gap-2 rounded-full bg-black/70 px-4 py-2 text-sm font-semibold text-amber-200 ring-1 ring-amber-400/40"
+                  title={PROCESSING_BADGE_TITLE}
+                >
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {PROCESSING_BADGE_LABEL}
+                </span>
+                <p className="text-xs font-medium uppercase tracking-wider text-amber-200/70">
+                  {encoding?.label || "Processing"} · {encoding?.progress ?? 0}%
                 </p>
-                <p className="text-sm text-white/45 max-w-md">
+                <div className="w-56 bg-white/15 rounded-full h-1.5 overflow-hidden">
+                  <div
+                    className="bg-amber-400 h-full transition-all duration-500"
+                    style={{ width: `${Math.max(3, encoding?.progress ?? 0)}%` }}
+                  />
+                </div>
+                <p className="max-w-md text-xs text-white/65">
                   {isOwner
-                    ? "Your video is being prepared into its playback qualities. It plays as soon as processing finishes — nothing else is needed from you."
-                    : "It is not playable just yet. Refresh in a few minutes."}
+                    ? "Your post is already live on your profile with this badge. It becomes playable here on its own the moment processing finishes — you do not need to reload."
+                    : "This scene is being prepared for playback. It starts here by itself as soon as it is ready."}
                 </p>
-                {typeof encoding?.progress === "number" && (
-                  <div className="w-56 bg-white/10 rounded-full h-1.5 overflow-hidden">
-                    <div
-                      className="bg-amber-400 h-full transition-all duration-500"
-                      style={{ width: `${Math.max(3, encoding.progress)}%` }}
-                    />
-                  </div>
-                )}
-                {encoding && (
-                  <p className="text-xs text-white/35">
-                    {encoding.label} · {encoding.progress}%
-                  </p>
-                )}
               </>
             )}
+            </div>
           </div>
         ) : videoSrc ? (
           <div className="relative">
@@ -1445,8 +1551,14 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               </div>
             ) : !canPlayFull && effectiveUser ? (
               <button
-                onClick={() => setShowPurchaseModal(true)}
-                className="btn-brand flex items-center gap-2"
+                onClick={openPurchase}
+                disabled={notPlayable}
+                title={
+                  notPlayable
+                    ? "This scene is still being prepared for playback"
+                    : undefined
+                }
+                className="btn-brand flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Shield className="w-4 h-4" />
                 Buy — {format(video.price)}

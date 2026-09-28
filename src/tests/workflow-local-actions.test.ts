@@ -3,7 +3,7 @@
 //
 // Why this exists. `.github/actions/supervise` is a local composite action, and
 // a local action is resolved from the RUNNER'S WORKSPACE — which is empty until
-// `actions/checkout` fills it. Six workflows call it. None of them checked out,
+// `actions/checkout` fills it. The worker workflows call it. None checked out,
 // so every scheduled run of all six failed in under a second, before a single
 // request was made, with:
 //
@@ -209,7 +209,10 @@ describe("workflow local actions", () => {
     // Guards the guard: if the `./…` form ever stops appearing, the case above
     // would pass while checking nothing.
     const callers = workflows.filter((workflow) => localUses(workflow.source).length > 0);
-    expect(callers.length).toBeGreaterThanOrEqual(6);
+    // Five since the encoding poll workflow was removed; the floor moves with
+    // the repository rather than pinning a number that a workflow change makes
+    // wrong. What it protects is that the guard above is checking something.
+    expect(callers.length).toBeGreaterThanOrEqual(5);
     expect(readdirSync(ACTIONS_DIR).length).toBeGreaterThan(0);
   });
 

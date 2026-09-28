@@ -3,7 +3,13 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Play, Clock, Eye, Heart, Bookmark, BadgeCheck, Lock } from "lucide-react";
+import { Play, Clock, Eye, Heart, Bookmark, BadgeCheck, Lock, Loader2 } from "lucide-react";
+import { useVideoStatuses } from "@/hooks/useVideoStatuses";
+import {
+  PROCESSING_BADGE_LABEL,
+  PROCESSING_BADGE_TITLE,
+  type VideoStatus,
+} from "@/lib/video-status";
 import { formatTZS, formatDuration } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
@@ -30,6 +36,16 @@ interface VideoCardProps {
   teaserDuration: number;
   likesCount?: number;
   isPremium?: boolean;
+  /**
+   * Publication state from the API. `PROCESSING` means the post is real and
+   * visible but the host is still transcoding it: the card shows the cover and
+   * an "Inachakatwa..." badge, and nothing that could try to play.
+   */
+  status?: VideoStatus;
+  /** False while the video cannot be served yet — no hover preview. */
+  playable?: boolean;
+  /** Bunny's 0-100, shown under the badge while processing. */
+  encodeProgress?: number;
   creator: {
     id: string;
     /** Unique public handle; shown as @username when present. */
@@ -54,11 +70,31 @@ export default function VideoCard(video: VideoCardProps) {
   const previewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewActiveRef = useRef(false);
 
+  // A processing post is live but cannot play, so the card watches it and
+  // turns into a normal card by itself when the host finishes — no reload, and
+  // no hover spending a request on a playlist that 404s until then.
+  const initialStatus: VideoStatus = video.status ?? "READY";
+  const liveStatus = useVideoStatuses(
+    initialStatus === "PROCESSING" ? [video.id] : []
+  );
+  const live = liveStatus[video.id];
+  const status: VideoStatus = live?.status ?? initialStatus;
+  const processing = status === "PROCESSING";
+  const progress = Math.max(
+    0,
+    Math.min(100, live?.progress ?? video.encodeProgress ?? 0)
+  );
+
   // The creator's own trailer when there is one; otherwise the clip cut from
   // the scene, so a PAID card previews like any other card instead of sitting
   // there as a still. Both are HLS manifests our own routes serve, so the card
   // never talks to the CDN directly.
-  const previewSrc = video.teaserUrl || video.introUrl || null;
+  //
+  // Null unless the host can serve it: there is no manifest to load while the
+  // video is being transcoded (or after an encode failed), and a hover that
+  // fetches a 404 is how a card that is working correctly looks broken.
+  const canPlay = !processing && video.playable !== false;
+  const previewSrc = canPlay ? video.teaserUrl || video.introUrl || null : null;
 
   // Hover preview — lazily load hls.js only when the user actually hovers
   function startPreview() {
@@ -203,7 +239,10 @@ export default function VideoCard(video: VideoCardProps) {
             src={video.thumbnailUrl}
             alt={video.title}
             fill
-            className="object-cover group-hover:scale-105 transition-transform duration-500"
+            className={cn(
+              "object-cover transition-transform duration-500",
+              processing ? "opacity-70" : "group-hover:scale-105"
+            )}
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
           />
         ) : (
@@ -215,16 +254,43 @@ export default function VideoCard(video: VideoCardProps) {
           </div>
         )}
 
-        {/* Play Button Overlay — and out of the way of a running preview */}
-        <div
-          className={`absolute inset-0 flex items-center justify-center transition-opacity duration-300 ${
-            previewing ? "opacity-0" : "opacity-0 group-hover:opacity-100"
-          }`}
-        >
-          <div className="w-14 h-14 rounded-full bg-brand-500/80 backdrop-blur-sm flex items-center justify-center shadow-lg shadow-brand-500/30">
-            <Play className="w-6 h-6 text-white fill-white ml-0.5" />
+        {/* Play Button Overlay — and out of the way of a running preview. Not
+            rendered at all while processing: a play button over a video that
+            cannot play is the one thing this badge exists to replace. */}
+        {!processing && (
+          <div
+            className={`absolute inset-0 flex items-center justify-center transition-opacity duration-300 ${
+              previewing ? "opacity-0" : "opacity-0 group-hover:opacity-100"
+            }`}
+          >
+            <div className="w-14 h-14 rounded-full bg-brand-500/80 backdrop-blur-sm flex items-center justify-center shadow-lg shadow-brand-500/30">
+              <Play className="w-6 h-6 text-white fill-white ml-0.5" />
+            </div>
           </div>
-        </div>
+        )}
+
+        {/* "Inachakatwa..." — the post is live, the bytes are still becoming a
+            video. It replaces the play affordance rather than sitting beside
+            it, and it carries the real percentage so a creator can tell a slow
+            encode from a stuck one. */}
+        {processing && (
+          <div
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/45 backdrop-blur-[2px] px-3 text-center"
+            title={PROCESSING_BADGE_TITLE}
+          >
+            <span className="inline-flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs font-semibold text-amber-200 ring-1 ring-amber-400/40">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              {PROCESSING_BADGE_LABEL}
+            </span>
+            <div className="w-24 bg-white/20 rounded-full h-1 overflow-hidden">
+              <div
+                className="bg-amber-400 h-full transition-all duration-500"
+                style={{ width: `${Math.max(4, progress)}%` }}
+              />
+            </div>
+            <span className="text-[10px] font-medium text-white/70">{progress}%</span>
+          </div>
+        )}
 
         {/* Preview indicator */}
         {previewing && (

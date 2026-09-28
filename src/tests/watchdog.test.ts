@@ -228,8 +228,8 @@ describe("describeStoppedWorkers", () => {
   });
 
   it("falls back to the id when the name is missing", () => {
-    expect(describeStoppedWorkers({ workers: [{ id: "poll-encoding" }] })).toContain(
-      "poll-encoding"
+    expect(describeStoppedWorkers({ workers: [{ id: "reconcile-payments" }] })).toContain(
+      "reconcile-payments"
     );
   });
 

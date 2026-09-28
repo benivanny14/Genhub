@@ -53,7 +53,6 @@ import {
 export const SUPERVISOR_WORKERS: readonly CronWorkerId[] = [
   "release-earnings",
   "reconcile-payments",
-  "poll-encoding",
   // Safe to start automatically: it sends an email, reaches no phone, and sends
   // at most one digest per creator per week no matter how often it runs.
   "earnings-digest",

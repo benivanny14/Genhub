@@ -95,23 +95,32 @@ export default function SystemReference() {
             server and is never handed to the browser.
           </Step>
           <Step n={2} title="Upload directly from the browser">
-            The browser PATCHes the file to <Code>video.bunnycdn.com/tusupload</Code> in
-            32&nbsp;MiB chunks. A dropped connection resumes from the last
-            acknowledged offset instead of restarting, and each chunk is retried a
-            few times. This path is <Code>src/lib/tus-upload.ts</Code>.
+            The browser PATCHes the file to <Code>video.bunnycdn.com/tusupload</Code>{" "}
+            in chunks that follow the connection: 5&nbsp;MiB on a phone, up to
+            32&nbsp;MiB once a chunk proves the link is fast. A dropped connection
+            resumes from the last acknowledged offset instead of restarting, each
+            chunk is retried a few times, and the screen is held awake for the
+            length of the transfer — on a phone the usual cause of a frozen bar is
+            the screen locking, not the network. This path is{" "}
+            <Code>src/lib/tus-upload.ts</Code>.
           </Step>
-          <Step n={3} title="Store the row">
-            <Code>POST /api/videos</Code> writes the video row <em>unpublished</em>{" "}
-            with <Code>encodingStatus = 0</Code>. It is not live yet: the host has
-            accepted the file but has not finished transcoding it, and publishing
-            now would put a dead player in front of paying viewers.
+          <Step n={3} title="Store the row, live, immediately">
+            <Code>POST /api/videos</Code> writes the row <em>published</em> with{" "}
+            <Code>encodingStatus = 0</Code>. The post is on the creator&apos;s
+            profile and in the feed straight away, marked{" "}
+            <Code>status = PROCESSING</Code> — an &ldquo;Inachakatwa...&rdquo; badge
+            over the cover, with nothing to press. Only playback waits for the
+            host, and a scene Bunny fails is kept out of the public feed.
           </Step>
           <Step n={4} title="The host calls us back">
             Bunny Stream posts a signed callback to{" "}
             <Code>POST /api/webhooks/bunny</Code> on every state change. On{" "}
             <Code>Status 3</Code> (Finished) the row is refreshed from the API and
-            published, and the creator is notified once. This is what makes a
-            finished encode go live within seconds.
+            the creator is notified once. It is already published, so nothing has
+            to flip: the badge is what changes. Open pages learn it by polling{" "}
+            <Code>POST /api/videos/status</Code> and swap the placeholder for the
+            player in place; the cron sweep and the creator&apos;s own page read
+            cover the case where no webhook is configured.
           </Step>
         </div>
       </Section>
@@ -206,16 +215,12 @@ export default function SystemReference() {
             pending uploads on read (with a re-check floor), so a creator watching
             their page advances their own video.
           </li>
-          <li>
-            <strong>Worker sweep</strong> —{" "}
-            <Code>POST /api/cron/poll-encoding</Code> (worker id{" "}
-            <Code>poll-encoding</Code>) covers everyone, including when nobody is
-            looking.
-          </li>
         </ul>
         <p className="text-white/60">
-          All three call the same lifecycle code, so publishing, the 8-minute
-          duration floor and the once-only notification cannot drift between them.
+          There is <strong>no scheduled encoding poller</strong>: the webhook is
+          the source of truth, and the two on-read paths are the fallback. They
+          all call the same lifecycle code, so publication, the 8-minute duration
+          floor and the once-only notification cannot drift between them.
         </p>
       </Section>
 
@@ -253,9 +258,6 @@ export default function SystemReference() {
           Jobs panels on Overview show their live health.
         </p>
         <ul className="list-disc pl-5 space-y-1">
-          <li>
-            <Code>poll-encoding</Code> — publish videos the host has finished.
-          </li>
           <li>
             <Code>release-earnings</Code> — move matured funds out of the 14-day
             hold.

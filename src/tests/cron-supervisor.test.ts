@@ -117,7 +117,7 @@ describe("planSupervisorRuns", () => {
   it("carries the state each decision was made from", () => {
     // Read by the hold alert to tell "overdue, and nobody may start it" from
     // "never ran" — the first is a person's job now, the others are not.
-    const plan = planSupervisorRuns(healthOf([late("release-earnings"), worker("poll-encoding", { state: "never" })]));
+    const plan = planSupervisorRuns(healthOf([late("release-earnings"), worker("earnings-digest", { state: "never" })]));
 
     expect(plan.run[0].state).toBe("late");
     expect(plan.held[0].state).toBe("never");
@@ -155,21 +155,21 @@ describe("planSupervisorRuns", () => {
       healthOf([
         late("release-earnings", 400),
         late("renew-subscriptions", 1333),
-        late("poll-encoding", 47),
+        late("earnings-digest", 47),
         late("reconcile-payments", 35),
       ])
     );
 
-    expect(plan.run.map((d) => d.id)).toEqual(["release-earnings", "poll-encoding", "reconcile-payments"]);
+    expect(plan.run.map((d) => d.id)).toEqual(["release-earnings", "earnings-digest", "reconcile-payments"]);
     expect(plan.held.map((d) => d.id)).toEqual(["renew-subscriptions"]);
   });
 
   it("starts with the worker that has been quiet longest", () => {
     const plan = planSupervisorRuns(
-      healthOf([late("poll-encoding", 47), late("release-earnings", 400), late("reconcile-payments", 35)])
+      healthOf([late("earnings-digest", 47), late("release-earnings", 400), late("reconcile-payments", 35)])
     );
 
-    expect(plan.run.map((d) => d.id)).toEqual(["release-earnings", "poll-encoding", "reconcile-payments"]);
+    expect(plan.run.map((d) => d.id)).toEqual(["release-earnings", "earnings-digest", "reconcile-payments"]);
   });
 
   it("leaves a healthy or working worker alone, without a sentence about it", () => {
@@ -201,7 +201,7 @@ describe("planSupervisorRuns", () => {
     (state) => {
       // Both mean the job IS being triggered and dies when it runs, so starting
       // it again recovers nothing — it needs the crash fixed.
-      const plan = planSupervisorRuns(healthOf([worker("poll-encoding", { state, detail: "boom" })]));
+      const plan = planSupervisorRuns(healthOf([worker("earnings-digest", { state, detail: "boom" })]));
 
       expect(plan.run).toEqual([]);
       expect(plan.held[0].reason).toContain(state);
@@ -280,7 +280,7 @@ describe("summarizeSupervisorRun", () => {
     const line = summarizeSupervisorRun(
       [
         { ...decision("release-earnings"), ran: true, summary: "Released TZS 0 for 0 creator(s)" },
-        { ...decision("poll-encoding"), ran: true, summary: "3 checked, 1 published, 0 failed" },
+        { ...decision("earnings-digest"), ran: true, summary: "3 checked, 1 published, 0 failed" },
       ],
       []
     );
@@ -310,13 +310,13 @@ describe("summarizeSupervisorRun", () => {
     // the same way is how a broken worker gets reported as a busy one.
     const line = summarizeSupervisorRun(
       [
-        { ...decision("poll-encoding"), ran: false, error: "Bunny API 401" },
+        { ...decision("earnings-digest"), ran: false, error: "SMTP 421 too many connections" },
         { ...decision("reconcile-payments"), ran: false, summary: "a run is already in flight" },
       ],
       []
     );
 
-    expect(line).toContain("FAILED: poll-encoding (Bunny API 401)");
+    expect(line).toContain("FAILED: earnings-digest (SMTP 421 too many connections)");
     expect(line).toContain("Skipped 1 that were already running: reconcile-payments");
   });
 
@@ -348,7 +348,7 @@ describe("summarizeSupervisorRun", () => {
 
 describe("snapshotSupervisorHealth", () => {
   it("publishes the same verdict word /api/health would", () => {
-    const health = healthOf([late("poll-encoding"), worker("release-earnings", { state: "ok" })]);
+    const health = healthOf([late("earnings-digest"), worker("release-earnings", { state: "ok" })]);
     const snapshot = snapshotSupervisorHealth(health);
 
     expect(snapshot.verdict).toBe("late");

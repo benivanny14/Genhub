@@ -44,7 +44,6 @@ export type CronWorkerId =
   | "release-earnings"
   | "reconcile-payments"
   | "renew-subscriptions"
-  | "poll-encoding"
   | "earnings-digest";
 
 export interface CronWorkerDef {
@@ -65,7 +64,7 @@ export interface CronWorkerDef {
    *   * this is how long the SCHEDULER can be trusted to stay quiet, and it is
    *     the only thing an alarm can be built on.
    *
-   * It used to be "roughly 4 missed runs" (20 / 40 / 180 across the four),
+   * It used to be "roughly 4 missed runs" (20 / 40 / 180 across the workers),
    * which assumes the schedule fires often enough for four misses to be a lot.
    * GitHub Actions does not: measured on this repository, the file asking for a
    * run every five minutes was delivered every 138-341 minutes, and the hourly
@@ -114,10 +113,17 @@ export interface CronWorkerDef {
  * Actions.
  *
  * Six hours, because that is the measured shape of the only scheduler this repo
- * has: GitHub delivered ~14 runs a day across the five workflow files (worst
+ * has: GitHub delivered ~14 runs a day across the worker workflow files (worst
  * gap between any two of them: 3h32), so a poke every ≤ 6 h is the promise the
  * platform actually keeps — see `staleAfterMinutes` above and §4.0.4. It is not
  * a cadence any worker *wants*; it is the one the alarm can be honest about.
+ *
+ * NOTE: the video encoding worker is no longer one of these, and that is not an
+ * oversight. It is the one lifecycle whose single source of truth is a push
+ * (POST /api/webhooks/bunny) with two pull fallbacks that need no scheduler at
+ * all: the creator's own dashboard read and the owner/admin read of a video
+ * page both refresh a stale row. A video's readiness is nobody's money and
+ * nobody's deadline, so it is the one job that did not need a clock.
  */
 const POKES_STOPPED_AFTER_MINUTES = 360;
 
@@ -151,25 +157,13 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     consequence: "Memberships expire instead of renewing, and the fan is never retried.",
     everyMinutes: 60,
     staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
-    // Longest of the four: it sends one USSD push per subscriber, and each push
+    // Longest of them: it sends one USSD push per subscriber, and each push
     // is a round trip to the gateway.
     inFlightGraceMinutes: 15,
     schedule: "vercel.json or .github/workflows/renew-subscriptions.yml",
     // The only worker that can charge someone who did not ask, right now: when
     // the wallet cannot cover a renewal it sends a USSD prompt to the fan.
     sendsCustomerRequests: true,
-  },
-  {
-    id: "poll-encoding",
-    name: "Publish finished uploads",
-    consequence:
-      "A transcoded video is never published, so the creator waits for a video that is already ready.",
-    // vercel.json asks for 3 minutes; GitHub Actions cannot go below 5.
-    everyMinutes: 5,
-    staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
-    inFlightGraceMinutes: 5,
-    schedule: "vercel.json or .github/workflows/poll-encoding.yml",
-    sendsCustomerRequests: false,
   },
   {
     id: "earnings-digest",

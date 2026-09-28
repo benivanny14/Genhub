@@ -709,50 +709,80 @@ per worker, all four in `.github/workflows/`:
 | `/api/cron/release-earnings` | hourly | 14-day holding release |
 | `/api/cron/reconcile-payments` | every 10 min | settle PENDING gateway orders, flag never-settled ones as under investigation |
 | `/api/cron/renew-subscriptions` | hourly (minute 15) | charge memberships that expire within 24h |
-| `/api/cron/poll-encoding` | every 5 min | publish uploaded videos once Bunny Stream can serve them, and tell the creator |
+| `/api/cron/earnings-digest` | hourly (checks; sends at most weekly per creator) | tell creators when their money clears the 14-day hold |
+
+Video publication is deliberately **not** on that list. It is driven by a push
+from Bunny with two on-read fallbacks and no scheduler at all — see §3.2.
 
 `vercel.json` deliberately ships an empty `crons` array: the same schedules
 there fail a **Hobby** deployment outright. On **Pro**, move them back into
 `vercel.json` for tighter timing — the exact JSON is in §4.0.1.
 
-### 3.2 Video processing (why a new upload is not live immediately)
+### 3.2 Video processing (a post is live before its video can play)
 
 Bunny Stream accepts an upload seconds after the browser starts sending, then
-spends minutes transcoding. A video Bunny has to transcode is therefore created
-**unpublished** and released by `/api/cron/poll-encoding` the moment Bunny
-reports it playable; the creator gets one notification at that point.
+spends minutes transcoding. Publication is therefore **instant and playback
+waits**: `POST /api/videos` writes the row **published** with
+`encodingStatus = 0`, so the post is on the creator's profile and in the feed
+straight away with an **“Inachakatwa...”** badge over its cover, and it turns
+into a playable video in place — no reload — the moment Bunny finishes.
 
-`encodingStatus` on the video row is what tracks this:
+WHAT DECIDES IT. `status` is derived, never stored: `PROCESSING` / `READY` /
+`FAILED` come from Bunny's `encodingStatus` + `encodeProgress` through one rule
+(`src/lib/video-status.ts`), which is the same rule `describeEncoding()` acts on.
+A second stored status column would be a copy a missed callback could leave
+permanently wrong.
 
-| Bunny status | Meaning |
-|---|---|
-| `0` / `1` | queued / uploaded — held |
-| `2` / `3` | processing — held, with a live percentage in the creator dashboard |
-| `4` | finished — published and notified |
-| `5` | error — creator told the reason, never published |
-| `NULL` | not tracked (side-loaded/demo rows) — publication is never touched |
+| Bunny `encodingStatus` | Derived `status` | Effect |
+|---|---|---|
+| `0` / `1` / `2` | `PROCESSING` | live, badge over the cover, no playback controls, not purchasable |
+| `3` / `4`, or `encodeProgress` 100 | `READY` | badge replaced by the player; buyable |
+| `5` | `FAILED` | hidden from the public feed and not buyable; the creator sees the reason |
+| `NULL` | `READY` | side-loaded/demo rows Bunny never transcodes — untouched |
 
-Two escape hatches exist on purpose, because an automatic gate with no exit is
-worse than no gate:
+WHO MOVES IT TO `READY` — in order of authority:
 
-- **The creator's dashboard polls for them.** Opening it advances their own
-  pending uploads, so the lifecycle still completes on a host with no scheduler.
+1. **`POST /api/webhooks/bunny`** — Bunny calls us the instant an encode
+   finishes. This is the source of truth, and the only path that can observe the
+   transition the second it happens. Its signing key is
+   `BUNNY_STREAM_WEBHOOK_SECRET`; the route re-reads the real status from Bunny
+   rather than trusting the payload.
+2. **`GET /api/videos/[id]`** — an owner's or an admin's page read refreshes a
+   stale row (with a re-check floor).
+3. **`GET /api/creator/videos`** — a creator opening their dashboard refreshes
+   their own pending uploads.
+
+Open pages then learn about it from `POST /api/videos/status`, which the client
+poller asks every 8 s while anything on screen is `PROCESSING` (and stops when
+nothing is, when the tab is hidden, or after 20 minutes).
+
+> **There is no encoding poller.** A scheduled sweep was removed on purpose: it
+> was a second source of truth for the same fact, and it could disagree with the
+> webhook. The price of removing it is that a **missed callback** no longer
+> resolves by itself for a creator who never opens their dashboard — which is
+> why the webhook must be configured, and why the two on-read paths exist.
+
+Two escape hatches remain, because an automatic state with no exit is worse than
+one with an exit:
+
+- **The creator's dashboard advances their own uploads** when they open it.
 - **Publish now** — the creator can override the gate from the dashboard. It
   warns that the video may not play yet, then publishes it. Use this when Bunny
   never reports a video as finished.
 
-- [ ] Confirm the cron is listed: **Vercel → your project → Cron Jobs**,
-      and `curl -H "x-cron-secret: $CRON_SECRET" https://<domain>/api/cron/poll-encoding`
-      returns `{"status":"ok",...}`.
-- [ ] Upload one real video and watch it move `Processing → Ready` in
-      **Creator Dashboard → Video Performance → Status**.
+- [ ] Confirm the webhook is configured: Bunny dashboard → Stream library →
+      **Webhook URL** = `https://<domain>/api/webhooks/bunny`, and
+      `BUNNY_STREAM_WEBHOOK_SECRET` = the library's **Read-Only** API key. The
+      self-test in **Admin → System** posts a signed callback to prove it.
+- [ ] Upload one real video and watch the post appear immediately with the
+      “Inachakatwa...” badge, then turn into a player without a reload.
 
 The release job moves matured earnings `pendingBalance → availableBalance`:
 
 - [ ] **Scheduled**: set repository variable `APP_URL` and secret `CRON_SECRET`,
       and `.github/workflows/release-earnings.yml` runs it hourly. Nothing runs
       until both are set — see §4.0.1.
-- [ ] **On Pro**: move the four schedules into `vercel.json` instead (§4.0.1),
+- [ ] **On Pro**: move these schedules into `vercel.json` instead (§4.0.1),
       which removes the 60-day-inactivity rule below and gives per-minute timing.
 - [ ] **Either way**: point the scheduler at `/api/cron/supervisor` (§4.0.4). One
       poke runs everything that is overdue, because GitHub Actions delivers the
@@ -846,7 +876,7 @@ query strings are logged and are not accepted
 ```
 
 Two other properties, both enforced in `src/lib/cron-auth.ts` (one
-implementation for all four cron routes, so they cannot drift apart again):
+implementation for every cron route, so they cannot drift apart again):
 
 - **Timing-safe comparison.** Both sides are SHA-256 hashed and compared with
   `crypto.timingSafeEqual`, so the response time does not reveal how many
@@ -886,7 +916,7 @@ workflow per worker, all four already in the repo:
 | `.github/workflows/release-earnings.yml` | hourly | `/api/cron/release-earnings` |
 | `.github/workflows/reconcile-payments.yml` | every 10 min | `/api/cron/reconcile-payments` |
 | `.github/workflows/renew-subscriptions.yml` | hourly (minute 15) | `/api/cron/renew-subscriptions` |
-| `.github/workflows/poll-encoding.yml` | every 5 min | `/api/cron/poll-encoding` |
+| `.github/workflows/earnings-digest.yml` | hourly (minute 30) | `/api/cron/earnings-digest` |
 
 They all authenticate the same way Vercel Cron does — header only, never a
 query string (see §4.0) — so no code changes are needed to switch. Configure
@@ -903,10 +933,10 @@ the Actions tab stays quiet instead of red while you are still setting up.
 
 Three caveats worth knowing before you rely on this:
 
-- **GitHub's minimum interval is 5 minutes**, so `poll-encoding` cannot run
-  more often than that. Nothing breaks: the worker is idempotent and a creator
-  can still advance their own uploads by opening the dashboard. A finished
-  encode just surfaces within 5 minutes.
+- **GitHub's minimum interval is 5 minutes**, so no worker here can run more
+  often than that. Nothing breaks: every worker is idempotent, and the one that
+  used to care about a sub-5-minute cadence (encoding) is no longer scheduled at
+  all — it is pushed by Bunny (§3.2).
 - **Scheduled workflows are disabled after 60 days of repository inactivity.**
   GitHub emails the owner first, and any commit re-enables them — but on a quiet
   repo, payments and renewals would stop. Budget one commit (or a
@@ -919,14 +949,14 @@ Three caveats worth knowing before you rely on this:
   supervisor (§4.0.4) rather than on each file arriving when it says it will.
   Every worker is written to be safe under a late or duplicated run —
   `release-earnings` only ever moves matured balances, `renew-subscriptions`
-  charges at most once per `RETRY_GAP`, and `poll-encoding` only ever flips
-  unpublished → published.
+  charges at most once per `RETRY_GAP`, and `reconcile-payments` only settles or
+  flags a charge that already exists.
 
 Verify after switching:
 
 ```bash
 B=https://<domain>; S=$CRON_SECRET
-for r in release-earnings reconcile-payments renew-subscriptions poll-encoding; do
+for r in release-earnings reconcile-payments renew-subscriptions earnings-digest; do
   printf "%-22s " "$r"
   curl -s -o /dev/null -w "%{http_code}\n" -X POST "$B/api/cron/$r" -H "x-cron-secret: $S"
 done   # expect four 200s; a wrong secret must give 401
@@ -950,7 +980,7 @@ run lock and a duplicate trigger is refused rather than repeated.
     { "path": "/api/cron/release-earnings", "schedule": "0 * * * *" },
     { "path": "/api/cron/reconcile-payments", "schedule": "*/10 * * * *" },
     { "path": "/api/cron/renew-subscriptions", "schedule": "15 * * * *" },
-    { "path": "/api/cron/poll-encoding", "schedule": "*/3 * * * *" }
+    { "path": "/api/cron/earnings-digest", "schedule": "30 * * * *" }
   ]
 }
 ```
@@ -987,7 +1017,7 @@ The thresholds live with the registry in
 `src/lib/services/cron-heartbeat.service.ts`, and there are two of them because
 they answer two different questions.
 
-**Overdue: 6 hours without a finished run, for all four workers.** This is the
+**Overdue: 6 hours without a finished run, for every worker.** This is the
 *scheduler's* clock, not the worker's: it says "the pokes have stopped", which is
 the only thing an alarm can honestly measure here. It used to be "roughly four
 missed runs" per worker (20 / 40 / 180 min), which assumes a schedule that fires
@@ -998,8 +1028,8 @@ alarm nobody can afford to read). What a worker *needs* is still recorded per
 worker as `everyMinutes`, and the card prints both:
 
 ```
-Nothing has finished for 7 h (expected every 5 min, flagged after 6 h).
-The schedule has stopped firing — check .github/workflows/poll-encoding.yml.
+Nothing has finished for 7 h (expected every 10 min, flagged after 6 h).
+The schedule has stopped firing — check .github/workflows/ and §4.0.1.
 ```
 
 So a tight budget is a statement about your scheduler, and it should be tightened
@@ -1169,7 +1199,7 @@ late` — and not *which worker*, because `/api/health` is public and publishes 
 verdict alone: an endpoint that hands out worker names and where each one is
 scheduled is a map of the system for anybody who asks.
 
-Set `CRON_SECRET` (the same secret the four workers already use — new **secret**,
+Set `CRON_SECRET` (the same secret the scheduled workers already use — new **secret**,
 not a variable) and the alarm names it, with how long it has been quiet:
 
 ```
@@ -1292,7 +1322,7 @@ not reported — the alarm is unaffected either way.
 
 **One failure this cannot report, and it is worth knowing.** GitHub disables
 *every* scheduled workflow in a repository after 60 days without activity (§4.0.1,
-caveat 2) — this watchdog included, at the same moment as the four workers it
+caveat 2) — this watchdog included, at the same moment as the workers it
 watches. So it cannot warn you about the one outage that also silences it. For
 that, point a free external monitor (UptimeRobot, Better Stack, healthchecks.io)
 at `/api/health`: the endpoint answers **503** when the jobs have gone quiet, and
@@ -1367,8 +1397,8 @@ walks past.
 shows `Last result: … (manual run from the admin panel)` and "running on
 schedule" is never claimed about something a person started.
 
-- [ ] Press **Run now** on `poll-encoding`, `reconcile-payments` and
-      `release-earnings` once. Each should return a summary and the row should
+- [ ] Press **Run now** on `reconcile-payments` and `release-earnings` once.
+      Each should return a summary and the row should
       flip to `Running on schedule · 1 run(s) recorded` with
       `(manual run from the admin panel)` in the result.
 - [ ] Press **Run now** on `renew-subscriptions` and confirm you get the
@@ -1384,7 +1414,6 @@ the app recorded:
 
 | Workflow asks for | Actually delivered |
 |---|---|
-| `poll-encoding` — every 5 min | 138, 160, 203, 297, 304, 341 min apart |
 | `reconcile-payments` — every 10 min | 137, 197, 222, 308, 314, 336 min apart |
 | `release-earnings` — hourly | 3h25, 4h42, 4h59, 5h36 apart |
 | `renew-subscriptions` — hourly | 3h19, 4h03, 5h06, 5h08, 5h12 apart |
@@ -1392,7 +1421,7 @@ the app recorded:
 Nothing in the app is lying when that happens: each heartbeat goes past its own
 budget minutes after every delivery, so `checks.backgroundJobs` reads `late` for
 most of the day, `/api/health` answers 503, and the watchdog alarms — correctly,
-because renewals, releases and encoding publication really are hours behind. What
+because renewals and releases really are hours behind. What
 is wrong is the assumption underneath §4.0.1: that each worker's own file arrives
 when it says it will. An alarm that is red nearly all the time is its own failure,
 because nobody reads it (§4.0.2).
@@ -1400,9 +1429,9 @@ because nobody reads it (§4.0.2).
 `.github/workflows/supervisor.yml` is the answer, and it is deliberately small:
 it calls `POST /api/cron/supervisor`, which runs **every worker whose heartbeat is
 past its own budget**, through the same lock and heartbeat a scheduled run would
-have used. One delivered poke therefore restores all four cadences, whichever
-file GitHub chose to deliver — and an external scheduler pointed at this one
-endpoint replaces the four per-worker ones entirely.
+have used. One delivered poke therefore restores every cadence, whichever file
+GitHub chose to deliver — and an external scheduler pointed at this one endpoint
+replaces the per-worker files entirely.
 
 ```bash
 B=https://<domain>; S=$CRON_SECRET
@@ -1410,14 +1439,15 @@ B=https://<domain>; S=$CRON_SECRET
 curl -s -X POST "$B/api/cron/supervisor" -H "x-cron-secret: $S" | head -c 400
 ```
 
-Its own `*/10` schedule is delivered just as sparsely as the rest, and the four
-worker workflows now end with the same poke, so the real poke rate is the union
-of all five files — about 14 runs a day measured, worst gap 3h32 between any two
-of them. That is what the 6-hour "Overdue" budget in §4.0.2 is calibrated to. The
+Its own `*/10` schedule is delivered just as sparsely as the rest, and the worker
+workflows now end with the same poke, so the real poke rate is the union of every
+file that carries one — about 14 runs a day was the figure measured while the
+encoding poll was still part of that set, and dropping a file lowers it. That is
+what the 6-hour "Overdue" budget in §4.0.2 is calibrated to. The
 **endpoint** is the unit of correctness, not the file —
 so a free 5-minute monitor (cron-job.org, healthchecks.io) sending
-`x-cron-secret` to `/api/cron/supervisor` gives per-minute precision for all four
-workers at once, and so does Vercel Cron on Pro:
+`x-cron-secret` to `/api/cron/supervisor` gives per-minute precision for every
+worker at once, and so does Vercel Cron on Pro:
 
 ```json
 { "crons": [{ "path": "/api/cron/supervisor", "schedule": "*/5 * * * *" }] }
@@ -1488,7 +1518,7 @@ phones.
 - [ ] Confirm it cannot be talked into running the charging worker: with
       `renew-subscriptions` overdue it must appear under `held`, and its
       heartbeat's `lastOrigin` must not change.
-- [ ] After a day, check **Background jobs**: the four workers should read
+- [ ] After a day, check **Background jobs**: the workers should read
       `Running on schedule` for most of the day rather than `Overdue`, and
       `/api/health` should answer 200 while nothing else is wrong.
 

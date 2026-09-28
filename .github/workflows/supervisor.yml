@@ -1,22 +1,24 @@
 # =============================================================================
 # GENHUB - The cron supervisor
 # Calls POST /api/cron/supervisor, which runs every worker whose heartbeat is
-# past its own budget. Setup required (the same two values the four worker
+# past its own budget. Setup required (the same two values the worker
 # workflows already read):
 #   * Repository variable  APP_URL      — e.g. https://genhub.co.tz
 #   * Repository secret    CRON_SECRET  — must match the server's CRON_SECRET
 # The job skips cleanly (green) until both are configured.
 #
-# WHY THIS FILE EXISTS. GitHub Actions does not keep the intervals the four
-# worker workflows ask for. Measured on this repository over 24 h: the `*/5`
-# poll-encoding schedule was delivered every 138-341 minutes, reconcile-payments
-# (`*/10`) every 137-336, and the two hourly ones every 3h19-5h36. Each worker
+# WHY THIS FILE EXISTS. GitHub Actions does not keep the intervals the worker
+# workflows ask for. Measured on this repository over 24 h: reconcile-payments
+# (`*/10`) was delivered every 137-336 minutes, and the hourly ones every
+# 3h19-5h36. (The `*/5` encoding poll that was part of that
+# measurement has since been removed — video readiness is pushed by Bunny, see
+# PRODUCTION.md §3.2.) Each worker
 # therefore only ran when its own file happened to arrive, and its heartbeat sat
 # past the budget in between — so `backgroundJobs` read `late` for most of the
 # day and money-moving work was hours late with nothing actually broken.
 #
 # One poke that runs everything overdue turns any delivery into a full round of
-# the workers, so the four worker workflows end with the same step as this file
+# the workers, so the worker workflows end with the same step as this file
 # does — one shared composite action. That is also what makes an external
 # scheduler (cron-job.org, or Vercel Cron on Pro) a complete fix rather than a
 # partial one: point it here, every 5 minutes, and every worker's real cadence
@@ -54,8 +56,8 @@ jobs:
       #   '.../.github/actions/supervise'. Did you forget to run actions/checkout
       #   before running your local action?
       #
-      # That is what every scheduled run of this repository looked like: the five
-      # workers and this file all red while the endpoints behind them were
+      # That is what every scheduled run of this repository looked like: every
+      # worker and this file all red while the endpoints behind them were
       # healthy, `backgroundJobs` read `never`, and the watchdog's alarm was the
       # only thing telling the truth. Nothing inside the app is broken by this —
       # it is a workflow that cannot start.
@@ -65,7 +67,7 @@ jobs:
       # step that has it.
       - uses: actions/checkout@v4
 
-      # The same step the four worker workflows end with, so the guard and the
+      # The same step the worker workflows end with, so the guard and the
       # endpoint have one home: .github/actions/supervise/action.yml
       - name: Run whatever the schedule missed
         uses: ./.github/actions/supervise

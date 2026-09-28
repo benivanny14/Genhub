@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import Image from "next/image";
@@ -8,8 +8,14 @@ import ImageCropper from "@/components/ImageCropper";
 import { canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
-import { uploadFileWithTus, TusUploadError, videoSizeError } from "@/lib/tus-upload";
+import {
+  uploadFileWithTus,
+  TusUploadError,
+  videoSizeError,
+  UPLOAD_STALL_WARNING_MS,
+} from "@/lib/tus-upload";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
+import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
 import { CATEGORIES } from "@/lib/categories";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
 import {
@@ -38,6 +44,16 @@ export default function UploadPage() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  // True when no byte has moved for a while. Reported, never acted on: on a
+  // phone this is usually the screen locking or the browser being sent to the
+  // background (see the wake lock below), and the creator is the only one who
+  // can undo that.
+  const [uploadStalled, setUploadStalled] = useState(false);
+  // When progress last moved, in ms. A ref because it changes on every chunk
+  // and must not re-render the form.
+  const lastProgressAt = useRef<number | null>(null);
+  // The screen wake lock held for the duration of a transfer.
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   // True only once the bytes are actually stored at Bunny. `bunnyVideoId` is set
   // earlier — when the slot is reserved — so it cannot be what the UI trusts to
   // know the upload finished, or a failed transfer would look like a success.
@@ -54,6 +70,10 @@ export default function UploadPage() {
   } | null>(null);
   const [success, setSuccess] = useState(false);
   const [awaitingProcessing, setAwaitingProcessing] = useState(false);
+  // The slug of the post that was just created, so the confirmation screen can
+  // offer "View post" — the point of instant publication is that there is
+  // something to look at straight away.
+  const [createdSlug, setCreatedSlug] = useState("");
   // The rules changed since this account last accepted them, so the upload
   // form stays closed until they are read and ticked again. Read from the
   // account, not from this browser, so the gate is the same on every device.
@@ -112,6 +132,82 @@ export default function UploadPage() {
     checkAccess();
   }, [checkAccess]);
 
+  // ===========================================================================
+  // Why a phone upload dies halfway (the thing that was hurting worst)
+  // ===========================================================================
+  // On a phone, the upload does not fail on the network — it fails because the
+  // PAGE goes away. Locking the screen or switching apps suspends the tab, and
+  // a suspended tab stops sending: the XHR freezes mid-chunk with no error, so
+  // the browser reports neither success nor failure and the bar simply stops.
+  // On the old 32 MiB chunks a creator would come back to a bar that had not
+  // moved, wait out the stall timeout, and often give up on a file that was
+  // one chunk from done.
+  //
+  // Two things make that survivable, and neither is a trick:
+  //   1. the screen is held awake for the length of the transfer (Wake Lock),
+  //      which is the commonest cause removed outright;
+  //   2. the creator is TOLD what will break their upload, in the language they
+  //      are using the site in, while it is running.
+  // Chunk sizing is the third half — see lib/tus-upload.ts — and the reserved
+  // slot means a dropped transfer resumes where it stopped instead of starting
+  // again from byte zero.
+
+  const releaseScreenWake = useCallback(() => {
+    const lock = wakeLockRef.current;
+    wakeLockRef.current = null;
+    try {
+      void lock?.release();
+    } catch {
+      // Already released (the browser does this when the tab is hidden).
+    }
+  }, []);
+
+  const holdScreenAwake = useCallback(async () => {
+    try {
+      if (wakeLockRef.current) return;
+      if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+      wakeLockRef.current = await navigator.wakeLock.request("screen");
+    } catch {
+      // Unsupported, or the browser refused. Not an error worth showing: the
+      // on-screen warning below is the fallback, and the upload works without
+      // it (it just survives less).
+    }
+  }, []);
+
+  /** A transfer is in flight whenever a bar is moving towards 100%. */
+  const transferring =
+    (uploadProgress > 0 && uploadProgress < 100) || uploadingTeaser;
+
+  useEffect(() => {
+    if (!transferring) {
+      setUploadStalled(false);
+      lastProgressAt.current = null;
+      releaseScreenWake();
+      return;
+    }
+
+    lastProgressAt.current = lastProgressAt.current ?? Date.now();
+    void holdScreenAwake();
+
+    // A hidden tab has its wake lock released by the browser, so take it again
+    // the moment the creator comes back — that is exactly the situation the
+    // lock exists for.
+    const onVisible = () => {
+      if (!document.hidden) void holdScreenAwake();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    const timer = setInterval(() => {
+      const last = lastProgressAt.current ?? Date.now();
+      setUploadStalled(Date.now() - last > UPLOAD_STALL_WARNING_MS);
+    }, 5_000);
+
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [transferring, holdScreenAwake, releaseScreenWake]);
+
   /** Reserve the slot and get the short-lived credentials to fill it. */
   async function initiateUpload(): Promise<BunnyUploadCredentials | null> {
     try {
@@ -153,6 +249,11 @@ export default function UploadPage() {
     const label = file.name.length > 28 ? `${file.name.slice(0, 27)}…` : file.name;
     const toastId = toast("info", `Uploading ${label} — 0%`, 0);
     const report = (percent: number) => {
+      // Every callback is proof the connection is alive — the stall warning is
+      // built from these timestamps, so it clears itself the moment bytes move
+      // again (a phone coming back from the background resumes here).
+      lastProgressAt.current = Date.now();
+      setUploadStalled(false);
       onProgress(percent);
       updateToast(toastId, {
         message: `Uploading ${label} — ${percent}%`,
@@ -227,6 +328,29 @@ export default function UploadPage() {
       toast("error", sizeError);
       return;
     }
+
+    // The length floor, checked here too — and here is where it matters.
+    //
+    // The rule is on this form and always has been, but nothing enforced it
+    // until Bunny reported the real duration, minutes after the creator had
+    // spent their data pushing the file. Now that a post is published the
+    // moment it is uploaded, an unchecked too-short file would go live and then
+    // be taken down — a public post appearing and disappearing over something
+    // this line can say in the file picker.
+    //
+    // Reading the file's own metadata is local: no upload, no request. A
+    // container the browser cannot parse answers null, and a null proceeds —
+    // refusing a good file is the worse failure, and the server still holds the
+    // backstop (refreshVideoEncoding).
+    const durationError = shortVideoError(
+      await probeVideoDuration(file),
+      MIN_VIDEO_DURATION_SECONDS
+    );
+    if (durationError) {
+      toast("error", durationError);
+      return;
+    }
+
     setFailedUpload(null);
     const credentials = await initiateUpload();
     if (!credentials) return;
@@ -282,10 +406,13 @@ export default function UploadPage() {
 
       const data = await res.json();
       if (data.success) {
-        // Bunny has not finished transcoding yet, so this is not "it is live" —
-        // it is "we have it, and it will publish itself when it can play".
-        // Carrying the flag through avoids telling the creator something untrue.
+        // The post is published the moment this row is written (see
+        // /api/videos POST), so this is not "it is live" OR "it is waiting" —
+        // it is both at once: visible now with an "Inachakatwa..." badge, and
+        // playable the moment Bunny finishes. Carrying the flag through is what
+        // lets the confirmation screen say exactly that instead of guessing.
         setAwaitingProcessing(data.data?.encodingStatus !== null);
+        setCreatedSlug(data.data?.slug || data.data?.id || "");
         setSuccess(true);
       } else {
         toast("error", data.error || "An error occurred");
@@ -316,19 +443,23 @@ export default function UploadPage() {
           <div className="text-center">
             <CheckCircle className="w-16 h-16 text-emerald-400 mx-auto mb-4" />
             <h2 className="text-2xl font-display font-bold mb-2">
-              {awaitingProcessing ? "Upload complete — now processing" : "Video Uploaded!"}
+              {awaitingProcessing ? "Posted — now processing" : "Video Uploaded!"}
             </h2>
             {awaitingProcessing ? (
               <>
                 <p className="text-white/60 mb-2 max-w-md">
-                  Your video is being prepared into the playback qualities
-                  viewers need. It publishes itself the moment it is ready, and
-                  you will get a notification when it goes live.
+                  Your post is already live on your profile and in your
+                  subscribers&apos; feed, marked{" "}
+                  <span className="font-medium text-amber-200">
+                    &ldquo;Inachakatwa...&rdquo;
+                  </span>
+                  . It turns into a playable video on its own — nobody has to
+                  reload anything — and you will get a notification when it is
+                  ready.
                 </p>
                 <p className="text-white/40 text-sm mb-6">
-                  You do not need to keep this page open — we keep working on it
-                  for you. You can also publish it early from your dashboard if
-                  you would rather not wait.
+                  You can close this page: processing happens on the video host,
+                  and your post stays exactly where it is while it finishes.
                 </p>
               </>
             ) : (
@@ -336,7 +467,12 @@ export default function UploadPage() {
                 Your video has been created and is live.
               </p>
             )}
-            <div className="flex gap-3 justify-center">
+            <div className="flex flex-wrap gap-3 justify-center">
+              {createdSlug && (
+                <Link href={`/video/${createdSlug}`} className="btn-brand">
+                  View post
+                </Link>
+              )}
               <Link href="/creator" className="btn-ghost">
                 Back to Dashboard
               </Link>
@@ -349,8 +485,9 @@ export default function UploadPage() {
                   setUploadProgress(0);
                   setUploadedBytes(null);
                   setFailedUpload(null);
+                  setCreatedSlug("");
                 }}
-                className="btn-brand"
+                className="btn-ghost"
               >
                 Upload Another Video
               </button>
@@ -531,6 +668,29 @@ export default function UploadPage() {
                   <p className="text-xs text-white/50 mt-1 text-center">
                     Uploading... {uploadProgress}%
                   </p>
+                </div>
+              )}
+
+              {/* The phone-specific truth, said while it can still help. */}
+              {transferring && (
+                <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 space-y-1">
+                  <p className="text-xs font-medium text-amber-200/90">
+                    Keep this page open — do not lock the phone or switch apps.
+                  </p>
+                  <p className="text-xs leading-relaxed text-amber-200/70">
+                    Kwenye simu, video inapanda vizuri ukiacha ukurasa huu mbele,
+                    skrini ikiwa imewaka na simu kwenye chaja. Ukifunga skrini au
+                    kutoka kwenye ukurasa, browser inasimamisha kupandisha —
+                    ukirudi, inaendelea pale ilipoishia.
+                  </p>
+                  {uploadStalled && (
+                    <p className="text-xs font-medium text-amber-100">
+                      No bytes have moved for a while. Keep this page in front —
+                      if the connection dropped, the upload resumes on its own
+                      from where it stopped, and &ldquo;Retry upload&rdquo; continues
+                      into the same reserved slot if it does not.
+                    </p>
+                  )}
                 </div>
               )}
               {failedUpload && (

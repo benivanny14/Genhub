@@ -41,6 +41,7 @@ import {
   Share2,
 } from "lucide-react";
 import { canOptimizeImage } from "@/lib/media";
+import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
 import { uploadFileWithTus, TusUploadError, videoSizeError } from "@/lib/tus-upload";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import type { BunnyUploadCredentials } from "@/lib/bunny";
@@ -369,6 +370,12 @@ function EncodingBadge({
           style={{ width: `${Math.max(4, encoding.progress)}%` }}
         />
       </div>
+      {/* The post is already published the moment it was uploaded, so the
+          creator should not read "Encoding 40%" as "not up yet" — this is the
+          same badge their viewers are looking at. */}
+      <span className="mt-1 block text-[10px] leading-tight text-white/35">
+        Live now — viewers see “{PROCESSING_BADGE_LABEL}”
+      </span>
       <HostStoredBytes
         storedBytes={storedBytes}
         sourceBytes={sourceBytes}

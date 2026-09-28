@@ -2,8 +2,10 @@
 // GENHUB - Publish / Unpublish a Video
 // POST /api/creator/videos/[id]/publish  { published: boolean }
 //
-// Videos Bunny has to transcode are held unpublished until it can serve them
-// (see lib/services/video-encoding.service.ts). This is the creator's override.
+// A post is published the moment it is uploaded and carries an "Inachakatwa..."
+// badge until Bunny can serve it (see lib/video-status.ts); the player appears
+// in place, with no reload, when the encode finishes. This is the creator's
+// manual override over that state, in both directions.
 //
 // The override exists for a specific failure: if Bunny never reports the video
 // as finished — a stuck encode, an account problem, a code Bunny changes without
@@ -12,7 +14,12 @@
 // cannot be opened by hand is worse than no gate.
 //
 // Unpublishing is allowed at any time and is never reversed by the poller: it
-// only ever flips a video from unpublished to published, never back.
+// only ever flips a video from unpublished to published, never back — with one
+// exception that is not the creator's doing and happens at most once. A scene
+// Bunny measures as shorter than the guidelines minimum is taken down when that
+// becomes known (see refreshVideoEncoding), because posts are now published the
+// moment they are uploaded and a too-short one would otherwise have been live
+// for the minutes before its length was known.
 // =============================================================================
 
 import { NextRequest } from "next/server";

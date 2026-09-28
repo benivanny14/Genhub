@@ -30,18 +30,10 @@ import {
 import { releaseMatureEarnings, type ReleaseResult } from "./earning-release.service";
 import { reconcileStalePayments, type ReconcileResult } from "./payment-reconcile.service";
 import { renewDueSubscriptions, type RenewalResult } from "./subscription-renewal.service";
-import { refreshPendingEncodings } from "./video-encoding.service";
 import {
   sendDueEarningsDigests,
   type EarningsDigestResult,
 } from "./earnings-digest.service";
-
-/**
- * Inferred rather than imported: video-encoding.service.ts already exports a
- * different `RefreshResult` (one video's refresh), and taking the type from the
- * function is the only way to be sure these stay the same thing.
- */
-type EncodingRunResult = Awaited<ReturnType<typeof refreshPendingEncodings>>;
 
 // ---------------------------------------------------------------------------
 // Wording
@@ -74,10 +66,6 @@ export function describeRenewals(result: RenewalResult): string {
     `Renewals: ${result.renewedFromWallet} from wallet, ${result.pushedToPhone} USSD push(es), ` +
     `${result.awaitingApproval} awaiting approval, ${result.failed} failed`
   );
-}
-
-export function describeEncoding(result: EncodingRunResult): string {
-  return `${result.checked} checked, ${result.published} published, ${result.failed} failed`;
 }
 
 export function describeEarningsDigest(result: EarningsDigestResult): string {
@@ -124,10 +112,6 @@ export function runWorkerNow(
   options?: WorkerRunOptions
 ): Promise<CronRunOutcome<RenewalResult>>;
 export function runWorkerNow(
-  id: "poll-encoding",
-  options?: WorkerRunOptions
-): Promise<CronRunOutcome<EncodingRunResult>>;
-export function runWorkerNow(
   id: "earnings-digest",
   options?: WorkerRunOptions
 ): Promise<CronRunOutcome<EarningsDigestResult>>;
@@ -161,9 +145,6 @@ export async function runWorkerNow(
 
     case "renew-subscriptions":
       return runCronJob("renew-subscriptions", () => renewDueSubscriptions(), describeRenewals, origin);
-
-    case "poll-encoding":
-      return runCronJob("poll-encoding", () => refreshPendingEncodings(), describeEncoding, origin);
 
     case "earnings-digest":
       return runCronJob("earnings-digest", () => sendDueEarningsDigests(), describeEarningsDigest, origin);

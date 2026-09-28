@@ -20,8 +20,85 @@
 
 import type { BunnyUploadCredentials } from "./bunny";
 
-/** Chunk size. TUS requires a multiple of 256 KiB; 32 MiB keeps requests few. */
-const CHUNK_SIZE = 32 * 1024 * 1024;
+// =============================================================================
+// How big one PATCH is — the single most important upload setting on a phone
+// =============================================================================
+// TUS sends the file in parts, and a part that dies must be sent again from the
+// offset the server confirms. So the chunk size is a bet on the connection:
+//
+//   * too big, and a single wobble discards minutes of transfer — a 32 MiB
+//     chunk on a phone at 1 Mbit/s is four and a half minutes of work thrown
+//     away by one lost signal, which is what "it reaches 80% and starts again"
+//     looks like from the creator's side;
+//   * too small, and the per-request overhead (and the chance of a stall
+//     between requests) adds up.
+//
+// The old fixed 32 MiB was tuned for a desktop on a stable line. A phone gets
+// five, and the size then follows the connection's own measured speed, so a
+// fast one climbs back to 32 MiB after the first chunk proves it. Every value
+// is a multiple of 256 KiB, which the TUS spec requires.
+
+export const TUS_CHUNK_ALIGNMENT = 256 * 1024;
+/** What a phone starts with: cheap to lose, quick to show progress. */
+export const MOBILE_CHUNK_SIZE = 5 * 1024 * 1024;
+/** What a desktop starts with. */
+export const DESKTOP_CHUNK_SIZE = 16 * 1024 * 1024;
+/** What a proven-fast connection is allowed to climb to. */
+export const FAST_CHUNK_SIZE = 32 * 1024 * 1024;
+
+/**
+ * Chunk size to START with, before anything is known about the connection.
+ *
+ * Pure and exported so the rule is testable without a browser: the caller says
+ * whether it looks like a phone, and this decides. A file no bigger than the
+ * chunk is sent in one piece, which is the fastest and safest case there is.
+ */
+export function initialChunkSize(isMobile: boolean, fileSize: number): number {
+  const preferred = isMobile ? MOBILE_CHUNK_SIZE : DESKTOP_CHUNK_SIZE;
+  return Math.min(preferred, Math.max(TUS_CHUNK_ALIGNMENT, fileSize));
+}
+
+/**
+ * Chunk size for the NEXT chunk, given how fast the last one actually went.
+ *
+ * Measured, not guessed: a creator on fibre and a creator on a 3G phone start
+ * the same way and stop being the same after one chunk. Below 400 KB/s the
+ * answer is always the smallest chunk (losing five megabytes hurts less than
+ * losing thirty-two); above 2 MB/s the largest, because on a fast link the
+ * per-request overhead is the cost that matters. In between, no change: a size
+ * that is working is not worth re-deciding every chunk.
+ *
+ * Returns one of the three sizes above — every one a multiple of 256 KiB — or
+ * the current size unchanged when the measurement says nothing useful.
+ */
+export function adaptChunkSize(current: number, bytesPerSecond: number): number {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return current;
+  if (bytesPerSecond < 400 * 1024) return MOBILE_CHUNK_SIZE;
+  if (bytesPerSecond > 2 * 1024 * 1024) return FAST_CHUNK_SIZE;
+  return current;
+}
+
+/**
+ * Does this look like a phone or tablet?
+ *
+ * `navigator.userAgentData.mobile` is the honest answer where a browser offers
+ * it; the user-agent string is the fallback, which is why the pattern is loose
+ * (it only has to be right often enough to pick a starting chunk size — the
+ * measurement above corrects it immediately either way).
+ *
+ * SSR-safe: this runs in the browser during an upload, and returns false when
+ * there is no navigator at all.
+ */
+export function looksLikeMobile(): boolean {
+  if (typeof navigator === "undefined") return false;
+
+  const hints = navigator as Navigator & { userAgentData?: { mobile?: boolean } };
+  if (typeof hints.userAgentData?.mobile === "boolean") return hints.userAgentData.mobile;
+
+  return /Android|iPhone|iPad|iPod|Mobile|Windows Phone|Opera Mini|IEMobile/i.test(
+    navigator.userAgent || ""
+  );
+}
 
 /**
  * Backoff between attempts at the SAME chunk, in ms.
@@ -38,12 +115,31 @@ const RETRY_DELAYS = [0, 1_000, 3_000, 8_000, 15_000, 30_000];
  * How long one chunk may sit with no progress before it is treated as a dropped
  * connection and retried.
  *
- * Deliberately generous: a 32 MiB chunk on a slow phone connection is minutes,
- * so this is a stall detector, not a throughput limit. Without it a connection
- * that dies without an error event (a lost radio, a silent NAT timeout) leaves
- * the upload hanging forever with the progress bar frozen.
+ * Deliberately generous: a chunk on a slow phone connection is minutes, so this
+ * is a stall detector, not a throughput limit. Without it a connection that
+ * dies without an error event (a lost radio, a silent NAT timeout) leaves the
+ * upload hanging forever with the progress bar frozen.
+ *
+ * Shortened from ten minutes, which was set when every chunk was 32 MiB. Now
+ * that a phone sends 5 MiB at a time, ten minutes of silence cannot be a slow
+ * transfer — it is a dead one, and the retry ladder should start while the
+ * creator is still looking at the screen. Ten minutes of a frozen bar is what
+ * makes somebody close the tab and give up on an upload that would have
+ * finished. A genuinely slow link is still covered: this is time with ZERO
+ * bytes moved, and the page warns the creator long before it fires (see
+ * UPLOAD_STALL_WARNING_MS).
  */
-const CHUNK_STALL_TIMEOUT_MS = 10 * 60 * 1000;
+const CHUNK_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+
+/**
+ * How long the form waits, with no bytes moving, before telling the creator so.
+ *
+ * Reporting only — it never cancels anything. A phone that has switched apps,
+ * locked its screen or lost signal looks exactly like a slow one from here, and
+ * the creator can only act on the difference (come back to the page, move to
+ * better signal) if we say something.
+ */
+export const UPLOAD_STALL_WARNING_MS = 45 * 1000;
 
 /**
  * The largest video a creator may send, matching the "Max 2GB" label on the
@@ -321,7 +417,10 @@ function sendChunk(
 export interface TusUploadOptions {
   onProgress?: (uploaded: number, total: number) => void;
   signal?: AbortSignal;
-  /** Overridable for tests; must be a multiple of 256 KiB per the TUS spec. */
+  /**
+   * Fixes the chunk size and switches off the adaptation below. Overridable for
+   * tests; must be a multiple of 256 KiB per the TUS spec.
+   */
   chunkSize?: number;
 }
 
@@ -336,7 +435,7 @@ export async function uploadFileWithTus(
   credentials: BunnyUploadCredentials,
   options: TusUploadOptions = {}
 ): Promise<void> {
-  const { onProgress, signal, chunkSize = CHUNK_SIZE } = options;
+  const { onProgress, signal } = options;
 
   if (!file.size) {
     throw new TusUploadError("UNSUPPORTED", "That file is empty.");
@@ -359,14 +458,24 @@ export async function uploadFileWithTus(
   const location = await createUpload(file, credentials);
   let offset = 0;
 
+  // A caller-supplied size wins (tests pin it); otherwise start from what the
+  // device looks like and let the measurements below take over.
+  const fixedChunkSize = options.chunkSize;
+  let chunkSize = fixedChunkSize ?? initialChunkSize(looksLikeMobile(), file.size);
+
   while (offset < file.size) {
     const blob = file.slice(offset, offset + chunkSize);
     const chunkStart = offset;
     let lastError: TusUploadError | null = null;
+    // When the successful attempt started, to measure this chunk's real speed.
+    // Not the time the whole chunk took: retries and their backoff sleeps are
+    // the connection failing, not the connection's speed.
+    let attemptStartedAt = 0;
 
     for (let attempt = 0; attempt < RETRY_DELAYS.length; attempt++) {
       if (RETRY_DELAYS[attempt] > 0) await sleep(RETRY_DELAYS[attempt], signal);
       try {
+        attemptStartedAt = Date.now();
         offset = await sendChunk(
           location,
           blob,
@@ -405,5 +514,15 @@ export async function uploadFileWithTus(
 
     if (lastError) throw lastError;
     onProgress?.(offset, file.size);
+
+    // Decide the next chunk from what this one achieved — see adaptChunkSize.
+    // Skipped when the caller pinned a size, so tests stay deterministic.
+    if (fixedChunkSize === undefined) {
+      const seconds = (Date.now() - attemptStartedAt) / 1000;
+      const moved = offset - chunkStart;
+      if (seconds > 0 && moved > 0) {
+        chunkSize = adaptChunkSize(chunkSize, moved / seconds);
+      }
+    }
   }
 }

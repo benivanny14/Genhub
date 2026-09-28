@@ -18,7 +18,7 @@
 # Discord webhook) to get the alarm pushed somewhere you will actually see it,
 # instead of only in GitHub's email.
 #
-# Set `CRON_SECRET` (the secret the four workers already use) and the alarm names
+# Set `CRON_SECRET` (the secret the scheduled workers already use) and the alarm names
 # the worker that stopped, with how long it has been quiet, instead of saying only
 # "background jobs: late". It also lets the watchdog START that worker again —
 # through the worker's own cron route, so the run takes the same lock and stamps
@@ -54,7 +54,7 @@
 # The blind spot, which is why §4.0.2 also recommends a monitor outside GitHub
 #
 # GitHub disables *every* scheduled workflow in a repository after 60 days
-# without activity — this one included, at the same moment as the four workers it
+# without activity — this one included, at the same moment as the workers it
 # is watching. So it cannot report the one failure that also silences it. For
 # that, point any free uptime monitor at /api/health: the endpoint answers 503
 # when the jobs have gone quiet, and a monitor is not hosted in the repository
@@ -66,8 +66,8 @@ name: Uptime watchdog
 on:
   schedule:
     # Minute 45: clear of the workers (release :00, renew :15, reconcile every
-    # 10, encoding every 5), so a run that is seconds late is not mistaken for
-    # one that never happened.
+    # 10), so a run that is seconds late is not mistaken for one that never
+    # happened.
     - cron: "45 * * * *"
   workflow_dispatch: {}
 

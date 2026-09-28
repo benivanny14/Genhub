@@ -25,7 +25,6 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
-  describeEncoding,
   describeReconcile,
   describeReleaseEarnings,
   describeRenewals,
@@ -100,12 +99,6 @@ describe("worker result summaries", () => {
     expect(summary).toContain("1 failed");
   });
 
-  it("reports encoding in the terms the creator cares about", () => {
-    const summary = describeEncoding({ checked: 6, published: 4, ready: 5, failed: 1 });
-    expect(summary).toContain("6 checked");
-    expect(summary).toContain("4 published");
-    expect(summary).toContain("1 failed");
-  });
 });
 
 // -----------------------------------------------------------------------------
@@ -135,7 +128,7 @@ describe("job wiring", () => {
       "releaseMatureEarnings",
       "reconcileStalePayments",
       "renewDueSubscriptions",
-      "refreshPendingEncodings",
+      "sendDueEarningsDigests",
     ];
 
     for (const w of CRON_WORKERS) {

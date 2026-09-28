@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   count: vi.fn(),
   cacheGet: vi.fn(),
   cacheSet: vi.fn(),
+  cacheDel: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -48,7 +49,21 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/redis", () => ({
   cacheGet: (...args: unknown[]) => mocks.cacheGet(...args),
   cacheSet: (...args: unknown[]) => mocks.cacheSet(...args),
+  cacheDel: (...args: unknown[]) => mocks.cacheDel(...args),
 }));
+
+// The upload path only marks a video as needing transcoding when Bunny is
+// configured AND the id looks like Bunny's. Both are mocked here so the
+// instant-publication case below runs the real branch instead of the
+// side-loaded one, without an environment that has a Stream library.
+vi.mock("@/lib/bunny", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/bunny")>();
+  return {
+    ...actual,
+    isBunnyConfigured: () => true,
+    isBunnyVideoId: (id: string) => !!id,
+  };
+});
 
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
@@ -130,6 +145,29 @@ describe("GET /api/videos", () => {
     expect(args.skip).toBe(0);
   });
 
+  it("keeps a post Bunny is still transcoding, and drops one it failed", async () => {
+    // Instant publication: a PROCESSING post is live and must be in the grid —
+    // that is the whole change. A FAILED one can never play, so it must not be.
+    await GET(request(""));
+
+    const filter = findManyArgs().where.OR as { encodingStatus?: unknown }[];
+    // Written as an OR rather than `{ not: 5 }` on purpose: a `not` comparison
+    // matches no NULL, and NULL is every side-loaded, demo and pre-lifecycle
+    // row — the filter would have emptied the catalogue.
+    expect(filter).toContainEqual({ encodingStatus: null });
+    expect(filter).toContainEqual({ encodingStatus: { not: 5 } });
+  });
+
+  it("ANDs a search onto that filter instead of replacing it", async () => {
+    // Search needs its own OR, and two ORs cannot share a key — the second one
+    // would silently win and the feed filter above would stop applying.
+    await GET(request("?q=ngoma"));
+
+    const { where } = findManyArgs();
+    expect(where.OR).toBeDefined();
+    expect(where.AND).toBeDefined();
+  });
+
   it("does not serve a creator's list from the general feed's cache", async () => {
     // The general feed was cached under a key that did not name a creator, so a
     // creator page could be answered entirely from cache — the filter above
@@ -208,5 +246,29 @@ describe("POST /api/videos", () => {
     await POST(postRequest({ ...body, title: "\u{1F336}\u{1F336}" }));
 
     expect(createdData().slug).toBe("video");
+  });
+
+  it("publishes the post immediately, with the encode marked as running", async () => {
+    // This is the Instagram behaviour: the post exists the second the bytes
+    // land, and the badge says the video is still being prepared. Holding the
+    // row back until Bunny finished is what made a creator's upload invisible
+    // to everyone, themselves included, for the whole transcode.
+    mocks.findUnique.mockResolvedValue(null);
+
+    const response = await POST(postRequest());
+    const data = await response.json();
+
+    expect(createdData().isPublished).toBe(true);
+    expect(createdData().encodingStatus).toBe(0);
+    expect(data.data.status).toBe("PROCESSING");
+    expect(response.status).toBe(201);
+  });
+
+  it("drops the cached feed so the new post is not invisible for a minute", async () => {
+    mocks.findUnique.mockResolvedValue(null);
+
+    await POST(postRequest());
+
+    expect(mocks.cacheDel).toHaveBeenCalledWith("videos:*");
   });
 });

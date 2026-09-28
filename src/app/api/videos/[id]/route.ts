@@ -25,6 +25,7 @@ import {
   refreshVideoEncoding,
   ENCODING_RECHECK_FLOOR_MS,
 } from "@/lib/services/video-encoding.service";
+import { videoStatus } from "@/lib/video-status";
 import { cacheDel, claimOnce } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 
@@ -288,6 +289,9 @@ export async function GET(
       // (see /api/creator/videos/[id]/publish). Saying so is the difference
       // between "this site is broken" and "this is still processing".
       encoding: describeEncoding(video.encodingStatus, video.encodeProgress),
+      // The publication state in one word, for the client that has to decide
+      // whether to mount a player or the "Inachakatwa..." placeholder.
+      status: videoStatus(video.encodingStatus, video.encodeProgress),
       hasAccess,
       accessSource,
       paymentUnderInvestigation,

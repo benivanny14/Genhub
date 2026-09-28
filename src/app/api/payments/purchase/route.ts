@@ -22,6 +22,7 @@ import { generateOrderId } from "@/lib/utils";
 import config from "@/lib/config";
 import { checkRateLimit } from "@/lib/redis";
 import { applyCoupon, consumeCoupon } from "@/lib/coupons";
+import { videoStatus } from "@/lib/video-status";
 
 // How long an unpaid checkout keeps the video locked for that customer. A USSD
 // prompt is usually answered in a minute or two; after this window we reconcile
@@ -73,11 +74,45 @@ export async function POST(request: NextRequest) {
         creatorId: true,
         isPublished: true,
         isDeleted: true,
+        // Bunny's own numbers, to answer "can this be watched yet?" — see the
+        // guard below.
+        encodingStatus: true,
+        encodeProgress: true,
       },
     });
 
     if (!video || !video.isPublished || video.isDeleted) {
       return api.notFound("Video not found");
+    }
+
+    // Can this scene be watched at all?
+    //
+    // A post is published the moment it is uploaded (see /api/videos POST), so
+    // a video is deliberately visible — with its price on the card — while
+    // Bunny is still transcoding it. It has no manifest yet: charging here
+    // would take a customer's money, push a USSD prompt to their phone and
+    // grant access to a scene that cannot play, then leave them arguing with a
+    // spinner. Refused before any charge, any coupon and any transaction row,
+    // exactly like the amount check below.
+    //
+    // FAILED is refused for the same reason from the other direction: the feed
+    // hides those rows, but a bookmark, a shared link or a stale page still
+    // reaches this route, and access to something that will never play is not
+    // access.
+    const status = videoStatus(video.encodingStatus, video.encodeProgress);
+    if (status === "PROCESSING") {
+      return api.error(
+        "This scene is still being prepared for playback — it becomes available to buy in a few minutes. You have not been charged.",
+        409,
+        "VIDEO_PROCESSING"
+      );
+    }
+    if (status === "FAILED") {
+      return api.error(
+        "This scene could not be prepared for playback, so it cannot be bought. You have not been charged.",
+        409,
+        "VIDEO_UNAVAILABLE"
+      );
     }
 
     // Prevent buying own video

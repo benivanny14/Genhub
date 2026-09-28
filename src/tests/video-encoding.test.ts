@@ -297,6 +297,27 @@ describeDB("refreshVideoEncoding (real database)", () => {
     expect(notifications[0].title).toMatch(/too short/i);
   });
 
+  it("takes down a video that was already live when the length was learned", async () => {
+    // Posts are published the moment they are uploaded, so a too-short scene is
+    // public for the minutes Bunny needs to report its length. Without this the
+    // "8 minutes minimum" rule would stop existing: the upload would be live and
+    // playable, and the guideline would be a sentence on a form.
+    await prisma.video.update({ where: { id: videoId }, data: { isPublished: true } });
+    bunnyState.details = { status: 4, encodeProgress: 100, length: 120 };
+
+    await refreshVideoEncoding(videoId);
+
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.isPublished).toBe(false);
+
+    // And the creator is told what happened to the post, not that it "stays"
+    // unpublished — it was up.
+    const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].type).toBe("error");
+    expect(notifications[0].title).toMatch(/too short/i);
+  });
+
   it("notifies exactly once, no matter how often it polls", async () => {
     bunnyState.details = { status: 4, encodeProgress: 100 };
 

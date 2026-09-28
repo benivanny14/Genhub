@@ -7,9 +7,11 @@
 // endpoint that also knows about video codecs.
 //
 // Reading this route ADVANCES the state: a creator watching the page is the
-// most reliable signal that someone cares, and it means the lifecycle still
-// works on a deployment with no scheduler configured. A re-check floor keeps a
-// polling dashboard from flooding Bunny (see the service).
+// most reliable signal that someone cares. Since the encoding worker was
+// removed this is no longer a convenience — with /api/videos/[id] and the Bunny
+// webhook it is one of the three things that move an upload forward, and the
+// only one that covers a creator's own unfinished uploads in bulk. A re-check
+// floor keeps a polling dashboard from flooding Bunny (see the service).
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -20,6 +22,7 @@ import {
   describeEncoding,
   refreshCreatorPendingEncodings,
 } from "@/lib/services/video-encoding.service";
+import { videoStatus } from "@/lib/video-status";
 
 const IN_FLIGHT = ["pending", "processing"];
 
@@ -91,6 +94,9 @@ export async function GET(request: NextRequest) {
         ...video,
         hasTeaser: !!teaserBunnyVideoId,
         encoding: describeEncoding(video.encodingStatus, video.encodeProgress),
+        // The same three-word vocabulary the feed uses, so the dashboard's badge
+        // and the badge a viewer sees are the same judgement of the same row.
+        status: videoStatus(video.encodingStatus, video.encodeProgress),
         storedBytes: bunnyStorageBytes,
         sourceBytes: uploadSizeBytes,
       })

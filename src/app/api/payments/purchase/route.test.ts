@@ -80,6 +80,16 @@ const VIEWER = "viewer-1";
 const CREATOR = "creator-1";
 const VIDEO_PRICE = 2_000;
 
+/** The row every case starts from; individual cases override the encoding. */
+const VIDEO = {
+  id: "video-1",
+  title: "A scene",
+  price: VIDEO_PRICE,
+  creatorId: CREATOR,
+  isPublished: true,
+  isDeleted: false,
+};
+
 function request(body: Record<string, unknown>) {
   return new NextRequest("https://genhub.test/api/payments/purchase", {
     method: "POST",
@@ -97,14 +107,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.requireAuth.mockResolvedValue({ userId: VIEWER, role: "VIEWER" });
   mocks.checkRateLimit.mockResolvedValue({ allowed: true });
-  mocks.videoFindUnique.mockResolvedValue({
-    id: "video-1",
-    title: "A scene",
-    price: VIDEO_PRICE,
-    creatorId: CREATOR,
-    isPublished: true,
-    isDeleted: false,
-  });
+  mocks.videoFindUnique.mockResolvedValue({ ...VIDEO });
   mocks.accessFindUnique.mockResolvedValue(null);
   mocks.transactionFindFirst.mockResolvedValue(null);
   mocks.purchaseVideoWithWallet.mockResolvedValue({
@@ -172,5 +175,77 @@ describe("POST /api/payments/purchase — amount tampering", () => {
     expect(mocks.purchaseVideoWithWallet.mock.calls[0][0]).toMatchObject({
       amount: VIDEO_PRICE,
     });
+  });
+});
+
+// =============================================================================
+// A post that exists but cannot be played yet
+//
+// Instant publication put a price on screen while Bunny is still transcoding
+// the scene underneath it (see /api/videos POST and lib/video-status.ts). A
+// charge there takes money, pushes a USSD prompt and grants access to a video
+// with no manifest — so it is refused before anything is written, quoting the
+// reason and saying plainly that nobody was charged.
+// =============================================================================
+
+describe("POST /api/payments/purchase — still being prepared", () => {
+  it("refuses to charge for a scene Bunny is still transcoding", async () => {
+    mocks.videoFindUnique.mockResolvedValue({ ...VIDEO, encodingStatus: 1, encodeProgress: 20 });
+
+    const { status, body } = await post({ videoId: "video-1", method: "WALLET" });
+
+    expect(status).toBe(409);
+    expect(body.code).toBe("VIDEO_PROCESSING");
+    expect(body.error).toMatch(/not been charged/i);
+
+    // Nothing at all happened: no charge, no transaction row to reconcile, no
+    // coupon spent, and the customer never left the page.
+    expect(mocks.purchaseVideoWithWallet).not.toHaveBeenCalled();
+    expect(mocks.transactionCreate).not.toHaveBeenCalled();
+    expect(mocks.applyCoupon).not.toHaveBeenCalled();
+  });
+
+  it("refuses the phone path too, before any USSD push", async () => {
+    mocks.videoFindUnique.mockResolvedValue({ ...VIDEO, encodingStatus: 0, encodeProgress: 0 });
+
+    const { status, body } = await post({
+      videoId: "video-1",
+      gateway: "HARAKAPAY",
+      phoneNumber: "0712345678",
+    });
+
+    expect(status).toBe(409);
+    expect(body.code).toBe("VIDEO_PROCESSING");
+    expect(mocks.transactionCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a scene whose encode failed", async () => {
+    // The feed hides these, but a bookmark, a shared link or a stale page still
+    // reaches this route. Access to something that will never play is not access.
+    mocks.videoFindUnique.mockResolvedValue({ ...VIDEO, encodingStatus: 5, encodeProgress: 0 });
+
+    const { status, body } = await post({ videoId: "video-1", method: "WALLET" });
+
+    expect(status).toBe(409);
+    expect(body.code).toBe("VIDEO_UNAVAILABLE");
+    expect(mocks.purchaseVideoWithWallet).not.toHaveBeenCalled();
+  });
+
+  it("still sells a scene the host has finished", async () => {
+    mocks.videoFindUnique.mockResolvedValue({ ...VIDEO, encodingStatus: 3, encodeProgress: 100 });
+
+    const { status } = await post({ videoId: "video-1", method: "WALLET" });
+
+    expect(status).toBe(200);
+  });
+
+  it("still sells a side-loaded scene Bunny never transcodes", async () => {
+    // encodingStatus null = demo/migrated content, which plays from its own URL
+    // and is not waiting for anything.
+    mocks.videoFindUnique.mockResolvedValue({ ...VIDEO, encodingStatus: null, encodeProgress: 0 });
+
+    const { status } = await post({ videoId: "video-1", method: "WALLET" });
+
+    expect(status).toBe(200);
   });
 });

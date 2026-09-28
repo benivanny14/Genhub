@@ -12,9 +12,10 @@ import { api } from "@/lib/api-response";
 import { createVideoSchema } from "@/lib/validation";
 import { generateSlug, intParam } from "@/lib/utils";
 import { introClipPath, isBunnyConfigured, isBunnyVideoId, resolveTeaserUrl } from "@/lib/bunny";
-import { cacheGet, cacheSet } from "@/lib/redis";
+import { cacheGet, cacheSet, cacheDel } from "@/lib/redis";
 import { rankTrending, type TrendingItem } from "@/lib/trending";
 import { normalizeMediaUrl } from "@/lib/media";
+import { BUNNY_FAILED, videoStatus } from "@/lib/video-status";
 import config from "@/lib/config";
 
 // =============================================================================
@@ -52,11 +53,24 @@ export async function GET(request: NextRequest) {
       isPublished: true,
       isDeleted: false,
       isFlagged: false,
+      // A post whose encode Bunny has FAILED is not published, even though the
+      // row is: it can never play, so leaving it in the grid is a card that
+      // opens onto an apology. Written as "not tracked, or not failed" rather
+      // than `{ not: 5 }`, because a `not` comparison against a NULL column
+      // matches nothing — and NULL is every side-loaded, demo and pre-lifecycle
+      // video in the catalogue, which would empty the feed.
+      OR: [{ encodingStatus: null }, { encodingStatus: { not: BUNNY_FAILED } }],
       ...(search
         ? {
-            OR: [
-              { title: { contains: search, mode: "insensitive" as const } },
-              { description: { contains: search, mode: "insensitive" as const } },
+            // The two ORs cannot share a key: search is ANDed onto the filter
+            // above, not merged into it.
+            AND: [
+              {
+                OR: [
+                  { title: { contains: search, mode: "insensitive" as const } },
+                  { description: { contains: search, mode: "insensitive" as const } },
+                ],
+              },
             ],
           }
         : {}),
@@ -119,6 +133,13 @@ export async function GET(request: NextRequest) {
       isFeatured: true,
       tags: true,
       createdAt: true,
+      // Bunny's own numbers, so a card can tell "this is live" from "this is
+      // live but still transcoding" — an Instagram-like post exists before it
+      // can play, and the card has to show that rather than a dead player. Raw
+      // Bunny ids stay out of every response; a status code and a percentage
+      // tell a viewer nothing they did not already know.
+      encodingStatus: true,
+      encodeProgress: true,
       creator: {
         select: {
           id: true,
@@ -167,9 +188,20 @@ export async function GET(request: NextRequest) {
           teaserBunnyVideoId: string | null;
           teaserClipUrl: string | null;
           price: number;
+          encodingStatus: number | null;
+          encodeProgress: number;
         }[]
       ).map(
-        ({ bunnyVideoId, previewUrl, teaserBunnyVideoId, teaserClipUrl, price, ...v }) => {
+        ({
+          bunnyVideoId,
+          previewUrl,
+          teaserBunnyVideoId,
+          teaserClipUrl,
+          price,
+          encodingStatus,
+          encodeProgress,
+          ...v
+        }) => {
           // The trailer clip when one exists, the video itself when it is free,
           // and null for a paid scene with no trailer — never a throw, so one
           // video with a Bunny id on an unconfigured library cannot break the feed.
@@ -185,11 +217,24 @@ export async function GET(request: NextRequest) {
             price,
           });
 
+          const status = videoStatus(encodingStatus, encodeProgress);
+
           return {
             ...v,
             // Destructured out only for the resolver — the client needs it back,
             // or every card loses its price badge.
             price,
+            // One word for the card to switch on: `PROCESSING` posts render the
+            // thumbnail, the badge and no playback; everything else behaves
+            // exactly as before.
+            status,
+            // The card also shows how far along it is, which is the only thing
+            // that answers "is this moving?" while a creator waits.
+            encodeProgress: encodeProgress ?? 0,
+            // Said out loud so a card never *hovers* a manifest that does not
+            // exist yet: Bunny 404s a playlist until transcoding finishes, and
+            // the preview would spend a request to find that out on every hover.
+            playable: status === "READY",
             teaserUrl,
             // What a card plays on hover when the scene is LOCKED. A paid scene
             // with no uploaded trailer resolves to a null teaser, and without
@@ -301,11 +346,26 @@ export async function POST(request: NextRequest) {
     const slug = await uniqueVideoSlug(title);
 
     // Bunny accepts an upload seconds after the creator's browser starts
-    // sending, but the video is unplayable until transcoding finishes. A video
-    // Bunny has to transcode therefore starts UNPUBLISHED and is published by
-    // refreshVideoEncoding() the moment Bunny can serve it — the creator is
-    // notified at the same time. Side-loaded/demo rows (synthetic ids, which
-    // Bunny never transcodes) keep publishing immediately, exactly as before.
+    // sending, but the video is unplayable until transcoding finishes. This
+    // used to hold the row back (`isPublished: false`) until Bunny could serve
+    // it, which meant a creator's post simply did not exist for anyone —
+    // including themselves — for the minutes a phone upload + transcode takes,
+    // and the failure they described was "my video never appears".
+    //
+    // Publication is now INSTANT and playback is what waits: the row is created
+    // published with encodingStatus 0, the feed and the creator's profile show
+    // it immediately behind an "Inachakatwa..." badge, and the badge is
+    // replaced by the player in place when the host finishes (the webhook, the
+    // cron sweep and the client poll all converge on that one state — see
+    // lib/video-status.ts).
+    //
+    // A row whose encode FAILS is hidden from the public feed by the GET above,
+    // so "published but unplayable" cannot become a permanent dead card; the
+    // creator still sees it, with Bunny's reason, on their dashboard.
+    //
+    // Side-loaded/demo rows (synthetic ids, which Bunny never transcodes) keep
+    // encodingStatus null and are READY from the first moment, exactly as
+    // before.
     const awaitingTranscode = isBunnyConfigured() && isBunnyVideoId(bunnyVideoId);
 
     const video = await prisma.video.create({
@@ -325,7 +385,7 @@ export async function POST(request: NextRequest) {
         teaserDuration,
         category,
         tags: tags || [],
-        isPublished: !awaitingTranscode,
+        isPublished: true,
         encodingStatus: awaitingTranscode ? 0 : null,
         // The creator's own size, kept beside the host's number so the dashboard
         // can answer "did the whole file arrive?" instead of only "does the host
@@ -343,14 +403,24 @@ export async function POST(request: NextRequest) {
         price: true,
         isPublished: true,
         encodingStatus: true,
+        encodeProgress: true,
         createdAt: true,
       },
     });
 
+    // The feed is cached for a minute, and a creator who has just uploaded is
+    // looking at their own profile to see it appear. Without this the post is
+    // real, published and invisible for up to a minute — which reads exactly
+    // like the bug this change removes.
+    await cacheDel("videos:*");
+
     return api.success(
-      video,
+      {
+        ...video,
+        status: videoStatus(video.encodingStatus, video.encodeProgress),
+      },
       awaitingTranscode
-        ? "Video saved — it goes live automatically as soon as processing finishes"
+        ? "Video posted — it is already on your profile while it finishes processing"
         : "Video created successfully",
       201
     );
