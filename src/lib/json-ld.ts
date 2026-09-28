@@ -10,10 +10,12 @@
 // the JSON string is inside the element, not inside a JS string literal. So a
 // title of
 //
-//   </script><script>fetch('/api/wallet/withdraw', {method:'POST', ...})</script>
+//   </script><script>  ... any script the author chose ...  </script>
 //
 // closes our tag and opens a script of the attacker's own, with our origin and
-// our visitor's session. The page-level CSP allows inline scripts (Next.js ships
+// our visitor's session. (Deliberately not spelled out as a live call: the
+// endpoint audit reads these comments as UI call sites, and an example that
+// looks like one makes the "every UI fetch has a route" gate fail.) The page-level CSP allows inline scripts (Next.js ships
 // its hydration payload as one), so nothing else stands in the way.
 //
 // That was demonstrated, not theorised: the same markup in a browser ran the
