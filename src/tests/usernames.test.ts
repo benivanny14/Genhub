@@ -16,6 +16,7 @@ import { describe, it, expect } from "vitest";
 import {
   USERNAME_MAX_LENGTH,
   isReservedUsername,
+  usernameAttempts,
   usernameFormatError,
   usernameFromDisplayName,
 } from "@/lib/usernames";
@@ -61,6 +62,32 @@ describe("usernameFromDisplayName", () => {
       expect(handle, name).not.toBe("");
       expect(usernameFormatError(handle), name).toBeNull();
     }
+  });
+
+  it("numbers the handle it hands out when the name is already taken", () => {
+    // The name belongs to the person, so a collision keeps the name and moves
+    // the number — not the other way round.
+    expect(usernameAttempts("amani").slice(0, 4)).toEqual([
+      "amani",
+      "amani_2",
+      "amani_3",
+      "amani_4",
+    ]);
+  });
+
+  it("makes room for the number instead of producing the same handle twice", () => {
+    // A 30-character base cannot take `_2` without giving something up, and the
+    // thing it gives up must not be the number itself: every candidate has to be
+    // a DIFFERENT string, or the caller would believe it had tried four names
+    // when it had tried one.
+    const attempts = usernameAttempts("a".repeat(USERNAME_MAX_LENGTH));
+
+    expect(new Set(attempts).size).toBe(attempts.length);
+    for (const candidate of attempts) {
+      expect(candidate.length).toBeLessThanOrEqual(USERNAME_MAX_LENGTH);
+      expect(candidate).not.toMatch(/_$/);
+    }
+    expect(attempts[1]).toBe(`${"a".repeat(USERNAME_MAX_LENGTH - 2)}_2`);
   });
 
   it("can derive a reserved word, which is why the field is still validated", () => {

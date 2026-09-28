@@ -19,6 +19,7 @@ import { api } from "@/lib/api-response";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import { sendPasswordResetLink } from "@/lib/services/password-reset.service";
+import { emailMatch } from "@/lib/validation";
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -34,8 +35,11 @@ export async function POST(request: NextRequest) {
       return api.validation("Enter the email address on your account");
     }
 
+    // Case-insensitive: the account's row may hold the address with capitals
+    // from before it was normalised, and an exact match would silently answer
+    // "if that account exists…" while sending nothing at all.
     const user = await prisma.user.findFirst({
-      where: { email: email.trim() },
+      where: emailMatch(email),
       select: { id: true },
     });
 

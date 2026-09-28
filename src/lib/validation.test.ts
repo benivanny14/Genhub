@@ -104,8 +104,12 @@ describe("registerSchema username", () => {
       password: "password123",
     });
 
-  it("requires a username", () => {
-    expect(withUsername(undefined).success).toBe(false);
+  // The handle is derived from the name, so a form that sends no handle is
+  // complete — the name IS the username. An EMPTY one is still a mistake worth
+  // reporting: it means a client cleared the field rather than not having one.
+  it("does not require a username, because the name becomes one", () => {
+    expect(withUsername(undefined).success).toBe(true);
+    expect(withUsername(null).success).toBe(true);
     expect(withUsername("").success).toBe(false);
   });
 

@@ -8,6 +8,10 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import config from "@/lib/config";
+import {
+  REFERRAL_BONUS_AMOUNT,
+  referralBonusTransactionId,
+} from "@/lib/services/referral.service";
 
 function makeCode(displayName: string | null): string {
   const base = (displayName || "GEN")
@@ -61,6 +65,21 @@ export async function GET(request: NextRequest) {
       take: 20,
     });
 
+    // Which invitations have actually been paid.
+    //
+    // The bonus is released when the invited person makes their first payment,
+    // so an invite can be a real, signed-up person who has earned nothing yet.
+    // Reporting TZS 1,000 beside every row would promise money the wallet does
+    // not hold; the existence of the bonus row is what makes it true.
+    const paidBonuses = new Set(
+      (
+        await prisma.transaction.findMany({
+          where: { id: { in: referrals.map((r) => referralBonusTransactionId(r.id)) } },
+          select: { id: true },
+        })
+      ).map((t) => t.id)
+    );
+
     return api.success({
       code: user.referralCode,
       link: user.referralCode
@@ -68,13 +87,19 @@ export async function GET(request: NextRequest) {
         : null,
       referredCount: user._count.referrals,
       referralEarnings: user.referralEarnings,
-      rewardPerReferral: 1000,
+      rewardPerReferral: REFERRAL_BONUS_AMOUNT,
       referrals: referrals.map((r) => ({
         id: r.id,
+        // The public handle travels with the row: it is the name shown
+        // everywhere else, so an invite list that showed only `displayName`
+        // would name people differently from the rest of the app.
+        username: r.username,
         displayName: r.displayName,
         avatarUrl: r.avatarUrl,
         joinedAt: r.createdAt,
-        bonus: 1000,
+        bonus: paidBonuses.has(referralBonusTransactionId(r.id))
+          ? REFERRAL_BONUS_AMOUNT
+          : 0,
       })),
     });
   } catch (error) {

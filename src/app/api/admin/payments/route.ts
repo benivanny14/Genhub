@@ -34,6 +34,7 @@ import {
 import { reverseCollectedCharge } from "@/lib/services/payment-reversal.service";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import { z } from "zod";
+import { intParam } from "@/lib/utils";
 
 // A USSD prompt answered normally settles in a couple of minutes; past this the
 // charge is only worth investigating.
@@ -45,8 +46,8 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams;
     const status = (searchParams.get("status") || "PENDING").toUpperCase();
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
-    const limit = Math.min(50, parseInt(searchParams.get("limit") || "20"));
+    const page = intParam(searchParams.get("page"), 1);
+    const limit = intParam(searchParams.get("limit"), 20, 50);
 
     const where = { status: status as any };
 

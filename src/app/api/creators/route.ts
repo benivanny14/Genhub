@@ -7,12 +7,15 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
 import { cacheGet, cacheSet } from "@/lib/redis";
+import { intParam } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
     const search = request.nextUrl.searchParams.get("q")?.trim() || "";
-    const page = Math.max(1, parseInt(request.nextUrl.searchParams.get("page") || "1"));
-    const limit = Math.min(60, parseInt(request.nextUrl.searchParams.get("limit") || "24"));
+    // Same guard as the feed: `Math.max(1, NaN)` is NaN, and Prisma refuses a
+    // NaN `skip`/`take` with a 500.
+    const page = intParam(request.nextUrl.searchParams.get("page"), 1);
+    const limit = intParam(request.nextUrl.searchParams.get("limit"), 24, 60);
 
     const cacheKey = `creators:dir:${search}:${page}:${limit}`;
     const cached = await cacheGet(cacheKey);

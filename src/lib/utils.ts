@@ -78,6 +78,29 @@ export function generateSlug(title: string): string {
     .slice(0, 100);
 }
 
+// A whole number from a query string, or a default when it is missing or not a
+// number.
+//
+// `parseInt("abc")` is NaN, and `Math.max(1, NaN)` is still NaN — so every
+// listing route that wrote `Math.max(1, parseInt(page))` handed Prisma a NaN
+// `skip`/`take` whenever anybody typed a letter into the page number. Prisma
+// refuses that argument, so `/api/videos?page=abc` was a 500 instead of the
+// feed, and the cache key was written for a page that cannot exist.
+//
+// The page and the limit are the same question ("a bounded positive integer,
+// defaulting when absent"), asked by the feed, the directory and the admin
+// queues, so it is answered in one place rather than by five copies of
+// `parseInt` drifting apart.
+export function intParam(
+  raw: string | null | undefined,
+  fallback: number,
+  max: number = Number.MAX_SAFE_INTEGER
+): number {
+  const parsed = Number.parseInt((raw ?? "").trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+  return Math.min(max, parsed);
+}
+
 // Format relative time
 export function formatRelativeTime(date: Date): string {
   const now = new Date();

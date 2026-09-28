@@ -61,7 +61,9 @@ const translations: Record<string, Record<Locale, string>> = {
   "auth.viewerDesc": { en: "Watch videos", sw: "Tazama video" },
   "auth.creator": { en: "Creator", sw: "Muundaji" },
   "auth.creatorDesc": { en: "Upload videos", sw: "Pakia video" },
-  "auth.displayName": { en: "Display Name", sw: "Jina la Kuonyesha" },
+  // The ONE name an account has: it is what people see AND the @username it
+  // folds into, so it is described as a name, not as display metadata.
+  "auth.displayName": { en: "Your name", sw: "Jina lako" },
   "auth.emailRequired": { en: "Email address", sw: "Barua pepe" },
   // Sign-up takes an email and nothing else. The old copy offered "email OR
   // phone", which described an account nobody could recover (no SMS reset).

@@ -13,7 +13,40 @@ import {
   generateOrderId,
   toTelHref,
   cn,
+  intParam,
 } from "./utils";
+
+describe("intParam", () => {
+  it("uses the default when the value is missing", () => {
+    expect(intParam(null, 20, 50)).toBe(20);
+    expect(intParam(undefined, 1)).toBe(1);
+    expect(intParam("", 20, 50)).toBe(20);
+  });
+
+  it("never returns NaN for a value that is not a number", () => {
+    // Math.max(1, parseInt("abc")) is NaN, and a NaN take/skip is a 500.
+    for (const raw of ["abc", "NaN", "Infinity", "0x", "-", "  "]) {
+      const result = intParam(raw, 20, 50);
+      expect(Number.isNaN(result)).toBe(false);
+      expect(result).toBe(20);
+    }
+  });
+
+  it("caps the value at the maximum", () => {
+    expect(intParam("500", 20, 50)).toBe(50);
+    expect(intParam("50", 20, 50)).toBe(50);
+  });
+
+  it("falls back for zero and negative pages", () => {
+    expect(intParam("0", 1)).toBe(1);
+    expect(intParam("-3", 1)).toBe(1);
+  });
+
+  it("reads a real value, and ignores anything after it", () => {
+    expect(intParam("7", 1)).toBe(7);
+    expect(intParam(" 12 ", 1, 50)).toBe(12);
+  });
+});
 
 describe("formatTZS", () => {
   it("should format zero", () => {

@@ -11,6 +11,7 @@ import { assertSupportedSettlementProvider } from "../payments/gateway";
 import { notifyPaymentResult } from "./payment-notify.service";
 import { grantSubscription } from "./subscription.service";
 import { consumeCoupon } from "../coupons";
+import { releaseReferralBonus } from "./referral.service";
 
 // =============================================================================
 // Process Successful Payment Webhook
@@ -208,6 +209,23 @@ export async function processPaymentWebhook(params: {
         where: { id: orderId },
         data: { status: "SUCCESS", providerRef: transactionId },
       });
+  }
+
+  // -------------------------------------------------------- The referral bonus
+  //
+  // Money has now landed for this customer, which is the whole condition for
+  // paying whoever invited them: no sale, no bonus. It is released from HERE,
+  // the single choke point every gateway payment passes through, rather than
+  // from the purchase route — a bonus paid at checkout would be paid for USSD
+  // prompts nobody approves, and the wallet and subscription paths would each
+  // need their own copy of the rule.
+  //
+  // Called on every settled payment and pays at most once per invited account
+  // (see services/referral.service.ts). It never throws: a bonus that could not
+  // be paid must not undo a settlement that already happened.
+  const referral = await releaseReferralBonus({ referredUserId: transaction.userId });
+  if (referral.paid) {
+    console.log(`[Webhook] Referral bonus released to ${referral.referrerId}`);
   }
 
   // --------------------------------------------------------------- The coupon

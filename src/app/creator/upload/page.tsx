@@ -493,12 +493,16 @@ export default function UploadPage() {
                 <p className="text-xs text-white/40">
                   MP4, MOV, AVI — Max 2GB
                 </p>
-                {price > 0 && (
-                  <p className="text-xs text-amber-200/80 mt-2">
-                    A paid scene must be at least {MIN_VIDEO_DURATION_SECONDS / 60} minutes
-                    long or it never goes live.
-                  </p>
-                )}
+                {/* The 8-minute floor is not a price rule, and saying it only
+                    above a price hid it from exactly the creators it holds
+                    back: a free scene shorter than the floor is never
+                    published either (see refreshVideoEncoding). Stated here,
+                    before the file is picked, because it cannot be fixed
+                    after the upload. */}
+                <p className="text-xs text-amber-200/80 mt-2">
+                  Every scene must be at least {MIN_VIDEO_DURATION_SECONDS / 60} minutes
+                  long — a shorter video never goes live, paid or free.
+                </p>
                 <input
                   type="file"
                   accept="video/*"

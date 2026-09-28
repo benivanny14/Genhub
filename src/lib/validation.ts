@@ -105,11 +105,50 @@ export const usernameSchema = usernameShapeSchema
     message: usernameFormatError(value) ?? "Choose a different username",
   }));
 
+/**
+ * The one form of an email address this app stores or looks up.
+ *
+ * `email String? @unique` on PostgreSQL is case-SENSITIVE, so without this
+ * `User@Example.com` and `user@example.com` are two different accounts: the
+ * second sign-up passes the "already in use" check, and the person who typed a
+ * capital letter at sign-up is later told "Incorrect sign-in details" for the
+ * same address in lowercase. Every write goes through here; every read matches
+ * case-insensitively (see the login, register and forgot-password routes), so
+ * accounts created before this rule can still sign in.
+ */
+export function normalizeEmail(raw: string): string {
+  return raw.trim().toLowerCase();
+}
+
+/**
+ * A case-insensitive match on one email address, for a `where` clause.
+ *
+ * `findUnique` accepts only the exact unique value, so a lookup that must also
+ * find a row stored with capitals has to be a `findFirst` with a filter — this
+ * keeps that filter identical everywhere it is needed.
+ */
+export function emailMatch(raw: string) {
+  return { email: { equals: normalizeEmail(raw), mode: "insensitive" as const } };
+}
+
 export const registerSchema = z.object({
   displayName: z.string().min(2, "Name must be at least 2 characters").max(50),
-  // Unique public handle (see lib/usernames.ts).
-  username: usernameSchema,
-  email: z.string().trim().email("Enter a valid email address"),
+  // Optional, because the name above IS the username: the route derives the
+  // handle from it and numbers the handle when somebody already holds that
+  // name (see /api/auth/register). A form that still sends one is treated as
+  // having NAMED a handle — its collision is reported rather than numbered.
+  //
+  // Not `.optional()` alone: a client that clears the field sends `null`, which
+  // means "no handle of my own" just as plainly as omitting it does.
+  username: usernameSchema.nullish(),
+  email: z
+    .string()
+    .trim()
+    .email("Enter a valid email address")
+    // Stored lowercase: the column is unique and case-sensitive, so this is what
+    // stops the same person ending up with two accounts, and what makes the
+    // second sign-up see the first one's row.
+    .transform(normalizeEmail),
   password: z.string().min(8, "Password must be at least 8 characters"),
   role: z.enum(["VIEWER", "CREATOR"]).default("VIEWER"),
   locale: z.enum(["sw", "en"]).default("sw"),
@@ -124,7 +163,7 @@ export const registerSchema = z.object({
 // without either one failing.
 
 export const loginSchema = z.object({
-  email: z.string().email().optional(),
+  email: z.string().email().optional().transform((value) => (value ? normalizeEmail(value) : value)),
   phone: z.string().optional(),
   password: z.string().min(1, "Password is required"),
 }).refine((data) => data.email || data.phone, {

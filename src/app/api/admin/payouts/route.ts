@@ -10,6 +10,7 @@ import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import { z } from "zod";
+import { intParam } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
@@ -31,8 +32,8 @@ export async function GET(request: NextRequest) {
         (ALL_STATUSES as readonly string[]).includes(s)
       );
     const statuses = requested.length ? requested : ["PENDING" as const];
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
-    const limit = Math.min(50, parseInt(searchParams.get("limit") || "20"));
+    const page = intParam(searchParams.get("page"), 1);
+    const limit = intParam(searchParams.get("limit"), 20, 50);
 
     const [payouts, total] = await Promise.all([
       prisma.payoutRequest.findMany({

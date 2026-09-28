@@ -10,6 +10,7 @@ import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { reviewKycSchema } from "@/lib/validation";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
+import { intParam } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
@@ -17,8 +18,8 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams;
     const status = searchParams.get("status") || "PENDING";
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
-    const limit = Math.min(50, parseInt(searchParams.get("limit") || "20"));
+    const page = intParam(searchParams.get("page"), 1);
+    const limit = intParam(searchParams.get("limit"), 20, 50);
 
     const [kycs, total] = await Promise.all([
       prisma.kycVerification.findMany({

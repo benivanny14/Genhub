@@ -183,6 +183,35 @@ export function usernameFromDisplayName(displayName: string): string {
 }
 
 /**
+ * The handles to try, in order, when the one derived from a name is already
+ * somebody else's.
+ *
+ * The promise the sign-up form makes is that the name you choose is your
+ * username, so a collision cannot be answered with "pick a different name" —
+ * the person already told us the name they want. It is answered the way social
+ * networks answer it: keep the name, number the handle (`amani`, `amani_2`,
+ * `amani_3`).
+ *
+ * The number is appended to a base TRUNCATED to make room for it, and a
+ * separator left dangling by that cut is removed — otherwise a 30-character
+ * base would produce `"a".repeat(30)` twice under two different numbers, and the
+ * caller would believe it had tried two names when it had tried one.
+ *
+ * Pure on purpose: which of these is free is a database question, asked by the
+ * caller (see services/username.service.ts).
+ */
+export function usernameAttempts(base: string, limit = 25): string[] {
+  const attempts = [base];
+  for (let n = 2; n <= Math.max(1, limit); n++) {
+    const suffix = `_${n}`;
+    const room = USERNAME_MAX_LENGTH - suffix.length;
+    const stem = base.slice(0, room).replace(/_+$/, "");
+    attempts.push(`${stem}${suffix}`);
+  }
+  return attempts;
+}
+
+/**
  * The name to show for an account, everywhere a name is shown.
  *
  * The @handle wins when there is one, because it is the name nobody else can
@@ -202,8 +231,14 @@ export function displayHandle(
   return user.displayName || fallback;
 }
 
-/** A short, user-facing summary of the rules, for the form's helper text. */
+/**
+ * A short, user-facing summary of the rules, for the helper text beside the
+ * NAME field.
+ *
+ * It describes the handle the name produces, not a separate field, because
+ * there is no separate field: the person types the name they want and this is
+ * what it turns into.
+ */
 export const USERNAME_RULES_HINT =
-
-  `${USERNAME_MIN_LENGTH}-${USERNAME_MAX_LENGTH} characters · lowercase letters, ` +
-  "numbers and underscores only · must be unique";
+  `your name becomes your @username — ${USERNAME_MIN_LENGTH}-${USERNAME_MAX_LENGTH} ` +
+  "characters: lowercase letters, numbers and underscores";

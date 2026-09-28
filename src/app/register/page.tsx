@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AuthBrandPanel from "@/components/AuthBrandPanel";
-import { Play, Mail, Lock, Eye, EyeOff, User, AtSign, Film, Check, Loader2, ArrowRight, ScrollText, ShieldAlert } from "lucide-react";
+import { Play, Mail, Lock, Eye, EyeOff, User, Film, Check, Loader2, ArrowRight, ScrollText, ShieldAlert } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
 import { useToast } from "@/components/Toast";
@@ -15,11 +15,7 @@ import {
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
 } from "@/lib/creator-guidelines";
-import {
-  USERNAME_RULES_HINT,
-  normalizeUsername,
-  usernameFromDisplayName,
-} from "@/lib/usernames";
+import { USERNAME_RULES_HINT, usernameFromDisplayName } from "@/lib/usernames";
 
 /** The form's life cycle — each phase has its own look and motion. */
 type Phase = "idle" | "loading" | "success" | "error";
@@ -51,14 +47,10 @@ export default function RegisterPage() {
   const isLight = theme === "light";
 
   const [role, setRole] = useState<"VIEWER" | "CREATOR">("VIEWER");
+  // The ONE name this account has. It is stored as the display name AND folded
+  // into the unique @username on the server, so the public name is the
+  // username: signing up never asks the same question twice.
   const [displayName, setDisplayName] = useState("");
-  // The public handle. Stored lowercase; typed as-is here so the person sees
-  // their own keystrokes, and normalised again on submit and on the server.
-  const [username, setUsername] = useState("");
-  // True once the person has typed a handle of their own. Until then the field
-  // follows the display name, so signing up does not ask for the same name
-  // twice — and the moment they edit it, we stop moving it under their cursor.
-  const [usernameTouched, setUsernameTouched] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -113,12 +105,11 @@ export default function RegisterPage() {
       refuse("Passwords do not match");
       return;
     }
-    // The username is the one name nobody else may take, so it is required and
-    // checked before the request goes out — the server checks it again, but a
-    // round trip that fails on "too short" is a bad first impression.
-    const handle = normalizeUsername(username);
-    if (!handle) {
-      refuse("Choose a username");
+    // There is no handle to check here: the name above IS the username, and the
+    // server folds it into one (numbering it when somebody else holds the same
+    // name). All this end insists on is that a name was typed at all.
+    if (!displayName.trim()) {
+      refuse("Type the name you want to be known by");
       return;
     }
     // Email only. Signing up with a phone number was removed along with the SMS
@@ -142,7 +133,6 @@ export default function RegisterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           displayName,
-          username: handle,
           email: email.trim(),
           password,
           role,
@@ -180,6 +170,10 @@ export default function RegisterPage() {
   }
 
   const busy = phase === "loading" || phase === "success";
+  // The handle the name will claim, shown as the person types. It is a
+  // PREVIEW: if somebody already holds it the server numbers theirs, so the
+  // field never promises a name it cannot deliver.
+  const handlePreview = usernameFromDisplayName(displayName);
   const strength = passwordStrength(password);
   const strengthStyle = STRENGTH[strength];
 
@@ -277,48 +271,31 @@ export default function RegisterPage() {
                 </button>
               </div>
 
-              <div className="relative">
-                <User className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
-                <input
-                  type="text"
-                  value={displayName}
-                  onChange={(e) => {
-                    setDisplayName(e.target.value);
-                    if (!usernameTouched) setUsername(usernameFromDisplayName(e.target.value));
-                  }}
-                  placeholder={t("auth.displayName")}
-                  className="input-field pl-10"
-                  required
-                  minLength={2}
-                  autoComplete="name"
-                />
-              </div>
-
               <div>
                 <div className="relative">
-                  <AtSign className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
+                  <User className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
                   <input
                     type="text"
-                    value={username}
-                    onChange={(e) => {
-                      setUsernameTouched(true);
-                      setUsername(e.target.value);
-                    }}
-                    placeholder="username"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    placeholder={t("auth.displayName")}
                     className="input-field pl-10"
                     required
-                    minLength={3}
-                    maxLength={30}
-                    autoComplete="username"
-                    autoCapitalize="none"
-                    spellCheck={false}
+                    minLength={2}
+                    autoComplete="name"
                   />
                 </div>
                 <p className={cn("text-xs mt-1", isLight ? "text-gray-400" : "text-white/40")}>
-                  Your public @handle, filled in from your name — change it to whatever you
-                  like. {USERNAME_RULES_HINT}.
+                  This is your public name, and it is your username too: you will be{" "}
+                  {handlePreview ? (
+                    <span className="font-mono text-brand-300">@{handlePreview}</span>
+                  ) : (
+                    "given an @username"
+                  )}
+                  . If that name is already taken we add a number to it. {USERNAME_RULES_HINT}.
                 </p>
               </div>
+
 
               <div className="relative">
                 <Mail className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
@@ -478,7 +455,9 @@ export default function RegisterPage() {
                   maxLength={32}
                 />
                 {referralCode && (
-                  <p className="text-xs text-emerald-400 mt-1">✓ Code applied — you both get a bonus</p>
+                  <p className="text-xs text-emerald-400 mt-1">
+                    ✓ Code applied — they earn a bonus once you make your first payment
+                  </p>
                 )}
               </div>
 

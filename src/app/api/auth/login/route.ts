@@ -8,7 +8,7 @@ import bcrypt from "bcryptjs";
 import prisma from "@/lib/db";
 import { generateToken, setAuthCookie } from "@/lib/auth";
 import { api } from "@/lib/api-response";
-import { loginSchema } from "@/lib/validation";
+import { loginSchema, emailMatch } from "@/lib/validation";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
@@ -36,11 +36,17 @@ export async function POST(request: NextRequest) {
 
     const { email, phone, password } = result.data;
 
-    // Find user
+    // Find user.
+    //
+    // The email is matched case-insensitively (emailMatch) rather than by exact
+    // equality: the column is unique and case-sensitive, so an account created
+    // before the address was normalised — `User@Example.com` — would answer
+    // "incorrect sign-in details" to the exact address typed back in lowercase.
+    // Matching this way fixes those accounts without rewriting their rows.
     const user = await prisma.user.findFirst({
       where: {
         OR: [
-          ...(email ? [{ email }] : []),
+          ...(email ? [emailMatch(email)] : []),
           ...(phone ? [{ phone }] : []),
         ],
       },

@@ -113,6 +113,23 @@ describe("GET /api/videos", () => {
     expect(secondKey).toContain("creator-2");
   });
 
+  it("answers a nonsense page number with the first page, not a 500", async () => {
+    // `Math.max(1, parseInt("abc"))` is NaN, and Prisma refuses a NaN take/skip
+    // — so a shared link with a mangled `?page=` was an error page.
+    const response = await GET(request("?page=abc&limit=nonsense"));
+
+    expect(response.status).toBe(200);
+    expect(findManyArgs().take).toBe(20);
+  });
+
+  it("caps the page size and refuses a negative page", async () => {
+    await GET(request("?page=-4&limit=5000"));
+
+    const args = mocks.findMany.mock.calls[0][0] as { take: number; skip: number };
+    expect(args.take).toBe(50);
+    expect(args.skip).toBe(0);
+  });
+
   it("does not serve a creator's list from the general feed's cache", async () => {
     // The general feed was cached under a key that did not name a creator, so a
     // creator page could be answered entirely from cache — the filter above

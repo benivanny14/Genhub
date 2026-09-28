@@ -10,7 +10,7 @@ import prisma from "@/lib/db";
 import { requireAuth, requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { createVideoSchema } from "@/lib/validation";
-import { generateSlug } from "@/lib/utils";
+import { generateSlug, intParam } from "@/lib/utils";
 import { introClipPath, isBunnyConfigured, isBunnyVideoId, resolveTeaserUrl } from "@/lib/bunny";
 import { cacheGet, cacheSet } from "@/lib/redis";
 import { rankTrending, type TrendingItem } from "@/lib/trending";
@@ -24,8 +24,11 @@ import config from "@/lib/config";
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
-    const limit = Math.min(50, parseInt(searchParams.get("limit") || "20"));
+    // intParam, not `parseInt`: a letter in the page number is NaN, and a NaN
+    // `skip`/`take` is refused by Prisma — `/api/videos?page=abc` used to answer
+    // 500 instead of the first page of the feed.
+    const page = intParam(searchParams.get("page"), 1);
+    const limit = intParam(searchParams.get("limit"), 20, 50);
     const search = searchParams.get("q") || "";
     const category = searchParams.get("category") || "";
     // A creator's own page asks for their videos with this. It used to be read
