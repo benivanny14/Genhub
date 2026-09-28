@@ -976,16 +976,36 @@ export interface SampledBunnyVideo {
   thumbnailUrl: string | null;
 }
 
+/** Bunny's own "finished" code on a video object (not a webhook status). */
+const BUNNY_VIDEO_STATUS_FINISHED = 4;
+
 export async function sampleBunnyVideo(): Promise<SampledBunnyVideo | null> {
   if (!isBunnyConfigured()) return null;
   try {
+    // A page of videos, not the newest one, because the sample has to be a video
+    // that can actually PLAY. Asking for the newest object made this probe lie:
+    // a freshly reserved upload that never received a byte has no manifest, so
+    // the signed playback check answered 404 and the whole service probe
+    // reported "Bunny Stream is configured but failing" — which is what turned
+    // the uptime watchdog red for a reason that had nothing to do with signing.
+    // A library with no finished video reports "nothing to test yet" instead,
+    // which is honest and is not an alarm.
     const list = await bunnyFetch(
-      `${BUNNY_STREAM_API}/library/${config.bunny.libraryId}/videos?page=1&itemsPerPage=1`,
+      `${BUNNY_STREAM_API}/library/${config.bunny.libraryId}/videos?page=1&itemsPerPage=50`,
       { headers: { AccessKey: config.bunny.apiKey } },
       "probe video lookup"
     );
     if (!list.ok) return null;
-    const guid = ((await list.json()) as { items?: { guid?: string }[] }).items?.[0]?.guid;
+    const items =
+      ((await list.json()) as {
+        items?: { guid?: string; status?: number; storageSize?: number }[];
+      }).items ?? [];
+    const guid = items.find(
+      (v) =>
+        v.status === BUNNY_VIDEO_STATUS_FINISHED &&
+        (v.storageSize ?? 0) > 0 &&
+        typeof v.guid === "string"
+    )?.guid;
     if (!guid) return null;
 
     const play = await bunnyFetch(
