@@ -15,7 +15,11 @@ import {
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
 } from "@/lib/creator-guidelines";
-import { USERNAME_RULES_HINT, normalizeUsername } from "@/lib/usernames";
+import {
+  USERNAME_RULES_HINT,
+  normalizeUsername,
+  usernameFromDisplayName,
+} from "@/lib/usernames";
 
 /** The form's life cycle — each phase has its own look and motion. */
 type Phase = "idle" | "loading" | "success" | "error";
@@ -51,6 +55,10 @@ export default function RegisterPage() {
   // The public handle. Stored lowercase; typed as-is here so the person sees
   // their own keystrokes, and normalised again on submit and on the server.
   const [username, setUsername] = useState("");
+  // True once the person has typed a handle of their own. Until then the field
+  // follows the display name, so signing up does not ask for the same name
+  // twice — and the moment they edit it, we stop moving it under their cursor.
+  const [usernameTouched, setUsernameTouched] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -271,7 +279,19 @@ export default function RegisterPage() {
 
               <div className="relative">
                 <User className={cn("absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4", isLight ? "text-gray-400" : "text-white/40")} />
-                <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={t("auth.displayName")} className="input-field pl-10" required minLength={2} autoComplete="name" />
+                <input
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => {
+                    setDisplayName(e.target.value);
+                    if (!usernameTouched) setUsername(usernameFromDisplayName(e.target.value));
+                  }}
+                  placeholder={t("auth.displayName")}
+                  className="input-field pl-10"
+                  required
+                  minLength={2}
+                  autoComplete="name"
+                />
               </div>
 
               <div>
@@ -280,7 +300,10 @@ export default function RegisterPage() {
                   <input
                     type="text"
                     value={username}
-                    onChange={(e) => setUsername(e.target.value)}
+                    onChange={(e) => {
+                      setUsernameTouched(true);
+                      setUsername(e.target.value);
+                    }}
                     placeholder="username"
                     className="input-field pl-10"
                     required
@@ -292,7 +315,8 @@ export default function RegisterPage() {
                   />
                 </div>
                 <p className={cn("text-xs mt-1", isLight ? "text-gray-400" : "text-white/40")}>
-                  Your public @handle. {USERNAME_RULES_HINT}.
+                  Your public @handle, filled in from your name — change it to whatever you
+                  like. {USERNAME_RULES_HINT}.
                 </p>
               </div>
 

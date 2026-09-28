@@ -153,6 +153,36 @@ export function usernameFormatError(username: string): string | null {
 }
 
 /**
+ * A handle derived from a display name, so a creator does not have to invent a
+ * second name for themselves.
+ *
+ * The display name is free text — spaces, capitals, an emoji, punctuation — and
+ * the handle has to survive being put in a URL, quoted in a reply and typed on a
+ * phone keyboard. This folds one into the other: accents lose their marks (é →
+ * e), anything that is not a letter or a digit becomes a single underscore, and
+ * the result is trimmed to the length limit without leaving a trailing
+ * separator.
+ *
+ * Returns "" when nothing usable is left ("😍", "a"). The caller then asks for a
+ * handle instead of guessing at one: an empty field with a rule beside it is
+ * clearer than a handle nobody typed.
+ */
+export function usernameFromDisplayName(displayName: string): string {
+  const value = displayName
+    .normalize("NFKD")
+    // Combining marks left behind by NFKD: "e" + U+0301 for "é".
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, USERNAME_MAX_LENGTH)
+    .replace(/_+$/, "");
+
+  return value.length >= USERNAME_MIN_LENGTH ? value : "";
+}
+
+/**
  * The name to show for an account, everywhere a name is shown.
  *
  * The @handle wins when there is one, because it is the name nobody else can
@@ -174,5 +204,6 @@ export function displayHandle(
 
 /** A short, user-facing summary of the rules, for the form's helper text. */
 export const USERNAME_RULES_HINT =
+
   `${USERNAME_MIN_LENGTH}-${USERNAME_MAX_LENGTH} characters · lowercase letters, ` +
   "numbers and underscores only · must be unique";
