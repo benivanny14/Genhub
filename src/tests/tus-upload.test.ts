@@ -383,7 +383,10 @@ describe("what a failed upload reports about itself", () => {
         },
         (error: TusUploadError) => error
       );
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      // The whole ladder: one silence window per attempt, plus the backoff
+      // between them. Comfortably more than it needs, so a longer ladder does
+      // not turn this into a flaky race.
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
       return await settled;
     } finally {
       vi.useRealTimers();
@@ -596,8 +599,8 @@ describe("the stall watchdog", () => {
         },
         (error: TusUploadError) => error
       );
-      // Four attempts of one stall window each, plus the backoff between them.
-      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      // One silence window per attempt, plus the backoff between them.
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
       await expect(settled).resolves.toMatchObject({
         code: "NETWORK",
         stage: "chunk",

@@ -103,11 +103,20 @@ export function looksLikeMobile(): boolean {
 /**
  * Backoff between attempts at the SAME chunk, in ms.
  *
- * Four attempts with a short exponential backoff. The upload is resumable, so
- * retries should recover a brief network dip without keeping a creator waiting
- * through a 20-minute ladder after a dead connection.
+ * The tail is deliberately long, and that is measured rather than guessed. On
+ * this deployment one creator's phone failed every upload across five hours, and
+ * Bunny's own library confirms it never received a single byte: nine empty slots,
+ * storage size zero. Four of those nine attempts could not even deliver the
+ * failure report to our server, so the device was reachable enough for a
+ * one-kilobyte POST and not for a three-megabyte PATCH — a connection that goes
+ * away and comes back, not one that is gone.
+ *
+ * A ladder of [0, 1s, 3s, 8s] gives up twelve seconds after the first failure,
+ * which cannot tell those two cases apart. Six attempts, with the last three
+ * minutes-ish apart, is long enough for a real drop to return and short enough
+ * that a genuinely dead connection still says so inside a minute of waiting.
  */
-const RETRY_DELAYS = [0, 1_000, 3_000, 8_000];
+export const CHUNK_RETRY_DELAYS = [0, 1_000, 3_000, 8_000, 15_000, 30_000] as const;
 const RESERVE_RETRY_DELAYS = [0, 1_000, 3_000];
 
 /**
@@ -870,10 +879,10 @@ export async function uploadFileWithTus(
     let attemptSent = 0;
     let maxAttemptSent = 0;
 
-    for (let attempt = 0; attempt < RETRY_DELAYS.length; attempt++) {
+    for (let attempt = 0; attempt < CHUNK_RETRY_DELAYS.length; attempt++) {
       attemptSent = 0;
       try {
-        if (RETRY_DELAYS[attempt] > 0) await sleep(RETRY_DELAYS[attempt], signal);
+        if (CHUNK_RETRY_DELAYS[attempt] > 0) await sleep(CHUNK_RETRY_DELAYS[attempt], signal);
         attemptStartedAt = Date.now();
         offset = await sendChunk(
           location,
@@ -926,7 +935,7 @@ export async function uploadFileWithTus(
         onRetry?.({
           chunkIndex,
           attempt: attempt + 1,
-          totalAttempts: RETRY_DELAYS.length,
+          totalAttempts: CHUNK_RETRY_DELAYS.length,
           offset: chunkStart,
           reason: tusError.reason,
         });
@@ -939,8 +948,8 @@ export async function uploadFileWithTus(
         chunkIndex,
         // Every attempt in the ladder was spent on this one chunk. Zero means
         // the first try died, which is a different finding from a connection
-        // that refused it four times.
-        retryCount: RETRY_DELAYS.length - 1,
+        // that refused it six times over a minute.
+        retryCount: CHUNK_RETRY_DELAYS.length - 1,
       });
     }
     reportProgress(offset);

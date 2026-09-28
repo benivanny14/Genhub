@@ -30,6 +30,7 @@ import {
   uploadFileWithTus,
   describeRetry,
   TusUploadError,
+  CHUNK_RETRY_DELAYS,
   TUS_CHUNK_ALIGNMENT,
   type TusUploadRetryInfo,
 } from "@/lib/tus-upload";
@@ -199,7 +200,7 @@ async function run(
     () => null,
     (error: unknown) => error
   );
-  await vi.advanceTimersByTimeAsync(options.advanceMs ?? 10 * 60_000);
+  await vi.advanceTimersByTimeAsync(options.advanceMs ?? 15 * 60_000);
   return { error: (await settled) as TusUploadError | null, sends, calls };
 }
 
@@ -263,7 +264,7 @@ describe("retrying a dropped chunk", () => {
     expect(seen[0]).toMatchObject({
       chunkIndex: 0,
       attempt: 1,
-      totalAttempts: 4,
+      totalAttempts: CHUNK_RETRY_DELAYS.length,
       offset: 0,
       reason: "reset",
     });
@@ -318,16 +319,32 @@ describe("what a run of retries reports", () => {
   it("counts the retries, the chunk and the server offset when the ladder runs out", async () => {
     const { error, sends } = await run(fileOf(CHUNK * 2), [{ drop: true }], { headOffset: null });
 
-    // Four attempts at the first chunk, the whole ladder.
-    expect(sends).toHaveLength(4);
+    // The whole ladder spent on the first chunk.
+    expect(sends).toHaveLength(CHUNK_RETRY_DELAYS.length);
     expect(error).toMatchObject({
       code: "NETWORK",
       stage: "chunk",
       reason: "reset",
       chunkIndex: 0,
       offset: 0,
-      retryCount: 3,
+      retryCount: CHUNK_RETRY_DELAYS.length - 1,
     });
+  });
+
+  it("keeps trying a connection that went away and came back", async () => {
+    // The failure this ladder exists for, measured on a real deployment: a phone
+    // whose connection drops for tens of seconds loses every attempt of a short
+    // ladder and every byte of a 192 MB upload. Attempts four and five are
+    // failed here, so the upload only finishes if the tail of the ladder is
+    // still trying a minute in.
+    const { error, sends } = await run(
+      fileOf(CHUNK),
+      [{ drop: true }, { drop: true }, { drop: true }, { drop: true }, {}],
+      { headOffset: null }
+    );
+
+    expect(error).toBeNull();
+    expect(sends).toHaveLength(5);
   });
 
   it("makes progress cumulative across chunks and retries, never backwards", async () => {
@@ -366,7 +383,7 @@ describe("what a run of retries reports", () => {
     expect(error).toMatchObject({
       chunkIndex: 1,
       offset: CHUNK,
-      retryCount: 3,
+      retryCount: CHUNK_RETRY_DELAYS.length - 1,
       bytesTotal: total,
     });
     // One whole chunk is on the server plus half of the next: cumulative, which
@@ -437,7 +454,7 @@ describe("the retry sentence", () => {
     const base: TusUploadRetryInfo = {
       chunkIndex: 0,
       attempt: 2,
-      totalAttempts: 4,
+      totalAttempts: CHUNK_RETRY_DELAYS.length,
       offset: 0,
     };
 
@@ -448,9 +465,10 @@ describe("the retry sentence", () => {
     expect(describeRetry({ ...base, reason: "provider" })).toMatch(/host refused/i);
     // Every sentence says which attempt this is, so a creator can tell one
     // wobble from a connection that is refusing the same bytes over and over.
+    const of = `2 of ${CHUNK_RETRY_DELAYS.length}`;
     for (const reason of ["offline", "reset", "stall", "timeout", "provider"] as const) {
-      expect(describeRetry({ ...base, reason })).toContain("2 of 4");
+      expect(describeRetry({ ...base, reason })).toContain(of);
     }
-    expect(describeRetry(base)).toContain("2 of 4");
+    expect(describeRetry(base)).toContain(of);
   });
 });
