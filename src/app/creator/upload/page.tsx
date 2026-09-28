@@ -41,6 +41,10 @@ export default function UploadPage() {
   // earlier — when the slot is reserved — so it cannot be what the UI trusts to
   // know the upload finished, or a failed transfer would look like a success.
   const [uploadReady, setUploadReady] = useState(false);
+  // How many bytes were handed to Bunny, kept until the video row is created.
+  // The dashboard compares it against what the host reports holding, which is
+  // the only way to see that a transfer stopped arriving — see lib/host-bytes.ts.
+  const [uploadedBytes, setUploadedBytes] = useState<number | null>(null);
   // A failed transfer keeps its file AND credentials, so Retry re-sends into the
   // SAME reserved slot instead of reserving a new one and orphaning this one.
   const [failedUpload, setFailedUpload] = useState<{
@@ -232,6 +236,7 @@ export default function UploadPage() {
     const uploaded = await uploadToBunny(file, credentials, setUploadProgress);
     if (uploaded) {
       setUploadProgress(100);
+      setUploadedBytes(file.size);
       setUploadReady(true);
     } else {
       setUploadProgress(0);
@@ -258,6 +263,8 @@ export default function UploadPage() {
           bunnyVideoId,
           teaserBunnyVideoId: teaserBunnyVideoId || undefined,
           thumbnailUrl: thumbnailUrl || undefined,
+          // What the browser just sent, sent again as a fact about the file.
+          fileSize: uploadedBytes ?? undefined,
           complianceAttested,
         }),
       });
@@ -329,6 +336,7 @@ export default function UploadPage() {
                   setBunnyVideoId("");
                   setUploadReady(false);
                   setUploadProgress(0);
+                  setUploadedBytes(null);
                   setFailedUpload(null);
                 }}
                 className="btn-brand"

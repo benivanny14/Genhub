@@ -189,6 +189,9 @@ describeDB("refreshVideoEncoding (real database)", () => {
         encodingError: null,
         encodingCheckedAt: null,
         encodingNotifiedAt: null,
+        // What each case writes is asserted below, so every case starts with the
+        // host having said nothing.
+        bunnyStorageBytes: null,
       },
     });
     await prisma.notification.deleteMany({ where: { userId: creatorId } });
@@ -314,6 +317,51 @@ describeDB("refreshVideoEncoding (real database)", () => {
     expect(notifications[0].message).toContain("Unsupported video codec");
   });
 
+  // ---------------------------------------------------------------------------
+  // What the host says it holds
+  //
+  // Stored so the creator's dashboard can show the host's own byte count beside
+  // the progress bar. It is the number that makes a transfer which stopped
+  // arriving visible, because the browser's percentage counts bytes handed to
+  // the socket and Bunny's does not — see lib/host-bytes.ts.
+  // ---------------------------------------------------------------------------
+
+  it("records the byte count the host reports holding", async () => {
+    bunnyState.details = { status: 4, encodeProgress: 100, length: 480, storageSize: 437_736_786 };
+
+    await refreshVideoEncoding(videoId);
+
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.bunnyStorageBytes).toBe(437_736_786);
+  });
+
+  it("keeps the last count when a poll does not carry a size", async () => {
+    // Bunny answering without `storageSize` says nothing about how much it
+    // holds. Writing a 0 over a real number would put "Host holds 0 B" beside a
+    // healthy video, which is the one reading this column must never fake.
+    bunnyState.details = { status: 2, encodeProgress: 40, storageSize: 512_000 };
+    await refreshVideoEncoding(videoId);
+
+    bunnyState.details = { status: 3, encodeProgress: 70 };
+    await refreshVideoEncoding(videoId);
+
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.bunnyStorageBytes).toBe(512_000);
+  });
+
+  it("clamps a footprint too large for the column instead of losing the row's update", async () => {
+    // storageSize counts every rendition, so a large source can pass the 32-bit
+    // ceiling. An overflow would throw and take the rest of the update (status,
+    // progress, checkedAt) with it.
+    bunnyState.details = { status: 2, encodeProgress: 55, storageSize: 3_000_000_000 };
+
+    await refreshVideoEncoding(videoId);
+
+    const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
+    expect(video.bunnyStorageBytes).toBe(2_147_483_647);
+    expect(video.encodeProgress).toBe(55);
+  });
+
   it("leaves state untouched when Bunny cannot be reached", async () => {
     bunnyState.details = { status: 2, encodeProgress: 50 };
     await refreshVideoEncoding(videoId);
@@ -422,6 +470,9 @@ describeDB("refreshVideoEncoding (real database)", () => {
     expect(result?.snapshot.state).toBe("pending");
     const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
     expect(video.encodingStatus).toBe(0);
+    // Recorded as 0, not left NULL: the dashboard says "Host holds 0 B" for it,
+    // which is the truth about a transfer that has not delivered anything yet.
+    expect(video.bunnyStorageBytes).toBe(0);
     expect(video.encodingError).toBeNull();
     expect(await prisma.notification.count({ where: { userId: creatorId } })).toBe(0);
   });

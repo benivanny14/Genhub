@@ -318,6 +318,19 @@ model Video {
   /// Set only when Bunny reports a real failure, so creators see the reason.
   encodingError       String?
   encodingCheckedAt   DateTime?
+  /// The creator's own file size, recorded when the row is created. Compared
+  /// against bunnyStorageBytes it answers the only question worth asking about a
+  /// stuck upload: did the host receive the whole file or not.
+  uploadSizeBytes     Int?
+  /// Bunny's own `storageSize` — what the HOST reports holding.
+  ///
+  /// NULL means Bunny has not answered with a size; 0 is an answer. Measured
+  /// against the live API: 0 is what a slot mid-transfer reports AND what a slot
+  /// whose transfer never completed reports, and the number only jumps to the
+  /// full encoded footprint once the transcode finishes (37 MB for a 2.8 MB
+  /// source, because it counts every rendition). It is therefore read next to
+  /// encodingStatus, never alone.
+  bunnyStorageBytes   Int?
   /// When the "it is ready" notification was sent. Guards against re-notifying
   /// on every poll, which would spam a creator every few minutes forever.
   encodingNotifiedAt  DateTime?

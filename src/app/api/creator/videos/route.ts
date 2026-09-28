@@ -74,15 +74,27 @@ export async function GET(request: NextRequest) {
         encodeProgress: true,
         encodingError: true,
         encodingCheckedAt: true,
+        // What the HOST says it holds, and the creator's own file size. Shown
+        // beside the progress bar so a transfer that has stopped arriving is
+        // visible as a number instead of as a bar that will not move — the
+        // browser's own percentage counts bytes handed to the socket, not bytes
+        // Bunny kept, so on a bad connection the two disagree and only this one
+        // is the host's. See lib/host-bytes.ts for what each can and cannot say.
+        bunnyStorageBytes: true,
+        uploadSizeBytes: true,
         createdAt: true,
       },
     });
 
-    const withEncoding = videos.map(({ teaserBunnyVideoId, ...video }) => ({
-      ...video,
-      hasTeaser: !!teaserBunnyVideoId,
-      encoding: describeEncoding(video.encodingStatus, video.encodeProgress),
-    }));
+    const withEncoding = videos.map(
+      ({ teaserBunnyVideoId, bunnyStorageBytes, uploadSizeBytes, ...video }) => ({
+        ...video,
+        hasTeaser: !!teaserBunnyVideoId,
+        encoding: describeEncoding(video.encodingStatus, video.encodeProgress),
+        storedBytes: bunnyStorageBytes,
+        sourceBytes: uploadSizeBytes,
+      })
+    );
 
     return api.success({
       videos: withEncoding,

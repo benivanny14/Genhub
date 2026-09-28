@@ -258,6 +258,7 @@ export async function POST(request: NextRequest) {
       bunnyVideoId,
       teaserBunnyVideoId,
       thumbnailUrl,
+      fileSize,
     } = result.data;
 
     const slug = generateSlug(title);
@@ -289,6 +290,11 @@ export async function POST(request: NextRequest) {
         tags: tags || [],
         isPublished: !awaitingTranscode,
         encodingStatus: awaitingTranscode ? 0 : null,
+        // The creator's own size, kept beside the host's number so the dashboard
+        // can answer "did the whole file arrive?" instead of only "does the host
+        // hold anything?". Recorded here because this is the only moment the
+        // browser still has the file in hand.
+        uploadSizeBytes: fileSize ?? null,
         // createVideoSchema guarantees this is true (18 U.S.C. § 2257)
         complianceAttestedAt: new Date(),
       },

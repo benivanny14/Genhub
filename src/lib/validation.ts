@@ -5,6 +5,10 @@
 
 import { z } from "zod";
 import { MEDIA_ROUTE_PREFIX, isSafeMediaKey } from "./media";
+// The same 2 GB ceiling the upload form and the TUS client enforce. One number,
+// three places it is checked, so a file that passes the picker cannot be refused
+// by the schema that stores it.
+import { MAX_VIDEO_BYTES } from "./tus-upload";
 import { normalizeUsername, usernameFormatError } from "./usernames";
 
 /**
@@ -147,6 +151,11 @@ export const createVideoSchema = z.object({
   category: z.string().optional(),
   tags: z.array(z.string()).max(10).optional(),
   bunnyVideoId: z.string().min(1, "A video ID is required"),
+  // The creator's own file size, so the dashboard can show what the host holds
+  // AGAINST what was sent. Optional on purpose: rows created before this
+  // existed, and an older client mid-deploy, must still be accepted — the
+  // comparison is useful, not required.
+  fileSize: z.number().int().positive().max(MAX_VIDEO_BYTES).optional(),
   // Optional trailer clip. A paid scene with no trailer shows a poster instead
   // of a playable preview, because a Bunny token cannot limit how much of the
   // main video it unlocks (see resolveTeaserUrl).

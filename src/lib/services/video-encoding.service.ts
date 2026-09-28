@@ -190,6 +190,22 @@ async function notifyReady(video: {
 }
 
 /**
+ * A byte count that fits the column it is written to.
+ *
+ * `storageSize` is a 32-bit integer in Postgres, and Bunny reports the WHOLE
+ * encoded footprint — original plus every rendition — which for a 2 GB source
+ * of multi-bitrate video can pass 2.1 GB. Storing the raw number would fail the
+ * write and lose the rest of the row's update with it, so it is clamped to the
+ * column's ceiling: a number that big is only ever read as "very large".
+ */
+const MAX_STORED_BYTES = 2_147_483_647;
+
+function clampStoredBytes(bytes: number): number {
+  if (!Number.isFinite(bytes) || bytes < 0) return 0;
+  return Math.min(Math.round(bytes), MAX_STORED_BYTES);
+}
+
+/**
  * A video that finished at Bunny but is shorter than the 8-minute floor. It is
  * NOT published, and the creator is told why in the same breath — a silent
  * unpublished video is the worst outcome, because they cannot tell it apart
@@ -247,8 +263,18 @@ async function notifyFailed(video: {
 // upload vanished silently.
 //
 // So this drives the REAL path — create object, sign, reserve, upload, read
-// back — and judges it on what Bunny kept, not on the status codes it returned.
-// The probe object is always deleted, including on failure.
+// back — and judges it on what Bunny DID with the bytes, not on the status codes
+// its calls returned. The probe object is always deleted, including on failure.
+//
+// Careful with the evidence, though, and this is where this probe went wrong
+// once already: `storageSize` is not a counter of bytes received. Measured
+// against the live library, a healthy upload reports `storageSize 0` at 0, 3 and
+// 8 seconds and only reports its footprint at 18 s (37 MB for a 2.8 MB source,
+// because it counts every rendition). Judging "stored nothing" on that number
+// after a few seconds accused a working account of losing every upload and sent
+// its owner to check Bunny's billing for a fault that did not exist. What the
+// probe tests now is whether the video left its initial Queued(0) state, which a
+// complete file does within a second and an interrupted transfer never does.
 // =============================================================================
 
 const SELF_TEST_TITLE = "genhub-pipeline-selftest";
@@ -269,28 +295,51 @@ export interface BunnyPipelineSelfTest {
   bytesSent: number;
 }
 
-/** How long to wait for Bunny's own bookkeeping to catch up before judging it. */
-const READBACK_DELAYS_MS = [1_500, 3_000, 5_000];
+/**
+ * How long to wait for Bunny's own bookkeeping to catch up before judging it.
+ *
+ * Roughly a minute in total, and the length is the point. `storageSize` is NOT a
+ * received-bytes counter: measured against the live library, it reads 0 for the
+ * entire upload AND transcode and then reports the whole encoded footprint at
+ * once — a real 2.8 MB clip answered `storageSize 0` at 0 s, 3 s and 8 s and
+ * only reported 37 MB at 18 s. Judging on "is storageSize still 0?" after 9.5 s
+ * therefore condemned a perfectly healthy library, which is exactly what this
+ * probe did before it was given the time to see the truth.
+ */
+const READBACK_DELAYS_MS = [2_000, 5_000, 10_000, 15_000, 30_000];
+
+/**
+ * True when Bunny has taken the file.
+ *
+ * The status is the reliable half. A slot Bunny has received a complete file for
+ * LEAVES its initial Queued(0) immediately — measured at 2 (Processing) within a
+ * second of the last byte — and a slot whose transfer never finished arriving
+ * stays at 0 forever, however long it is watched. That is the same fingerprint
+ * every stranded creator upload wears (see UPLOAD_STRANDED_AFTER_MS), and it is
+ * the thing worth testing, because it cannot be faked by a slow transcode.
+ */
+function bunnyTookTheFile(details: Record<string, unknown>): boolean {
+  const stored = Number(details.storageSize) || 0;
+  const status = Number(details.status) || 0;
+  return stored > 0 || status !== 0;
+}
 
 async function readBackVideo(videoId: string): Promise<Record<string, unknown> | null> {
+  let last: Record<string, unknown> | null = null;
   for (const delay of READBACK_DELAYS_MS) {
     await new Promise((resolve) => setTimeout(resolve, delay));
     try {
       const details = (await getBunnyVideoDetails(videoId)) as Record<string, unknown>;
-      const stored = Number(details.storageSize) || 0;
-      const length = Number(details.length) || 0;
-      // Only report once Bunny has had a chance to register the bytes.
-      if (stored > 0 || length > 0) return details;
-      // Otherwise keep the last answer and let the caller judge it.
-      if (delay === READBACK_DELAYS_MS[READBACK_DELAYS_MS.length - 1]) {
-        return details;
-      }
+      // Report as soon as Bunny has moved off its initial state; otherwise keep
+      // the last answer and let the caller judge it once the time is up.
+      if (bunnyTookTheFile(details)) return details;
+      last = details;
     } catch (error) {
       console.error("[SelfTest] read-back failed:", error);
       return null;
     }
   }
-  return null;
+  return last;
 }
 
 export async function runBunnyPipelineSelfTest(): Promise<BunnyPipelineSelfTest> {
@@ -430,12 +479,19 @@ export async function runBunnyPipelineSelfTest(): Promise<BunnyPipelineSelfTest>
 
     const stored = Number(details.storageSize) || 0;
     const status = Number(details.status) || 0;
-    const kept = stored > 0;
+    const kept = bunnyTookTheFile(details);
 
     steps.push({
-      label: "Bunny keeps the file",
+      label: "Bunny takes the file",
       ok: kept,
-      detail: `storageSize ${stored} bytes · status ${status} (${BUNNY_STATUS_LABELS[status] ?? "unknown"})`,
+      // Read by a person, so say which observation decided it: an Error on THIS
+      // probe is expected (the payload is not a video) and is not the same thing
+      // as the silent 0-bytes fault the probe exists to catch.
+      detail: !kept
+        ? `still Queued(0) with storageSize ${stored} after the read-back window — the bytes never completed arriving`
+        : status === BUNNY_STATUS_ERROR
+        ? `status 5 (Error) · storageSize ${stored} bytes — Bunny read the bytes; a probe payload is not a video, so an Error on this file is expected`
+        : `status ${status} (${BUNNY_STATUS_LABELS[status] ?? "unknown"}) · storageSize ${stored} bytes`,
     });
 
     if (!kept) {
@@ -444,14 +500,16 @@ export async function runBunnyPipelineSelfTest(): Promise<BunnyPipelineSelfTest>
         // Its own verdict: not a code failure (every call succeeded) and not a
         // pass either. The UI colours this one differently for that reason.
         verdict: "accepted-not-stored",
-        headline: "Bunny accepts uploads but stores nothing",
+        headline: "Bunny accepted the bytes but the transfer never completed",
         detail:
-          "Every call returns success — the object is created, the signature is accepted and the " +
-          `${bytes.length} bytes are acknowledged — yet Bunny reports 0 bytes stored and the video ` +
-          "never advances past its initial status. Creator uploads will appear to work and then " +
-          "vanish. This is an account/library problem, not code: check for a missing payment method " +
-          "or an unactivated Stream subscription on bunny.net (Billing), and whether a video " +
-          "uploaded through Bunny's own dashboard stays stuck as well.",
+          "Every call succeeded — the object was created, the signature was accepted and the " +
+          `${bytes.length} bytes were acknowledged — yet the video is still at Queued(0) after a ` +
+          "minute, which is where Bunny keeps a file it never received in full. A real transfer " +
+          "leaves that state within a second of the last byte, so this is not a slow transcode: the " +
+          "bytes are not arriving. That is a connection or browser problem on the uploading side, " +
+          "not an account problem — Bunny is reachable, the credentials work and the slot was " +
+          "created, so do not go looking for a billing fault. If a creator hits this, have them " +
+          "upload again on a stable connection.",
       };
     }
 
@@ -460,9 +518,12 @@ export async function runBunnyPipelineSelfTest(): Promise<BunnyPipelineSelfTest>
       verdict: "ok",
       headline: "Upload pipeline works",
       detail:
-        "Bunny created the object, accepted the presigned signature, kept the bytes and started " +
-        `processing (status ${status} · ${BUNNY_STATUS_LABELS[status] ?? "unknown"}). ` +
-        "Encoding continues in the background for real videos.",
+        "Bunny created the object, accepted the presigned signature, acknowledged the bytes and " +
+        `took the file (status ${status} · ${BUNNY_STATUS_LABELS[status] ?? "unknown"}). ` +
+        "A probe payload is not a real video, so Bunny frequently rejects THIS file as " +
+        "unreadable — that is the pipeline working, not failing: what matters is that the bytes " +
+        "were kept and processing started, which is what a real upload needs. Encoding continues " +
+        "in the background for real videos.",
     };
   } catch (error) {
     steps.push({
@@ -594,6 +655,13 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
       encodeProgress: snapshot.progress,
       encodingError: snapshot.error,
       encodingCheckedAt: new Date(),
+      // The host's own number, stored so the dashboard can show it beside the
+      // progress bar without asking Bunny again on every poll. NULL is left
+      // alone rather than written as 0, because the API answering without the
+      // field says nothing, while an actual 0 is the answer that matters.
+      ...(result.storageBytes !== null
+        ? { bunnyStorageBytes: clampStoredBytes(result.storageBytes) }
+        : {}),
       ...(result.lengthSeconds ? { duration: result.lengthSeconds } : {}),
       ...(shouldPublish ? { isPublished: true } : {}),
       ...((shouldNotify || tooShort) ? { encodingNotifiedAt: new Date() } : {}),

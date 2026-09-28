@@ -51,6 +51,9 @@ import {
   lastPayoutAccount,
 } from "@/lib/payout-account";
 import { formatTZS, formatRelativeTime, formatCount, cn } from "@/lib/utils";
+// What the video host reports holding, and how to read it beside the encoding
+// state — a stalled transfer is a byte count, not a bar that will not move.
+import { describeHostStoredBytes } from "@/lib/host-bytes";
 // The one list of categories — the same ids /browse/[category] serves, minus the
 // "all" pseudo-category, which is a filter and not something a video can be.
 import { CATEGORIES } from "@/lib/categories";
@@ -260,6 +263,50 @@ interface CreatorVideo {
   hasTeaser: boolean;
   createdAt: string;
   encoding: EncodingState;
+  /**
+   * Bytes the video HOST reports holding, or null when it has not said.
+   * Read beside `sourceBytes` it is the stalled-transfer signal; see
+   * lib/host-bytes.ts for what each number can and cannot answer.
+   */
+  storedBytes: number | null;
+  /** The creator's own file size, recorded when the video was created. */
+  sourceBytes: number | null;
+}
+
+/**
+ * What the host holds, under the badge that shows what it is doing.
+ *
+ * Deliberately a separate line rather than a rewrite of the badge: the state and
+ * the byte count answer two different questions, and a creator with a stuck
+ * upload needs both at once — "still processing" AND "the host holds none of
+ * it" is the pair that says the file is not arriving.
+ */
+function HostStoredBytes({
+  storedBytes,
+  sourceBytes,
+  flagEmpty,
+}: {
+  storedBytes?: number | null;
+  sourceBytes?: number | null;
+  /** Called out in amber while the video is still being prepared. */
+  flagEmpty?: boolean;
+}) {
+  const host = describeHostStoredBytes({ storedBytes, sourceBytes });
+  if (!host) return null;
+
+  const warn = flagEmpty && host.empty;
+  return (
+    <span
+      className={cn(
+        "block mt-1 text-[11px] leading-tight",
+        warn ? "text-amber-400/90" : "text-white/35"
+      )}
+      title={host.detail}
+    >
+      {host.text}
+      {warn ? " — nothing has arrived yet" : ""}
+    </span>
+  );
 }
 
 /**
@@ -267,27 +314,45 @@ interface CreatorVideo {
  * side-loaded video has no encoding lifecycle, and showing it a fake "Ready"
  * would devalue the real ones.
  */
-function EncodingBadge({ encoding }: { encoding?: EncodingState }) {
+function EncodingBadge({
+  encoding,
+  storedBytes,
+  sourceBytes,
+}: {
+  encoding?: EncodingState;
+  storedBytes?: number | null;
+  sourceBytes?: number | null;
+}) {
   if (!encoding || encoding.state === "untracked") {
     return <span className="text-xs text-white/25">—</span>;
   }
 
   if (encoding.state === "failed") {
     return (
-      <span
-        className="inline-flex items-center gap-1 text-xs font-medium text-red-400"
-        title={encoding.error || "This file could not be processed for playback"}
-      >
-        <XCircle className="w-3.5 h-3.5" /> Failed
-      </span>
+      <div>
+        <span
+          className="inline-flex items-center gap-1 text-xs font-medium text-red-400"
+          title={encoding.error || "This file could not be processed for playback"}
+        >
+          <XCircle className="w-3.5 h-3.5" /> Failed
+        </span>
+        <HostStoredBytes
+          storedBytes={storedBytes}
+          sourceBytes={sourceBytes}
+          flagEmpty
+        />
+      </div>
     );
   }
 
   if (encoding.state === "ready") {
     return (
-      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-400">
-        <CheckCircle className="w-3.5 h-3.5" /> Ready
-      </span>
+      <div>
+        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-400">
+          <CheckCircle className="w-3.5 h-3.5" /> Ready
+        </span>
+        <HostStoredBytes storedBytes={storedBytes} sourceBytes={sourceBytes} />
+      </div>
     );
   }
 
@@ -303,6 +368,11 @@ function EncodingBadge({ encoding }: { encoding?: EncodingState }) {
           style={{ width: `${Math.max(4, encoding.progress)}%` }}
         />
       </div>
+      <HostStoredBytes
+        storedBytes={storedBytes}
+        sourceBytes={sourceBytes}
+        flagEmpty
+      />
     </div>
   );
 }
@@ -1424,7 +1494,11 @@ export default function CreatorDashboard() {
                     {video.purchaseCount} sales · {formatRelativeTime(new Date(video.createdAt))}
                   </p>
                   <div className="mt-1">
-                    <EncodingBadge encoding={video.encoding} />
+                    <EncodingBadge
+                      encoding={video.encoding}
+                      storedBytes={video.storedBytes}
+                      sourceBytes={video.sourceBytes}
+                    />
                   </div>
                 </div>
 
@@ -1534,7 +1608,11 @@ export default function CreatorDashboard() {
                       {formatTZS(v.totalEarned)}
                     </td>
                     <td className="px-4 py-3">
-                      <EncodingBadge encoding={encodingById.get(v.id)?.encoding} />
+                      <EncodingBadge
+                        encoding={encodingById.get(v.id)?.encoding}
+                        storedBytes={encodingById.get(v.id)?.storedBytes}
+                        sourceBytes={encodingById.get(v.id)?.sourceBytes}
+                      />
                       {encodingById.get(v.id)?.isPublished === false && (
                         <button
                           onClick={() => {
