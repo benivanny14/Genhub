@@ -16,6 +16,7 @@ import {
   uploadFileWithTus,
   TusUploadError,
   videoSizeError,
+  CHUNK_STALL_TIMEOUT_MS,
   DESKTOP_CHUNK_SIZE,
   FAST_CHUNK_SIZE,
   MAX_VIDEO_BYTES,
@@ -452,5 +453,163 @@ describe("what a failed upload reports about itself", () => {
       uploadFileWithTus(bigFileOf(MAX_VIDEO_BYTES + 1), credentials)
     ).rejects.toMatchObject({ bytesSent: 0, bytesTotal: MAX_VIDEO_BYTES + 1 });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// The stall watchdog — silence, not slowness
+//
+// The window has to mean "no bytes moved for this long", not "this request must
+// finish in this long". Those were the same thing in the code for as long as the
+// value was assigned to `xhr.timeout`, and the difference is an upload that
+// cannot succeed however long the creator waits: a 16 MiB chunk on a 100 KB/s
+// phone needs nearly three minutes of healthy transfer, so every attempt failed,
+// every retry started the same chunk from the same offset, and the ladder was
+// spent in six tries. Measured on a real link a 4 MiB chunk took 5.7s, so the
+// margin is not theoretical.
+//
+// One test for each half of the promise: a chunk that keeps moving may take as
+// long as it likes, and a chunk that goes quiet is still abandoned.
+// =============================================================================
+
+describe("the stall watchdog", () => {
+  const CHUNK = TUS_CHUNK_ALIGNMENT;
+
+  function stubReserve() {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("", { status: 201, headers: { Location: "/tusupload/abc" } })
+      )
+    );
+  }
+
+  /**
+   * A fake XHR that reports progress on a clock, because progress is the only
+   * thing the watchdog listens to.
+   *
+   * `events` and `perEventMs` set how long the chunk takes, and the total is
+   * deliberately LONGER than the stall window — the case the old total-time cap
+   * got wrong. `timeout` is a real accessor that does what a browser does with
+   * it, so "the cap is no longer set" is an assertion rather than a comment.
+   */
+  function clockedXhr(events: number, perEventMs: number) {
+    return class {
+      upload = {
+        onprogress: undefined as
+          | ((event: { lengthComputable: boolean; loaded: number }) => void)
+          | undefined,
+      };
+      status = 0;
+      responseText = "";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      private headers: Record<string, string> = {};
+      private nextOffset = "0";
+      private cap = 0;
+      get timeout() {
+        return this.cap;
+      }
+      set timeout(ms: number) {
+        this.cap = ms;
+        setTimeout(() => this.ontimeout?.(), ms);
+      }
+      open() {}
+      setRequestHeader(name: string, value: string) {
+        this.headers[name] = value;
+      }
+      getResponseHeader(name: string) {
+        return name === "Upload-Offset" ? this.nextOffset : null;
+      }
+      abort() {
+        this.onabort?.();
+      }
+      send(blob: Blob) {
+        const step = Math.ceil(blob.size / events);
+        let loaded = 0;
+        const tick = () => {
+          loaded = Math.min(loaded + step, blob.size);
+          this.upload.onprogress?.({ lengthComputable: true, loaded });
+          if (loaded < blob.size) {
+            setTimeout(tick, perEventMs);
+            return;
+          }
+          this.nextOffset = String(Number(this.headers["Upload-Offset"]) + blob.size);
+          this.status = 204;
+          this.onload?.();
+        };
+        setTimeout(tick, perEventMs);
+      }
+    };
+  }
+
+  it("lets a chunk outlast the stall window while bytes keep moving", async () => {
+    stubReserve();
+    // Four moves, one a minute: the chunk takes four minutes, which is past the
+    // stall window on every count except the one that matters — no single gap is.
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      clockedXhr(4, 60_000) as unknown as typeof XMLHttpRequest
+    );
+
+    vi.useFakeTimers();
+    try {
+      const upload = uploadFileWithTus(fileOf(CHUNK), credentials, { chunkSize: CHUNK });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      await expect(upload).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still abandons a chunk that goes completely quiet", async () => {
+    stubReserve();
+    class SilentXhr {
+      upload = { onprogress: undefined as unknown };
+      status = 0;
+      responseText = "";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      open() {}
+      setRequestHeader() {}
+      getResponseHeader() {
+        return null;
+      }
+      abort() {
+        this.onabort?.();
+      }
+      send() {}
+    }
+    vi.stubGlobal("XMLHttpRequest", SilentXhr as unknown as typeof XMLHttpRequest);
+
+    vi.useFakeTimers();
+    try {
+      const attempt = uploadFileWithTus(fileOf(CHUNK), credentials, { chunkSize: CHUNK });
+      const settled = attempt.then(
+        () => {
+          throw new Error("this upload was supposed to fail");
+        },
+        (error: TusUploadError) => error
+      );
+      // Six attempts of one stall window each, plus the backoff between them.
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
+      await expect(settled).resolves.toMatchObject({
+        code: "NETWORK",
+        stage: "chunk",
+        message: "The upload stalled and was retried.",
+        bytesSent: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the window long enough that a slow phone is not one long stall", () => {
+    expect(CHUNK_STALL_TIMEOUT_MS).toBeGreaterThan(UPLOAD_STALL_WARNING_MS);
   });
 });

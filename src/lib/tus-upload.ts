@@ -128,8 +128,18 @@ const RETRY_DELAYS = [0, 1_000, 3_000, 8_000, 15_000, 30_000];
  * finished. A genuinely slow link is still covered: this is time with ZERO
  * bytes moved, and the page warns the creator long before it fires (see
  * UPLOAD_STALL_WARNING_MS).
+ *
+ * THAT SENTENCE WAS ASPIRATION UNTIL RECENTLY. The value used to be assigned to
+ * `xhr.timeout`, which is a cap on the WHOLE request — a throughput limit wearing
+ * a stall detector's name. On a link slow enough that a 16 MiB chunk needs more
+ * than three minutes of healthy transfer, the old code failed a connection that
+ * was working perfectly, retried the same chunk from the same offset, and gave up
+ * after six attempts: an upload that could never succeed no matter how long the
+ * creator waited. Measured on a real link, a 4 MiB chunk took 5.7s, so the margin
+ * is not theoretical. It is now enforced by a watchdog in sendChunk that every
+ * progress event re-arms, which is what the paragraph above has always described.
  */
-const CHUNK_STALL_TIMEOUT_MS = 3 * 60 * 1000;
+export const CHUNK_STALL_TIMEOUT_MS = 3 * 60 * 1000;
 
 /**
  * How long the form waits, with no bytes moving, before telling the creator so.
@@ -193,15 +203,19 @@ export class TusUploadError extends Error {
   providerBody?: string;
 
   /**
-   * How far the transfer had got when it died, counted from the bytes the
-   * browser had handed to the socket.
+   * How far the transfer had got when it died: the last figure the browser
+   * reported through its upload-progress event.
    *
-   * This is the one fact that separates the two failures that are otherwise
-   * identical in a report. A request the browser never sent leaves zero bytes
-   * and no HTTP status; a transfer that died with the file already moving
-   * leaves tens of megabytes and the same absent status. Both are NETWORK,
-   * both have a null status, and nothing else in the report tells them apart —
-   * which is exactly the question a report exists to answer.
+   * This is the fact that separates the two failures that are otherwise
+   * identical in a report — a transfer that was moving (tens of megabytes, and
+   * no HTTP status) from one that never got going (a bare zero, and the same
+   * absent status). Both are NETWORK, both have a null status, and nothing else
+   * in the report tells them apart.
+   *
+   * The limit of the number is worth knowing: it is what was REPORTED, not what
+   * was on the wire. A browser coalesces progress events, so a connection that
+   * dies in its first moments reports zero, and zero is therefore "never
+   * acknowledged", not "nothing was sent".
    */
   bytesSent?: number;
   /** The size of the file being sent, so `bytesSent` reads as a fraction of it. */
@@ -381,10 +395,6 @@ function sendChunk(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PATCH", location);
-    // A chunk that stops making progress without erroring is a dropped
-    // connection; time it out so it becomes a retryable failure. See
-    // CHUNK_STALL_TIMEOUT_MS.
-    xhr.timeout = CHUNK_STALL_TIMEOUT_MS;
     xhr.setRequestHeader("Tus-Resumable", "1.0.0");
     xhr.setRequestHeader("Upload-Offset", String(offset));
     xhr.setRequestHeader("Content-Type", "application/offset+octet-stream");
@@ -392,11 +402,46 @@ function sendChunk(
       xhr.setRequestHeader(name, value);
     }
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) onLoaded(event.loaded);
+    // -----------------------------------------------------------------------
+    // The stall watchdog — deliberately NOT `xhr.timeout`
+    // -----------------------------------------------------------------------
+    // `xhr.timeout` bounds the WHOLE request, so on a slow link it fails an
+    // upload that is working: 16 MiB at 100 KB/s is nearly three minutes, and the
+    // retry then restarts the same chunk from the same offset until the ladder is
+    // spent. What has to be detected is SILENCE, so the clock is re-armed by
+    // every progress event. Bytes moving means the chunk is left alone for as
+    // long as it takes; a connection that stops moving for
+    // CHUNK_STALL_TIMEOUT_MS is abandoned and retried. See the constant's note.
+    let stalled = false;
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+
+    const stopWatchdog = () => {
+      if (watchdog !== null) {
+        clearTimeout(watchdog);
+        watchdog = null;
+      }
+    };
+    const armWatchdog = () => {
+      stopWatchdog();
+      watchdog = setTimeout(() => {
+        // Set before the abort so `onabort` can tell this apart from a creator
+        // pressing cancel: both arrive on the same event, and only one of them
+        // is a retryable failure.
+        stalled = true;
+        xhr.abort();
+      }, CHUNK_STALL_TIMEOUT_MS);
     };
 
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      armWatchdog();
+      onLoaded(event.loaded);
+    };
+
+    // Every path that settles the promise stops the clock first: a watchdog that
+    // fires after the fact would abort a request nobody is waiting on.
     xhr.onload = () => {
+      stopWatchdog();
       if (xhr.status >= 200 && xhr.status < 300) {
         const next = xhr.getResponseHeader("Upload-Offset");
         resolve(next === null ? offset + blob.size : Number(next));
@@ -409,7 +454,8 @@ function sendChunk(
     // produces — so the reader cannot tell a slot that was never reserved from a
     // transfer that was already moving. The HTTP-status path gets it from
     // `describe()`; these three are the ones where nothing answered at all.
-    xhr.onerror = () =>
+    xhr.onerror = () => {
+      stopWatchdog();
       reject(
         new TusUploadError(
           "NETWORK",
@@ -418,7 +464,12 @@ function sendChunk(
           { stage: "chunk" }
         )
       );
-    xhr.ontimeout = () =>
+    };
+    // Kept although nothing sets `xhr.timeout` any more: it costs nothing, and a
+    // browser or proxy that imposes its own cap lands on the same verdict as our
+    // watchdog rather than on an unhandled event.
+    xhr.ontimeout = () => {
+      stopWatchdog();
       reject(
         new TusUploadError(
           "NETWORK",
@@ -427,13 +478,24 @@ function sendChunk(
           { stage: "chunk" }
         )
       );
-    xhr.onabort = () =>
+    };
+    xhr.onabort = () => {
+      stopWatchdog();
       reject(
-        new TusUploadError("ABORTED", "Upload cancelled", undefined, { stage: "chunk" })
+        stalled
+          ? new TusUploadError(
+              "NETWORK",
+              "The upload stalled and was retried.",
+              undefined,
+              { stage: "chunk" }
+            )
+          : new TusUploadError("ABORTED", "Upload cancelled", undefined, { stage: "chunk" })
       );
+    };
 
     if (signal) {
       if (signal.aborted) {
+        stopWatchdog();
         reject(
           new TusUploadError("ABORTED", "Upload cancelled", undefined, { stage: "chunk" })
         );
@@ -442,6 +504,9 @@ function sendChunk(
       signal.addEventListener("abort", () => xhr.abort(), { once: true });
     }
 
+    // Armed before the first byte leaves, so a request that never gets going at
+    // all is still caught — that case produces no progress event to re-arm on.
+    armWatchdog();
     xhr.send(blob);
   });
 }
@@ -462,6 +527,9 @@ export interface TusUploadOptions {
  * One function rather than the same two assignments at each `throw`, because a
  * report that only SOMETIMES carries a byte count is worse than one that never
  * does: its absence would stop meaning anything.
+ *
+ * The count is what the browser last REPORTED, never a claim about the wire —
+ * see bytesSent on TusUploadError.
  */
 function withProgress(
   error: TusUploadError,

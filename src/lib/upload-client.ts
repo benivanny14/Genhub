@@ -116,13 +116,15 @@ export interface UploadFailureReport {
   fileName?: string | null;
   fileSize?: number | null;
   /**
-   * How many bytes had left the browser when it died, and the file's size.
+   * How far the transfer had got when it died, and the file's size.
    *
-   * The two facts that turn "NETWORK" into an answer: zero bytes with no HTTP
-   * status is a request that was never sent (blocked, offline, refused before it
-   * left), while tens of megabytes with the same absent status is a transfer
-   * that was already moving and stopped. Everything else in a report is the same
-   * for both.
+   * The two facts that turn "NETWORK" into an answer: a bare zero with no HTTP
+   * status is a request that never got going (blocked, offline, refused or reset
+   * on the way out), while tens of megabytes with the same absent status is a
+   * transfer that was already moving and stopped. Everything else in a report is
+   * the same for both. The figure is what the browser REPORTED through its
+   * upload-progress event, and it coalesces those — so zero means "never
+   * acknowledged", not "nothing was sent".
    */
   bytesSent?: number | null;
   bytesTotal?: number | null;

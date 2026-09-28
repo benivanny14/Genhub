@@ -68,10 +68,12 @@ export interface UploadFailure {
   /**
    * How far the transfer got, and how big the file is.
    *
-   * Zero with a null status is a request that never left the browser; tens of
+   * A bare zero with a null status is a request that never got going; tens of
    * megabytes with the same null status is a transfer that was already moving.
    * Those are different faults with different fixes, and before these two fields
-   * both were the single word "NETWORK".
+   * both were the single word "NETWORK". The count is what the browser reported
+   * through its upload-progress event — it coalesces those, so zero is "never
+   * acknowledged" rather than "nothing was sent".
    */
   bytesSent: number | null;
   bytesTotal: number | null;

@@ -517,6 +517,11 @@ interface UploadFailure {
    * and the API is JSON: an old row arrives with them absent. The renderer
    * therefore tests for a number rather than for "not null" — `undefined !==`
    * `null` is true, and that is how these rows printed "NaN MB of NaN MB".
+   *
+   * Note what a zero MEANS: no progress was ever REPORTED, which is not the same
+   * as no byte having left the browser. The only source is the upload-progress
+   * event, and the browser coalesces those, so a connection that dies in its
+   * first moments reports zero too. The wording on screen says so.
    */
   bytesSent?: number | null;
   bytesTotal?: number | null;
@@ -4163,7 +4168,7 @@ export default function AdminDashboard() {
                         typeof failure.bytesTotal === "number" && (
                           <p className="text-[11px] text-white/50 mt-1">
                             {failure.bytesSent === 0
-                              ? "Died before a byte left the browser — this request was never sent (blocked, offline, or refused before it went out)."
+                              ? "No upload progress was ever reported — the request was refused or dropped before any byte was acknowledged (blocked, offline, or reset on the way out)."
                               : `Died after ${(failure.bytesSent / 1024 / 1024).toFixed(1)} MB of ${(
                                   failure.bytesTotal / 1024 / 1024
                                 ).toFixed(1)} MB — the transfer was already moving.`}

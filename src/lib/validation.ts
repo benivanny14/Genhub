@@ -451,12 +451,13 @@ export const uploadFailureSchema = z.object({
     .max(MAX_VIDEO_BYTES * 2)
     .nullish(),
   /**
-   * Bytes that had left the browser when the transfer died, and the file size.
+   * How far the transfer had got when it died, and the file size.
    *
    * Bounded the same way — and for the same reason — as `fileSize`. These two
-   * are what separate a request that was never sent (zero bytes, no status)
+   * are what separate a request that never got going (a bare zero, no status)
    * from a transfer that was already moving (tens of megabytes, no status);
-   * without them both read as a bare "NETWORK".
+   * without them both read as a bare "NETWORK". The count is what the browser
+   * reported, which is not the same claim as what reached the wire.
    */
   bytesSent: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
   bytesTotal: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
