@@ -71,6 +71,60 @@ describe("TUS direct upload", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("refuses a file this device will not let the page read, and says device rather than network", async () => {
+    // What a phone hands over when the video came from another app's storage: a
+    // File whose bytes cannot be read back. Chrome fails that read lazily, so
+    // without the probe the uploader sends the whole ladder, gets nothing
+    // acknowledged, and reports "the connection dropped" — which is what the
+    // live panel showed for a 5.5 MB file on a working 4G link.
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const unreadable = {
+      name: "1000371423.mp4",
+      size: 5_804_475,
+      type: "video/mp4",
+      slice: () => ({ arrayBuffer: () => Promise.reject(new Error("NotReadableError")) }),
+    } as unknown as File;
+
+    await expect(uploadFileWithTus(unreadable, credentials)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+      reason: "preflight",
+      stage: undefined,
+    });
+    // Nothing was reserved and nothing was retried: the fault is the device and
+    // no amount of patience or smaller chunks would have changed it.
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("reads one kilobyte to prove the file is reachable, not the whole file", async () => {
+    // The probe runs before EVERY upload, the successful ones included, so it
+    // has to be cheap. One slice, of 1 KB, before the reserve.
+    const slices: Array<{ start: number; end: number }> = [];
+    const real = fileOf(1024 * 1024);
+    const probed = {
+      name: real.name,
+      size: real.size,
+      type: real.type,
+      slice: (start: number, end: number) => {
+        slices.push({ start, end });
+        return real.slice(start, end);
+      },
+    } as unknown as File;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 201 }))
+    );
+
+    // Fails on the missing Location, which is after the probe and before any
+    // PATCH — so the slices recorded are the probe's and nothing else.
+    await expect(uploadFileWithTus(probed, credentials)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+
+    expect(slices).toEqual([{ start: 0, end: 1024 }]);
+  });
+
   it("refuses a file over 2 GB before any bytes are sent", async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);

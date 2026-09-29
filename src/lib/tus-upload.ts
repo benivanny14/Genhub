@@ -194,6 +194,16 @@ export const UPLOAD_STALL_WARNING_MS = 30 * 1000;
 export const MAX_VIDEO_BYTES = 2_147_483_647; // just under 2 GiB
 
 /**
+ * How much of the file the pre-flight read probe pulls.
+ *
+ * Small on purpose: this runs before every upload, including the ones that work,
+ * and a phone cannot afford to read a gigabyte twice. It is enough to make the
+ * device prove it can open the file at all, which is the only question it is
+ * asking.
+ */
+const READ_PROBE_BYTES = 1024;
+
+/**
  * A creator-facing message when a file is over the limit, or null when it is
  * fine. Shared so the form can refuse the file early (no wasted Bunny slot) and
  * `uploadFileWithTus` can refuse it again as a last line of defence.
@@ -890,6 +900,38 @@ export async function uploadFileWithTus(
       file.size
     );
   }
+  // CAN THIS DEVICE ACTUALLY HAND US THE BYTES?
+  //
+  // A video picked on a phone is not a file on a disk: it arrives as a
+  // `content://` URI owned by whichever app holds it, and Chrome reads it
+  // lazily while the upload is running. When that read fails, the XHR raises a
+  // plain error event with no status and no bytes — exactly what a refused
+  // socket raises — so the transfer spends the whole ladder and then reports
+  // "the connection dropped" for a fault that never touched the network. And
+  // that is not hypothetical: a measured failure on a 4G link whose own rtt was
+  // 150 ms recorded attempts of 35 ms and 45 ms, which no round trip can fit
+  // inside.
+  //
+  // One kilobyte answers it, for the cost of one read. It cannot prove the whole
+  // file is readable — a provider can be revoked mid-transfer — but it turns the
+  // case that fails immediately, and fails identically every time, into the
+  // device's own words instead of a second misleading report.
+  try {
+    await file.slice(0, READ_PROBE_BYTES).arrayBuffer();
+  } catch {
+    throw withProgress(
+      new TusUploadError(
+        "UNSUPPORTED",
+        "This device would not let the page read that video. Videos picked from another app's storage " +
+          "sometimes cannot be read back — move or copy it into Downloads, then choose it again.",
+        undefined,
+        { reason: "preflight" }
+      ),
+      0,
+      file.size
+    );
+  }
+
   // Catch an expired authorization here rather than as an opaque 401 mid-upload.
   if (credentials.expirationTime <= Math.floor(Date.now() / 1000)) {
     throw withProgress(

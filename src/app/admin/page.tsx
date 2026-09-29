@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { formatTZS } from "@/lib/utils";
+import { describeAttemptShape } from "@/lib/upload-failure-reading";
 import {
   Shield,
   HelpCircle,
@@ -4240,16 +4241,20 @@ export default function AdminDashboard() {
                         seconds each is a transfer that keeps being cut. Both
                         read "6 retries" and they are not the same fault, so the
                         numbers are shown and the reading is spelled out. */}
-                      {Array.isArray(failure.attemptMs) && failure.attemptMs.length > 0 && (
-                        <p className="text-[11px] text-white/45 mt-1">
-                          {`${failure.attemptMs.length} attempt(s) on this chunk lasted ${failure.attemptMs
-                            .map((ms) => (ms < 1_000 ? `${ms} ms` : `${(ms / 1_000).toFixed(1)} s`))
-                            .join(", ")}`}
-                          {failure.attemptMs.every((ms) => ms < 200)
-                            ? " — every one ended before a request could have been sent, so nothing was ever on the wire and a smaller chunk will not help."
-                            : " — bytes were moving, so the transfer is being cut rather than refused."}
-                        </p>
-                      )}
+                      {(() => {
+                        // The reading is a function, not a threshold inlined
+                        // here: the first version of this line contradicted the
+                        // byte count printed directly above it, and a pure
+                        // function is what lets that be tested rather than
+                        // noticed. See lib/upload-failure-reading.ts.
+                        const reading = describeAttemptShape({
+                          bytesSent: typeof failure.bytesSent === "number" ? failure.bytesSent : null,
+                          attemptMs: failure.attemptMs ?? null,
+                        });
+                        return reading ? (
+                          <p className="text-[11px] text-white/45 mt-1">{reading}</p>
+                        ) : null;
+                      })()}
                       {/* Who reported it. A phone on a proxy browser and Chrome
                           on WiFi produce the same NETWORK row and are not the
                           same bug. */}

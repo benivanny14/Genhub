@@ -33,6 +33,7 @@ import {
   type UploadFailure,
 } from "@/lib/services/upload-failure.service";
 import { uploadFailureSchema } from "@/lib/validation";
+import { describeAttemptShape } from "@/lib/upload-failure-reading";
 
 const failure = {
   code: "NETWORK",
@@ -353,5 +354,67 @@ describe("uploadFailureSchema", () => {
     expect(
       uploadFailureSchema.safeParse({ code: "NETWORK", message: "x", bytesSent: -1 }).success
     ).toBe(false);
+  });
+});
+
+// =============================================================================
+// Reading the attempts
+//
+// The first version of this reading was a threshold inside the panel's JSX, and
+// the first live record it met contradicted itself on screen: "no upload
+// progress was ever reported" printed directly above "bytes were moving, so the
+// transfer is being cut". Eight attempts of 225, 35, 45, 258, 226, 233, 270 and
+// 475 ms, all with `bytesSent: 0`, cleared a 200 ms threshold and were described
+// as a transfer in motion.
+//
+// The rule is now ordered: the bytes decide the sentence and the timings add
+// detail to it. These pin that order.
+// =============================================================================
+
+describe("describeAttemptShape", () => {
+  /** The real record, verbatim, from a 5.5 MB upload on 4G. */
+  const live = { bytesSent: 0, attemptMs: [225, 35, 45, 258, 226, 233, 270, 475] };
+
+  it("never says bytes were moving when the browser acknowledged none", () => {
+    const reading = describeAttemptShape(live);
+
+    expect(reading).toContain("8 attempt(s) on this chunk lasted 225 ms, 35 ms, 45 ms");
+    expect(reading).toContain("475 ms");
+    expect(reading).not.toMatch(/bytes were moving/);
+    expect(reading).toMatch(/nothing acknowledged/);
+    // And it must not send the reader off to shrink a chunk that is not the
+    // problem: with no acknowledged byte, the chunk size is irrelevant.
+    expect(reading).toMatch(/a smaller chunk will not help/);
+  });
+
+  it("says a transfer was moving only when bytes were actually acknowledged", () => {
+    const reading = describeAttemptShape({ bytesSent: 12 * 1024 * 1024, attemptMs: [4_000, 6_000] });
+
+    expect(reading).toContain("4.0 s, 6.0 s");
+    expect(reading).toMatch(/bytes were moving/);
+  });
+
+  it("names attempts that could not have made a round trip as local", () => {
+    // Two attempts of 35 ms and 45 ms on a link whose own rtt is 150 ms cannot
+    // have reached the host at all, and "the connection dropped" is the wrong
+    // sentence for them.
+    const reading = describeAttemptShape({ bytesSent: 0, attemptMs: [35, 45] });
+
+    expect(reading).toMatch(/never reached the network/);
+  });
+
+  it("admits when the browser never said how far it got", () => {
+    // An older client sends no byte count. The durations are still evidence, but
+    // they cannot carry the claim that bytes were or were not moving.
+    const reading = describeAttemptShape({ bytesSent: null, attemptMs: [900] });
+
+    expect(reading).toMatch(/never reported how far it got/);
+  });
+
+  it("says nothing at all when no attempt was timed", () => {
+    // Rows written before the timings existed must render exactly as they did,
+    // not as an empty sentence.
+    expect(describeAttemptShape({ bytesSent: 0, attemptMs: null })).toBeNull();
+    expect(describeAttemptShape({ bytesSent: 0, attemptMs: [] })).toBeNull();
   });
 });
