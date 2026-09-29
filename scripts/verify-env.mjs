@@ -102,6 +102,26 @@ check(
   "BUNNY_TOKEN_SECRET is missing — paid video URLs are not signed, and with Token Authentication " +
     "off on the pull zone they can be shared freely outside the paywall"
 );
+// Bunny signs Stream callbacks with the library's READ-ONLY API key, never with
+// the read-write one (bunny.net/docs/stream/webhooks — "the signing secret is
+// your library's Read-Only API key"). Pasting the main key here is the trap: it
+// LOOKS configured, both values are present, and every genuine callback is then
+// refused with a 401 — so a finished upload sits on "processing" until somebody
+// opens the dashboard or the sweep runs, which reads exactly like the upload
+// having failed. Nothing else catches it before production: /api/health cannot
+// see it and the admin self-test only reports it to whoever opens that tab.
+//
+// A blocker rather than a warning, because this combination can never be
+// correct — unlike a MISSING secret, which degrades (below) and is only
+// reported as a warning.
+check(
+  !env("BUNNY_STREAM_WEBHOOK_SECRET") ||
+    env("BUNNY_STREAM_WEBHOOK_SECRET") !== env("BUNNY_STREAM_API_KEY"),
+  "BUNNY_STREAM_WEBHOOK_SECRET is the SAME value as BUNNY_STREAM_API_KEY — Bunny signs webhooks with " +
+    "the library's Read-Only API key, so production would refuse every callback (401) and finished " +
+    "uploads would wait for a dashboard visit or the worker sweep. Copy the Read-Only key instead " +
+    "(Bunny -> Stream -> your library -> API)"
+);
 
 // ---------------------------------------------------------- Infrastructure
 check(

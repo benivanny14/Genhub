@@ -197,12 +197,12 @@ function signedBunnyUrl(path: string, expiresAt: number): string {
 // API key to a client would let any viewer upload, rename or DELETE every video
 // in the library. Measured against the live API, a PUT without the header is a
 // hard 401, and there is no scoped or presigned form of it — Bunny's signed
-// signature scheme covers only its resumable endpoint (see lib/r2-sign.ts for
-// what replaced all of this).
+// signed TUS headers are created by the server and returned only for one upload
+// session.
 //
 // So this module does the ONE thing on the upload path that needs the key: it
-// creates the video object, and returns its id. The bytes arrive afterwards from
-// the storage bucket, moved by worker/video-ingest, into the slot reserved here.
+// creates the video object, and returns its id. The bytes then arrive directly
+// at Bunny through the signed resumable TUS resource.
 //
 // The split matters: every video id in the database is an id this server asked
 // Bunny for, so the row, the webhook and the encode lifecycle are all keyed on
@@ -236,8 +236,8 @@ export interface BunnyVideoSlot {
  * Create the video object and return the id of the slot it reserves.
  *
  * Nothing is uploaded here: Bunny holds an empty video whose id every later step
- * refers to — the presigned target, the ingest, the row, and the encode
- * lifecycle. Creating it BEFORE the bytes exist is what makes the id OURS.
+ * refers to — the signed TUS session, the row, and the encode lifecycle.
+ * Creating it BEFORE the bytes exist is what makes the id OURS.
  */
 export async function createVideoUpload(title: string): Promise<BunnyVideoSlot> {
   if (!config.bunny.libraryId || !config.bunny.apiKey) {

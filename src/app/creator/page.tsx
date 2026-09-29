@@ -42,11 +42,14 @@ import {
 } from "lucide-react";
 import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
-import { VideoUploadError, videoSizeError } from "@/lib/upload-error";
-import { sendFileToTarget } from "@/lib/upload-send";
-import { prepareVideoWithBunny } from "@/lib/upload-prepare";
-import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
-import type { UploadTarget } from "@/lib/upload-target";
+import {
+  abortVideoUpload,
+  uploadVideoFile,
+  completeVideoUpload,
+  videoFileSizeError,
+  VideoUploadError,
+  type VideoUploadSession,
+} from "@/lib/video-upload";
 import {
   PAYOUT_METHODS,
   PAYOUT_METHOD_LABEL,
@@ -423,6 +426,7 @@ export default function CreatorDashboard() {
   // teaser but not clear one, so an untouched field must send nothing.
   const [editTeaserAttached, setEditTeaserAttached] = useState(false);
   const [newTeaserBunnyVideoId, setNewTeaserBunnyVideoId] = useState("");
+  const [newTeaserUploadSession, setNewTeaserUploadSession] = useState<VideoUploadSession | null>(null);
   const [editTeaserProgress, setEditTeaserProgress] = useState(0);
   const [uploadingEditTeaser, setUploadingEditTeaser] = useState(false);
   const [editCoverUrl, setEditCoverUrl] = useState<string | null>(null);
@@ -589,6 +593,7 @@ export default function CreatorDashboard() {
     setEditTeaserDuration(video.teaserDuration || 15);
     setEditTeaserAttached(video.hasTeaser);
     setNewTeaserBunnyVideoId("");
+    setNewTeaserUploadSession(null);
     setEditTeaserProgress(0);
     setEditCoverUrl(video.thumbnailUrl);
     setEditCaptionsUrl(video.captionsUrl || "");
@@ -623,16 +628,16 @@ export default function CreatorDashboard() {
   /**
    * Attach or replace the trailer clip a non-buyer gets to watch.
    *
-   * Same flow as the upload page: reserve a Bunny slot, send the file to the
-   * bucket by whichever transport its size calls for, then the ingest that
-   * follows it. The result is held in state and only written to the video row on
+   * Same flow as the upload page: reserve a Bunny slot and send the file through
+   * the resumable direct Bunny transport. The result is held in state and only
+   * written to the video row on
    * Save, so a cancelled edit changes nothing — and this is the door that finally
    * lets an existing scene grow an intro trailer.
    */
   async function uploadEditTeaser(file: File) {
     // Same guard as the upload form: no slot is reserved for a file that can
     // never be sent.
-    const sizeError = videoSizeError(file);
+    const sizeError = videoFileSizeError(file);
     if (sizeError) {
       toast("error", sizeError);
       return;
@@ -641,16 +646,16 @@ export default function CreatorDashboard() {
     setEditTeaserProgress(0);
     // Declared out here so the catch below can name the slot that was reserved
     // and abandoned — it is the only handle on the orphan left in the library.
-    let credentials: UploadTarget | null = null;
+    let session: VideoUploadSession | null = null;
     try {
       const res = await fetch("/api/videos/upload-signature", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // The size is what tells the server which transport this file needs —
-        // one presigned PUT or a multipart plan (lib/upload-target.ts). Omitted,
-        // a big trailer would be sent as a single request, which is the transfer
-        // that stalls and loses everything it had sent.
-        body: JSON.stringify({ title: `${editTitle || "trailer"} (teaser)`, size: file.size }),
+        body: JSON.stringify({
+          title: `${editTitle || "trailer"} (teaser)`,
+          size: file.size,
+          mimeType: file.type || "video/mp4",
+        }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -658,19 +663,15 @@ export default function CreatorDashboard() {
         return;
       }
 
-      credentials = data.data as UploadTarget;
-      await sendFileToTarget(file, credentials, {
-        onProgress: (uploaded, total) =>
-          setEditTeaserProgress(Math.round((uploaded / total) * 100)),
+      session = data.data as VideoUploadSession;
+      await uploadVideoFile(file, session, {
+        onProgress: ({ percent }) => setEditTeaserProgress(percent),
       });
 
-      // The trailer's slot is empty until the ingest fills it, so a trailer that
-      // is only in the bucket must not be announced as uploaded. This POLLS: a
-      // trailer can be a large file, and the route moves what one invocation can
-      // carry and continues from where Bunny got to on the next call.
-      await prepareVideoWithBunny(credentials.videoId);
+      const videoId = await completeVideoUpload(session.sessionToken);
 
-      setNewTeaserBunnyVideoId(credentials.videoId);
+      setNewTeaserUploadSession(session);
+      setNewTeaserBunnyVideoId(videoId);
       toast("success", "Trailer uploaded — press Save to attach it");
     } catch (error) {
       toast(
@@ -679,15 +680,7 @@ export default function CreatorDashboard() {
           ? error.message
           : "Network error while uploading the trailer"
       );
-      // This transfer went straight to Bunny, so the server never saw it fail.
-      // Report it before the reason is lost — see lib/upload-client.ts.
-      void reportUploadFailure(
-        describeUploadFailure(error, {
-          bunnyVideoId: credentials?.videoId ?? null,
-          fileName: file.name,
-          fileSize: file.size,
-        })
-      );
+      if (session) void abortVideoUpload(session.sessionToken);
     } finally {
       setUploadingEditTeaser(false);
     }
@@ -789,6 +782,9 @@ export default function CreatorDashboard() {
           // value every time would be a no-op, and the schema has no way to clear
           // it, so "unchanged" must mean "not sent".
           ...(newTeaserBunnyVideoId ? { teaserBunnyVideoId: newTeaserBunnyVideoId } : {}),
+          ...(newTeaserUploadSession
+            ? { teaserUploadSessionToken: newTeaserUploadSession.sessionToken }
+            : {}),
           ...(editCoverUrl ? { thumbnailUrl: editCoverUrl } : {}),
           // Always sent, empty included: clearing the field is how a creator
           // removes captions, and an omitted field could not mean that.

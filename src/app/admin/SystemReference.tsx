@@ -81,36 +81,31 @@ export default function SystemReference() {
       </div>
 
       {/* --------------------------------------------------------------- */}
-      <Section icon={Upload} title="Video ingestion &amp; processing">
+      <Section icon={Upload} title="Video upload &amp; processing">
         <p>
-          A creator&apos;s file never passes through an application server. The
-          browser PUTs it straight into an object-storage bucket with a URL this
-          server signs for one object and one moment, and the bytes reach the
-          video host from there — server to server, on Cloudflare&apos;s network.
+          A creator&apos;s file goes directly from the browser to Bunny Stream&apos;s
+          resumable TUS endpoint. Genhub only creates the signed session, checks
+          ownership and confirms the final byte offset; video bytes never pass
+          through Vercel, R2 or a separate Worker.
         </p>
         <div className="space-y-3 mt-2">
-          <Step n={1} title="Reserve a slot and sign the URL">
-            <Code>POST /api/videos/upload-signature</Code> creates the video object
-            in the Bunny Stream library (creator-only, KYC-approved, rate limited),
-            then signs a presigned URL for that one object —{" "}
-            <Code>AWS4-HMAC-SHA256</Code>, valid for hours and worthless
-            afterwards. The library key stays on the server and is never handed to
-            the browser: it can delete every video in the library.
+          <Step n={1} title="Create a signed upload session">
+            <Code>POST /api/videos/upload-signature</Code> authenticates the
+            creator, checks KYC and limits, creates the Bunny video slot, then
+            returns a short-lived session token and Bunny TUS URL. The library key
+            stays on the server.
           </Step>
-          <Step n={2} title="Upload directly from the browser">
-            One <Code>PUT</Code> to the bucket, with no credential of ours in the
-            page and no server of ours receiving the body — which is what removed
-            the old chunked path, the 100&nbsp;MB request-body ceiling and the
-            resumable endpoint along with it. The screen is still held awake for the
-            length of the transfer: on a phone the usual cause of a frozen bar is
-            the screen locking, not the network. This path is{" "}
-            <Code>src/lib/upload-put.ts</Code>. Then{" "}
-            <Code>POST /api/videos/ingest</Code> asks <Code>worker/video-ingest</Code>{" "}
-            to move that one object out of the private bucket into the reserved
-            slot, where the only holder of the library key writes it. Retrying it
-            is safe — the same file into the same slot — which is why Bunny&apos;s
-            own fetch API is not used: it creates a video object of its own and
-            returns no id to attach a post to.
+          <Step n={2} title="Upload resumable chunks directly">
+            The browser sends 16&nbsp;MB <Code>PATCH</Code> chunks to Bunny with
+            retries. Before each resume it asks Bunny for the saved offset, so a
+            connection reset continues from the confirmed byte instead of
+            restarting the whole file.
+          </Step>
+          <Step n={3} title="Confirm and publish metadata">
+            <Code>POST /api/videos/upload-complete</Code> confirms that Bunny has
+            the declared length. Then <Code>POST /api/videos</Code> verifies the
+            signed creator session again before writing the database row. The row
+            enters processing immediately while Bunny encodes in the background.
           </Step>
           <Step n={3} title="Store the row, live, immediately">
             <Code>POST /api/videos</Code> writes the row <em>published</em> with{" "}

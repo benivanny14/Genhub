@@ -16,10 +16,12 @@ import {
   introPreviewPath,
   introClipPath,
   deleteBunnyVideo,
+  isBunnyConfigured,
 } from "@/lib/bunny";
 import { resolveVideoEntitlement, type EntitlementSource } from "@/lib/services/video-entitlement.service";
 import { normalizeMediaUrl } from "@/lib/media";
 import config from "@/lib/config";
+import { confirmVideoUpload, verifyVideoUploadSession } from "@/lib/video-upload-session";
 import {
   describeEncoding,
   refreshVideoEncoding,
@@ -338,20 +340,40 @@ export async function PATCH(
       return api.validation(result.error.errors[0].message);
     }
 
+    const { teaserUploadSessionToken, ...updateData } = result.data;
+
+    if (updateData.teaserBunnyVideoId && updateData.teaserBunnyVideoId === video.bunnyVideoId) {
+      return api.validation("The teaser must be a different video from the main video");
+    }
+
+    if (updateData.teaserBunnyVideoId && video.creatorId === auth.userId && isBunnyConfigured()) {
+      if (!teaserUploadSessionToken) {
+        return api.validation("The teaser upload session is missing");
+      }
+      const session = await verifyVideoUploadSession(teaserUploadSessionToken, auth.userId);
+      if (!session || session.videoId !== updateData.teaserBunnyVideoId) {
+        return api.forbidden("This teaser upload session does not belong to this creator");
+      }
+      const confirmed = await confirmVideoUpload(session);
+      if (!confirmed.ok) {
+        return api.error("The teaser upload is not complete yet", 409, "TEASER_UPLOAD_INCOMPLETE");
+      }
+    }
+
     // The same rule the upload schema enforces, checked against the row that is
     // actually stored. It matters more here than it does at upload time, because
     // this is the route that can point the teaser column of an ALREADY LIVE
     // video at the video itself — and the teaser door serves without asking for
     // entitlement, so the result would be a paid scene playable by anyone,
     // signed in or not.
-    if (result.data.teaserBunnyVideoId && result.data.teaserBunnyVideoId === video.bunnyVideoId) {
+    if (updateData.teaserBunnyVideoId && updateData.teaserBunnyVideoId === video.bunnyVideoId) {
       return api.validation("The teaser must be a different video from the main video");
     }
 
     const updated = await prisma.video.update({
       where: { id },
       data: {
-        ...result.data,
+        ...updateData,
         // Same healing as create: a stored Bunny CDN URL is rewritten to the
         // in-app path that actually serves the file.
         ...(result.data.thumbnailUrl !== undefined

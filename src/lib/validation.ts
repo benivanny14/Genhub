@@ -8,7 +8,7 @@ import { MEDIA_ROUTE_PREFIX, isSafeMediaKey } from "./media";
 // The same 2 GB ceiling the upload form and the transport enforce. One number,
 // three places it is checked, so a file that passes the picker cannot be refused
 // by the schema that stores it.
-import { MAX_VIDEO_BYTES, UPLOAD_FAILURE_REASONS } from "./upload-error";
+import { MAX_VIDEO_BYTES } from "./video-upload";
 import { normalizeUsername, usernameFormatError } from "./usernames";
 
 /**
@@ -190,6 +190,10 @@ export const createVideoSchema = z.object({
   category: z.string().optional(),
   tags: z.array(z.string()).max(10).optional(),
   bunnyVideoId: z.string().min(1, "A video ID is required"),
+  // Signed by the server when the browser starts the direct Bunny TUS upload.
+  // New posts must prove this session belongs to the authenticated creator.
+  uploadSessionToken: z.string().min(80).max(20_000).optional(),
+  teaserUploadSessionToken: z.string().min(80).max(20_000).optional(),
   // The creator's own file size, so the dashboard can show what the host holds
   // AGAINST what was sent. Optional on purpose: rows created before this
   // existed, and an older client mid-deploy, must still be accepted — the
@@ -272,6 +276,7 @@ export const updateVideoSchema = z.object({
   tags: z.array(z.string()).max(10).optional(),
   isPublished: z.boolean().optional(),
   teaserBunnyVideoId: z.string().min(1).optional(),
+  teaserUploadSessionToken: z.string().min(80).max(20_000).optional(),
   thumbnailUrl: mediaOrExternalUrl("thumbnail URL").optional(),
   // Edit-only, like the price: the upload flow has no captions step, and
   // captions are usually written after a scene is already live. "" clears them.
@@ -415,91 +420,6 @@ export const creatorPostSchema = z.object({
 });
 
 // =============================================================================
-// A failed video upload, reported by the browser
-// =============================================================================
-// The byte transfer runs in the CREATOR'S browser, so a failure leaves the
-// server with no evidence at all: the video row is created only after the
-// upload completes, which means a failed one produces no row, no log line and
-// nothing on any dashboard. The creator sees a toast and the reason dies with
-// the tab — which is exactly why "some videos refuse, and we do not know why"
-// stayed unanswerable while orphaned slots piled up in the Bunny library.
-//
-// This is what the client sends instead. Lenient about the strings on purpose:
-// this is a diagnostic, and refusing a report because Bunny phrased something
-// unexpectedly would discard the evidence it exists to keep. Strict about the
-// SHAPE, so the stored list cannot be used to smuggle arbitrary blobs into the
-// admin panel.
-export const uploadFailureSchema = z.object({
-  /** VideoUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED / ABORTED. */
-  code: z.string().trim().min(1).max(40),
-  /**
-   * Which request died: the reserve POST, a chunk PATCH, or the whole-file PUT
-   * that goes through the upload proxy. Two transports exist, so a record that
-   * did not say which one died would be read as whichever the reader assumed.
-   */
-  stage: z.enum(["reserve", "chunk", "put"]).nullish(),
-  /** Bunny's HTTP status, or null when nothing answered. */
-  status: z.number().int().min(0).max(599).nullish(),
-  /** What the creator was shown. */
-  message: z.string().trim().min(1).max(300),
-  /** Bunny's own response body, verbatim — the half that names the cause. */
-  providerBody: z.string().max(600).nullish(),
-  /** The reserved slot, so an operator can find the orphan in the library. */
-  bunnyVideoId: z.string().trim().max(64).nullish(),
-  fileName: z.string().trim().max(200).nullish(),
-  fileSize: z
-    .number()
-    .int()
-    .min(0)
-    // Twice the ceiling the client enforces: a bound, not a policy.
-    .max(MAX_VIDEO_BYTES * 2)
-    .nullish(),
-  /**
-   * How far the transfer had got when it died, and the file size.
-   *
-   * Bounded the same way — and for the same reason — as `fileSize`. These two
-   * are what separate a request that never got going (a bare zero, no status)
-   * from a transfer that was already moving (tens of megabytes, no status);
-   * without them both read as a bare "NETWORK". The count is what the browser
-   * reported, which is not the same claim as what reached the wire.
-   */
-  bytesSent: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
-  bytesTotal: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
-  /**
-   * Which physical fault it was. Bounded to the closed set the uploader can
-   * produce, so the admin panel never renders a word this codebase did not
-   * write — an enum, not free text, for the same reason `stage` is one.
-   */
-  reason: z.enum(UPLOAD_FAILURE_REASONS).nullish(),
-  /**
-   * Where the failing chunk started, which chunk it was, and how many retries
-   * had been spent on it. Bounded generously: these are read by a human, and a
-   * value outside the file's own size is already refused by the byte counts.
-   */
-  offset: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
-  chunkIndex: z.number().int().min(0).max(100_000).nullish(),
-  retryCount: z.number().int().min(0).max(100).nullish(),
-  /**
-   * How long each attempt at the failing chunk lasted, in milliseconds.
-   *
-   * Bounded in both directions on purpose. A length cap keeps the array from
-   * being a channel for arbitrary blobs, and a per-entry cap means a clock that
-   * jumped — or a tab that stayed frozen overnight — cannot describe an attempt
-   * as lasting eleven hours. The ladder is eight rungs, so sixteen entries is
-   * already twice what the uploader can produce.
-   */
-  attemptMs: z.array(z.number().int().min(0).max(600_000)).max(16).nullish(),
-  /**
-   * What the browser knew about its own connection as it sent the report.
-   * `navigator.connection` is Chrome-only, so all three are nullable by design
-   * rather than because a client forgot them.
-   */
-  connectionType: z.string().trim().max(20).nullish(),
-  downlinkMbps: z.number().min(0).max(100_000).nullish(),
-  rttMs: z.number().int().min(0).max(120_000).nullish(),
-});
-
-// =============================================================================
 // Type exports
 // =============================================================================
 
@@ -511,4 +431,3 @@ export type InitiatePaymentInput = z.infer<typeof initiatePaymentSchema>;
 export type TopUpWalletInput = z.infer<typeof topUpWalletSchema>;
 export type SubmitKycInput = z.infer<typeof submitKycSchema>;
 export type RequestPayoutInput = z.infer<typeof requestPayoutSchema>;
-export type UploadFailureInput = z.infer<typeof uploadFailureSchema>;

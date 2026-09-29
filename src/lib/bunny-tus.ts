@@ -1,40 +1,13 @@
 // =============================================================================
 // GENHUB - Bunny Stream's resumable endpoint (TUS), written once
 //
-// The move that puts a creator's file in front of the encoder used to be made by
-// worker/video-ingest alone. It is now made by the upload's own server as well
-// (lib/services/video-ingest.service.ts), because a step that only exists in a
-// Worker is a step that only works after somebody remembers to deploy it — and
-// measured on 2026-09-29, nobody had: every completed upload, including a 192 MB
-// file that had already crossed the Atlantic into the bucket, ended at a
-// Cloudflare "Worker threw exception" page, and the creator saw an upload reach
-// 100% and then fail with no reason anywhere in the app.
+// The browser sends resumable chunks directly to Bunny. The application server
+// uses this same implementation to create sessions and verify offsets; no
+// object-storage hop or separate ingest service is involved.
 //
-// Two callers, one implementation. Both runtimes this codebase has — a Node
-// serverless function and a Cloudflare Worker — speak fetch and WebCrypto, so
-// there is no platform branch in here, only the four requests Bunny's resumable
-// protocol requires: create, ask where it got to, send a slice, and (implicitly)
-// be told a slice was refused.
-//
-// WHAT IS PINNED HERE, AND WHY EACH ONE COST A MEASUREMENT:
-//
-//   * The Location Bunny returns is RELATIVE — `/tusupload/<id>` — and used as
-//     it arrives it throws "Failed to parse URL". It has to be resolved against
-//     the API host. Measured live against library 760553.
-//   * The Authorization headers are revalidated on EVERY POST, HEAD and PATCH: a
-//     PATCH carrying an offset but no LibraryId is answered `400 Library ID
-//     missing or invalid`. So the headers are built once and spread into each
-//     call rather than written out at each one.
-//   * The signature is SHA-256, lowercase hex, of libraryId + apiKey + expire +
-//     videoId, in that order — Bunny's own rule, character for character.
-//   * A 204 must be answered with no body at all. The successful PATCH is the
-//     one request where a fake that writes `new Response("", …)` breaks, which
-//     is noted where it bit (tests/video-ingest.test.ts).
-//
-// A HEAD that fails, and a Location that is missing, are both reported rather
-// than thrown: every ending in this file has to be a value the caller can turn
-// into an answer, because the failure this module exists to end is the one where
-// an exception escaped and the creator was left with an HTML error page.
+// Bunny requires the signed headers on every POST, HEAD and PATCH. The helpers
+// below keep URL resolution, signatures, offsets and cleanup in one place so the
+// browser and server cannot drift into different upload protocols.
 // =============================================================================
 
 /** Bunny's management API. The video object already exists — this only fills it. */
@@ -124,10 +97,11 @@ export async function createTusUpload(params: {
   apiKey: string;
   videoId: string;
   total: number;
+  mimeType?: string;
   expiresAt: number;
   timeoutMs?: number;
 }): Promise<TusCreateOutcome> {
-  const { libraryId, apiKey, videoId, total, expiresAt, timeoutMs } = params;
+  const { libraryId, apiKey, videoId, total, mimeType = "video/mp4", expiresAt, timeoutMs } = params;
 
   const headers = await tusAuthHeaders({ libraryId, apiKey, videoId, expiresAt });
 
@@ -139,7 +113,7 @@ export async function createTusUpload(params: {
         ...headers,
         "Tus-Resumable": TUS_VERSION,
         "Upload-Length": String(total),
-        "Upload-Metadata": `filetype ${base64("video/mp4")},title ${base64(videoId)}`,
+        "Upload-Metadata": `filetype ${base64(mimeType)},title ${base64(videoId)}`,
       },
       ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
@@ -262,4 +236,17 @@ export async function patchTusChunk(params: {
     ok: true,
     offset: Number.isFinite(advanced) && advanced > offset ? advanced : offset + size,
   };
+}
+
+/** Best-effort cleanup for a TUS resource the creator abandoned. */
+export async function cancelTusUpload(params: {
+  uploadUrl: string;
+  headers: Record<string, string>;
+  timeoutMs?: number;
+}): Promise<void> {
+  await fetch(params.uploadUrl, {
+    method: "DELETE",
+    headers: { ...params.headers, "Tus-Resumable": TUS_VERSION },
+    signal: AbortSignal.timeout(params.timeoutMs ?? 15_000),
+  }).catch(() => undefined);
 }

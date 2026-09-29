@@ -30,6 +30,7 @@
 // =============================================================================
 
 import prisma from "@/lib/db";
+import config from "@/lib/config";
 import { MIN_VIDEO_DURATION_SECONDS } from "@/lib/creator-guidelines";
 import {
   createVideoUpload,
@@ -37,11 +38,12 @@ import {
   getBunnyVideoDetails,
   isBunnyConfigured,
 } from "@/lib/bunny";
-import { createPresignedUploadTarget } from "@/lib/upload-target";
 import {
-  describeIngestFailure,
-  ingestUploadedVideo,
-} from "@/lib/services/video-ingest.service";
+  createTusUpload,
+  patchTusChunk,
+  tusAuthHeaders,
+  TUS_AUTH_TTL_SECONDS,
+} from "@/lib/bunny-tus";
 import type { BunnyWebhookIntent } from "@/lib/bunny-webhook";
 import {
   BUNNY_FINISHED,
@@ -460,48 +462,65 @@ export async function runBunnyPipelineSelfTest(): Promise<BunnyPipelineSelfTest>
     // 3. Sign the upload — through the same function the upload route calls, so
     //    this checks the URL a real creator would be handed rather than an
     //    imitation of it.
-    const presigned = createPresignedUploadTarget(videoId);
-    if (!presigned) {
+    const expiresAt = Math.floor(Date.now() / 1000) + TUS_AUTH_TTL_SECONDS;
+    const tus = await createTusUpload({
+      libraryId: credentials.libraryId,
+      apiKey: config.bunny.apiKey,
+      videoId,
+      total: bytes.length,
+      expiresAt,
+      timeoutMs: 20_000,
+    });
+    if (!tus.ok) {
       steps.push({
-        label: "Sign the upload",
+        label: "Open Bunny upload",
         ok: false,
         detail:
-          "R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET are not all set",
+          `HTTP ${tus.status || "network"} ${tus.detail}`.slice(0, 160),
       });
       return {
         ...state(),
-        headline: "The upload bucket is not configured",
+        headline: "Bunny refused the upload session",
         detail:
-          "A presigned upload is what every creator uses now, so this is a deployment fault and not a test failure: set the R2 variables, deploy worker/video-ingest, then run this again.",
+          "Bunny created the video object but did not open its resumable upload resource.",
       };
     }
     steps.push({
-      label: "Sign the upload",
+      label: "Open Bunny upload",
       ok: true,
-      detail: `presigned PUT for ${presigned.key}`,
+      detail: "direct TUS resource opened",
     });
 
     // 4. PUT the bytes, exactly as the browser does — one request, no chunking
     //    and no Bunny credential anywhere near it.
-    const put = await fetch(presigned.url, {
-      method: "PUT",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: bytes,
-      cache: "no-store",
-      signal: AbortSignal.timeout(20_000),
+    const headers = await tusAuthHeaders({
+      libraryId: credentials.libraryId,
+      apiKey: config.bunny.apiKey,
+      videoId,
+      expiresAt,
     });
-    const acceptedByBucket = put.ok;
+    const patch = await patchTusChunk({
+      uploadUrl: tus.uploadUrl,
+      headers,
+      offset: 0,
+      body: bytes,
+      size: bytes.length,
+      timeoutMs: 20_000,
+    });
+    const acceptedByBunny = patch.ok && patch.offset === bytes.length;
     steps.push({
       label: "Upload bytes",
-      ok: acceptedByBucket,
-      detail: acceptedByBucket
-        ? `${bytes.length} bytes accepted by the bucket`
-        : `HTTP ${put.status} ${(await put.text().catch(() => "")).slice(0, 120)}`,
+      ok: acceptedByBunny,
+      detail: acceptedByBunny
+        ? `${bytes.length} bytes acknowledged by Bunny`
+        : patch.ok
+        ? `Bunny acknowledged offset ${patch.offset} of ${bytes.length}`
+        : `HTTP ${patch.status || "network"} ${patch.detail}`.slice(0, 160),
     });
-    if (!acceptedByBucket) {
+    if (!acceptedByBunny) {
       return {
         ...state(),
-        headline: "The bucket refused the file",
+        headline: "Bunny did not accept the file",
         detail:
           "The presigned URL did not authorize this upload, so a creator's would not either — check that the R2 API token may write to the bucket it names.",
       };
@@ -510,23 +529,7 @@ export async function runBunnyPipelineSelfTest(): Promise<BunnyPipelineSelfTest>
     // 5. Hand it to Bunny. This is the step that moved when the browser stopped
     //    talking to Bunny: the ingest is what puts the file in front of the
     //    encoder now, so a failure here is a failure of the whole pipeline.
-    const ingest = await ingestUploadedVideo(videoId);
-    steps.push({
-      label: "Hand it to Bunny",
-      ok: ingest.ok,
-      detail: ingest.ok
-        ? "the ingest moved the file into the reserved slot"
-        : `${ingest.reason ?? "failed"}: ${ingest.detail ?? ""}`.slice(0, 160),
-    });
-    if (!ingest.ok) {
-      return {
-        ...state(),
-        headline: "The ingest could not reach Bunny",
-        detail: describeIngestFailure(ingest),
-      };
-    }
-
-    // 6. The part that matters: did Bunny KEEP them?
+    // 5. The part that matters: did Bunny KEEP them?
     const details = await readBackVideo(videoId);
     if (!details) {
       steps.push({

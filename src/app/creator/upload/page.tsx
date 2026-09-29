@@ -1,107 +1,69 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
-import { fetchCurrentUser } from "@/lib/current-user";
-import Header from "@/components/Header";
-import Image from "next/image";
-import ImageCropper from "@/components/ImageCropper";
-import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useToast } from "@/components/Toast";
 import {
-  describeRetry,
-  VideoUploadError,
-  videoSizeError,
-  UPLOAD_STALL_WARNING_MS,
-  type UploadRetryInfo,
-} from "@/lib/upload-error";
-import { abandonPendingUpload, sendFileToTarget } from "@/lib/upload-send";
-import { prepareVideoWithBunny } from "@/lib/upload-prepare";
-import { ScreenWakeLock } from "@/lib/screen-wake-lock";
-import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
-import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
+  ArrowLeft,
+  Check,
+  CheckCircle,
+  FileVideo,
+  Image as ImageIcon,
+  Loader2,
+  ShieldAlert,
+  Upload,
+  X,
+} from "lucide-react";
+import Header from "@/components/Header";
+import ImageCropper from "@/components/ImageCropper";
+import { fetchCurrentUser } from "@/lib/current-user";
+import { useToast } from "@/components/Toast";
+import { uploadImage } from "@/lib/upload-client";
+import { VIDEO_ACCEPT } from "@/lib/media";
 import { CATEGORIES } from "@/lib/categories";
-import type { UploadTarget } from "@/lib/upload-target";
 import {
   CREATOR_GUIDELINES,
+  CREATOR_GUIDELINES_VERSION,
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
   MIN_VIDEO_DURATION_SECONDS,
   needsGuidelineAcceptance,
 } from "@/lib/creator-guidelines";
-import Link from "next/link";
+import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
 import {
-  Upload,
-  Film,
-  DollarSign,
-  Tag,
-  FileText,
-  ArrowLeft,
-  CheckCircle,
-  ScrollText,
-  ShieldAlert,
-} from "lucide-react";
+  abortVideoUpload,
+  completeVideoUpload,
+  uploadVideoFile,
+  videoFileSizeError,
+  VideoUploadError,
+  type VideoUploadProgress,
+  type VideoUploadSession,
+} from "@/lib/video-upload";
+
+type UploadKind = "main" | "teaser";
+
+interface UserData {
+  role: string;
+  kycStatus: string;
+  guidelinesAcceptedVersion?: number;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function percent(progress: VideoUploadProgress | null): number {
+  return progress?.percent ?? 0;
+}
 
 export default function UploadPage() {
   const router = useRouter();
-  const { toast, update: updateToast } = useToast();
+  const { toast } = useToast();
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
-  // This is separate from progress: the first PATCH can be in flight before
-  // the browser emits its first progress event. Wake Lock and the stall warning
-  // must already be active during that window.
-  const [mainUploadActive, setMainUploadActive] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  // Null while the bytes are still going to the bucket; 0..99 while the server is
-  // moving the finished file from the bucket into Bunny. Two phases of one
-  // upload, and the bar says which one the creator is waiting on — a bar that
-  // reads 100% and then does nothing is what "it reaches 100% and fails" looked
-  // like from the phone.
-  const [preparingPercent, setPreparingPercent] = useState<number | null>(null);
-  // True when no byte has moved for a while. Reported, never acted on: on a
-  // phone this is usually the screen locking or the browser being sent to the
-  // background (see the wake lock below), and the creator is the only one who
-  // can undo that.
-  const [uploadStalled, setUploadStalled] = useState(false);
-  // When progress last moved, in ms. A ref because it changes on every chunk
-  // and must not re-render the form.
-  const lastProgressAt = useRef<number | null>(null);
-  // The screen wake lock held for the duration of a transfer. One instance per
-  // page, created on first use — see lib/screen-wake-lock.ts for the rules it
-  // owns (requested before the reserve call, retaken when the tab returns,
-  // released on every ending, silent on browsers without the API).
-  const wakeLockRef = useRef<ScreenWakeLock | null>(null);
-  const screenWakeLock = () => (wakeLockRef.current ??= new ScreenWakeLock());
-  // Aborting on unmount prevents an invisible XHR from continuing after the
-  // creator leaves the page and makes the reserved slot eligible for cleanup.
-  const uploadAbortRef = useRef<AbortController | null>(null);
-  // True only once the bytes are actually stored at Bunny. `bunnyVideoId` is set
-  // earlier — when the slot is reserved — so it cannot be what the UI trusts to
-  // know the upload finished, or a failed transfer would look like a success.
-  const [uploadReady, setUploadReady] = useState(false);
-  // How many bytes were handed to Bunny, kept until the video row is created.
-  // The dashboard compares it against what the host reports holding, which is
-  // the only way to see that a transfer stopped arriving — see lib/host-bytes.ts.
-  const [uploadedBytes, setUploadedBytes] = useState<number | null>(null);
-  // A failed transfer keeps its file AND credentials, so Retry re-sends into the
-  // SAME reserved slot instead of reserving a new one and orphaning this one.
-  const [failedUpload, setFailedUpload] = useState<{
-    file: File;
-    credentials: UploadTarget;
-  } | null>(null);
-  const [success, setSuccess] = useState(false);
-  const [awaitingProcessing, setAwaitingProcessing] = useState(false);
-  // The slug of the post that was just created, so the confirmation screen can
-  // offer "View post" — the point of instant publication is that there is
-  // something to look at straight away.
-  const [createdSlug, setCreatedSlug] = useState("");
-  // The rules changed since this account last accepted them, so the upload
-  // form stays closed until they are read and ticked again. Read from the
-  // account, not from this browser, so the gate is the same on every device.
-  const [reAcceptGuidelines, setReAcceptGuidelines] = useState(false);
+  const [user, setUser] = useState<UserData | null>(null);
   const [acceptingGuidelines, setAcceptingGuidelines] = useState(false);
-  const [guidelineChecks, setGuidelineChecks] = useState<Record<string, boolean>>({});
-  const allGuidelinesChecked = CREATOR_GUIDELINES.every((g) => guidelineChecks[g.id]);
+  const [checks, setChecks] = useState<Record<string, boolean>>({});
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -109,477 +71,215 @@ export default function UploadPage() {
   const [teaserDuration, setTeaserDuration] = useState(15);
   const [category, setCategory] = useState("");
   const [tags, setTags] = useState("");
-  const [bunnyVideoId, setBunnyVideoId] = useState("");
-  const [thumbnailUrl, setThumbnailUrl] = useState("");
-  const [uploadingThumb, setUploadingThumb] = useState(false);
-  // The picture the creator just chose, held while they frame it. The cover is
-  // shown as a 16:9 shape everywhere (feed, profile, watch page), so the same
-  // shape is what they position here — what they see is what every viewer gets.
-  const [thumbCropFile, setThumbCropFile] = useState<File | null>(null);
-  // Separate short clip shown to non-buyers. Without it a paid scene shows only
-  // a poster, because signing the main video for non-buyers would unlock the
-  // whole scene (a Bunny token authorises a path, not a duration).
-  const [teaserBunnyVideoId, setTeaserBunnyVideoId] = useState("");
-  const [teaserProgress, setTeaserProgress] = useState(0);
-  const [uploadingTeaser, setUploadingTeaser] = useState(false);
-  // 18 U.S.C. § 2257 — the creator must affirm this before the video is created.
   const [complianceAttested, setComplianceAttested] = useState(false);
+
+  const [mainFile, setMainFile] = useState<File | null>(null);
+  const [mainSession, setMainSession] = useState<VideoUploadSession | null>(null);
+  const [mainProgress, setMainProgress] = useState<VideoUploadProgress | null>(null);
+  const [mainUploading, setMainUploading] = useState(false);
+  const [mainReady, setMainReady] = useState(false);
+  const [bunnyVideoId, setBunnyVideoId] = useState("");
+
+  const [teaserFile, setTeaserFile] = useState<File | null>(null);
+  const [teaserSession, setTeaserSession] = useState<VideoUploadSession | null>(null);
+  const [teaserProgress, setTeaserProgress] = useState<VideoUploadProgress | null>(null);
+  const [teaserUploading, setTeaserUploading] = useState(false);
+  const [teaserVideoId, setTeaserVideoId] = useState("");
+
+  const [thumbnailUrl, setThumbnailUrl] = useState("");
+  const [cropFile, setCropFile] = useState<File | null>(null);
+  const [thumbnailUploading, setThumbnailUploading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState<{ slug: string; processing: boolean } | null>(null);
+
+  const allGuidelinesChecked = CREATOR_GUIDELINES.every((item) => checks[item.id]);
 
   const checkAccess = useCallback(async () => {
     try {
-      const res = await fetchCurrentUser();
-      const data = await res.json();
-      if (!data.success || data.data.role !== "CREATOR") {
-        router.push("/");
+      const response = await fetchCurrentUser();
+      const body = await response.json();
+      const data = body.data as UserData | undefined;
+      if (!body.success || !data || data.role !== "CREATOR") {
+        router.replace("/");
         return;
       }
-      if (data.data.kycStatus !== "APPROVED") {
-        router.push("/creator/kyc");
+      if (data.kycStatus !== "APPROVED") {
+        router.replace("/creator/kyc");
         return;
       }
-      // Read-side re-check: a version bump invalidates the old receipt, so a
-      // creator who accepted the previous wording is shown the new one here.
-      setReAcceptGuidelines(
-        needsGuidelineAcceptance(data.data.guidelinesAcceptedVersion)
-      );
+      setUser(data);
     } catch {
-      router.push("/login");
+      router.replace("/login");
     } finally {
       setLoading(false);
     }
   }, [router]);
 
   useEffect(() => {
-    checkAccess();
+    void checkAccess();
   }, [checkAccess]);
 
-  // ===========================================================================
-  // Why a phone upload dies halfway (the thing that was hurting worst)
-  // ===========================================================================
-  // On a phone, the upload does not fail on the network — it fails because the
-  // PAGE goes away. Locking the screen or switching apps suspends the tab, and
-  // a suspended tab stops sending: the XHR freezes mid-chunk with no error, so
-  // the browser reports neither success nor failure and the bar simply stops.
-  // On the old 32 MiB chunks a creator would come back to a bar that had not
-  // moved, wait out the stall timeout, and often give up on a file that was
-  // one chunk from done.
-  //
-  // Two things make that survivable, and neither is a trick:
-  //   1. the screen is held awake for the length of the transfer (Wake Lock),
-  //      which is the commonest cause removed outright;
-  //   2. the creator is TOLD what will break their upload, in the language they
-  //      are using the site in, while it is running.
-  // The transport itself is the third half — see lib/upload-put.ts. What it does
-  // NOT do is resume, which is why a failure that cost the creator real time is
-  // reported by name (an expired permission, a device that will not read the
-  // file) rather than as one more "connection dropped".
-
-  /** Give the lock back and stop watching. Every ending lands here. */
-  const releaseScreenWake = useCallback(() => {
-    screenWakeLock().stop();
-  }, []);
-  /**
-   * Take the lock now. Never throws and is never awaited for its own sake: the
-   * API is an optimisation, so a browser without it simply continues.
-   */
-  const holdScreenAwake = useCallback(async () => {
-    await screenWakeLock().acquire();
-  }, []);
-  /**
-   * The same, plus the rule that matters on a phone: a hidden tab has its lock
-   * dropped BY THE BROWSER, so coming back to the page has to take it again.
-   */
-  const watchScreenWake = useCallback(async () => {
-    await screenWakeLock().watch();
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      uploadAbortRef.current?.abort();
-      uploadAbortRef.current = null;
-      // A multipart upload this page was holding is real storage in the bucket
-      // holding every part that reached it, and leaving the page is the one
-      // ending where no retry can ever use them — so it is given up here. A
-      // transfer that FAILED is deliberately not given up: the creator can still
-      // press Retry, and the parts already stored are what makes that cheap.
-      abandonPendingUpload();
-      releaseScreenWake();
-    };
-  }, [releaseScreenWake]);
-
-  /** A transfer is in flight from before the first byte until it settles. */
-  const transferring = mainUploadActive || uploadingTeaser;
-
-  useEffect(() => {
-    if (!transferring) {
-      setUploadStalled(false);
-      lastProgressAt.current = null;
-      releaseScreenWake();
-      return;
-    }
-
-    lastProgressAt.current = lastProgressAt.current ?? Date.now();
-    // Takes the lock AND registers the re-acquire-on-return rule — which is why
-    // this is not the same call the reserve path makes. The timer below is
-    // reporting only; the module owns every decision about the lock itself.
-    void watchScreenWake();
-
-    const timer = setInterval(() => {
-      const last = lastProgressAt.current ?? Date.now();
-      setUploadStalled(Date.now() - last > UPLOAD_STALL_WARNING_MS);
-    }, 5_000);
-
-    return () => {
-      clearInterval(timer);
-    };
-  }, [transferring, watchScreenWake, releaseScreenWake]);
-
-  /**
-   * Reserve the slot and get the credentials to fill it.
-   *
-   * `size` IS what chooses the transport, and it is passed on every call rather
-   * than only the first: the server decides from it whether to hand back one
-   * presigned PUT or a multipart plan (lib/upload-target.ts), so a retry that
-   * withheld the size would quietly ask for the transport the file cannot use.
-   */
-  async function initiateUpload(size?: number): Promise<UploadTarget | null> {
+  async function acceptGuidelines() {
+    setAcceptingGuidelines(true);
     try {
-      const res = await fetch("/api/videos/upload-signature", {
+      const response = await fetch("/api/creator/guidelines/accept", { method: "POST" });
+      const body = await response.json();
+      if (!body.success) {
+        toast("error", body.error || "Could not save your acceptance");
+        return;
+      }
+      setUser((current) =>
+        current ? { ...current, guidelinesAcceptedVersion: CREATOR_GUIDELINES_VERSION } : current
+      );
+    } catch {
+      toast("error", "Network error while saving your acceptance");
+    } finally {
+      setAcceptingGuidelines(false);
+    }
+  }
+
+  async function createSession(file: File, kind: UploadKind): Promise<VideoUploadSession | null> {
+    try {
+      const response = await fetch("/api/videos/upload-signature", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, size }),
+        body: JSON.stringify({
+          title: `${title.trim() || file.name.replace(/\.[^.]+$/, "") || "Video"}${kind === "teaser" ? " (teaser)" : ""}`,
+          size: file.size,
+          mimeType: file.type || "video/mp4",
+        }),
       });
-      const data = await res.json();
-      if (data.success) {
-        setBunnyVideoId(data.data.videoId);
-        return data.data as UploadTarget;
+      const body = await response.json();
+      if (!response.ok || !body.success) {
+        toast("error", body.error || "Could not start the video upload");
+        return null;
       }
-      toast("error", data.error || "Could not start the upload");
-      return null;
+      return body.data as VideoUploadSession;
     } catch {
-      toast("error", "Network error");
+      toast("error", "Could not reach Genhub to start the upload");
       return null;
     }
   }
 
-  /**
-   * Send the file to the bucket — one PUT or many parts, as signed for — then
-   * hand it to the encoder. `onProgress` is 0..100.
-   *
-   * The transfer also drives one small toast that lives exactly as long as the
-   * upload does: created sticky so it cannot time out mid-transfer, rewritten
-   * with the percentage on every chunk, finished off as a success with a real
-   * duration once the last byte lands. A creator who scrolls away from the
-   * progress bar inside the form still sees how far the upload got — a whole
-   * file can take minutes on a phone, and "it is still going" was previously
-   * only visible in one place on the page.
-   */
-  async function uploadToBunny(
+  async function uploadOne(
     file: File,
-    credentials: UploadTarget,
-    onProgress: (percent: number) => void,
-    signal?: AbortSignal
-  ): Promise<boolean> {
-    const label = file.name.length > 28 ? `${file.name.slice(0, 27)}…` : file.name;
-    const toastId = toast("info", `Uploading ${label} — 0%`, 0);
-    // Kept so a retry message can carry the percentage the bar is already
-    // showing: a toast rewritten without one drops the bar back to nothing and
-    // reads as "it started again".
-    let lastPercent = 0;
-    const report = (percent: number) => {
-      // Every callback is proof the connection is alive — the stall warning is
-      // built from these timestamps, so it clears itself the moment bytes move
-      // again (a phone coming back from the background resumes here).
-      lastPercent = percent;
-      lastProgressAt.current = Date.now();
-      setUploadStalled(false);
-      onProgress(percent);
-      updateToast(toastId, {
-        message: `Uploading ${label} — ${percent}%`,
-        progress: percent,
-      });
-    };
-    /**
-     * Between one failed attempt and the next, say so. The backoff is seconds
-     * long, and a bar that sits still for that long with no explanation is
-     * indistinguishable from the hang this whole file keeps running into — so
-     * the retry names the fault (offline, dropped, stalled) instead of waiting
-     * silently.
-     */
-    const onRetry = (info: Pick<UploadRetryInfo, "attempt" | "totalAttempts" | "reason">) => {
-      lastProgressAt.current = Date.now();
-      setUploadStalled(false);
-      updateToast(toastId, {
-        message: `${describeRetry(info)} · ${label} at ${lastPercent}%`,
-        progress: lastPercent,
-      });
-    };
-    /**
-     * Say so when a previous run already delivered part of this file.
-     *
-     * The one thing that tells a creator their phone restarting did not cost
-     * them the transfer — without it, a bar that opens at 40% looks like a bug
-     * rather than an upload that kept what it had.
-     */
-    const onResume = (partsAlreadySent: number) => {
-      lastProgressAt.current = Date.now();
-      setUploadStalled(false);
-      updateToast(toastId, {
-        message: `Continuing ${label} — ${partsAlreadySent} part${
-          partsAlreadySent === 1 ? "" : "s"
-        } already saved`,
-        progress: lastPercent,
-      });
-    };
-
-    const sendProgress = (uploaded: number, total: number) =>
-      report(Math.round((uploaded / total) * 100));
+    kind: UploadKind,
+    existing: VideoUploadSession | null
+  ): Promise<{ session: VideoUploadSession; videoId: string } | null> {
+    const setProgress = kind === "main" ? setMainProgress : setTeaserProgress;
+    const session = existing ?? (await createSession(file, kind));
+    if (!session) return null;
 
     try {
-      // STRAIGHT INTO THE BUCKET, by whichever route the server signed for.
-      //
-      // The bytes never pass through a server of ours and the browser never
-      // holds a credential of ours. Small files go as ONE presigned PUT
-      // (lib/upload-put.ts); everything bigger arrives as ~8 MiB parts and is
-      // then assembled (lib/upload-multipart.ts) — because measured on this
-      // application's own failure records, a 192 MB file over a 1.55 Mbps link
-      // needs seventeen minutes, the connection was cut after thirty to sixty
-      // seconds, and a transfer with no offset to resume from lost everything it
-      // had sent. Which one this is was decided by the server, from the size the
-      // picker reported — see lib/upload-send.ts.
-      await sendFileToTarget(file, credentials, {
-        onProgress: sendProgress,
-        onRetry,
-        onResume,
-        signal,
-      });
-      // Done: say so on the same toast, give it a real duration, and let it
-      // clear itself. `progress: 100` first so the bar finishes visibly rather
-      // than snapping away at 99%.
-      updateToast(toastId, {
-        type: "success",
-        message: `${label} uploaded — 100%`,
-        progress: 100,
-        duration: 5000,
-      });
-      return true;
+      setProgress({ uploadedBytes: 0, totalBytes: file.size, percent: 0 });
+      await uploadVideoFile(file, session, { onProgress: setProgress });
+      const videoId = await completeVideoUpload(session.sessionToken);
+      setProgress({ uploadedBytes: file.size, totalBytes: file.size, percent: 100 });
+      return { session, videoId };
     } catch (error) {
-      updateToast(toastId, {
-        type: "error",
-        message:
-          error instanceof VideoUploadError
-            ? error.message
-            : "Upload failed. Please try again.",
-        progress: undefined,
-        duration: 8000,
-      });
-      // The bytes went straight to Bunny, so nothing on our side saw this — and
-      // the reserved slot is now an orphan in the library. Report it, with
-      // Bunny's own status and body, before the tab takes it away.
-      void reportUploadFailure(
-        describeUploadFailure(error, {
-          bunnyVideoId: credentials.videoId,
-          fileName: file.name,
-          fileSize: file.size,
-        })
-      );
-      return false;
+      const message =
+        error instanceof VideoUploadError ? error.message : "The video upload failed. Try again.";
+      toast("error", message);
+      return { session, videoId: "" };
     }
   }
 
-  /**
-   * Upload a framed cover and remember its URL on the draft.
-   *
-   * Called with the cropped file the ImageCropper produced, so the picture we
-   * store is exactly the 16:9 frame the creator positioned — no re-cropping by
-   * the feed or the profile can move it afterwards.
-   */
-  async function uploadThumb(file: File) {
-    setUploadingThumb(true);
-    try {
-      const { uploadImage } = await import("@/lib/upload-client");
-      // Public: a thumbnail is shown to every visitor on the feed.
-      setThumbnailUrl(await uploadImage(file, { kind: "public" }));
-    } catch (err) {
-      toast("error", err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploadingThumb(false);
-    }
-  }
-
-  /** Reproduce the upload once a file is final — full or already cut. */
-  async function startVideoUpload(file: File) {
-    // Refuse an over-limit file BEFORE reserving a Bunny slot: an empty slot
-    // that can never be filled still counts against the creator's library.
-    const sizeError = videoSizeError(file);
+  async function handleMainFile(file: File) {
+    const sizeError = videoFileSizeError(file);
     if (sizeError) {
       toast("error", sizeError);
       return;
     }
 
-    // The length floor, checked here too — and here is where it matters.
-    //
-    // The rule is on this form and always has been, but nothing enforced it
-    // until Bunny reported the real duration, minutes after the creator had
-    // spent their data pushing the file. Now that a post is published the
-    // moment it is uploaded, an unchecked too-short file would go live and then
-    // be taken down — a public post appearing and disappearing over something
-    // this line can say in the file picker.
-    //
-    // Reading the file's own metadata is local: no upload, no request. A
-    // container the browser cannot parse answers null, and a null proceeds —
-    // refusing a good file is the worse failure, and the server still holds the
-    // backstop (refreshVideoEncoding).
-    const durationError = shortVideoError(
-      await probeVideoDuration(file),
-      MIN_VIDEO_DURATION_SECONDS
-    );
-    if (durationError) {
-      toast("error", durationError);
+    // The same file keeps the session — that is what makes a retry a resume from
+    // Bunny's saved offset. A DIFFERENT file must not inherit it, and `reuse` is
+    // captured before any state is reset because setState is asynchronous: the
+    // old `mainSession` is still the one in this closure either way.
+    const reuse =
+      mainSession && mainFile?.name === file.name && mainFile?.size === file.size
+        ? mainSession
+        : null;
+    if (mainSession && !reuse) {
+      await cancelSession(mainSession);
+      setMainSession(null);
+    }
+    setMainFile(file);
+    setMainReady(false);
+    setBunnyVideoId("");
+    setMainUploading(true);
+    try {
+      const durationError = shortVideoError(
+        await probeVideoDuration(file),
+        MIN_VIDEO_DURATION_SECONDS
+      );
+      if (durationError) {
+        toast("error", durationError);
+        return;
+      }
+
+      const result = await uploadOne(file, "main", reuse);
+      if (!result) return;
+      setMainSession(result.session);
+      if (!result.videoId) return;
+      setBunnyVideoId(result.videoId);
+      setMainReady(true);
+      toast("success", "Video uploaded successfully");
+    } finally {
+      setMainUploading(false);
+    }
+  }
+
+  async function handleTeaserFile(file: File) {
+    if (!mainReady) {
+      toast("error", "Upload the main video first");
+      return;
+    }
+    const sizeError = videoFileSizeError(file);
+    if (sizeError) {
+      toast("error", sizeError);
+      return;
+    }
+    const reuse =
+      teaserSession && teaserFile?.name === file.name && teaserFile?.size === file.size
+        ? teaserSession
+        : null;
+    if (teaserSession && !reuse) {
+      await cancelSession(teaserSession);
+      setTeaserSession(null);
+    }
+    setTeaserFile(file);
+    setTeaserVideoId("");
+    setTeaserUploading(true);
+    try {
+      const result = await uploadOne(file, "teaser", reuse);
+      if (!result) return;
+      setTeaserSession(result.session);
+      if (!result.videoId) return;
+      setTeaserVideoId(result.videoId);
+      toast("success", "Teaser uploaded successfully");
+    } finally {
+      setTeaserUploading(false);
+    }
+  }
+
+  async function cancelSession(session: VideoUploadSession | null) {
+    if (session) await abortVideoUpload(session.sessionToken);
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!mainReady || !mainSession || !bunnyVideoId) {
+      toast("error", "Upload the main video completely first");
+      return;
+    }
+    if (!complianceAttested) {
+      toast("error", "Confirm the 18+ records statement before publishing");
       return;
     }
 
-    setFailedUpload(null);
-
-    // The wake lock is requested HERE, before the reserve POST — not after it,
-    // and not when progress starts. Reserve and the first PATCH are one
-    // transfer, and the first PATCH can be in flight before the browser emits a
-    // single progress event; a screen that locks in that window produces a
-    // frozen bar with no error at all, which is the fault this is here to
-    // prevent. `mainUploadActive` goes up first so the form reflects it and the
-    // file picker locks. (Both guards above have already run, so a file that is
-    // refused never wakes the screen for nothing.)
-    setMainUploadActive(true);
-    await holdScreenAwake();
+    setSubmitting(true);
     try {
-      const credentials = await initiateUpload(file.size);
-      if (!credentials) return;
-      await runVideoUpload(file, credentials);
-    } finally {
-      // A reserve that never produced credentials has no path through
-      // runVideoUpload, so the flag would otherwise stay up with nothing behind
-      // it — and along with it the wake lock. runVideoUpload clears it on the
-      // paths that reach it; clearing twice is harmless.
-      setMainUploadActive(false);
-    }
-  }
-
-  /**
-   * Send one file into one already-reserved slot, and remember the pair if it
-   * fails.
-   *
-   * The old flow cleared the reserved id on any failure, which forced a full
-   * re-pick AND reserved a second slot while the first sat empty in the library
-   * — the "it removes itself, upload it again" the creator saw. Keeping the
-   * pair means Retry continues into the same slot.
-   */
-  /**
-   * Ask the server to move the finished file from the bucket into Bunny.
-   *
-   * A separate step because it is a separate wait: the file has crossed two
-   * providers by the time this answers, and the creator is told about that wait
-   * instead of it being hidden inside the upload they think already finished.
-   *
-   * It POLLS rather than waiting on one request — a large file can outlast a
-   * single serverless invocation, so the route moves what it can and the page
-   * asks again, each round continuing from the offset Bunny reports. While that
-   * happens the bar says "Preparing", which is the difference between a screen
-   * stuck at 100% and one that is visibly still working.
-   *
-   * Returns false when Bunny does not end up holding the file, which is the only
-   * outcome that matters to the caller — the message to the creator names the
-   * real cause rather than "upload failed" (lib/upload-prepare.ts).
-   */
-  async function handOffToBunny(videoId: string, signal?: AbortSignal): Promise<boolean> {
-    setPreparingPercent(0);
-    try {
-      await prepareVideoWithBunny(videoId, {
-        signal,
-        onProgress: (uploaded, total) =>
-          setPreparingPercent(total > 0 ? Math.min(99, Math.round((uploaded / total) * 100)) : 0),
-      });
-      return true;
-    } catch (error) {
-      // An abort is the creator stopping, not a fault, and saying "network
-      // error" for their own tap is how a cancel starts looking like a bug.
-      if (error instanceof VideoUploadError && error.code === "ABORTED") return false;
-
-      const failure =
-        error instanceof VideoUploadError
-          ? error
-          : new VideoUploadError("NETWORK", "Network error while preparing the video", undefined, {
-              stage: "chunk",
-              reason: "reset",
-            });
-      toast("error", failure.message);
-
-      // Reported for the same reason a transfer failure is, and it is the gap
-      // that made this fault invisible: the file reached the bucket, so the
-      // creator's browser is the only witness that it never reached the library,
-      // and /admin would otherwise have nothing to show for a completed upload
-      // that failed at 100%.
-      void reportUploadFailure(describeUploadFailure(failure, { bunnyVideoId: videoId }));
-      return false;
-    } finally {
-      setPreparingPercent(null);
-    }
-  }
-
-  async function runVideoUpload(file: File, credentials: UploadTarget) {
-    setFailedUpload(null);
-    setMainUploadActive(true);
-    setUploadStalled(false);
-    lastProgressAt.current = Date.now();
-    const controller = new AbortController();
-    uploadAbortRef.current = controller;
-
-    // The same request as the first path, and not a duplicate of it: this is
-    // where the RETRY button lands, with the slot already reserved, so it never
-    // passes through startVideoUpload. Both are awaited before a byte is sent.
-    await holdScreenAwake();
-    try {
-      // A presigned URL dies at its deadline, and the retry button can be pressed
-      // hours later — a creator comes back to the tab, or to the phone. Reusing a
-      // dead URL is a 403 they can do nothing about, so the reservation is taken
-      // again. It replaces the URL AND the slot, which is why everything below
-      // reads `slot` rather than the credentials this call arrived with.
-      let slot = credentials;
-      if (
-        slot.presigned &&
-        slot.presigned.expiresAt * 1000 - Date.now() < 5 * 60 * 1000
-      ) {
-        const fresh = await initiateUpload(file.size);
-        if (fresh) slot = fresh;
-      }
-
-      const uploaded = await uploadToBunny(file, slot, setUploadProgress, controller.signal);
-      // The bucket holding the file is not the same as Bunny holding it, and only
-      // the second one makes a post. When the file went to the bucket, the ingest
-      // is the rest of the upload, so its failure is an upload failure: the retry
-      // button stays useful, and the retry re-sends a file whose permission the
-      // server hands out again rather than one it has to guess about.
-      const accepted = uploaded && (await handOffToBunny(slot.videoId, controller.signal));
-      if (accepted) {
-        setUploadProgress(100);
-        setUploadedBytes(file.size);
-        setUploadReady(true);
-      } else {
-        setUploadProgress(0);
-        setFailedUpload({ file, credentials: slot });
-      }
-    } finally {
-      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
-      setMainUploadActive(false);
-    }
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!uploadReady || !bunnyVideoId || !title) return;
-
-    setUploading(true);
-    try {
-      const res = await fetch("/api/videos", {
+      const response = await fetch("/api/videos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -588,39 +288,38 @@ export default function UploadPage() {
           price,
           teaserDuration,
           category: category || undefined,
-          tags: tags ? tags.split(",").map((t) => t.trim()) : [],
+          tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
           bunnyVideoId,
-          teaserBunnyVideoId: teaserBunnyVideoId || undefined,
+          teaserBunnyVideoId: teaserVideoId || undefined,
           thumbnailUrl: thumbnailUrl || undefined,
-          // What the browser just sent, sent again as a fact about the file.
-          fileSize: uploadedBytes ?? undefined,
+          fileSize: mainFile?.size,
+          uploadSessionToken: mainSession.sessionToken,
+          teaserUploadSessionToken: teaserVideoId ? teaserSession?.sessionToken : undefined,
           complianceAttested,
         }),
       });
-
-      const data = await res.json();
-      if (data.success) {
-        // The post is published the moment this row is written (see
-        // /api/videos POST), so this is not "it is live" OR "it is waiting" —
-        // it is both at once: visible now with an "Inachakatwa..." badge, and
-        // playable the moment Bunny finishes. Carrying the flag through is what
-        // lets the confirmation screen say exactly that instead of guessing.
-        setAwaitingProcessing(data.data?.encodingStatus !== null);
-        setCreatedSlug(data.data?.slug || data.data?.id || "");
-        setSuccess(true);
-      } else {
-        toast(
-          "error",
-          data.error || "The video reached the host, but the post could not be finalized. Submit again to retry."
-        );
+      const body = await response.json();
+      if (!response.ok || !body.success) {
+        toast("error", body.error || "The video uploaded but could not be published");
+        return;
       }
+      setSuccess({ slug: body.data.slug || body.data.id, processing: body.data.status === "PROCESSING" });
     } catch {
-      // The POST response may have been lost after the database committed. The
-      // server finalizer is idempotent by Bunny video id, so submitting again is
-      // safe and does not upload the large file a second time.
-      toast("error", "Post finalization was interrupted. Submit again; the video upload is still safe.");
+      toast("error", "The video uploaded, but publishing could not be confirmed. Press publish again.");
     } finally {
-      setUploading(false);
+      setSubmitting(false);
+    }
+  }
+
+  async function handleThumbnail(file: File) {
+    setThumbnailUploading(true);
+    try {
+      setThumbnailUrl(await uploadImage(file, { kind: "public" }));
+      toast("success", "Cover image uploaded");
+    } catch (error) {
+      toast("error", error instanceof Error ? error.message : "Cover image upload failed");
+    } finally {
+      setThumbnailUploading(false);
     }
   }
 
@@ -628,173 +327,31 @@ export default function UploadPage() {
     return (
       <div className="min-h-screen">
         <Header />
-        <div className="flex items-center justify-center h-[60vh]">
-          <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
-        </div>
+        <div className="flex justify-center py-32"><Loader2 className="animate-spin" /></div>
       </div>
     );
   }
 
-  if (success) {
+  if (!user) return null;
+
+  if (needsGuidelineAcceptance(user.guidelinesAcceptedVersion)) {
     return (
       <div className="min-h-screen">
         <Header />
-        <div className="flex items-center justify-center h-[60vh]">
-          <div className="text-center">
-            <CheckCircle className="w-16 h-16 text-emerald-400 mx-auto mb-4" />
-            <h2 className="text-2xl font-display font-bold mb-2">
-              {awaitingProcessing ? "Posted — now processing" : "Video Uploaded!"}
-            </h2>
-            {awaitingProcessing ? (
-              <>
-                <p className="text-white/60 mb-2 max-w-md">
-                  Your post is already live on your profile and in your
-                  subscribers&apos; feed, marked{" "}
-                  <span className="font-medium text-amber-200">
-                    &ldquo;Inachakatwa...&rdquo;
-                  </span>
-                  . It turns into a playable video on its own — nobody has to
-                  reload anything — and you will get a notification when it is
-                  ready.
-                </p>
-                <p className="text-white/40 text-sm mb-6">
-                  You can close this page: processing happens on the video host,
-                  and your post stays exactly where it is while it finishes.
-                </p>
-              </>
-            ) : (
-              <p className="text-white/60 mb-6">
-                Your video has been created and is live.
-              </p>
-            )}
-            <div className="flex flex-wrap gap-3 justify-center">
-              {createdSlug && (
-                <Link href={`/video/${createdSlug}`} className="btn-brand">
-                  View post
-                </Link>
-              )}
-              <Link href="/creator" className="btn-ghost">
-                Back to Dashboard
-              </Link>
-              <button
-                onClick={() => {
-                  setSuccess(false);
-                  setTitle("");
-                  setBunnyVideoId("");
-                  setUploadReady(false);
-                  setUploadProgress(0);
-                  setUploadedBytes(null);
-                  setFailedUpload(null);
-                  setCreatedSlug("");
-                }}
-                className="btn-ghost"
-              >
-                Upload Another Video
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // The wording of the rules changed after this creator accepted them. Nothing
-  // else on the page is reachable until the new version is ticked — the form is
-  // simply not rendered, which is stronger than a disabled button.
-  if (reAcceptGuidelines) {
-    return (
-      <div className="min-h-screen">
-        <Header />
-
-        <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-          <div className="flex items-center gap-3">
-            <Link href="/creator" className="p-2 rounded-xl hover:bg-white/10 transition">
-              <ArrowLeft className="w-5 h-5" />
-            </Link>
-            <div>
-              <h1 className="text-2xl font-display font-bold">Masharti ya Creators</h1>
-              <p className="text-white/50 text-sm">
-                Tumebadilisha masharti ya creators. Soma na ukubali kila sharti
-                kabla ya kuendelea ku-upload.
-              </p>
-            </div>
-          </div>
-
-          <div className="glass-card p-6 space-y-4">
-            <div className="flex items-start gap-2">
-              <ScrollText className="mt-0.5 h-5 w-5 shrink-0 text-brand-400" />
-              <p className="text-sm text-white/60">
-                Sheria zilizosasishwa zinaanza kutumika mara moja. Bonyeza kila
-                sharti kuonyesha kuwa umelisoma.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              {CREATOR_GUIDELINES.map((g, i) => (
-                <label
-                  key={g.id}
-                  className={`flex items-start gap-3 rounded-xl border p-3 cursor-pointer transition ${
-                    guidelineChecks[g.id]
-                      ? "border-emerald-500/40 bg-emerald-500/5"
-                      : g.severe
-                        ? "border-red-500/30 bg-red-500/5"
-                        : "border-white/10 hover:border-white/20"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={!!guidelineChecks[g.id]}
-                    onChange={(e) =>
-                      setGuidelineChecks((prev) => ({ ...prev, [g.id]: e.target.checked }))
-                    }
-                    className="mt-1 h-4 w-4 shrink-0 accent-emerald-500"
-                  />
-                  <div className="space-y-1">
-                    <p className="flex items-center gap-2 text-sm font-medium">
-                      <span className="text-white/40">{i + 1}.</span>
-                      {g.severe && <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />}
-                      <span>{g.sw}</span>
-                    </p>
-                    <p className="text-xs text-white/50">{g.en}</p>
-                  </div>
+        <main className="max-w-3xl mx-auto px-4 py-8">
+          <Link href="/creator" className="inline-flex items-center gap-2 text-white/60 mb-6"><ArrowLeft className="w-4 h-4" /> Back</Link>
+          <div className="glass-card p-6 space-y-6">
+            <div><h1 className="text-2xl font-bold">Creator guidelines</h1><p className="text-white/60 mt-2">Soma na ukubali masharti haya kabla ya ku-upload.</p></div>
+            <div className="space-y-3">
+              {CREATOR_GUIDELINES.map((item) => (
+                <label key={item.id} className="flex gap-3 rounded-xl border border-white/10 p-4 cursor-pointer">
+                  <input type="checkbox" checked={Boolean(checks[item.id])} onChange={(e) => setChecks((current) => ({ ...current, [item.id]: e.target.checked }))} className="mt-1" />
+                  <span><span className="block text-white/90">{item.sw}</span><span className="block text-sm text-white/50 mt-1">{item.en}</span></span>
                 </label>
               ))}
             </div>
-
-            <p className="text-xs text-white/50">
-              {GUIDELINE_ACK_LABEL_SW}
-              <br />
-              {GUIDELINE_ACK_LABEL_EN}
-            </p>
-
-            <button
-              type="button"
-              disabled={!allGuidelinesChecked || acceptingGuidelines}
-              onClick={async () => {
-                setAcceptingGuidelines(true);
-                try {
-                  const res = await fetch("/api/creator/guidelines/accept", {
-                    method: "POST",
-                  });
-                  const data = await res.json();
-                  if (!data.success) {
-                    toast("error", data.error || "Could not save your acceptance");
-                    return;
-                  }
-                  setReAcceptGuidelines(false);
-                } catch {
-                  toast("error", "Network error");
-                } finally {
-                  setAcceptingGuidelines(false);
-                }
-              }}
-              className="btn-brand w-full"
-            >
-              {acceptingGuidelines
-                ? "Inatuma..."
-                : allGuidelinesChecked
-                  ? "Nimekubali — endelea"
-                  : "Tiki masharti yote ili kuendelea"}
+            <button type="button" disabled={!allGuidelinesChecked || acceptingGuidelines} onClick={() => void acceptGuidelines()} className="btn-brand w-full disabled:opacity-50">
+              {acceptingGuidelines ? "Saving…" : `${GUIDELINE_ACK_LABEL_SW} / ${GUIDELINE_ACK_LABEL_EN}`}
             </button>
           </div>
         </main>
@@ -802,455 +359,75 @@ export default function UploadPage() {
     );
   }
 
+  if (success) {
+    return (
+      <div className="min-h-screen"><Header /><main className="max-w-xl mx-auto px-4 py-24 text-center">
+        <CheckCircle className="w-16 h-16 text-emerald-400 mx-auto mb-5" />
+        <h1 className="text-2xl font-bold">Video published</h1>
+        <p className="text-white/60 mt-3">{success.processing ? "It is now processing and will become playable automatically." : "Your video is live."}</p>
+        <div className="flex justify-center gap-3 mt-8"><Link href={`/video/${success.slug}`} className="btn-brand">View video</Link><Link href="/creator" className="btn-ghost">Dashboard</Link></div>
+      </main></div>
+    );
+  }
+
+  const mainPercent = percent(mainProgress);
+  const teaserPercent = percent(teaserProgress);
+
   return (
     <div className="min-h-screen">
       <Header />
+      <main className="max-w-3xl mx-auto px-4 py-8">
+        <Link href="/creator" className="inline-flex items-center gap-2 text-white/60 mb-6"><ArrowLeft className="w-4 h-4" /> Back to dashboard</Link>
+        <form onSubmit={(e) => void submit(e)} className="space-y-6">
+          <div><h1 className="text-2xl font-bold">Upload video</h1><p className="text-white/50 mt-1">Upload direct to Bunny. The page resumes from the last saved chunk after a connection reset.</p></div>
 
-      <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
-        <div className="flex items-center gap-3">
-          <Link href="/creator" className="p-2 rounded-xl hover:bg-white/10 transition">
-            <ArrowLeft className="w-5 h-5" />
-          </Link>
-          <div>
-            <h1 className="text-2xl font-display font-bold">Upload Video</h1>
-            <p className="text-white/50 text-sm">Select a video and fill in the details</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit} className="glass-card p-6 space-y-5">
-          {/* Video File */}
-          {!uploadReady ? (
-            <div>
-              <label className="text-sm text-white/60 mb-2 block">Select Video</label>
-              <label className="border-2 border-dashed border-white/20 rounded-2xl p-8 text-center cursor-pointer hover:border-brand-500/50 transition">
-                <Upload className="w-10 h-10 text-white/30 mx-auto mb-3" />
-                <p className="text-sm text-white/60 mb-1">
-                  Click here to upload your video
-                </p>
-                <p className="text-xs text-white/40">
-                  MP4, MOV, MKV, AVI, WebM — Max 2GB
-                </p>
-                {/* Said before the picker opens, because a creator whose videos
-                    would not go up from anywhere but Downloads was left to work
-                    that out from a failure message afterwards. */}
-                <p className="text-xs text-white/40 mt-1">
-                  Chagua kutoka mahali popote ilipo — Files, Downloads, Photos,
-                  SD card. Ikikataliwa kwenye mojawapo, jaribu kupitia Files.
-                </p>
-                {/* The 8-minute floor is not a price rule, and saying it only
-                    above a price hid it from exactly the creators it holds
-                    back: a free scene shorter than the floor is never
-                    published either (see refreshVideoEncoding). Stated here,
-                    before the file is picked, because it cannot be fixed
-                    after the upload. */}
-                <p className="text-xs text-amber-200/80 mt-2">
-                  Every scene must be at least {MIN_VIDEO_DURATION_SECONDS / 60} minutes
-                  long — a shorter video never goes live, paid or free.
-                </p>
-                <input
-                  type="file"
-                  accept={VIDEO_ACCEPT}
-                  className="hidden"
-                  // Locked while a transfer is running so a second pick cannot
-                  // start a second upload into the same slot.
-                  disabled={mainUploadActive || uploadingTeaser}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    // Reset so choosing the same file again still fires.
-                    e.target.value = "";
-                    if (!file) return;
-                    // Straight to the upload: the file is sent exactly as chosen.
-                    void startVideoUpload(file);
-                  }}
-                />
-              </label>
-              {mainUploadActive && (
-                <div className="mt-3">
-                  <div className="bg-surface-300/40 rounded-full h-2 overflow-hidden">
-                    <div
-                      className="bg-brand-500 h-full transition-all duration-300"
-                      style={{ width: `${uploadProgress}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-white/50 mt-1 text-center">
-                    {preparingPercent === null
-                      ? `Uploading... ${uploadProgress}%`
-                      : `Preparing... ${preparingPercent}%`}
-                  </p>
-                </div>
-              )}
-
-              {/* The phone-specific truth, said while it can still help. */}
-              {transferring && (
-                <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 space-y-1">
-                  <p className="text-xs font-medium text-amber-200/90">
-                    Keep this page open — do not lock the phone or switch apps.
-                  </p>
-                  <p className="text-xs leading-relaxed text-amber-200/70">
-                    Kwenye simu, video inapanda vizuri ukiacha ukurasa huu mbele,
-                    skrini ikiwa imewaka na simu kwenye chaja. Ukifunga skrini au
-                    kutoka kwenye ukurasa, browser inasimamisha kupandisha —
-                    ukirudi, inaendelea pale ilipoishia.
-                  </p>
-                  {uploadStalled && (
-                    <p className="text-xs font-medium text-amber-100">
-                      No bytes have moved for a while. Keep this page in front —
-                      if the connection dropped, the upload resumes on its own
-                      from where it stopped, and &ldquo;Retry upload&rdquo; continues
-                      into the same reserved slot if it does not.
-                    </p>
-                  )}
-                </div>
-              )}
-              {failedUpload && (
-                <div className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <p className="text-xs text-amber-200/80">
-                    The upload was interrupted before it finished. Your video is still
-                    reserved — try again, or pick a different file.
-                  </p>
-                  {/* Offered HERE, next to the failure, because the only place the
-                      reason exists is the device that failed: a browser tells a
-                      page nothing about why a cross-origin upload was refused,
-                      and the server never saw the request at all. */}
-                  <Link
-                    href="/creator/upload-check"
-                    className="text-xs underline text-amber-200/90 shrink-0"
-                  >
-                    Pima mtandao (network check)
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => void runVideoUpload(failedUpload.file, failedUpload.credentials)}
-                    className="btn-ghost text-xs shrink-0"
-                  >
-                    Retry upload
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : (
-            <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-4 flex items-center gap-3">
-              <CheckCircle className="w-5 h-5 text-emerald-400" />
-              <span className="text-sm text-emerald-400">Video uploaded successfully!</span>
-            </div>
-          )}
-
-          {/* Title */}
-          <div>
-            <label className="text-sm text-white/60 mb-2 block flex items-center gap-2">
-              <Film className="w-4 h-4" /> Video Title
+          <section className="glass-card p-5 space-y-4">
+            <h2 className="font-semibold flex items-center gap-2"><FileVideo className="w-5 h-5 text-brand-400" /> Main video</h2>
+            <label className="block border-2 border-dashed border-white/15 rounded-2xl p-8 text-center cursor-pointer hover:border-brand-400/60 transition">
+              <Upload className="w-8 h-8 mx-auto text-brand-400 mb-3" />
+              <span className="block font-medium">Choose a video</span>
+              <span className="block text-xs text-white/40 mt-1">MP4, MOV, MKV, WebM and common video formats · maximum 2 GB</span>
+              <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
             </label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Enter video title..."
-              className="input-field"
-              required
-              minLength={3}
-            />
-          </div>
+            {mainFile && <div className="flex items-center justify-between text-sm"><span className="truncate">{mainFile.name} · {formatBytes(mainFile.size)}</span>{mainReady ? <span className="text-emerald-400 flex items-center gap-1"><Check className="w-4 h-4" /> Ready</span> : null}</div>}
+            {(mainUploading || mainProgress) && !mainReady && <ProgressBar percent={mainPercent} label={mainUploading ? `Uploading ${mainPercent}%` : "Upload incomplete — press choose again to resume"} />}
+            {mainSession && !mainReady && !mainUploading && <button type="button" className="btn-ghost text-sm" onClick={() => mainFile && void handleMainFile(mainFile)}>Resume upload</button>}
+            {mainSession && !mainReady && <button type="button" className="text-xs text-red-300" onClick={() => { void cancelSession(mainSession); setMainSession(null); setMainFile(null); setMainProgress(null); }}>Cancel this upload</button>}
+          </section>
 
-          {/* Description */}
-          <div>
-            <label className="text-sm text-white/60 mb-2 block flex items-center gap-2">
-              <FileText className="w-4 h-4" /> Description
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe your video..."
-              className="input-field min-h-[100px] resize-y"
-              rows={3}
-            />
-          </div>
-
-          {/* Price & Teaser Duration */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="text-sm text-white/60 mb-2 block flex items-center gap-2">
-                <DollarSign className="w-4 h-4" /> Price (TZS)
-              </label>
-              <input
-                type="number"
-                value={price}
-                // The fallback and the floor are the same 500 as the schema's — a
-                // form that lets a creator type 100 and then refuses it at submit
-                // is a validation error they cannot act on.
-                onChange={(e) => setPrice(parseInt(e.target.value) || 500)}
-                min={500}
-                max={1000000}
-                className="input-field"
-              />
-              <p className="text-xs text-white/40 mt-1">Minimum TZS 500</p>
+          <section className="glass-card p-5 space-y-4">
+            <h2 className="font-semibold">Video details</h2>
+            <input className="input w-full" placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} required minLength={3} maxLength={200} />
+            <textarea className="input w-full min-h-28" placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={5000} />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <label className="text-sm text-white/60">Price (TZS)<input className="input w-full mt-1" type="number" min={500} max={1000000} value={price} onChange={(e) => setPrice(Number(e.target.value))} /></label>
+              <label className="text-sm text-white/60">Preview seconds<input className="input w-full mt-1" type="number" min={15} max={30} value={teaserDuration} onChange={(e) => setTeaserDuration(Number(e.target.value))} /></label>
+              <label className="text-sm text-white/60">Category<select className="input w-full mt-1" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">Choose</option>{CATEGORIES.filter((item) => item.id !== "all").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
             </div>
-            <div>
-              <label className="text-sm text-white/60 mb-2 block">Preview (seconds)</label>
-              <input
-                type="number"
-                value={teaserDuration}
-                onChange={(e) => setTeaserDuration(parseInt(e.target.value) || 15)}
-                min={15}
-                max={30}
-                className="input-field"
-              />
-              <p className="text-xs text-white/40 mt-1">15-30 seconds</p>
-            </div>
-          </div>
+            <input className="input w-full" placeholder="Tags separated by commas" value={tags} onChange={(e) => setTags(e.target.value)} />
+          </section>
 
-          {/* Category */}
-          <div>
-            <label className="text-sm text-white/60 mb-2 block">Category</label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className="input-field"
-            >
-              <option value="">Select category...</option>
-              {CATEGORIES.filter((c) => c.id !== "all").map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </div>
+          <section className="glass-card p-5 space-y-4">
+            <h2 className="font-semibold">Optional cover and teaser</h2>
+            <label className="flex items-center gap-3 text-sm text-white/70 cursor-pointer"><ImageIcon className="w-5 h-5 text-brand-400" /> Choose cover image<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) setCropFile(file); e.currentTarget.value = ""; }} /></label>
+            {thumbnailUploading && <ProgressBar percent={100} label="Uploading cover…" />}
+            {thumbnailUrl && <p className="text-xs text-emerald-400">Cover ready</p>}
+            <label className="block text-sm text-white/70">Optional teaser clip<input type="file" accept={VIDEO_ACCEPT} className="input w-full mt-2" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} /></label>
+            {teaserFile && <p className="text-xs text-white/60">{teaserFile.name} · {formatBytes(teaserFile.size)}</p>}
+            {(teaserUploading || teaserProgress) && !teaserVideoId && <ProgressBar percent={teaserPercent} label={`Teaser ${teaserPercent}%`} />}
+          </section>
 
-          {/* Tags */}
-          <div>
-            <label className="text-sm text-white/60 mb-2 block flex items-center gap-2">
-              <Tag className="w-4 h-4" /> Tags (comma separated)
-            </label>
-            <input
-              type="text"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              placeholder="music, tanzania, africa..."
-              className="input-field"
-            />
-          </div>
+          <label className="flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm"><input type="checkbox" checked={complianceAttested} onChange={(e) => setComplianceAttested(e.target.checked)} className="mt-1" /><span><ShieldAlert className="inline w-4 h-4 text-amber-300 mr-1" /> I confirm all performers are 18+ and required age/consent records are kept.</span></label>
 
-          {/* Thumbnail — chosen from the creator's own files and framed before
-              it is saved. There is deliberately no URL field here: the cover is
-              a picture we host, and a pasted link to somebody else's host could
-              break, change or disappear under the viewer. */}
-          <div>
-            <label className="text-sm text-white/60 mb-2 block">Thumbnail</label>
-            <label className="flex items-center gap-3 cursor-pointer border-2 border-dashed border-white/20 rounded-xl p-4 hover:border-brand-500/50 transition">
-              <span className="text-lg" aria-hidden>
-                🖼️
-              </span>
-              <span className="text-sm text-white/70">
-                {uploadingThumb
-                  ? "Uploading..."
-                  : thumbnailUrl
-                  ? "Replace thumbnail"
-                  : "Choose an image"}
-              </span>
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                className="hidden"
-                disabled={uploadingThumb}
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  // Reset so choosing the same file again still fires.
-                  e.target.value = "";
-                  if (!file) return;
-                  if (!file.type.startsWith("image/")) {
-                    toast("error", "Please choose an image file");
-                    return;
-                  }
-                  // Frame it as the 16:9 cover every viewer will see.
-                  setThumbCropFile(file);
-                }}
-              />
-            </label>
-            <p className="text-xs text-white/40 mt-2">
-              JPEG, PNG or WebP, up to 10 MB — a big photo is shrunk to fit
-              automatically. You can move and zoom the picture
-              before it is saved, so it looks exactly as you want it on the feed.
-            </p>
-            {thumbnailUrl && (
-              // The cover is shown as a 16:9 shape wherever a viewer meets it, so
-              // the preview uses the same shape — what the creator framed is what
-              // they see here and what the profile shows.
-              <Image
-                src={thumbnailUrl}
-                alt="Thumbnail preview"
-                width={320}
-                height={180}
-                unoptimized={!canOptimizeImage(thumbnailUrl)}
-                className="mt-2 aspect-video w-full max-w-xs object-cover rounded-lg"
-              />
-            )}
-          </div>
-
-          {/* Teaser / trailer clip — what non-buyers get to watch */}
-          <div>
-            <label className="label-field" htmlFor="teaser-upload">
-              Teaser clip {price === 0 ? "(optional — free videos preview in full)" : "(recommended)"}
-            </label>
-            <p className="text-xs text-white/45 mb-3 leading-relaxed">
-              A short clip (10–30s) that people who have not paid can watch. Upload your video
-              without one and it shows only a poster, because we cannot show part of the main
-              video without giving the whole thing away.
-            </p>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <label
-                htmlFor="teaser-upload"
-                className="btn-ghost cursor-pointer inline-flex items-center gap-2 text-sm"
-              >
-                <span aria-hidden>🎬</span>
-                <span>
-                  {uploadingTeaser
-                    ? `Uploading… ${teaserProgress}%`
-                    : teaserBunnyVideoId
-                      ? "Replace teaser clip"
-                      : "Choose a teaser clip"}
-                </span>
-                <input
-                  id="teaser-upload"
-                  type="file"
-                  accept={VIDEO_ACCEPT}
-                  className="hidden"
-                  disabled={uploadingTeaser}
-                  onChange={async (e) => {
-                    const file = e.target.files?.[0];
-                    // Reset so choosing the same file again still fires.
-                    e.target.value = "";
-                    if (!file) return;
-                    const sizeError = videoSizeError(file);
-                    if (sizeError) {
-                      toast("error", sizeError);
-                      return;
-                    }
-                    setUploadingTeaser(true);
-                    setTeaserProgress(0);
-                    const controller = new AbortController();
-                    uploadAbortRef.current = controller;
-                    // Named out here so the catch below can report the slot that
-                    // was reserved and then abandoned.
-                    let teaserSlot: UploadTarget | null = null;
-                    try {
-                      // Same flow as the main video, and the same transport:
-                      // whichever one the server prepared for a file this size,
-                      // then the ingest that puts it in front of the encoder.
-                      const res = await fetch("/api/videos/upload-signature", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({
-                          title: `${title || "teaser"} (teaser)`,
-                          size: file.size,
-                        }),
-                        signal: controller.signal,
-                      });
-                      const data = await res.json();
-                      if (!data.success) {
-                        toast("error", data.error || "Could not start the teaser upload");
-                        return;
-                      }
-
-                      teaserSlot = data.data as UploadTarget;
-                      const teaserProgress = (uploaded: number, total: number) =>
-                        setTeaserProgress(Math.round((uploaded / total) * 100));
-                      await sendFileToTarget(file, teaserSlot, {
-                        onProgress: teaserProgress,
-                        signal: controller.signal,
-                      });
-
-                      // Same hand-off as the main video, and for the same reason:
-                      // the trailer's slot is empty until the ingest fills it.
-                      if (!(await handOffToBunny(teaserSlot.videoId, controller.signal))) {
-                        return;
-                      }
-
-                      setTeaserBunnyVideoId(teaserSlot.videoId);
-                      toast("success", "Teaser clip uploaded");
-                    } catch (error) {
-                      toast(
-                        "error",
-                        error instanceof VideoUploadError
-                          ? error.message
-                          : "Network error while uploading the teaser"
-                      );
-                      // Same reason as the main upload: this transfer also went
-                      // straight to Bunny, and a failed one is invisible here.
-                      void reportUploadFailure(
-                        describeUploadFailure(error, {
-                          bunnyVideoId: teaserSlot?.videoId ?? null,
-                          fileName: file.name,
-                          fileSize: file.size,
-                        })
-                      );
-                    } finally {
-                      if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
-                      setUploadingTeaser(false);
-                    }
-                  }}
-                />
-              </label>
-
-              {teaserBunnyVideoId && (
-                <button
-                  type="button"
-                  className="text-xs text-white/50 hover:text-white transition"
-                  onClick={() => {
-                    setTeaserBunnyVideoId("");
-                    setTeaserProgress(0);
-                  }}
-                >
-                  Remove teaser
-                </button>
-              )}
-            </div>
-
-            {teaserBunnyVideoId && (
-              <p className="text-xs text-emerald-400/80 mt-2">
-                Teaser clip attached — non-buyers will see this instead of the full video.
-              </p>
-            )}
-          </div>
-
-          {/* 18 U.S.C. § 2257 attestation — the server rejects the upload without it */}
-          <label className="flex items-start gap-3 p-3 rounded-xl border border-white/10 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={complianceAttested}
-              onChange={(e) => setComplianceAttested(e.target.checked)}
-              className="mt-0.5 w-4 h-4 accent-brand-500 shrink-0"
-            />
-            <span className="text-xs text-white/60 leading-relaxed">
-              I confirm that every person appearing in this video was 18 years or older at the time
-              of filming, that I hold signed consent and government-issued photo ID for each of
-              them, and that I can produce those records on request (18 U.S.C. § 2257).
-            </span>
-          </label>
-
-          <button
-            type="submit"
-            disabled={uploading || !uploadReady || !title || !complianceAttested}
-            className="btn-brand w-full"
-          >
-            {uploading ? "Creating..." : "Create Video"}
-          </button>
+          <button type="submit" disabled={submitting || !mainReady || !title.trim() || !complianceAttested} className="btn-brand w-full disabled:opacity-50">{submitting ? <><Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Publishing…</> : "Publish video"}</button>
         </form>
-
-        {thumbCropFile && (
-          <ImageCropper
-            file={thumbCropFile}
-            shape="wide"
-            confirmLabel="Save thumbnail"
-            busy={uploadingThumb}
-            onCancel={() => setThumbCropFile(null)}
-            onConfirm={(cropped) => {
-              setThumbCropFile(null);
-              void uploadThumb(cropped);
-            }}
-          />
-        )}
-
       </main>
+
+      {cropFile && <ImageCropper file={cropFile} shape="wide" confirmLabel="Use cover" busy={thumbnailUploading} onCancel={() => setCropFile(null)} onConfirm={(file) => { setCropFile(null); void handleThumbnail(file); }} />}
     </div>
   );
+}
+
+function ProgressBar({ percent: value, label }: { percent: number; label: string }) {
+  return <div className="space-y-1"><div className="flex justify-between text-xs text-white/60"><span>{label}</span><span>{value}%</span></div><div className="h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-brand-500 transition-all" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div></div>;
 }

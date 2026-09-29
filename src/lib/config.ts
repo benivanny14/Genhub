@@ -137,47 +137,6 @@ const config = {
     webhookSecret: process.env.BUNNY_STREAM_WEBHOOK_SECRET || "",
   },
 
-  // Cloudflare R2 — where a video lands before Bunny ingests it.
-  //
-  // This is the browser's upload destination. The server signs a URL that
-  // authorizes ONE object for ONE method until one deadline (lib/r2-sign.ts),
-  // so neither of these credentials ever reaches the browser, and the bucket
-  // stays private: Bunny pulls the object through videoSource below, which
-  // checks a token this server signed.
-  //
-  // Absent is NOT a supported production state: there is one transport now, so
-  // a deployment without R2 refuses an upload reservation with a 503 rather than
-  // handing the browser a credential it cannot use. See
-  // api/videos/upload-signature/route.ts.
-  r2: {
-    accountId: process.env.R2_ACCOUNT_ID || "",
-    accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
-    bucket: process.env.R2_BUCKET || "",
-    // Long enough for a large file on a slow phone connection, short enough
-    // that a URL lifted out of a log is worthless. A creator who takes longer
-    // than this gets a fresh URL when they retry, because the page asks the
-    // server again rather than reusing the old one.
-    uploadUrlTtlSeconds: intFromEnv(process.env.R2_UPLOAD_URL_TTL_SECONDS, 6 * 60 * 60),
-  },
-
-  // worker/video-ingest — the only thing that ever touches the Bunny key on
-  // this path, and the bucket it reads from.
-  //
-  // Bunny's own fetch API cannot be used here: it creates a video object of its
-  // own and returns no guid (see the note in lib/services/video-ingest.service
-  // .ts), so it can neither fill the slot this server reserved nor be retried
-  // without risking a second copy of the same video. This Worker is what moves
-  // the bytes instead — from the private bucket, into the reserved slot.
-  videoIngest: {
-    url: process.env.VIDEO_INGEST_URL || "",
-    secret: process.env.VIDEO_INGEST_SECRET || "",
-    // Long enough that a retry an hour later is still authorized, because the
-    // upload is what a creator waits for; a queued ingest must not expire
-    // between the upload finishing and the transfer starting.
-    urlTtlSeconds: intFromEnv(process.env.VIDEO_INGEST_TTL_SECONDS, 12 * 60 * 60),
-  },
-
   // HarakaPay — the only payment gateway (USSD push via mobile money)
   harakaPay: {
     apiKey: process.env.HARAKAPAY_API_KEY || "",
@@ -255,43 +214,17 @@ const config = {
 
 export default config;
 
-/**
- * Which of the six upload variables are missing, BY NAME — and never a value.
- *
- * `productionConfigWarnings()` can say that the two halves of the presigned path
- * disagree, but a sentence in an array is the wrong shape for "which one": the
- * R2 four and the ingest two are set in different consoles, so the reader is
- * sent to the wrong one half the time.
- *
- * The silence this replaces is the part worth remembering. The check is a
- * COMPARISON between two readiness flags, not a floor, so a deployment with all
- * six variables absent is equal to itself and warns about nothing — and on
- * 2026-09-29 that is exactly how one sat, looking to /api/health exactly like a
- * deployment that was fully configured. Reporting the flags themselves is what
- * lets the endpoint answer the question an operator actually has.
- *
- * A variable set to the empty string counts as missing, because that is how it
- * behaves: R2_BUCKET="" signs a URL for a bucket with no name.
- */
+/** Returns the direct Bunny Stream variables missing from this deployment. */
 export function uploadStorageReadiness(): {
-  r2Configured: boolean;
-  ingestConfigured: boolean;
+  bunnyConfigured: boolean;
   missing: string[];
 } {
-  const missingR2: string[] = [];
-  if (!config.r2.accountId) missingR2.push("R2_ACCOUNT_ID");
-  if (!config.r2.accessKeyId) missingR2.push("R2_ACCESS_KEY_ID");
-  if (!config.r2.secretAccessKey) missingR2.push("R2_SECRET_ACCESS_KEY");
-  if (!config.r2.bucket) missingR2.push("R2_BUCKET");
-
-  const missingIngest: string[] = [];
-  if (!config.videoIngest.url) missingIngest.push("VIDEO_INGEST_URL");
-  if (!config.videoIngest.secret) missingIngest.push("VIDEO_INGEST_SECRET");
-
+  const missing: string[] = [];
+  if (!config.bunny.libraryId) missing.push("BUNNY_STREAM_LIBRARY_ID");
+  if (!config.bunny.apiKey) missing.push("BUNNY_STREAM_API_KEY");
   return {
-    r2Configured: missingR2.length === 0,
-    ingestConfigured: missingIngest.length === 0,
-    missing: [...missingR2, ...missingIngest],
+    bunnyConfigured: missing.length === 0,
+    missing,
   };
 }
 
@@ -335,29 +268,12 @@ export function productionConfigWarnings(): string[] {
   if (!config.bunny.apiKey || !config.bunny.cdnHostname) {
     warnings.push("Bunny.net Stream credentials are incomplete — uploads/playback will fail");
   }
-  // Half of the presigned path is worse than none of it: with R2 configured but
-  // no reader, Bunny is handed a URL nobody can authorize; with a reader but no
-  // R2, the browser is handed a URL this server cannot sign. Both arrive as a
-  // 401 or a 403 on the creator's screen, so the incomplete state is said out
-  // loud at boot instead.
-  //
-  // The names of what is missing ride along with the sentence. "Must be set
-  // together" is true of a pair and silent about which half is absent, and the
-  // two halves are fixed in different consoles.
-  const { r2Configured, ingestConfigured, missing } = uploadStorageReadiness();
-  if (r2Configured !== ingestConfigured) {
+  // The names of missing Bunny variables are safe to expose; values and keys
+  // never leave the server.
+  const { bunnyConfigured, missing } = uploadStorageReadiness();
+  if (!bunnyConfigured) {
     warnings.push(
-      "R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET and VIDEO_INGEST_URL / VIDEO_INGEST_SECRET must be set together — video uploads are refused until they are, because there is no second transport" +
-        (missing.length > 0 ? ` (missing: ${missing.join(", ")})` : "")
-    );
-  } else if (!r2Configured) {
-    // NEITHER half is set, which the comparison above cannot see: two empty
-    // halves are equal to each other, so a deployment with nothing configured
-    // warned about nothing while refusing every upload — and from /api/health it
-    // looked exactly like one with no complaints at all. That is the state this
-    // file was read in while an upload was being tested against it.
-    warnings.push(
-      `Video uploads are refused: no upload storage is configured — set ${missing.join(", ")}`
+      `Video uploads are unavailable: set ${missing.join(", ")}`
     );
   }
   if (!config.email.host) {

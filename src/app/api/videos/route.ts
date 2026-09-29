@@ -23,6 +23,7 @@ import { rankTrending, type TrendingItem } from "@/lib/trending";
 import { normalizeMediaUrl } from "@/lib/media";
 import { BUNNY_FAILED, videoStatus } from "@/lib/video-status";
 import config from "@/lib/config";
+import { confirmVideoUpload, verifyVideoUploadSession } from "@/lib/video-upload-session";
 
 // =============================================================================
 // GET /api/videos - Public feed with optional search
@@ -347,6 +348,8 @@ export async function POST(request: NextRequest) {
       teaserBunnyVideoId,
       thumbnailUrl,
       fileSize,
+      uploadSessionToken,
+      teaserUploadSessionToken,
     } = result.data;
 
     // The file is uploaded before this request. If the response is lost, the
@@ -387,6 +390,47 @@ export async function POST(request: NextRequest) {
           : "Video post already finalized",
         200
       );
+    }
+
+    // A new creator post must be backed by a signed Bunny TUS session that
+    // belongs to this creator. This closes the old gap where a client could
+    // submit any valid-looking Bunny GUID after another creator's upload.
+    if (isBunnyConfigured()) {
+      if (!uploadSessionToken) {
+        return api.validation("The completed video upload session is missing");
+      }
+
+      const mainSession = await verifyVideoUploadSession(uploadSessionToken, auth.userId);
+      if (!mainSession || mainSession.videoId !== bunnyVideoId) {
+        return api.forbidden("This upload session does not belong to this video");
+      }
+
+      const mainConfirmed = await confirmVideoUpload(mainSession);
+      if (!mainConfirmed.ok) {
+        return api.error(
+          "The video has not finished uploading yet. Continue the upload and try again.",
+          409,
+          "UPLOAD_INCOMPLETE"
+        );
+      }
+
+      if (teaserBunnyVideoId) {
+        if (!teaserUploadSessionToken) {
+          return api.validation("The teaser upload session is missing");
+        }
+        const teaserSession = await verifyVideoUploadSession(teaserUploadSessionToken, auth.userId);
+        if (!teaserSession || teaserSession.videoId !== teaserBunnyVideoId) {
+          return api.forbidden("This teaser upload session does not belong to this video");
+        }
+        const teaserConfirmed = await confirmVideoUpload(teaserSession);
+        if (!teaserConfirmed.ok) {
+          return api.error(
+            "The teaser upload is not complete yet. Continue it and try again.",
+            409,
+            "TEASER_UPLOAD_INCOMPLETE"
+          );
+        }
+      }
     }
 
     // A browser supplies the id, but it must not be allowed to turn an

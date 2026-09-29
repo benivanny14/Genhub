@@ -58,6 +58,22 @@ vi.mock("@/lib/redis", () => ({
   cacheDel: vi.fn(),
 }));
 
+vi.mock("@/lib/video-upload-session", () => ({
+  verifyVideoUploadSession: async (token: string) =>
+    token
+      ? {
+          sessionToken: token,
+          userId: "creator-1",
+          videoId: "trailer-guid-2222",
+          uploadUrl: "https://video.bunnycdn.com/tusupload/test",
+          headers: {},
+          totalBytes: 100,
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        }
+      : null,
+  confirmVideoUpload: async () => ({ ok: true, offset: 100 }),
+}));
+
 import { GET, PATCH } from "./route";
 
 const CREATOR = "creator-1";
@@ -269,7 +285,10 @@ describe("PATCH /api/videos/[id] — a teaser may not be the scene", () => {
     mocks.videoFindUnique.mockResolvedValue(videoRow({ bunnyVideoId: SCENE }));
     mocks.videoUpdate.mockResolvedValue({ id: "video-1", title: "x" });
 
-    const { status } = await patch({ teaserBunnyVideoId: "trailer-guid-2222" });
+    const { status } = await patch({
+      teaserBunnyVideoId: "trailer-guid-2222",
+      teaserUploadSessionToken: "session-token-" + "x".repeat(90),
+    });
 
     expect(status).toBe(200);
   });

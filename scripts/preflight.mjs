@@ -318,6 +318,18 @@ goLive(
   "BUNNY_TOKEN_SECRET is set — playback URLs are signed",
   "BUNNY_TOKEN_SECRET is missing — paid video URLs are not signed and can be shared freely"
 );
+// Bunny signs Stream callbacks with the library's READ-ONLY API key, never the
+// read-write one (bunny.net/docs/stream/webhooks). Pasting the main key into the
+// webhook secret looks configured and refuses every genuine callback with a 401,
+// which on screen is indistinguishable from the upload having failed.
+if (env("BUNNY_STREAM_WEBHOOK_SECRET") && env("BUNNY_STREAM_WEBHOOK_SECRET") === env("BUNNY_STREAM_API_KEY")) {
+  goLive(
+    false,
+    "",
+    "BUNNY_STREAM_WEBHOOK_SECRET is the same value as BUNNY_STREAM_API_KEY — Bunny signs webhooks with the " +
+      "Read-Only key, so every callback would be refused (401). Copy the Read-Only key instead"
+  );
+}
 goLive(
   !!env("SMTP_HOST"),
   `SMTP configured (${env("SMTP_HOST")})`,

@@ -119,16 +119,12 @@ export async function GET(_request: NextRequest) {
         // "sandbox" = no USSD push and no real money moves (dev default)
         payments: config.harakaPay.sandbox ? "sandbox" : "live",
         bunny: config.bunny.apiKey ? "configured" : "missing",
-        // Two flags rather than one verdict, and the names of whatever is
-        // absent. The R2 four and the ingest two are set in different consoles,
-        // so "the upload path is not configured" costs the reader the ten
-        // minutes of checking both — and a deployment with NEITHER half set used
-        // to publish no warning at all, because the warning is a comparison
-        // between the two flags rather than a floor. These are variable NAMES;
-        // no value is ever echoed here.
+        // The names of the Bunny Stream variables this deployment is missing,
+        // never a value. Video uploads and playback both need them, and a
+        // deployment with neither set used to publish no warning at all — the
+        // warning was a comparison between two flags rather than a floor.
         uploadStorage: {
-          r2: uploadStorage.r2Configured,
-          ingest: uploadStorage.ingestConfigured,
+          bunny: uploadStorage.bunnyConfigured,
           missing: uploadStorage.missing,
         },
         backgroundJobs,

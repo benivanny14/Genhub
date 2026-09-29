@@ -29,7 +29,6 @@ import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./red
 import { harakaBreakerNotice } from "./payments/harakapay";
 import { assessFloat, floatFloorTzs } from "./services/harakapay-float-alert.service";
 import { bunnyWebhookUrl, lastBunnyWebhookDelivery } from "./services/bunny-webhook.service";
-import { isR2Configured, presignR2Delete, presignR2Put, r2XmlMessage } from "./r2-sign";
 import config from "./config";
 
 // ---------------------------------------------------------------- checklist
@@ -735,67 +734,6 @@ async function probeHarakapay(): Promise<ProbeResult> {
 }
 
 /**
- * Whether this deployment's upload storage actually accepts a file.
- *
- * The one dependency in the upload path with no probe, and the one whose failure
- * is invisible until a creator has already spent their data: a wrong R2
- * credential signs a URL that R2 refuses with 403, so the browser's PUT dies with
- * nothing the creator can act on. `uploadStorageReadiness()` cannot catch it — it
- * compares variable NAMES, and an access key of 31 characters (R2 requires 32) is
- * a name that is present.
- *
- * So this signs a real PUT, sends four bytes to a key nothing reads, then deletes
- * it again. Self-cleaning like the Redis probe's write, bounded to a couple of
- * seconds, and under its own prefix so it can never collide with an upload —
- * which lives under `incoming/`.
- */
-const R2_PROBE_KEY = "probes/health";
-
-async function probeR2(): Promise<ProbeResult> {
-  const base = { id: "r2", name: "Upload storage (R2)" };
-  if (!isR2Configured(config.r2)) {
-    return {
-      ...base,
-      state: "skip",
-      detail: "R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET not set",
-    };
-  }
-
-  const now = new Date();
-  const put = presignR2Put(config.r2, R2_PROBE_KEY, 120, now);
-
-  try {
-    const res = await fetch(put.url, { method: "PUT", body: "genhub", signal: timeout(8_000) });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      return {
-        ...base,
-        state: "fail",
-        detail: `R2 refused a signed upload (HTTP ${res.status}${r2XmlMessage(body)})`,
-      };
-    }
-  } catch (error) {
-    return {
-      ...base,
-      state: "fail",
-      detail: `R2 unreachable (${String((error as Error)?.message || error).slice(0, 90)})`,
-    };
-  }
-
-  // The question is answered; the cleanup is best-effort on purpose. A four-byte
-  // marker left under `probes/` is not worth turning a working upload path red,
-  // and because the key is fixed it can never accumulate.
-  try {
-    const del = presignR2Delete(config.r2, R2_PROBE_KEY, 120, now);
-    await fetch(del.url, { method: "DELETE", signal: timeout(8_000) });
-  } catch {
-    /* leave it */
-  }
-
-  return { ...base, state: "ok", detail: `signed PUT accepted by bucket "${config.r2.bucket}"` };
-}
-
-/**
  * What an answer from `<appUrl>/api/health` means.
  *
  * Pure, so it can be pinned without a network — the same reason the CDN probe's
@@ -871,7 +809,6 @@ export async function runLiveProbes(): Promise<ProbeResult[]> {
   return Promise.all([
     probeDatabase(),
     probeRedis(),
-    probeR2(),
     probeBunny(),
     probeWebhook(),
     probeCdn(),

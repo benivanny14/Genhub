@@ -87,6 +87,22 @@ vi.mock("@/lib/auth", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/video-upload-session", () => ({
+  verifyVideoUploadSession: async (token: string) =>
+    token
+      ? {
+          sessionToken: token,
+          userId: "creator-1",
+          videoId: "abc-123",
+          uploadUrl: "https://video.bunnycdn.com/tusupload/test",
+          headers: {},
+          totalBytes: 100,
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+        }
+      : null,
+  confirmVideoUpload: async () => ({ ok: true, offset: 100 }),
+}));
+
 import { GET, POST } from "./route";
 
 function request(query: string) {
@@ -206,6 +222,7 @@ describe("POST /api/videos", () => {
     price: 1000,
     teaserDuration: 15,
     bunnyVideoId: "abc-123",
+    uploadSessionToken: "session-token-" + "x".repeat(90),
     complianceAttested: true,
   };
 
@@ -307,6 +324,7 @@ describe("POST /api/videos — finalization is idempotent", () => {
     price: 1000,
     teaserDuration: 15,
     bunnyVideoId: "abc-123",
+    uploadSessionToken: "session-token-" + "x".repeat(90),
     complianceAttested: true,
   };
 
