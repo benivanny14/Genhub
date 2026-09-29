@@ -250,6 +250,23 @@ describe("a file that fits in one request", () => {
     expect(fetchCalls).toHaveLength(0);
   });
 
+  it("records a whole-file failure as a put, and a part failure as a chunk", async () => {
+    // The one difference an operator reads: which request died. Kept in one test
+    // so the two labels cannot drift apart or be swapped by a later edit.
+    vi.stubGlobal("XMLHttpRequest", fakeXhr([{ outcome: "error" }], []));
+    stubFetch();
+
+    const wholeFile = await run(fileOf(10), putTarget());
+    expect(wholeFile.outcome).toBe("error");
+    expect((wholeFile as { error: VideoUploadError }).error.stage).toBe("put");
+
+    const inParts = await run(fileOf(10), multipartTarget());
+    expect(inParts.outcome).toBe("error");
+    const partFailure = (inParts as { error: VideoUploadError }).error;
+    expect(partFailure.stage).toBe("chunk");
+    expect(partFailure.offset).toBe(0);
+  });
+
   it("refuses a target with neither transport instead of sending the file anyway", async () => {
     const result = await run(fileOf(10), {
       videoId: "vid-1",
@@ -348,6 +365,12 @@ describe("a file too big for one request", () => {
     expect(failure.offset).toBe(0);
     expect(failure.reason).toBe("reset");
     expect(failure.attemptMs).toHaveLength(4);
+    // CHUNK, not PUT. The request that died is a slice of the file, and the
+    // shared PUT transport stamps its own failures `put` because for a
+    // whole-file upload that is what they are. Reported unchanged, the two read
+    // identically in the admin panel and need opposite answers: "retry the part"
+    // against "this link cannot carry this file".
+    expect(failure.stage).toBe("chunk");
     // Never completed: an object assembled from a list with a hole in it is a
     // video that plays with its middle missing.
     expect(fetchCalls.some((call) => call.url === "/api/videos/upload-complete")).toBe(false);

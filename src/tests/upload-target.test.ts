@@ -20,6 +20,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 afterEach(() => {
   vi.unstubAllGlobals();
 });
+import { api } from "@/lib/api-response";
 import {
   MULTIPART_UPLOAD_ID_RE,
   UPLOAD_PART_BYTES,
@@ -27,6 +28,7 @@ import {
   isMultipartUploadId,
   needsMultipart,
   originMayUpload,
+  parseReportedSize,
   partCountFor,
   preflightAllowsOrigin,
   videoObjectKey,
@@ -69,11 +71,60 @@ describe("needsMultipart", () => {
     expect(needsMultipart(200 * MIB)).toBe(true);
   });
 
-  it("says no when the size is unknown, which is the size a client can omit", () => {
-    // An upload-signature call with no `size` cannot be sized, and the simpler
-    // transport is the one that existed before this — refusing the upload is not
-    // an option when the file may be perfectly sendable in one request.
+  it("says no when the size is unknown, and the route never lets that happen", () => {
+    // The predicate itself cannot size a NaN, so it says no — and that is why the
+    // route REFUSES a request with no usable size rather than reaching here with
+    // one (parseReportedSize, asserted below). Left to this fall-back, a request
+    // that forgot its size was answered with the whole-file PUT: the transport
+    // with no offset to resume from, handed out by accident on the one request
+    // that was supposed to choose the one that survives a 3G connection.
     expect(needsMultipart(Number.NaN)).toBe(false);
+  });
+
+  it("splits at exactly one part and not at one byte less", () => {
+    expect(needsMultipart(UPLOAD_PART_BYTES)).toBe(false);
+    expect(needsMultipart(UPLOAD_PART_BYTES + 1)).toBe(true);
+    // 8 MiB is the floor S3 requires of every part but the last, so a file that
+    // lands exactly on it is one request and a file one byte over it is two.
+    expect(UPLOAD_PART_BYTES).toBe(8 * MIB);
+  });
+});
+
+describe("parseReportedSize", () => {
+  it("accepts a real size, as a number or as the string a form sends", () => {
+    expect(parseReportedSize(8 * MIB)).toEqual({ ok: true, size: 8 * MIB });
+    expect(parseReportedSize("201291964")).toEqual({ ok: true, size: 201291964 });
+    expect(parseReportedSize(1)).toEqual({ ok: true, size: 1 });
+  });
+
+  it("refuses everything that cannot decide a transport", () => {
+    // Every one of these used to fall through to the whole-file PUT.
+    for (const value of [undefined, null, "", "abc", {}, [], Number.NaN, 0, -1, Number.POSITIVE_INFINITY]) {
+      const parsed = parseReportedSize(value);
+      expect(parsed.ok, `expected ${JSON.stringify(value)} to be refused`).toBe(false);
+      expect(parsed.ok === false && parsed.error.length).toBeGreaterThan(20);
+    }
+  });
+
+  it("is consulted by the reserve route before a slot is reserved, with a 422", () => {
+    // A refused request must not have created anything: a slot is a real object
+    // in the Bunny library, and the size is checked before it exists.
+    const route = readFileSync(
+      join(process.cwd(), "src", "app", "api", "videos", "upload-signature", "route.ts"),
+      "utf8"
+    );
+
+    const checked = route.indexOf("parseReportedSize(body.size)");
+    const reserved = route.indexOf("await createVideoUpload(");
+    const refusal = route.indexOf("return api.validation(reported.error)");
+
+    expect(checked).toBeGreaterThan(-1);
+    expect(refusal).toBeGreaterThan(-1);
+    expect(reserved).toBeGreaterThan(-1);
+    expect(checked).toBeLessThan(reserved);
+    expect(refusal).toBeLessThan(reserved);
+    // 422, the status api.validation answers with — not a 400 and not a 500.
+    expect(api.validation("x").status).toBe(422);
   });
 });
 

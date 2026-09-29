@@ -38,6 +38,7 @@ import {
   isPresignedUploadConfigured,
   needsMultipart,
   originMayUpload,
+  parseReportedSize,
   partCountFor,
 } from "@/lib/upload-target";
 import { checkRateLimit } from "@/lib/redis";
@@ -139,7 +140,23 @@ export async function POST(request: NextRequest) {
     // exactly what the parts exist to avoid, and never a credential the server
     // did not mean to hand out. The key is derived from the video id either way,
     // and both transports write the same object.
-    const reportedSize = Number(body.size);
+    //
+    // WHAT IS NOT DELIBERATE IS A SIZE THAT IS ABSENT OR UNUSABLE. `Number(undefined)`
+    // is NaN, NaN failed the `Number.isFinite` test below, and the request fell
+    // through to the whole-file PUT — the silent fall-back that hands a creator the
+    // transport which cannot survive their connection, on the very request that was
+    // supposed to choose the one that can. Refused, with a number, before a slot is
+    // reserved: see parseReportedSize.
+    const reported = parseReportedSize(body.size);
+
+    if (!reported.ok) {
+      console.warn(
+        `[Upload Signature] refused a request with no usable size (${JSON.stringify(body.size)})`
+      );
+      return api.validation(reported.error);
+    }
+
+    const reportedSize = reported.size;
 
     const result = await createVideoUpload(title);
 

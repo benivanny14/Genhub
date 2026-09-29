@@ -278,6 +278,35 @@ export function presignR2Put(
 }
 
 /**
+ * A presigned GET of one object, for the one caller that reads the bytes back:
+ * the ingest, which moves a finished upload into Bunny and therefore has to be
+ * able to ask for a SLICE of it.
+ *
+ * The Range header is deliberately not signed. S3's rule is that the signature
+ * covers the headers it names and nothing else, so a byte range can be chosen at
+ * the moment of the read — which is what lets one signed URL fetch an 8 MiB part
+ * at a time instead of pulling a two-gigabyte object into a function's memory to
+ * hand it on.
+ */
+export function presignR2Get(
+  r2: R2Credentials,
+  key: string,
+  expiresInSeconds: number,
+  date: Date
+): PresignedRequest {
+  return presign({
+    host: r2Host(r2.accountId),
+    path: r2ObjectPath(r2.bucket, key),
+    method: "GET",
+    accessKeyId: r2.accessKeyId,
+    secretAccessKey: r2.secretAccessKey,
+    region: R2_REGION,
+    expiresInSeconds,
+    date,
+  });
+}
+
+/**
  * The sentence R2 puts inside the XML body it refuses with.
  *
  * Worth having shared rather than written twice: R2 says exactly what is wrong

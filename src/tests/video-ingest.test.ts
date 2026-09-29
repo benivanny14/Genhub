@@ -22,7 +22,7 @@ import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { INGEST_TIMEOUT_MS } from "@/lib/services/video-ingest.service";
+import { INGEST_BUDGET_MS } from "@/lib/services/video-ingest.service";
 import {
   signVideoIngestToken,
   videoIngestTokenPayload,
@@ -485,13 +485,23 @@ describe("the ingest route's patience", () => {
     const maxDuration = Number(route.match(/export\s+const\s+maxDuration\s*=\s*(\d+)/)?.[1]);
 
     expect(maxDuration).toBeGreaterThan(0);
-    expect(INGEST_TIMEOUT_MS).toBeLessThan(maxDuration * 1000);
+    expect(INGEST_BUDGET_MS).toBeLessThan(maxDuration * 1000);
   });
 
   it("still leaves the abort room to serialise an answer", () => {
     // Not merely less than maxDuration: it has to be far enough under it that
     // the route can log, build the response and flush it after the abort fires.
     const maxDuration = Number(route.match(/export\s+const\s+maxDuration\s*=\s*(\d+)/)![1]);
-    expect(maxDuration * 1000 - INGEST_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000);
+    expect(maxDuration * 1000 - INGEST_BUDGET_MS).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it("answers an unfinished transfer as something the page continues, not a failure", () => {
+    // The shape IS the contract here: a file that is halfway across two providers
+    // is not a failed upload, and a route that answered it as one would send a
+    // creator's two gigabytes again for a move that costs them nothing. Asserted
+    // against the route's source because that is where the branch lives — the
+    // outcome itself is covered in tests/video-ingest-transfer.test.ts.
+    expect(route).toMatch(/outcome\.pending/);
+    expect(route).toMatch(/ready:\s*false/);
   });
 });

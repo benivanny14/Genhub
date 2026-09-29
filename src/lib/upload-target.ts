@@ -171,14 +171,16 @@ export interface UploadTarget extends BunnyVideoSlot {
  * Whether this deployment can hand out a presigned upload.
  *
  * Both halves are required: without R2 there is nothing to sign for, and without
- * the reader Bunny would be given a URL it cannot authorize. A half-configured
- * pair is reported by productionConfigWarnings() rather than discovered as a
- * failed upload.
+ * the Bunny library key there is nowhere for the finished file to go — the
+ * upload's last step is now made by this application's own server
+ * (lib/services/video-ingest.service.ts), so the library credentials are what
+ * the pair is, not a Worker's URL. A half-configured pair is reported by
+ * productionConfigWarnings() rather than discovered as a failed upload.
  */
 export function isPresignedUploadConfigured(): boolean {
   return (
     isR2Configured(config.r2) &&
-    Boolean(config.videoIngest.url && config.videoIngest.secret)
+    Boolean(config.bunny.libraryId && config.bunny.apiKey)
   );
 }
 
@@ -266,6 +268,43 @@ export function partCountFor(fileSize: number): number {
  */
 export function needsMultipart(fileSize: number): boolean {
   return partCountFor(fileSize) > 1;
+}
+
+/** What the client said the file weighs, or why that cannot be used. */
+export type ReportedSize =
+  | { ok: true; size: number }
+  | { ok: false; error: string };
+
+/**
+ * The size the file picker reported, checked before anything is reserved.
+ *
+ * WHY A MISSING SIZE IS A REFUSAL AND NOT A DEFAULT. This number is the ONLY
+ * thing that decides which transport an upload gets, and the two transports are
+ * not interchangeable: the whole-file PUT has no offset to resume from, so on the
+ * connection this was all built for it loses everything it has sent when it is
+ * cut — measured three times, on a 192 MB file, before the parts existed. A
+ * request that arrives without a usable size therefore cannot be served by
+ * guessing: guessing "small" hands the creator the transport that fails, and the
+ * outcome lands in the failure records as "the connection dropped" with nothing
+ * to say why. 422 names the fault instead.
+ *
+ * ZERO IS REFUSED WITH IT. No video file has no bytes, so a zero is a broken
+ * picker or a client that never read the file — and a zero-sized plan is zero
+ * parts, an upload with nothing in it that would still reserve a slot.
+ */
+export function parseReportedSize(value: unknown): ReportedSize {
+  const size =
+    typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
+
+  if (!Number.isFinite(size) || size <= 0) {
+    return {
+      ok: false,
+      error:
+        "This request did not carry the file's size, so the upload cannot be prepared. Reload the page and choose the video again.",
+    };
+  }
+
+  return { ok: true, size };
 }
 
 /**

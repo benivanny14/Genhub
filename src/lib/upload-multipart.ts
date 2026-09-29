@@ -315,6 +315,15 @@ export async function uploadFileInParts(
                 reason: "reset",
               });
 
+        // A PART IS A CHUNK, AND THE RECORD HAS TO SAY SO. The request that died
+        // is a slice of the file, and lib/upload-put.ts — shared by both
+        // transports — stamps its own failures `put`, because for the whole-file
+        // transport that is exactly what they are. Left as they come, a multipart
+        // failure and a whole-file failure read identically in the admin panel,
+        // and the two need opposite answers: one says a part can be retried, the
+        // other says this link cannot carry this file at all.
+        if (failure.stage === "put") failure.stage = "chunk";
+
         attemptMs.push(Date.now() - startedAt);
 
         if (failure.code === "ABORTED") throw failure;

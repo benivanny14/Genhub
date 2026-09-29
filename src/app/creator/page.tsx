@@ -44,6 +44,7 @@ import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
 import { VideoUploadError, videoSizeError } from "@/lib/upload-error";
 import { sendFileToTarget } from "@/lib/upload-send";
+import { prepareVideoWithBunny } from "@/lib/upload-prepare";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import type { UploadTarget } from "@/lib/upload-target";
 import {
@@ -664,16 +665,10 @@ export default function CreatorDashboard() {
       });
 
       // The trailer's slot is empty until the ingest fills it, so a trailer that
-      // is only in the bucket must not be announced as uploaded.
-      const ingest = await fetch("/api/videos/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoId: credentials.videoId }),
-      }).then((r) => r.json());
-      if (!ingest.success) {
-        toast("error", ingest.error || "The trailer could not be prepared");
-        return;
-      }
+      // is only in the bucket must not be announced as uploaded. This POLLS: a
+      // trailer can be a large file, and the route moves what one invocation can
+      // carry and continues from where Bunny got to on the next call.
+      await prepareVideoWithBunny(credentials.videoId);
 
       setNewTeaserBunnyVideoId(credentials.videoId);
       toast("success", "Trailer uploaded — press Save to attach it");

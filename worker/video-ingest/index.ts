@@ -49,10 +49,29 @@
 // this hop is server to server. The Worker holds no credential for the bucket
 // beyond a binding that can only read the one object it is told to read.
 //
+// IT IS NOT REQUIRED ANY MORE, AND THAT IS THE POINT OF THE DATE ABOVE. Deploying
+// it is a step outside the application's own deploy, and measured on 2026-09-29
+// the step had not been taken: production was still serving the single-PUT
+// version, so a 192 MB file that had ALREADY reached the bucket failed at 100%
+// with Cloudflare's HTML error page and no reason anywhere the app could read.
+// The move is now made by lib/services/video-ingest.service.ts — this
+// application's own server, on its own deploy, in the same budgeted TUS chunks —
+// and this Worker is an alternative path for anyone who would rather the bytes
+// crossed inside Cloudflare and never touched a serverless function's egress.
+// The two share every protocol rule (lib/bunny-tus.ts), and they must not be run
+// at the same time for one video: they are two transfers into one slot.
+//
 // Deploy: see README.md beside this file.
 // =============================================================================
 
 import { verifyVideoIngestToken } from "../../src/lib/video-ingest-token";
+import {
+  createTusUpload,
+  patchTusChunk,
+  TUS_AUTH_TTL_SECONDS,
+  tusAuthHeaders,
+  tusUploadOffset,
+} from "../../src/lib/bunny-tus";
 
 /**
  * The shape this Worker needs, declared here rather than pulled from
@@ -90,11 +109,6 @@ interface Env {
   BUNNY_STREAM_LIBRARY_ID?: string;
 }
 
-const BUNNY_API = "https://video.bunnycdn.com";
-
-/** Bunny's resumable endpoint. The video object must already exist — ours does. */
-const TUS_ENDPOINT = `${BUNNY_API}/tusupload`;
-
 /**
  * How much of the file one PATCH carries.
  *
@@ -118,83 +132,6 @@ const CHUNK_TIMEOUT_MS = 5 * 60 * 1000;
  * costs the next attempt nothing but the time to resume.
  */
 const TRANSFER_BUDGET_MS = 20 * 60 * 1000;
-
-/**
- * How long a TUS authorization is good for.
- *
- * Bunny revalidates the signature on every request, so this has to outlast the
- * whole transfer rather than just the first call — an upload whose signature
- * expires mid-flight is refused on the next PATCH with a 401 that reads like a
- * bad key. Bunny asks for at least an hour.
- */
-const TUS_AUTH_TTL_SECONDS = 12 * 60 * 60;
-
-/** SHA-256 of a string, lowercase hex — the TUS AuthorizationSignature. */
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-/**
- * The headers Bunny wants on EVERY TUS request, not just the first.
- *
- * `AuthorizationExpire` and the signature are revalidated at the start of each
- * POST, HEAD and PATCH, so an upload that sends them only when creating the
- * resource is answered `400 Library ID missing or invalid` on the PATCH —
- * measured live against the real library on 2026-09-29, and the reason these are
- * built once and spread into every call rather than written out at each one.
- */
-async function tusAuthHeaders(params: {
-  libraryId: string;
-  apiKey: string;
-  videoId: string;
-  expiresAt: number;
-}): Promise<Record<string, string>> {
-  const { libraryId, apiKey, videoId, expiresAt } = params;
-
-  // Bunny's own ordering, character for character: library id, then key, then
-  // the deadline, then the video id, hashed as one string.
-  const signature = await sha256Hex(`${libraryId}${apiKey}${expiresAt}${videoId}`);
-
-  return {
-    AuthorizationSignature: signature,
-    AuthorizationExpire: String(expiresAt),
-    LibraryId: libraryId,
-    VideoId: videoId,
-  };
-}
-
-/**
- * Bunny answers a create with a RELATIVE Location — `/tusupload/<id>` — which is
- * not a URL until it is resolved against the API host. Fetched as it arrives, it
- * throws "Failed to parse URL"; measured live.
- */
-function resolveUploadUrl(location: string): string {
-  return new URL(location, BUNNY_API).toString();
-}
-
-/**
- * Where this upload has already got to, asked of Bunny rather than remembered.
- *
- * A resource created a moment ago answers zero. One a previous attempt left half
- * sent answers with the bytes it holds, and that number is what turns a retry
- * into a continuation. A HEAD that fails is treated as zero: starting again is
- * always correct, only slower.
- */
-async function currentOffset(uploadUrl: string, headers: Record<string, string>): Promise<number> {
-  try {
-    const res = await fetch(uploadUrl, {
-      method: "HEAD",
-      headers: { ...headers, "Tus-Resumable": "1.0.0" },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!res.ok) return 0;
-    const offset = Number(res.headers.get("upload-offset"));
-    return Number.isFinite(offset) && offset > 0 ? offset : 0;
-  } catch {
-    return 0;
-  }
-}
 
 type TransferOutcome =
   | { ok: true; bytes: number; chunks: number }
@@ -227,32 +164,24 @@ async function transferToBunny(params: {
   });
 
   try {
-    // 1. Open the upload against the slot this server reserved. Bunny's
-    //    metadata fields are required and the values are base64; the title is
-    //    the video id because the creator's own title arrives later, with the
-    //    post, and a blank one makes the library unusable to look at.
-    const created = await fetch(TUS_ENDPOINT, {
-      method: "POST",
-      headers: {
-        ...auth,
-        "Tus-Resumable": "1.0.0",
-        "Upload-Length": String(total),
-        "Upload-Metadata": `filetype ${btoa("video/mp4")},title ${btoa(videoId)}`,
-      },
+    // 1. Open the upload against the slot this server reserved. Every rule of
+    //    Bunny's protocol — the relative Location that has to be resolved, the
+    //    signature revalidated on every request, the required base64 metadata —
+    //    lives in lib/bunny-tus.ts, shared with the application's own ingest so
+    //    there is one implementation of them rather than one per runtime.
+    const created = await createTusUpload({
+      libraryId,
+      apiKey,
+      videoId,
+      total,
+      expiresAt: Number(auth.AuthorizationExpire),
     });
-
-    const createdBody = await created.text().catch(() => "");
     if (!created.ok) {
-      return { ok: false, status: created.status, detail: createdBody.slice(0, 600) };
+      return { ok: false, status: created.status, detail: created.detail };
     }
 
-    const location = created.headers.get("location");
-    if (!location) {
-      return { ok: false, status: 502, detail: "Bunny accepted the upload without naming it" };
-    }
-
-    const uploadUrl = resolveUploadUrl(location);
-    let offset = await currentOffset(uploadUrl, auth);
+    const uploadUrl = created.uploadUrl;
+    let offset = await tusUploadOffset({ uploadUrl, headers: auth });
     let chunks = 0;
 
     // 2. Send what is missing, one piece at a time. Read from the bucket by
@@ -275,51 +204,45 @@ async function transferToBunny(params: {
         return { ok: false, status: 404, detail: "Uploaded file not found" };
       }
 
-      let patched: Response | null = null;
-      let patchBody = "";
+      let advanced: number | null = null;
+      let thrown: string | null = null;
 
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          const res = await fetch(uploadUrl, {
-            method: "PATCH",
-            headers: {
-              ...auth,
-              "Tus-Resumable": "1.0.0",
-              "Upload-Offset": String(offset),
-              "Content-Type": "application/offset+octet-stream",
-            },
-            body: slice.body,
-            signal: AbortSignal.timeout(CHUNK_TIMEOUT_MS),
-          });
+        const result = await patchTusChunk({
+          uploadUrl,
+          headers: auth,
+          offset,
+          body: slice.body,
+          size: slice.size,
+          timeoutMs: CHUNK_TIMEOUT_MS,
+        });
 
-          patched = res;
-          patchBody = await res.text().catch(() => "");
-          if (res.ok) break;
-
-          // A refusal is Bunny's answer and repeating it changes nothing.
-          return { ok: false, status: res.status, detail: patchBody.slice(0, 600) };
-        } catch (error) {
-          // A thrown fetch is the connection to Bunny, and a chunk is a request
-          // that can be sent again — but only from the offset Bunny last
-          // confirmed, so the range is re-read rather than reused.
-          const name = error instanceof Error ? error.name : "UnknownError";
-          const message = error instanceof Error ? error.message : "";
-          if (attempt === 2) {
-            return {
-              ok: false,
-              status: 502,
-              detail: `the transfer to the video library failed after 3 attempts at offset ${offset} (${name}: ${message.slice(0, 200)})`,
-            };
-          }
+        if (result.ok) {
+          // Bunny's own figure, so progress cannot run ahead of what it holds.
+          advanced = result.offset;
+          break;
         }
+
+        // A refusal is Bunny's answer and repeating it changes nothing.
+        if (result.status !== undefined) {
+          return { ok: false, status: result.status, detail: result.detail };
+        }
+
+        // A thrown fetch is the connection to Bunny, and a chunk is a request
+        // that can be sent again — but only from the offset Bunny last
+        // confirmed, so the range is re-read rather than reused.
+        thrown = result.detail;
       }
 
-      if (!patched) continue;
+      if (advanced === null) {
+        return {
+          ok: false,
+          status: 502,
+          detail: `the transfer to the video library failed after 3 attempts at offset ${offset} (${thrown ?? "no detail"})`,
+        };
+      }
 
-      // Bunny's own figure, so progress cannot run ahead of what it holds. If
-      // the header is missing, the bytes that were sent are the honest guess.
-      const advanced = Number(patched.headers.get("upload-offset"));
-      offset = Number.isFinite(advanced) && advanced > offset ? advanced : offset + slice.size;
+      offset = advanced;
       chunks += 1;
     }
 
@@ -396,6 +319,7 @@ const worker = {
     if (!env.BUNNY_STREAM_API_KEY || !env.BUNNY_STREAM_LIBRARY_ID) {
       return json({ error: "The video library is not configured" }, 500);
     }
+
 
     // The LENGTH first, from metadata: a TUS upload has to declare how long it
     // is before the first byte moves, and head() is the cheap way to know — it

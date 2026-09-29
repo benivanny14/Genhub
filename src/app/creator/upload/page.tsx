@@ -16,6 +16,7 @@ import {
   type UploadRetryInfo,
 } from "@/lib/upload-error";
 import { abandonPendingUpload, sendFileToTarget } from "@/lib/upload-send";
+import { prepareVideoWithBunny } from "@/lib/upload-prepare";
 import { ScreenWakeLock } from "@/lib/screen-wake-lock";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
@@ -51,6 +52,12 @@ export default function UploadPage() {
   // must already be active during that window.
   const [mainUploadActive, setMainUploadActive] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  // Null while the bytes are still going to the bucket; 0..99 while the server is
+  // moving the finished file from the bucket into Bunny. Two phases of one
+  // upload, and the bar says which one the creator is waiting on — a bar that
+  // reads 100% and then does nothing is what "it reaches 100% and fails" looked
+  // like from the phone.
+  const [preparingPercent, setPreparingPercent] = useState<number | null>(null);
   // True when no byte has moved for a while. Reported, never acted on: on a
   // phone this is usually the screen locking or the browser being sent to the
   // background (see the wake lock below), and the creator is the only one who
@@ -469,33 +476,52 @@ export default function UploadPage() {
   /**
    * Ask the server to move the finished file from the bucket into Bunny.
    *
-   * A separate request because it is a separate wait: the file has crossed two
+   * A separate step because it is a separate wait: the file has crossed two
    * providers by the time this answers, and the creator is told about that wait
    * instead of it being hidden inside the upload they think already finished.
    *
+   * It POLLS rather than waiting on one request — a large file can outlast a
+   * single serverless invocation, so the route moves what it can and the page
+   * asks again, each round continuing from the offset Bunny reports. While that
+   * happens the bar says "Preparing", which is the difference between a screen
+   * stuck at 100% and one that is visibly still working.
+   *
    * Returns false when Bunny does not end up holding the file, which is the only
-   * outcome that matters to the caller — the message to the creator is written
-   * by the route (lib/services/video-ingest.service.ts), so it names the real
-   * cause rather than "upload failed".
+   * outcome that matters to the caller — the message to the creator names the
+   * real cause rather than "upload failed" (lib/upload-prepare.ts).
    */
   async function handOffToBunny(videoId: string, signal?: AbortSignal): Promise<boolean> {
+    setPreparingPercent(0);
     try {
-      const res = await fetch("/api/videos/ingest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ videoId }),
+      await prepareVideoWithBunny(videoId, {
         signal,
+        onProgress: (uploaded, total) =>
+          setPreparingPercent(total > 0 ? Math.min(99, Math.round((uploaded / total) * 100)) : 0),
       });
-      const data = await res.json();
-      if (data.success) return true;
-      toast("error", data.error || "The video could not be prepared after uploading");
-      return false;
+      return true;
     } catch (error) {
       // An abort is the creator stopping, not a fault, and saying "network
       // error" for their own tap is how a cancel starts looking like a bug.
-      if (error instanceof DOMException && error.name === "AbortError") return false;
-      toast("error", "Network error while preparing the video");
+      if (error instanceof VideoUploadError && error.code === "ABORTED") return false;
+
+      const failure =
+        error instanceof VideoUploadError
+          ? error
+          : new VideoUploadError("NETWORK", "Network error while preparing the video", undefined, {
+              stage: "chunk",
+              reason: "reset",
+            });
+      toast("error", failure.message);
+
+      // Reported for the same reason a transfer failure is, and it is the gap
+      // that made this fault invisible: the file reached the bucket, so the
+      // creator's browser is the only witness that it never reached the library,
+      // and /admin would otherwise have nothing to show for a completed upload
+      // that failed at 100%.
+      void reportUploadFailure(describeUploadFailure(failure, { bunnyVideoId: videoId }));
       return false;
+    } finally {
+      setPreparingPercent(null);
     }
   }
 
@@ -847,7 +873,9 @@ export default function UploadPage() {
                     />
                   </div>
                   <p className="text-xs text-white/50 mt-1 text-center">
-                    Uploading... {uploadProgress}%
+                    {preparingPercent === null
+                      ? `Uploading... ${uploadProgress}%`
+                      : `Preparing... ${preparingPercent}%`}
                   </p>
                 </div>
               )}

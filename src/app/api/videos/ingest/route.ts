@@ -13,11 +13,20 @@
 // slow ingest delays "Preparing…" instead of the publish, and a failed one is
 // reported as its own sentence rather than as a failed post.
 //
-// IDEMPOTENT BY CONSTRUCTION. The object key and the video id both come from the
-// token, and the ingest writes the same bytes into the same slot, so a creator
-// who retries — or a client that retries the request — cannot end up with two
-// videos. That is the property Bunny's own fetch API could not give (see
-// lib/services/video-ingest.service.ts).
+// WHY IT CAN BE CALLED MORE THAN ONCE FOR THE SAME VIDEO. One invocation has a
+// wall-clock budget shorter than a large file's crossing, so the answer can be
+// `ready: false` with how far the transfer got — not a failure, and not a
+// partial video: Bunny holds the slices already sent, the next call continues
+// from the offset Bunny reports, and a file that fits in one call answers
+// `ready: true` on the first try. The page keeps asking until it is ready, which
+// is the same shape as the part URLs the browser uses for the upload itself.
+//
+// IDEMPOTENT BY CONSTRUCTION. The object key is derived from the video id, the
+// transfer resumes from Bunny's own offset, and a repeat call on a finished
+// upload costs one HEAD and answers `ready: true` — so a retried request, or a
+// response lost on the way back, cannot end up with two videos or a second
+// two-gigabyte transfer. That is the property Bunny's own fetch API could not
+// give (see lib/services/video-ingest.service.ts).
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -33,9 +42,12 @@ import {
 } from "@/lib/services/video-ingest.service";
 
 export const runtime = "nodejs";
-// A whole video moving between providers, on a good network between two of them.
-// The default budget would cut a large ingest, and a cut ingest is a creator
-// told to upload again for no reason.
+// Long enough to move a large slice of a large file, and deliberately longer than
+// the transfer's own budget (INGEST_BUDGET_MS, lib/services/video-ingest.service.ts)
+// so the abort produces a sentence instead of a killed function. What does NOT
+// fit in this budget is continued by the next poll rather than by a bigger limit:
+// a route limit is a cliff, and Bunny's own offset is what makes stepping over it
+// free.
 export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
@@ -62,11 +74,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Every call moves a whole file and costs egress on two providers, so the
-    // same ceiling as reserving a slot: far above a creator retrying, far below
-    // a script.
+    // ceiling is the same one reserving a slot uses — but multiplied, because
+    // this is now POLLED: one large video is several calls by design, and a
+    // limit meant for "one upload" would throttle a transfer that is working.
+    // Still bounded, and still far below what a script needs.
     const { allowed } = await checkRateLimit(
       `videoingest:${auth.userId}`,
-      config.rateLimit.upload.max,
+      config.rateLimit.upload.max * 60,
       config.rateLimit.upload.windowMs
     );
     if (!allowed) {
@@ -74,6 +88,21 @@ export async function POST(request: NextRequest) {
     }
 
     const outcome = await ingestUploadedVideo(videoId);
+
+    // Not a failure, and not a success: the transfer is under way and the page
+    // should ask again. Answered as a success because every caller that treats
+    // this as an error would send a file again that is already being moved.
+    if (outcome.ok === false && outcome.pending) {
+      return api.success(
+        {
+          videoId,
+          ready: false,
+          uploadedBytes: outcome.uploadedBytes ?? 0,
+          totalBytes: outcome.totalBytes ?? 0,
+        },
+        "The video is still being handed over"
+      );
+    }
 
     if (!outcome.ok) {
       // 503 for a deployment that cannot do this at all, 502 for a provider that
@@ -94,7 +123,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return api.success({ videoId, ready: true }, "Video received by the video service");
+    return api.success(
+      { videoId, ready: true, bytes: outcome.bytes ?? 0 },
+      "Video received by the video service"
+    );
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);
