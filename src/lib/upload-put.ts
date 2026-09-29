@@ -35,6 +35,35 @@ import {
   TRANSIENT_4XX,
   type UploadFailureReason,
 } from "./upload-error";
+import { describeUploadReachability, hostOf } from "./upload-diagnostics";
+
+/**
+ * One network verdict per host per page, reused by every later attempt.
+ *
+ * Measured against the alternative: probing on each of the four attempts of one
+ * part would add four probe timeouts — up to a minute — to a failure the creator
+ * is already waiting on, on the very connection that is failing. The FIRST
+ * attempt pays for the answer and the rest carry it.
+ */
+const reachabilityVerdicts = new Map<string, string>();
+
+async function describeUploadReachabilityOnce(url: string): Promise<string> {
+  const host = hostOf(url) ?? url;
+  const known = reachabilityVerdicts.get(host);
+  if (known !== undefined) return known;
+
+  const verdict = await describeUploadReachability(url);
+  reachabilityVerdicts.set(host, verdict);
+  return verdict;
+}
+
+/** Forget the verdicts. Exported for tests, which must not inherit a network
+ *  answer from a test that ran before them — and that is not hypothetical: a
+ *  suite whose first failure reached the real host made every later assertion
+ *  read that stale sentence. */
+export function resetUploadReachabilityCache(): void {
+  reachabilityVerdicts.clear();
+}
 
 /**
  * How many times to send the WHOLE file, and how long to wait between tries.
@@ -228,23 +257,44 @@ export function putBlob(
 
     // A phone that has lost its radio and one whose request was refused by the
     // storage service arrive here identically; only the browser knows which, and
-    // it says so in `onLine`.
-    xhr.onerror = () =>
-      finish(
-        offlineNow()
-          ? new VideoUploadError(
+    // it says so in `onLine`. When it says nothing — the dangerous case, because
+    // `status: 0` also covers a refused preflight, a filtered host and a CORS
+    // refusal — the device is ASKED, once per host per upload, and the answer
+    // goes into the record. See lib/upload-diagnostics.ts for why an unreachable
+    // host and a refused request can be told apart at all.
+    xhr.onerror = () => {
+      if (offlineNow()) {
+        finish(
+          new VideoUploadError(
+            "NETWORK",
+            "Your device went offline during the upload. Reconnect and retry.",
+            undefined,
+            { stage: "put", reason: "offline" }
+          )
+        );
+        return;
+      }
+
+      void describeUploadReachabilityOnce(target.url)
+        .then((verdict) =>
+          finish(
+            new VideoUploadError(
               "NETWORK",
-              "Your device went offline during the upload. Reconnect and retry.",
+              verdict ? `The connection dropped during upload. ${verdict}` : "The connection dropped during upload.",
               undefined,
-              { stage: "put", reason: "offline" }
+              { stage: "put", reason: "reset", providerBody: verdict || undefined }
             )
-          : new VideoUploadError(
-              "NETWORK",
-              "The connection dropped during upload.",
-              undefined,
-              { stage: "put", reason: "reset" }
-            )
-      );
+          )
+        )
+        .catch(() =>
+          finish(
+            new VideoUploadError("NETWORK", "The connection dropped during upload.", undefined, {
+              stage: "put",
+              reason: "reset",
+            })
+          )
+        );
+    };
 
     xhr.ontimeout = () =>
       finish(

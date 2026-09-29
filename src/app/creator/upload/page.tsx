@@ -908,6 +908,16 @@ export default function UploadPage() {
                     The upload was interrupted before it finished. Your video is still
                     reserved — try again, or pick a different file.
                   </p>
+                  {/* Offered HERE, next to the failure, because the only place the
+                      reason exists is the device that failed: a browser tells a
+                      page nothing about why a cross-origin upload was refused,
+                      and the server never saw the request at all. */}
+                  <Link
+                    href="/creator/upload-check"
+                    className="text-xs underline text-amber-200/90 shrink-0"
+                  >
+                    Pima mtandao (network check)
+                  </Link>
                   <button
                     type="button"
                     onClick={() => void runVideoUpload(failedUpload.file, failedUpload.credentials)}

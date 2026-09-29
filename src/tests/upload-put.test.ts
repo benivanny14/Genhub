@@ -15,10 +15,11 @@
 //     telling two stories about one provider.
 // =============================================================================
 
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   PUT_RETRY_DELAYS,
   putBlob,
+  resetUploadReachabilityCache,
   uploadFileWithPut,
   type PutUploadOptions,
   type PutUploadTarget,
@@ -168,6 +169,33 @@ async function run(
     vi.useRealTimers();
   }
 }
+
+/**
+ * The network verdict a failed upload now asks the DEVICE for.
+ *
+ * Stubbed, because the real probe is a request to the storage host: left real,
+ * these tests reached the network and one of them took ten and a half seconds to
+ * answer — and a suite whose result depends on whether the machine running it has
+ * a route to Cloudflare is not a suite.
+ */
+const stubProbeReachable = () =>
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 200 })));
+
+const stubProbeUnreachable = () =>
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      throw new TypeError("Failed to fetch");
+    })
+  );
+
+beforeEach(() => {
+  // No test in this file may reach the network for a reason that is not its own:
+  // the verdict cache is per host and per page, so a test that ran earlier would
+  // otherwise hand its answer to every test after it.
+  resetUploadReachabilityCache();
+  stubProbeReachable();
+});
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -447,10 +475,36 @@ describe("what the bucket's answer means", () => {
     const calls: PutCall[] = [];
     vi.stubGlobal("XMLHttpRequest", fakeXhr({ outcome: "error" }, calls) as unknown as typeof XMLHttpRequest);
     vi.stubGlobal("navigator", { onLine: true });
+    stubProbeReachable();
 
     const result = await run(fileOf(1_000));
 
-    expect(result.error).toMatchObject({ reason: "reset", message: "The connection dropped during upload." });
+    expect(result.error).toMatchObject({ reason: "reset" });
+    expect(result.error!.message).toContain("The connection dropped during upload.");
+    // AND WHY, when the device can tell us. A host that IS reachable while the
+    // request still failed moves the suspicion off the network and onto the
+    // permission — which is a different person's problem and a different fix.
+    expect(result.error!.message).toContain("reachable");
+    expect(result.error!.message).toContain("CORS");
+  });
+
+  it("names the network as the reason when the device cannot reach the host at all", async () => {
+    const calls: PutCall[] = [];
+    vi.stubGlobal("XMLHttpRequest", fakeXhr({ outcome: "error" }, calls) as unknown as typeof XMLHttpRequest);
+    vi.stubGlobal("navigator", { onLine: true });
+    stubProbeUnreachable();
+
+    const result = await run(fileOf(1_000));
+
+    expect(result.error).toMatchObject({ reason: "reset" });
+    expect(result.error!.message).toContain("could not reach");
+    // The verdict travels in the record's own field too, so a card in /admin
+    // carries it without anybody reading a sentence.
+    expect(result.error!.providerBody).toContain("could not reach");
+
+    // Asked ONCE for the whole ladder: four attempts would otherwise add four
+    // probe timeouts to a failure the creator is already waiting on.
+    expect((globalThis.fetch as unknown as { mock: { calls: unknown[] } }).mock.calls).toHaveLength(1);
   });
 
   it("calls a stall a stall, and a silence a timeout", async () => {
@@ -525,10 +579,16 @@ describe("what the bucket's answer means", () => {
       }),
     } as unknown as File;
 
+    stubProbeUnreachable();
     const result = await run(unreadable);
 
     expect(result.error).toMatchObject({ code: "NETWORK", reason: "reset", bytesSent: 400 });
-    expect(result.error!.message).toBe("The connection dropped during upload.");
+    expect(result.error!.message).toContain("The connection dropped during upload.");
+    // Still the connection, even though the file was unreadable: bytes on the
+    // wire are proof the device handed the file over. What must not appear is
+    // the sentence that sends the creator off to re-pick the file.
+    expect(result.error!.message).not.toContain("NotReadableError");
+    expect(result.error!.message).not.toContain("would not let the page read");
   });
 
   it("reports a cancellation as a cancellation, not as a fault", async () => {
