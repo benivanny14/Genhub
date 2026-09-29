@@ -249,16 +249,19 @@ function putOnce(
     try {
       xhr.send(file);
     } catch (error) {
-      // The same local fault the pre-flight probe exists for, caught again here
-      // because this transport hands the WHOLE file to the socket at once: a
-      // device that cannot read it throws from `send`, and that must read as a
-      // device fault rather than as a dropped connection.
+      // The device refusing the file, met where this transport actually meets
+      // it: `send` hands the WHOLE file to the socket at once, so a pick the
+      // browser cannot read throws from here rather than failing later on the
+      // wire. No probe decides it — the attempt does — which is the same rule
+      // the resumable path now follows, so a file this browser can stream is
+      // sent whichever transport carries it.
       const name = error instanceof Error ? error.name : "UnknownError";
       finish(
         new TusUploadError(
           "UNSUPPORTED",
-          `This device would not let the page read that video (${name}). Check that this browser can ` +
-            "access photos and videos, then choose the video again.",
+          `This device would not let the page read that video (${name}). Choose it again — the Files ` +
+            "app usually works where a photos or cloud app does not — or copy it onto the phone's own " +
+            "storage first.",
           undefined,
           {
             stage: "put",

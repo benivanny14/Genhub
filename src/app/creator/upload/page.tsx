@@ -5,7 +5,7 @@ import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import Image from "next/image";
 import ImageCropper from "@/components/ImageCropper";
-import { canOptimizeImage } from "@/lib/media";
+import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import {
@@ -718,7 +718,14 @@ export default function UploadPage() {
                   Click here to upload your video
                 </p>
                 <p className="text-xs text-white/40">
-                  MP4, MOV, AVI — Max 2GB
+                  MP4, MOV, MKV, AVI, WebM — Max 2GB
+                </p>
+                {/* Said before the picker opens, because a creator whose videos
+                    would not go up from anywhere but Downloads was left to work
+                    that out from a failure message afterwards. */}
+                <p className="text-xs text-white/40 mt-1">
+                  Chagua kutoka mahali popote ilipo — Files, Downloads, Photos,
+                  SD card. Ikikataliwa kwenye mojawapo, jaribu kupitia Files.
                 </p>
                 {/* The 8-minute floor is not a price rule, and saying it only
                     above a price hid it from exactly the creators it holds
@@ -732,7 +739,7 @@ export default function UploadPage() {
                 </p>
                 <input
                   type="file"
-                  accept="video/*"
+                  accept={VIDEO_ACCEPT}
                   className="hidden"
                   // Locked while a transfer is running so a second pick cannot
                   // start a second upload into the same slot.
@@ -983,7 +990,7 @@ export default function UploadPage() {
                 <input
                   id="teaser-upload"
                   type="file"
-                  accept="video/*"
+                  accept={VIDEO_ACCEPT}
                   className="hidden"
                   disabled={uploadingTeaser}
                   onChange={async (e) => {

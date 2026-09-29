@@ -197,9 +197,11 @@ export const MAX_VIDEO_BYTES = 2_147_483_647; // just under 2 GiB
  * How much of the file the pre-flight read probe pulls.
  *
  * Small on purpose: this runs before every upload, including the ones that work,
- * and a phone cannot afford to read a gigabyte twice. It is enough to make the
- * device prove it can open the file at all, which is the only question it is
- * asking.
+ * and a phone cannot afford to read a gigabyte twice. It is enough to learn
+ * whether the device will let a SCRIPT open the file at all — which is a hint
+ * about the file and the provider holding it, never a verdict on whether the
+ * transfer can send it. See the call site in uploadFileWithTus for why that
+ * distinction cost a creator their uploads.
  */
 const READ_PROBE_BYTES = 1024;
 
@@ -885,6 +887,91 @@ export function isRetryableUploadFailure(error: TusUploadError): boolean {
  * Resolves once the last byte is stored. Throws TusUploadError on failure — the
  * caller decides whether to keep the reserved video id or discard it.
  */
+/**
+ * What the device said when a scripted read of the picked file was refused.
+ *
+ * `name` is the browser's own error name — `NotReadableError` is the one that
+ * means this — and `detail` keeps both parts for the record, because the name
+ * alone will not explain a provider behaviour nobody has seen before.
+ */
+interface DeviceReadRefusal {
+  name: string;
+  detail: string;
+}
+
+/**
+ * Read one kilobyte, and REPORT a refusal rather than acting on it.
+ *
+ * Still worth its cost on every upload, including the ones that work: it is the
+ * only way to know that the file itself was the problem rather than the link.
+ * What changed is who decides — see the comment at the call site and
+ * blameTheDeviceIfNothingMoved below.
+ */
+async function readProbe(file: File): Promise<DeviceReadRefusal | null> {
+  try {
+    await file.slice(0, READ_PROBE_BYTES).arrayBuffer();
+    return null;
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "UnknownError";
+    return {
+      name,
+      detail:
+        error instanceof Error && error.message ? `${name}: ${error.message}` : name,
+    };
+  }
+}
+
+/**
+ * Name the DEVICE when the device is what refused the file, and only then.
+ *
+ * Two conditions, and both are needed:
+ *
+ *   * the scripted read was refused, AND
+ *   * not one byte was acknowledged by the network.
+ *
+ * The second is what stops this from blaming the phone for a connection: an
+ * attempt that acknowledged bytes proves the file WAS readable, so a failure
+ * after that is the link and keeps saying so. And the first is what stops it
+ * from blaming the phone for a link that died before anything could move: a
+ * file this device never refused, on a transfer that never started, is the
+ * connection as plainly as it ever was. Only together do they mean "this file, on
+ * this device, cannot be handed over at all" — and that is a sentence the
+ * creator can act on, which "the connection dropped" is not.
+ *
+ * Everything else about the failure is carried through: the chunk it died on,
+ * the offset it died at, the ladder it spent and the timings, so the record in
+ * the admin panel stays comparable with every other failure.
+ */
+function blameTheDeviceIfNothingMoved(
+  error: TusUploadError,
+  refusal: DeviceReadRefusal | null
+): TusUploadError {
+  if (!refusal) return error;
+  if (error.stage !== "chunk") return error;
+  if (error.bytesSent !== 0) return error;
+
+  return withProgress(
+    new TusUploadError(
+      "UNSUPPORTED",
+      `This device would not let the page read that video (${refusal.name}), and nothing ever left the ` +
+        "browser. Choose it again — the Files app usually works where a photos or cloud app does not — " +
+        "or copy it onto the phone's own storage first.",
+      error.status,
+      // Bunny never saw this one, so its own words are not what names the
+      // cause — the DEVICE's are, and in the same field for the same reason.
+      { stage: "chunk", reason: "preflight", providerBody: refusal.detail.slice(0, 160) }
+    ),
+    error.bytesSent ?? 0,
+    error.bytesTotal ?? 0,
+    {
+      offset: error.offset,
+      chunkIndex: error.chunkIndex,
+      retryCount: error.retryCount,
+      attemptMs: error.attemptMs,
+    }
+  );
+}
+
 export async function uploadFileWithTus(
   file: File,
   credentials: BunnyUploadCredentials,
@@ -924,39 +1011,30 @@ export async function uploadFileWithTus(
   // 150 ms recorded attempts of 35 ms and 45 ms, which no round trip can fit
   // inside.
   //
-  // One kilobyte answers it, for the cost of one read. It cannot prove the whole
-  // file is readable — a provider can be revoked mid-transfer — but it turns the
-  // case that fails immediately, and fails identically every time, into the
-  // device's own words instead of a second misleading report.
+  // One kilobyte answers it, for the cost of one read. What it answers is a
+  // HINT, not a verdict — and refusing the upload on it was the first version's
+  // mistake: a video this device would not let a SCRIPT read was never offered
+  // to the network at all, so a file that could have gone up reported instead
+  // that it could not.
   //
-  // Run against a real Android device (Android emulator, Chrome, a 6 MB file
-  // chosen through the system picker's Downloads folder), BOTH reads succeed:
-  // this slice returns its 1024 bytes and an XHR of a 256 KiB slice reports
-  // progress and answers 200. A failure here is therefore about the file, not
-  // about Android or about reading a picked file in general — which is why the
-  // browser's own error is carried out with it rather than summarised.
-  try {
-    await file.slice(0, READ_PROBE_BYTES).arrayBuffer();
-  } catch (error) {
-    const name = error instanceof Error ? error.name : "UnknownError";
-    const detail =
-      error instanceof Error && error.message ? `${name}: ${error.message}` : name;
-
-    throw withProgress(
-      new TusUploadError(
-        "UNSUPPORTED",
-        `This device would not let the page read that video (${name}). The file is read as it uploads, ` +
-          "and Android can refuse that — check that this browser is allowed to access photos and videos, " +
-          "then choose the video again. Copying it into Downloads first is the surest fix.",
-        undefined,
-        // Bunny never saw this one, so its own words are not what names the
-        // cause — the DEVICE's are, and in the same field for the same reason.
-        { reason: "preflight", providerBody: detail.slice(0, 160) }
-      ),
-      0,
-      file.size
-    );
-  }
+  // The two reads are not the same operation, which is the part that got missed.
+  // `file.slice(…).arrayBuffer()` asks the renderer to pull bytes into JavaScript
+  // memory, and needs the provider to still be handing out a readable
+  // descriptor. An XHR carrying the File asks the browser's NETWORK stack to
+  // stream it, and there are providers where the second works and the first does
+  // not: a cloud or photos provider offering only a one-shot stream, a file
+  // handed over without seekable access. The emulator run (Chrome 113, a 6 MB
+  // file from the system picker's Downloads folder) showed both reads succeeding
+  // — which is exactly why it could not see the difference. It never met a
+  // provider that refuses.
+  //
+  // So the refusal is CARRIED rather than acted on: the upload is attempted
+  // anyway, and only a transfer that ends having moved nothing — no byte
+  // acknowledged, on a file this device had already refused to read — is
+  // reported as the device's fault (blameTheDeviceIfNothingMoved). A picked
+  // video therefore goes up from wherever it lives on the device, and when it
+  // genuinely cannot, the report says which of the two it was.
+  const deviceRefusal = await readProbe(file);
 
   // Catch an expired authorization here rather than as an opaque 401 mid-upload.
   if (credentials.expirationTime <= Math.floor(Date.now() / 1000)) {
@@ -1098,15 +1176,21 @@ export async function uploadFileWithTus(
     }
 
     if (lastError) {
-      throw withProgress(lastError, chunkStart + maxAttemptSent, file.size, {
-        offset: chunkStart,
-        chunkIndex,
-        // Every attempt in the ladder was spent on this one chunk. Zero means
-        // the first try died, which is a different finding from a connection
-        // that refused it six times over a minute.
-        retryCount: CHUNK_RETRY_DELAYS.length - 1,
-        attemptMs,
-      });
+      // The whole ladder is spent and the chunk never moved. If the device had
+      // already refused to read this file, that is the answer, and it is said in
+      // the device's own words rather than as a dropped connection.
+      throw blameTheDeviceIfNothingMoved(
+        withProgress(lastError, chunkStart + maxAttemptSent, file.size, {
+          offset: chunkStart,
+          chunkIndex,
+          // Every attempt in the ladder was spent on this one chunk. Zero means
+          // the first try died, which is a different finding from a connection
+          // that refused it six times over a minute.
+          retryCount: CHUNK_RETRY_DELAYS.length - 1,
+          attemptMs,
+        }),
+        deviceRefusal
+      );
     }
     reportProgress(offset);
     chunkIndex += 1;

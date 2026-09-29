@@ -35,6 +35,25 @@
 import { isHeifExtension } from "./image-bytes";
 
 /** Every generated image URL starts here. */
+/**
+ * What a video file input should offer: MIME types AND extensions.
+ *
+ * `video/*` on its own is not enough on Android, and the consequence is a
+ * creator reporting that their video "is not there". The system picker filters
+ * by the types it is handed, and it decides per provider: a file whose provider
+ * reports no MIME type — an .mkv off an SD card, a .mov from a camera app, a
+ * download from a chat app — is hidden or greyed out by the MIME filter alone.
+ * The extensions are the same allowance written the other way round, so the
+ * picker offers the file whichever way it chooses to filter.
+ *
+ * One constant because three inputs ask the question (the main video, the
+ * trailer on the upload page, the trailer in the editor), and three copies of a
+ * list is how one of them ends up accepting less than the others — which is
+ * exactly the "only works from Downloads" report this was written for.
+ */
+export const VIDEO_ACCEPT =
+  "video/*,.mp4,.m4v,.mov,.3gp,.3g2,.mkv,.webm,.avi,.wmv,.flv,.mts,.m2ts,.mpg,.mpeg,.ts";
+
 export const MEDIA_ROUTE_PREFIX = "/api/media/";
 
 export type MediaKind = "public" | "private";

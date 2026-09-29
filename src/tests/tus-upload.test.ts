@@ -71,44 +71,6 @@ describe("TUS direct upload", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("refuses a file this device will not let the page read, and says device rather than network", async () => {
-    // What a phone hands over when the video came from another app's storage: a
-    // File whose bytes cannot be read back. Chrome fails that read lazily, so
-    // without the probe the uploader sends the whole ladder, gets nothing
-    // acknowledged, and reports "the connection dropped" — which is what the
-    // live panel showed for a 5.5 MB file on a working 4G link.
-    const fetchSpy = vi.fn();
-    vi.stubGlobal("fetch", fetchSpy);
-
-    // What Chrome raises when the read itself is refused. The name is the whole
-    // diagnosis — permission, file gone, or provider refusing — so it is carried
-    // out of the probe rather than swallowed by it.
-    const refused = Object.assign(new Error("The requested file could not be read."), {
-      name: "NotReadableError",
-    });
-    const unreadable = {
-      name: "1000371423.mp4",
-      size: 5_804_475,
-      type: "video/mp4",
-      slice: () => ({ arrayBuffer: () => Promise.reject(refused) }),
-    } as unknown as File;
-
-    const error = (await uploadFileWithTus(unreadable, credentials).catch(
-      (caught: unknown) => caught
-    )) as { code: string; reason: string; message: string; providerBody: string };
-
-    expect(error).toMatchObject({ code: "UNSUPPORTED", reason: "preflight" });
-    // Named for the creator, and quoted for whoever reads the record afterwards.
-    expect(error.message).toContain("NotReadableError");
-    expect(error.message).toMatch(/photos and videos/);
-    expect(error.providerBody).toBe(
-      "NotReadableError: The requested file could not be read."
-    );
-    // Nothing was reserved and nothing was retried: the fault is the device and
-    // no amount of patience or smaller chunks would have changed it.
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
   it("reads one kilobyte to prove the file is reachable, not the whole file", async () => {
     // The probe runs before EVERY upload, the successful ones included, so it
     // has to be cheap. One slice, of 1 KB, before the reserve.
@@ -540,6 +502,208 @@ describe("what a failed upload reports about itself", () => {
 // One test for each half of the promise: a chunk that keeps moving may take as
 // long as it likes, and a chunk that goes quiet is still abandoned.
 // =============================================================================
+
+// =============================================================================
+// A device that will not hand over the file
+//
+// A creator reported that videos only went up from Downloads and refused from
+// everywhere else on the phone. Both halves of that were in this code: the
+// message the app printed told them to copy the file into Downloads, and — worse
+// — the 1 KB read probe REFUSED the upload when it failed, so a video the
+// browser could still have streamed to the network was never offered to it.
+//
+// The probe is now a hint. These pin the three outcomes that matter: a refusal
+// costs nothing when the transfer works anyway, the device is named when nothing
+// moved at all, and the connection keeps the blame when bytes were moving —
+// because a transfer that acknowledged bytes has already proved the file was
+// readable.
+// =============================================================================
+
+describe("a device that will not hand over the file", () => {
+  const CHUNK = TUS_CHUNK_ALIGNMENT;
+
+  /** The browser's refusal, exactly as Chrome raises it for a picked video. */
+  const refused = Object.assign(new Error("The requested file could not be read."), {
+    name: "NotReadableError",
+  });
+
+  /**
+   * A picked video whose SCRIPT-level read fails while its size is known.
+   *
+   * That is the real shape of the fault: `Blob.size` comes from the descriptor
+   * the browser already holds, so it is always there, while
+   * `slice().arrayBuffer()` asks the RENDERER to pull bytes into JavaScript —
+   * and that is the request a provider can refuse.
+   */
+  const unreadableFile = (size: number) =>
+    ({
+      name: "1000371423.mp4",
+      size,
+      type: "video/mp4",
+      slice: (start = 0, end = size) => ({
+        size: Math.max(0, Math.min(end, size) - start),
+        type: "video/mp4",
+        arrayBuffer: () => Promise.reject(refused),
+      }),
+    }) as unknown as File;
+
+  /** Reserve answers normally, so only the chunk transfer can fail. */
+  function stubReserve() {
+    const asked: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        asked.push(url);
+        return new Response("", { status: 201, headers: { Location: "/tusupload/abc" } });
+      })
+    );
+    return asked;
+  }
+
+  /** A PATCH that answers 204 and has taken the whole chunk. */
+  function xhrThatSends(sent: number[]) {
+    return class {
+      upload = { onprogress: null as unknown };
+      status = 0;
+      responseText = "";
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      open() {}
+      setRequestHeader() {}
+      getResponseHeader() {
+        // No Upload-Offset header, exactly as Bunny's 204 can arrive: the
+        // uploader then derives the next offset from the chunk it sent.
+        return null;
+      }
+      abort() {}
+      send(blob: { size: number }) {
+        sent.push(blob.size);
+        this.status = 204;
+        queueMicrotask(() => this.onload?.());
+      }
+    };
+  }
+
+  /** A PATCH that dies with `sentBytes` already handed to the socket. */
+  function xhrThatDrops(sentBytes: number) {
+    return class {
+      upload = {
+        onprogress: undefined as
+          | ((event: { lengthComputable: boolean; loaded: number }) => void)
+          | undefined,
+      };
+      status = 0;
+      responseText = "";
+      timeout = 0;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      ontimeout: (() => void) | null = null;
+      onabort: (() => void) | null = null;
+      open() {}
+      setRequestHeader() {}
+      getResponseHeader() {
+        // Nothing answered, so there is no offset to read either.
+        return null;
+      }
+      abort() {}
+      send() {
+        if (sentBytes > 0) {
+          this.upload.onprogress?.({ lengthComputable: true, loaded: sentBytes });
+        }
+        this.onerror?.();
+      }
+    };
+  }
+
+  /**
+   * Run one doomed upload to the end of the ladder.
+   *
+   * The ladder is bounded and the backoff sleeps between its rungs are seconds
+   * long, so the clock is moved rather than waited on: the assertion is about
+   * the error that comes out, not how long the browser politely waits.
+   */
+  async function runToFailure(): Promise<TusUploadError> {
+    vi.useFakeTimers();
+    try {
+      const attempt = uploadFileWithTus(unreadableFile(CHUNK), credentials, {
+        chunkSize: CHUNK,
+      });
+      const settled = attempt.then(
+        () => {
+          throw new Error("this upload was supposed to fail");
+        },
+        (error: TusUploadError) => error
+      );
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      return await settled;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it("attempts the upload anyway, because the network can stream what the script cannot read", async () => {
+    const asked = stubReserve();
+    const sent: number[] = [];
+    vi.stubGlobal("XMLHttpRequest", xhrThatSends(sent) as unknown as typeof XMLHttpRequest);
+
+    await expect(
+      uploadFileWithTus(unreadableFile(CHUNK), credentials, { chunkSize: CHUNK })
+    ).resolves.toBeUndefined();
+
+    // A slot was reserved and the chunk went up: the refusal cost nothing, which
+    // is the entire point of not gating on it.
+    expect(asked).toHaveLength(1);
+    expect(sent).toEqual([CHUNK]);
+  });
+
+  it("names the device when the transfer ended having moved nothing", async () => {
+    stubReserve();
+    vi.stubGlobal("XMLHttpRequest", xhrThatDrops(0) as unknown as typeof XMLHttpRequest);
+
+    await expect(runToFailure()).resolves.toMatchObject({
+      code: "UNSUPPORTED",
+      // Still a chunk-stage failure carrying the byte counts and the ladder it
+      // spent, so the record stays comparable with every other one.
+      stage: "chunk",
+      reason: "preflight",
+      bytesSent: 0,
+      bytesTotal: CHUNK,
+    });
+  });
+
+  it("quotes the browser's own error, and sends nobody to Downloads", async () => {
+    stubReserve();
+    vi.stubGlobal("XMLHttpRequest", xhrThatDrops(0) as unknown as typeof XMLHttpRequest);
+
+    const error = await runToFailure();
+
+    expect(error.message).toContain("NotReadableError");
+    // The old wording made the app look like it accepted files from one folder
+    // only, and told a creator to do filing work the app should not need.
+    expect(error.message).not.toMatch(/Downloads/);
+    expect(error.message).toMatch(/Files app/);
+    expect(error.providerBody).toBe(
+      "NotReadableError: The requested file could not be read."
+    );
+  });
+
+  it("keeps blaming the connection when bytes were moving", async () => {
+    // Bytes acknowledged means the file WAS readable, so the phone is not the
+    // answer however the probe went. Blaming the device for a dropped link sends
+    // the creator looking for a fault that is not theirs.
+    stubReserve();
+    const SENT = 128 * 1024;
+    vi.stubGlobal("XMLHttpRequest", xhrThatDrops(SENT) as unknown as typeof XMLHttpRequest);
+
+    const error = await runToFailure();
+
+    expect(error).toMatchObject({ code: "NETWORK", reason: "reset", bytesSent: SENT });
+    expect(error.message).toBe("The connection dropped during upload.");
+    expect(error.message).not.toContain("NotReadableError");
+  });
+});
 
 describe("the stall watchdog", () => {
   const CHUNK = TUS_CHUNK_ALIGNMENT;

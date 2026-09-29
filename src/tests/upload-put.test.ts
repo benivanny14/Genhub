@@ -380,7 +380,11 @@ describe("what the proxy's answer means", () => {
       bytesTotal: 5_804_475,
     });
     expect(result.error!.message).toContain("NotReadableError");
-    expect(result.error!.message).toMatch(/photos and videos/);
+    // The same wording as the resumable path, deliberately: one story for one
+    // fault whichever transport met it — and no instruction to go and put the
+    // file in a folder the app has no business requiring.
+    expect(result.error!.message).toMatch(/Files app/);
+    expect(result.error!.message).not.toMatch(/Downloads/);
     expect(result.error!.providerBody).toBe(
       "NotReadableError: The requested file could not be read."
     );

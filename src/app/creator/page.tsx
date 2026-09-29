@@ -40,7 +40,7 @@ import {
   Check,
   Share2,
 } from "lucide-react";
-import { canOptimizeImage } from "@/lib/media";
+import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
 import { uploadFileWithTus, TusUploadError, videoSizeError } from "@/lib/tus-upload";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
@@ -2035,7 +2035,7 @@ export default function CreatorDashboard() {
                     </span>
                     <input
                       type="file"
-                      accept="video/*"
+                      accept={VIDEO_ACCEPT}
                       className="hidden"
                       disabled={uploadingEditTeaser}
                       onChange={(e) => {
