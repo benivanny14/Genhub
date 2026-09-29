@@ -205,6 +205,24 @@ describe("uploadVideoFile", () => {
     expect(patches(fetchMock)).toHaveLength(VIDEO_UPLOAD_MAX_ATTEMPTS);
   });
 
+  it("sends the first chunk straight to a session the server just created", async () => {
+    // The offset of a brand-new TUS resource is zero by construction, so asking
+    // Bunny for it is a round trip a slow connection can lose before a single
+    // byte has been sent — and a lost one used to read as "the upload session is
+    // no longer available".
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.method === "HEAD" ? new Response(null, { status: 200, headers: { "upload-offset": "0" } }) : acknowledged(100)
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await settle(uploadVideoFile(fileOf(100), sessionFor(100), { offset: 0 }));
+
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit)?.method === "HEAD")).toHaveLength(0);
+    const sent = patches(fetchMock);
+    expect(sent).toHaveLength(1);
+    expect((sent[0][1].headers as Record<string, string>)["Upload-Offset"]).toBe("0");
+  });
+
   it("stops a transfer whose session has expired", async () => {
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
       init?.method === "HEAD" ? new Response(null, { status: 401 }) : acknowledged(100)
@@ -214,6 +232,23 @@ describe("uploadVideoFile", () => {
     await expect(settleFailure(uploadVideoFile(fileOf(100), sessionFor(100)))).resolves.toMatchObject({
       code: "EXPIRED",
     });
+    expect(patches(fetchMock)).toHaveLength(0);
+  });
+
+  it("reports a session the service has closed, instead of retrying it", async () => {
+    // Bunny answers 404 for an upload it no longer holds (and for a request that
+    // arrived without its headers). Neither is retryable, and both must reach
+    // the caller as an EXPIRED session — that code is what tells the page to
+    // open a fresh one instead of resuming this dead one forever.
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.method === "HEAD" ? new Response(null, { status: 404 }) : acknowledged(100)
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await settleFailure(uploadVideoFile(fileOf(100), sessionFor(100)));
+
+    expect(error).toMatchObject({ code: "EXPIRED", status: 404 });
+    expect(error.message).toMatch(/404/);
     expect(patches(fetchMock)).toHaveLength(0);
   });
 

@@ -129,9 +129,12 @@ async function readOffset(
     );
   }
   if (response.status === 404) {
+    // Bunny answers 404 — not 401 — both for an upload it no longer has and for
+    // a request that reached it without the signed headers, so the sentence says
+    // what is known and carries the number for whoever reads it next.
     throw new VideoUploadError(
       "EXPIRED",
-      "The upload session is no longer available. Please choose the video again.",
+      `The video service has closed this upload (HTTP ${response.status}). Please choose the video again.`,
       response.status
     );
   }
@@ -162,6 +165,17 @@ export async function uploadVideoFile(
   options: {
     onProgress?: (progress: VideoUploadProgress) => void;
     signal?: AbortSignal;
+    /**
+     * Where to start, when it is already known.
+     *
+     * A session the server has just created holds nothing, and that is not a
+     * guess: Bunny answers a brand-new TUS resource with offset 0. Supplying it
+     * removes the opening HEAD, which is one round trip off every upload and —
+     * on a connection slow enough to lose it — one more way for the transfer to
+     * die before it has sent a byte. Omitted for a RESUMED session, where the
+     * offset is exactly the thing that has to be asked for.
+     */
+    offset?: number;
   } = {}
 ): Promise<void> {
   if (!file || !file.size) {
@@ -176,7 +190,7 @@ export async function uploadVideoFile(
     );
   }
 
-  let offset = await readOffset(session, options.signal);
+  let offset = options.offset ?? (await readOffset(session, options.signal));
   options.onProgress?.({
     uploadedBytes: offset,
     totalBytes: file.size,

@@ -167,12 +167,42 @@ export default function UploadPage() {
     existing: VideoUploadSession | null
   ): Promise<{ session: VideoUploadSession; videoId: string } | null> {
     const setProgress = kind === "main" ? setMainProgress : setTeaserProgress;
-    const session = existing ?? (await createSession(file, kind));
+    let session = existing ?? (await createSession(file, kind));
     if (!session) return null;
 
+    /**
+     * Send the file, asking for an offset only when there is one to ask about.
+     *
+     * A session created a moment ago holds nothing, so its first request is the
+     * upload itself; a session already in hand is the one whose position can have
+     * moved, and that is the only case worth a round trip.
+     */
+    async function send(target: VideoUploadSession, from?: number) {
+      setProgress({ uploadedBytes: from ?? 0, totalBytes: file.size, percent: 0 });
+      await uploadVideoFile(file, target, {
+        onProgress: setProgress,
+        ...(from === undefined ? {} : { offset: from }),
+      });
+    }
+
     try {
-      setProgress({ uploadedBytes: 0, totalBytes: file.size, percent: 0 });
-      await uploadVideoFile(file, session, { onProgress: setProgress });
+      try {
+        await send(session, existing ? undefined : 0);
+      } catch (error) {
+        // An upload Bunny has closed cannot be resumed — and "choose the video
+        // again" was a dead end, because choosing the SAME file reuses this very
+        // session: the creator could never send it, and the only way out was
+        // Cancel. A session that no longer exists has no offset worth keeping,
+        // so a fresh one is opened and the bytes go again. Only the resumable
+        // case is retried; a fresh session that is refused this way is a real
+        // refusal, and it has to stay visible.
+        if (!existing || !(error instanceof VideoUploadError) || error.code !== "EXPIRED") {
+          throw error;
+        }
+        session = await createSession(file, kind);
+        if (!session) return null;
+        await send(session, 0);
+      }
       const videoId = await completeVideoUpload(session.sessionToken);
       setProgress({ uploadedBytes: file.size, totalBytes: file.size, percent: 100 });
       return { session, videoId };
