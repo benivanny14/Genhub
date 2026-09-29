@@ -177,7 +177,21 @@ export default function UploadPage() {
     file: File,
     kind: UploadKind,
     existing: VideoUploadSession | null
-  ): Promise<{ session: VideoUploadSession; videoId: string } | null> {
+  ): Promise<{
+    session: VideoUploadSession | null;
+    videoId: string;
+    /**
+     * True when the session this upload was using no longer exists at the host.
+     *
+     * Kept on the result rather than acted on in here, because the caller sets
+     * the state and would otherwise write the dead session straight back over
+     * the clearing. It matters because "Resume upload" re-uses exactly this
+     * session: a dead one left in state turns every later press into the same
+     * 404, which is the loop the admin panel recorded four times in fifteen
+     * minutes.
+     */
+    discardSession: boolean;
+  } | null> {
     const setProgress = kind === "main" ? setMainProgress : setTeaserProgress;
     let session = existing ?? (await createSession(file, kind));
     if (!session) return null;
@@ -236,7 +250,7 @@ export default function UploadPage() {
       }
       const videoId = await completeVideoUpload(session.sessionToken);
       setProgress({ uploadedBytes: file.size, totalBytes: file.size, percent: 100 });
-      return { session, videoId };
+      return { session, videoId, discardSession: false };
     } catch (error) {
       // This is the only record a failed upload will ever have. The bytes went
       // straight to Bunny and no video row exists yet, so without this the
@@ -245,7 +259,12 @@ export default function UploadPage() {
       reportUploadFailure(error, { session, file, kind });
       const message = failureMessageFor(error);
       toast("error", message);
-      return { session, videoId: "" };
+      // A session the host has closed holds no bytes worth resuming, and keeping
+      // it is what makes the next attempt fail the same way. Any other failure
+      // keeps it, because that is the whole point of a resumable upload: the
+      // bytes already at Bunny are still there and the retry continues from them.
+      const dead = error instanceof VideoUploadError && error.code === "EXPIRED";
+      return { session, videoId: "", discardSession: dead };
     }
   }
 
@@ -284,7 +303,7 @@ export default function UploadPage() {
 
       const result = await uploadOne(file, "main", reuse);
       if (!result) return;
-      setMainSession(result.session);
+      setMainSession(result.discardSession ? null : result.session);
       if (!result.videoId) return;
       setBunnyVideoId(result.videoId);
       setMainReady(true);
@@ -318,7 +337,7 @@ export default function UploadPage() {
     try {
       const result = await uploadOne(file, "teaser", reuse);
       if (!result) return;
-      setTeaserSession(result.session);
+      setTeaserSession(result.discardSession ? null : result.session);
       if (!result.videoId) return;
       setTeaserVideoId(result.videoId);
       toast("success", "Teaser uploaded successfully");
