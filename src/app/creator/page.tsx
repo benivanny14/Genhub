@@ -42,9 +42,10 @@ import {
 } from "lucide-react";
 import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
-import { uploadFileWithTus, TusUploadError, videoSizeError } from "@/lib/tus-upload";
+import { VideoUploadError, videoSizeError } from "@/lib/upload-error";
+import { uploadFileWithPut } from "@/lib/upload-put";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
-import type { BunnyUploadCredentials } from "@/lib/bunny";
+import type { UploadTarget } from "@/lib/upload-target";
 import {
   PAYOUT_METHODS,
   PAYOUT_METHOD_LABEL,
@@ -621,8 +622,8 @@ export default function CreatorDashboard() {
   /**
    * Attach or replace the trailer clip a non-buyer gets to watch.
    *
-   * Same flow as the upload page: reserve a Bunny slot, then send the file over
-   * TUS so a dropped connection resumes. The result is held in state and only
+   * Same flow as the upload page: reserve a Bunny slot, then one presigned PUT to
+   * the bucket and the ingest that follows it. The result is held in state and only
    * written to the video row on Save, so a cancelled edit changes nothing — and
    * this is the door that finally lets an existing scene grow an intro trailer.
    */
@@ -638,7 +639,7 @@ export default function CreatorDashboard() {
     setEditTeaserProgress(0);
     // Declared out here so the catch below can name the slot that was reserved
     // and abandoned — it is the only handle on the orphan left in the library.
-    let credentials: BunnyUploadCredentials | null = null;
+    let credentials: UploadTarget | null = null;
     try {
       const res = await fetch("/api/videos/upload-signature", {
         method: "POST",
@@ -651,18 +652,30 @@ export default function CreatorDashboard() {
         return;
       }
 
-      credentials = data.data as BunnyUploadCredentials;
-      await uploadFileWithTus(file, credentials, {
+      credentials = data.data as UploadTarget;
+      await uploadFileWithPut(file, credentials.presigned, {
         onProgress: (uploaded, total) =>
           setEditTeaserProgress(Math.round((uploaded / total) * 100)),
       });
+
+      // The trailer's slot is empty until the ingest fills it, so a trailer that
+      // is only in the bucket must not be announced as uploaded.
+      const ingest = await fetch("/api/videos/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId: credentials.videoId }),
+      }).then((r) => r.json());
+      if (!ingest.success) {
+        toast("error", ingest.error || "The trailer could not be prepared");
+        return;
+      }
 
       setNewTeaserBunnyVideoId(credentials.videoId);
       toast("success", "Trailer uploaded — press Save to attach it");
     } catch (error) {
       toast(
         "error",
-        error instanceof TusUploadError
+        error instanceof VideoUploadError
           ? error.message
           : "Network error while uploading the trailer"
       );

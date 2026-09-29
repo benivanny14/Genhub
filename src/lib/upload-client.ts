@@ -12,7 +12,7 @@
 // =============================================================================
 
 import { downscaleImage } from "./image-downscale";
-import { TusUploadError, type TusFailureReason } from "./tus-upload";
+import { VideoUploadError, type UploadFailureReason } from "./upload-error";
 
 export class UploadError extends Error {}
 
@@ -106,7 +106,7 @@ export async function uploadCaptions(file: File): Promise<string> {
 // first.
 
 export interface UploadFailureReport {
-  /** TusUploadError.code, or UNKNOWN for anything else. */
+  /** UploadError.code, or UNKNOWN for anything else. */
   code: string;
   /** Which request died — including which TRANSPORT it belonged to. */
   stage?: "reserve" | "chunk" | "put" | null;
@@ -139,7 +139,7 @@ export interface UploadFailureReport {
    * Whoever reads the report needs that distinction to know whether to wait,
    * to retry, or to go and look at Bunny.
    */
-  reason?: TusFailureReason | null;
+  reason?: UploadFailureReason | null;
   /**
    * The offset the failing chunk started at — what a retry would resume from.
    * Unlike `bytesSent` this is the SERVER's figure, so it is a floor rather
@@ -217,7 +217,7 @@ export function readNetworkSnapshot(): UploadNetworkSnapshot {
 /**
  * Turn whatever was thrown into a report, keeping Bunny's own words.
  *
- * A TusUploadError carries the parts worth keeping — the code, the HTTP status
+ * A VideoUploadError carries the parts worth keeping — the code, the HTTP status
  * and the provider's body — and everything else is summarised. The message is
  * still sent, because it is what the creator read on screen, and a report that
  * does not match the complaint is hard to trust.
@@ -230,7 +230,7 @@ export function describeUploadFailure(
     fileSize?: number | null;
   } = {}
 ): UploadFailureReport {
-  if (error instanceof TusUploadError) {
+  if (error instanceof VideoUploadError) {
     return {
       code: error.code,
       stage: error.stage ?? null,
@@ -241,7 +241,11 @@ export function describeUploadFailure(
       bytesTotal: error.bytesTotal ?? null,
       reason: error.reason ?? null,
       offset: error.offset ?? null,
-      chunkIndex: error.chunkIndex ?? null,
+      // Always null now: one whole-file request has no chunk. The field stays in
+      // the report because thirty days of records written by the chunked
+      // uploader are still readable in the admin panel, and a shape that changed
+      // would make their history unreadable.
+      chunkIndex: null,
       retryCount: error.retryCount ?? null,
       // Absent rather than empty when there was only ever one attempt with no
       // timing: a report that sometimes carries `[]` would make "no attempts

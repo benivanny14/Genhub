@@ -190,27 +190,24 @@ function signedBunnyUrl(path: string, expiresAt: number): string {
 }
 
 // =============================================================================
-// Video Upload - Presigned TUS credentials
+// Video Upload - reserving the slot
 // =============================================================================
 // The browser cannot PUT to `${BUNNY_STREAM_API}/library/.../videos/{id}`: that
 // endpoint authenticates with the `AccessKey` header, and handing the library
-// API key to a client would let any viewer upload, delete or read every video in
-// the library. A PUT without the header is a hard 401 (verified against the live
-// API), which is exactly the shape this path used to have.
+// API key to a client would let any viewer upload, rename or DELETE every video
+// in the library. Measured against the live API, a PUT without the header is a
+// hard 401, and there is no scoped or presigned form of it — Bunny's signed
+// signature scheme covers only its resumable endpoint (see lib/r2-sign.ts for
+// what replaced all of this).
 //
-// Bunny's answer is a presigned TUS upload: this server creates the video object
-// with the key it holds, then signs a short-lived authorization the browser can
-// use on its own:
+// So this module does the ONE thing on the upload path that needs the key: it
+// creates the video object, and returns its id. The bytes arrive afterwards from
+// the storage bucket, moved by worker/video-ingest, into the slot reserved here.
 //
-//   AuthorizationSignature = sha256hex(libraryId + apiKey + expiration + videoId)
-//
-// The signature is bound to ONE video id, so a leaked credential can at most
-// upload a single file into a slot that has already been reserved. The browser
-// never sees the key (asserted by a test).
+// The split matters: every video id in the database is an id this server asked
+// Bunny for, so the row, the webhook and the encode lifecycle are all keyed on
+// something we chose rather than something we went looking for.
 // -----------------------------------------------------------------------------
-
-/** The TUS 1.0.0 endpoint Bunny accepts resumable/direct uploads on. */
-export const BUNNY_TUS_ENDPOINT = "https://video.bunnycdn.com/tusupload";
 
 /**
  * True when an id is a real Bunny video GUID rather than one Genhub fabricated.
@@ -229,56 +226,20 @@ export function isBunnyVideoId(
   );
 }
 
-export interface BunnyUploadCredentials {
-  /** Where the browser PATCHes the bytes. */
-  endpoint: string;
-  /** GUID of the video object created below. */
+export interface BunnyVideoSlot {
+  /** GUID of the video object created below — the slot the bytes will fill. */
   videoId: string;
   libraryId: string;
-  /** UNIX seconds. Bunny rejects the upload once this passes. */
-  expirationTime: number;
-  /** sha256hex(libraryId + apiKey + expirationTime + videoId). */
-  signature: string;
 }
 
 /**
- * Sign one video id for direct upload. Split out so the signature can be tested
- * without touching the network.
+ * Create the video object and return the id of the slot it reserves.
+ *
+ * Nothing is uploaded here: Bunny holds an empty video whose id every later step
+ * refers to — the presigned target, the ingest, the row, and the encode
+ * lifecycle. Creating it BEFORE the bytes exist is what makes the id OURS.
  */
-export function createTusCredentials(
-  videoId: string,
-  ttlSeconds: number = 86_400
-): BunnyUploadCredentials {
-  if (!config.bunny.libraryId || !config.bunny.apiKey) {
-    throw new BunnyNotConfiguredError(
-      "Video uploads (BUNNY_STREAM_LIBRARY_ID + BUNNY_STREAM_API_KEY)"
-    );
-  }
-
-  const expirationTime = Math.floor(Date.now() / 1000) + ttlSeconds;
-  const signature = createHash("sha256")
-    .update(
-      `${config.bunny.libraryId}${config.bunny.apiKey}${expirationTime}${videoId}`
-    )
-    .digest("hex");
-
-  return {
-    endpoint: BUNNY_TUS_ENDPOINT,
-    videoId,
-    libraryId: config.bunny.libraryId,
-    expirationTime,
-    signature,
-  };
-}
-
-/**
- * Create the video object and return the credentials the browser needs to fill
- * it. TTL defaults to 24h so a long upload on a slow mobile connection cannot
- * have its authorization expire mid-transfer.
- */
-export async function createVideoUpload(
-  title: string
-): Promise<BunnyUploadCredentials> {
+export async function createVideoUpload(title: string): Promise<BunnyVideoSlot> {
   if (!config.bunny.libraryId || !config.bunny.apiKey) {
     throw new BunnyNotConfiguredError(
       "Video uploads (BUNNY_STREAM_LIBRARY_ID + BUNNY_STREAM_API_KEY)"
@@ -304,7 +265,7 @@ export async function createVideoUpload(
   }
 
   const data = await response.json();
-  return createTusCredentials(data.guid);
+  return { videoId: data.guid, libraryId: config.bunny.libraryId };
 }
 
 // =============================================================================

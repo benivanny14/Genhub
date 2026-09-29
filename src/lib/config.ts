@@ -135,24 +135,47 @@ const config = {
     // rotated without breaking uploads. Empty disables signature checks in dev
     // and fails the route closed in production.
     webhookSecret: process.env.BUNNY_STREAM_WEBHOOK_SECRET || "",
-    // OPTIONAL single-PUT upload proxy — see worker/bunny-upload.
-    //
-    // The management key cannot go to a browser, and Bunny signs its resumable
-    // uploads (TUS) rather than its one-shot PUT. When these two are set, the
-    // browser PUTs the whole file to a Worker that holds the key, and this
-    // server hands out a token that authorizes one video id until one deadline.
-    //
-    // Both empty is the default and means "upload the way we always have": the
-    // proxy is an addition, never a requirement, so a half-configured proxy
-    // (one value set, one missing) is a warning rather than a silent switch to a
-    // path that cannot authorize anything.
-    uploadProxyUrl: process.env.BUNNY_UPLOAD_PROXY_URL || "",
-    uploadProxySecret: process.env.BUNNY_UPLOAD_PROXY_SECRET || "",
-    // A single PUT has no resume, so the file must fit in one request. Cloudflare
-    // Workers refuse a request body over 100 MB on Free and Pro plans, and that
-    // refusal is a 413 the creator cannot act on — so anything larger goes down
-    // the resumable path instead.
-    uploadProxyMaxBytes: Number(process.env.BUNNY_UPLOAD_PROXY_MAX_BYTES || 100 * 1024 * 1024),
+  },
+
+  // Cloudflare R2 — where a video lands before Bunny ingests it.
+  //
+  // This is the browser's upload destination. The server signs a URL that
+  // authorizes ONE object for ONE method until one deadline (lib/r2-sign.ts),
+  // so neither of these credentials ever reaches the browser, and the bucket
+  // stays private: Bunny pulls the object through videoSource below, which
+  // checks a token this server signed.
+  //
+  // Absent is NOT a supported production state: there is one transport now, so
+  // a deployment without R2 refuses an upload reservation with a 503 rather than
+  // handing the browser a credential it cannot use. See
+  // api/videos/upload-signature/route.ts.
+  r2: {
+    accountId: process.env.R2_ACCOUNT_ID || "",
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
+    bucket: process.env.R2_BUCKET || "",
+    // Long enough for a large file on a slow phone connection, short enough
+    // that a URL lifted out of a log is worthless. A creator who takes longer
+    // than this gets a fresh URL when they retry, because the page asks the
+    // server again rather than reusing the old one.
+    uploadUrlTtlSeconds: intFromEnv(process.env.R2_UPLOAD_URL_TTL_SECONDS, 6 * 60 * 60),
+  },
+
+  // worker/video-ingest — the only thing that ever touches the Bunny key on
+  // this path, and the bucket it reads from.
+  //
+  // Bunny's own fetch API cannot be used here: it creates a video object of its
+  // own and returns no guid (see the note in lib/services/video-ingest.service
+  // .ts), so it can neither fill the slot this server reserved nor be retried
+  // without risking a second copy of the same video. This Worker is what moves
+  // the bytes instead — from the private bucket, into the reserved slot.
+  videoIngest: {
+    url: process.env.VIDEO_INGEST_URL || "",
+    secret: process.env.VIDEO_INGEST_SECRET || "",
+    // Long enough that a retry an hour later is still authorized, because the
+    // upload is what a creator waits for; a queued ingest must not expire
+    // between the upload finishing and the transfer starting.
+    urlTtlSeconds: intFromEnv(process.env.VIDEO_INGEST_TTL_SECONDS, 12 * 60 * 60),
   },
 
   // HarakaPay — the only payment gateway (USSD push via mobile money)
@@ -272,12 +295,18 @@ export function productionConfigWarnings(): string[] {
   if (!config.bunny.apiKey || !config.bunny.cdnHostname) {
     warnings.push("Bunny.net Stream credentials are incomplete — uploads/playback will fail");
   }
-  // Half a proxy is worse than none: the browser would be sent to a Worker that
-  // cannot verify a token this server never signed. Said out loud at boot rather
-  // than discovered as a 401 on the first upload.
-  if (Boolean(config.bunny.uploadProxyUrl) !== Boolean(config.bunny.uploadProxySecret)) {
+  // Half of the presigned path is worse than none of it: with R2 configured but
+  // no reader, Bunny is handed a URL nobody can authorize; with a reader but no
+  // R2, the browser is handed a URL this server cannot sign. Both arrive as a
+  // 401 or a 403 on the creator's screen, so the incomplete state is said out
+  // loud at boot instead.
+  const r2Ready = Boolean(
+    config.r2.accountId && config.r2.accessKeyId && config.r2.secretAccessKey && config.r2.bucket
+  );
+  const ingestReady = Boolean(config.videoIngest.url && config.videoIngest.secret);
+  if (r2Ready !== ingestReady) {
     warnings.push(
-      "BUNNY_UPLOAD_PROXY_URL and BUNNY_UPLOAD_PROXY_SECRET must be set together — the single-PUT upload path is disabled until they are"
+      "R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET and VIDEO_INGEST_URL / VIDEO_INGEST_SECRET must be set together — video uploads are refused until they are, because there is no second transport"
     );
   }
   if (!config.email.host) {

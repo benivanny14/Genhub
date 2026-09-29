@@ -1,37 +1,40 @@
 // =============================================================================
-// GENHUB - Whole-file upload through the proxy (one PUT)
+// GENHUB - Whole-file upload to the bucket (one presigned PUT)
 //
 // The transport the creator asked for: one standard HTTP PUT, one progress bar,
-// no chunk bookkeeping. The browser sends the file to a Worker that holds the
-// Bunny library key and streams the body on (see worker/bunny-upload) — because
-// the key manages every video in the library and cannot be handed to a client.
+// no chunk bookkeeping, no resumable endpoint. The browser sends the file
+// straight to a storage bucket with a presigned URL the server signed for that
+// one object and that one moment (lib/r2-sign.ts), so no credential of ours is
+// in the browser at all and no server of ours receives the bytes — which is what
+// lets this path accept a file of any size.
 //
-// WHAT THIS BUYS, HONESTLY. Fewer moving parts on the client, a bar that maps to
-// one request, and no dependency on Bunny's resumable endpoint. What it COSTS is
-// the property the TUS path was built for: there is no offset to resume from. A
-// connection that dies at 90% of a 90 MB file has sent 81 MB that are now gone,
-// so the retry ladder here is deliberately SHORT — three attempts, ten seconds
-// apart, about a hundred megabytes of the creator's data at worst — instead of
-// the two-and-a-half-minute ladder that is patient because patience is cheap
-// when the bytes already on the server are kept.
+// WHAT THIS COSTS, HONESTLY. There is no offset to resume from. A connection
+// that dies at 90% of a 90 MB file has sent 81 MB that are now gone, so the
+// retry ladder here is deliberately SHORT — three attempts, ten seconds apart,
+// about a hundred megabytes of the creator's data at worst — instead of the
+// patient ladder a resumable upload can afford, because patience is cheap when
+// the bytes already on the server are kept.
 //
-// That trade is why the page only takes this path when the file fits in one
-// request, and why the resumable path remains for everything else. Neither
-// transport is the right answer to every file, and pretending otherwise is how
-// the earlier version of this uploader ended up tuned for a desktop.
+// WHAT SOFTENS THAT. The upload goes to object storage rather than to Bunny, and
+// the transfer that puts it in front of the encoder is a server-to-server move
+// over Cloudflare's own network (worker/video-ingest) with an idempotent retry.
+// So a dropped connection costs the creator the bytes in flight at that moment,
+// and never a second transcode.
 //
-// The failures carry the same shape as the resumable path's — code, reason,
-// stage, byte counts, per-attempt timings — so the admin panel reads one kind of
-// record whichever way the bytes went.
+// The failures carry every field the admin panel reads — code, reason, stage,
+// byte counts and per-attempt timings — so one kind of record answers for every
+// way an upload can die.
 // =============================================================================
 
 import {
-  CHUNK_STALL_TIMEOUT_MS,
-  TusUploadError,
+  blameTheDeviceIfNothingMoved,
+  UPLOAD_STALL_TIMEOUT_MS,
+  probeDeviceRead,
+  VideoUploadError,
   isRetryableUploadFailure,
   TRANSIENT_4XX,
-  type TusFailureReason,
-} from "./tus-upload";
+  type UploadFailureReason,
+} from "./upload-error";
 
 /**
  * How many times to send the WHOLE file, and how long to wait between tries.
@@ -46,8 +49,14 @@ export const PUT_RETRY_DELAYS = [0, 3_000, 10_000] as const;
 export interface PutUploadTarget {
   /** Where the bytes go, authorization included in the query string. */
   url: string;
-  /** The largest file this path accepts; larger files take the resumable path. */
-  maxBytes: number;
+  /**
+   * Unix seconds, when the bucket will start refusing this URL.
+   *
+   * Carried for the one error worth naming separately: a 403 part-way through a
+   * slow upload on a phone is a signature that expired, not a bad file, and a
+   * creator who is told that knows to retry rather than to re-record.
+   */
+  expiresAt?: number;
 }
 
 export interface PutUploadOptions {
@@ -58,7 +67,7 @@ export interface PutUploadOptions {
     attempt: number;
     totalAttempts: number;
     offset: number;
-    reason?: TusFailureReason;
+    reason?: UploadFailureReason;
   }) => void;
   signal?: AbortSignal;
 }
@@ -92,27 +101,41 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 /**
  * What a non-2xx answer means.
  *
- * Mirrors `describe()` in the resumable path on purpose: the same status has to
- * mean the same thing whichever transport produced it, or the admin panel starts
- * telling two stories about one provider.
+ * One classification, read by everything that reports an upload failure: if a
+ * status meant one thing here and another somewhere else, the admin panel would
+ * start telling two stories about one provider.
  */
-function describePutStatus(status: number, body: string): TusUploadError {
+function describePutStatus(status: number, body: string): VideoUploadError {
   const detail = body ? `: ${body.slice(0, 160)}` : "";
 
-  // 413 is the proxy's own ceiling. The client is supposed to have checked the
-  // size first, so reaching here means the two disagreed — say so plainly rather
-  // than reporting it as a connection problem.
+  // A 403 is the bucket refusing the signature rather than the file, and it has
+  // exactly one cause worth naming: the presigned URL expired while a slow phone
+  // connection was still sending. Retrying the same URL cannot work, so this is
+  // not retryable — the page asks for a fresh target instead.
+  if (status === 403) {
+    return new VideoUploadError(
+      "REJECTED",
+      "This upload took longer than its permission allowed. Press retry: it will reserve a new one and send the file again.",
+      status,
+      { stage: "put", reason: "provider" }
+    );
+  }
+
+  // 413 no longer comes from us — nothing we run receives the body — so it can
+  // only be the bucket's own ceiling, which is 5 GiB, well above what the
+  // application accepts. Say which side refused it rather than blaming the
+  // connection for a refusal that arrived in milliseconds.
   if (status === 413) {
-    return new TusUploadError(
+    return new VideoUploadError(
       "UNSUPPORTED",
-      "The upload server refused a file this large. Try again, and it will be sent in pieces.",
+      "The storage service refused a file this large.",
       status,
       { stage: "put", reason: "provider" }
     );
   }
 
   if (status >= 400 && status < 500 && !TRANSIENT_4XX.has(status)) {
-    return new TusUploadError(
+    return new VideoUploadError(
       "REJECTED",
       `The upload server rejected the file (HTTP ${status})${detail}`,
       status,
@@ -120,9 +143,9 @@ function describePutStatus(status: number, body: string): TusUploadError {
     );
   }
 
-  return new TusUploadError(
+  return new VideoUploadError(
     "NETWORK",
-    `The upload server answered HTTP ${status}${detail}`,
+    `The storage service answered HTTP ${status}${detail}`,
     status,
     { stage: "put", reason: "provider", providerBody: body.slice(0, 600) }
   );
@@ -159,9 +182,9 @@ function putOnce(
       watchdog = setTimeout(() => {
         stalled = true;
         xhr.abort();
-      }, CHUNK_STALL_TIMEOUT_MS);
+      }, UPLOAD_STALL_TIMEOUT_MS);
     };
-    const finish = (error?: TusUploadError) => {
+    const finish = (error?: VideoUploadError) => {
       if (settled) return;
       settled = true;
       stopWatchdog();
@@ -183,19 +206,19 @@ function putOnce(
       finish(describePutStatus(xhr.status, xhr.responseText || ""));
     };
 
-    // A phone that has lost its radio and one whose request was refused by a
-    // proxy arrive here identically; only the browser knows which, and it says
-    // so in `onLine`.
+    // A phone that has lost its radio and one whose request was refused by the
+    // storage service arrive here identically; only the browser knows which, and
+    // it says so in `onLine`.
     xhr.onerror = () =>
       finish(
         offlineNow()
-          ? new TusUploadError(
+          ? new VideoUploadError(
               "NETWORK",
               "Your device went offline during the upload. Reconnect and retry.",
               undefined,
               { stage: "put", reason: "offline" }
             )
-          : new TusUploadError(
+          : new VideoUploadError(
               "NETWORK",
               "The connection dropped during upload.",
               undefined,
@@ -205,7 +228,7 @@ function putOnce(
 
     xhr.ontimeout = () =>
       finish(
-        new TusUploadError("NETWORK", "The upload stalled and was retried.", undefined, {
+        new VideoUploadError("NETWORK", "The upload stalled and was retried.", undefined, {
           stage: "put",
           reason: "timeout",
         })
@@ -214,11 +237,11 @@ function putOnce(
     xhr.onabort = () =>
       finish(
         stalled
-          ? new TusUploadError("NETWORK", "The upload stalled and was retried.", undefined, {
+          ? new VideoUploadError("NETWORK", "The upload stalled and was retried.", undefined, {
               stage: "put",
               reason: "stall",
             })
-          : new TusUploadError("ABORTED", "Upload cancelled", undefined, {
+          : new VideoUploadError("ABORTED", "Upload cancelled", undefined, {
               stage: "put",
               reason: "cancelled",
             })
@@ -232,7 +255,7 @@ function putOnce(
     if (signal) {
       if (signal.aborted) {
         finish(
-          new TusUploadError("ABORTED", "Upload cancelled", undefined, {
+          new VideoUploadError("ABORTED", "Upload cancelled", undefined, {
             stage: "put",
             reason: "cancelled",
           })
@@ -252,12 +275,12 @@ function putOnce(
       // The device refusing the file, met where this transport actually meets
       // it: `send` hands the WHOLE file to the socket at once, so a pick the
       // browser cannot read throws from here rather than failing later on the
-      // wire. No probe decides it — the attempt does — which is the same rule
-      // the resumable path now follows, so a file this browser can stream is
-      // sent whichever transport carries it.
+      // wire. The probe below is a hint, not a gate — the attempt is what
+      // decides — so a file this browser can stream is sent, and the probe can
+      // never be the reason a working file is refused.
       const name = error instanceof Error ? error.name : "UnknownError";
       finish(
-        new TusUploadError(
+        new VideoUploadError(
           "UNSUPPORTED",
           `This device would not let the page read that video (${name}). Choose it again — the Files ` +
             "app usually works where a photos or cloud app does not — or copy it onto the phone's own " +
@@ -279,11 +302,11 @@ function putOnce(
 
 /** Stamp how far the transfer got, so a report says more than the verdict. */
 function withProgress(
-  error: TusUploadError,
+  error: VideoUploadError,
   bytesSent: number,
   bytesTotal: number,
   stage: { offset?: number; retryCount?: number; attemptMs?: number[] }
-): TusUploadError {
+): VideoUploadError {
   error.bytesSent = Math.max(0, Math.min(bytesSent, bytesTotal));
   error.bytesTotal = bytesTotal;
   if (stage.offset !== undefined) error.offset = stage.offset;
@@ -293,10 +316,10 @@ function withProgress(
 }
 
 /**
- * Upload the whole file through the proxy, retrying the request a few times.
+ * Upload the whole file to the bucket, retrying the request a few times.
  *
- * Resolves once Bunny holds the file. Throws TusUploadError on failure, with the
- * same fields the resumable path fills in — including the per-attempt timings,
+ * Resolves once the bucket holds the file. Throws VideoUploadError on failure, with the
+ * same fields every upload failure fills in — including the per-attempt timings,
  * which for a single request are the fastest way to tell "the host refused it in
  * twelve milliseconds" from "it was cut ninety seconds in".
  */
@@ -309,7 +332,7 @@ export async function uploadFileWithPut(
 
   if (!file.size) {
     throw withProgress(
-      new TusUploadError("UNSUPPORTED", "That file is empty.", undefined, {
+      new VideoUploadError("UNSUPPORTED", "That file is empty.", undefined, {
         stage: "put",
         reason: "preflight",
       }),
@@ -319,23 +342,10 @@ export async function uploadFileWithPut(
     );
   }
 
-  // The caller is expected to have checked this and taken the other path. Kept
-  // as a last line of defence so a caller that skips it cannot push a file the
-  // proxy will refuse — and so the refusal is a sentence about the file rather
-  // than a bare 413 from someone else's server.
-  if (file.size > target.maxBytes) {
-    throw withProgress(
-      new TusUploadError(
-        "UNSUPPORTED",
-        "That video is too large to send in one request.",
-        undefined,
-        { stage: "put", reason: "preflight" }
-      ),
-      0,
-      file.size,
-      {}
-    );
-  }
+  // Two readings of whether this file can be handed over at all, and neither is
+  // a gate: this one, and whatever the attempts themselves report. See
+  // blameTheDeviceIfNothingMoved for when they are allowed to agree out loud.
+  const refusal = await probeDeviceRead(file);
 
   let highest = 0;
   const report = (uploaded: number, total: number) => {
@@ -347,7 +357,7 @@ export async function uploadFileWithPut(
   };
 
   const attemptMs: number[] = [];
-  let lastError: TusUploadError | null = null;
+  let lastError: VideoUploadError | null = null;
 
   for (let attempt = 0; attempt < PUT_RETRY_DELAYS.length; attempt++) {
     if (PUT_RETRY_DELAYS[attempt] > 0) await sleep(PUT_RETRY_DELAYS[attempt], signal);
@@ -362,9 +372,9 @@ export async function uploadFileWithPut(
       break;
     } catch (error) {
       const uploadError =
-        error instanceof TusUploadError
+        error instanceof VideoUploadError
           ? error
-          : new TusUploadError("NETWORK", "Upload failed", undefined, {
+          : new VideoUploadError("NETWORK", "Upload failed", undefined, {
               stage: "put",
               reason: "reset",
             });
@@ -390,11 +400,22 @@ export async function uploadFileWithPut(
   }
 
   if (lastError) {
-    throw withProgress(lastError, highest, file.size, {
-      offset: 0,
-      retryCount: PUT_RETRY_DELAYS.length - 1,
-      attemptMs,
-    });
+    const where = { offset: 0, retryCount: PUT_RETRY_DELAYS.length - 1, attemptMs };
+    // Stamped BEFORE the blame, and that order is the whole thing: the rule reads
+    // the byte count to decide whether the device or the connection is at fault,
+    // and an error that has not been told how far the transfer got cannot answer
+    // it. In this transport the count lives outside the error until the ladder
+    // ends, so it is the caller that has to hand it over.
+    const stamped = withProgress(lastError, highest, file.size, where);
+    throw withProgress(
+      // The rule lives in lib/upload-error.ts: a device that refused to read the
+      // file, on a transfer that moved nothing, is the answer — and anything that
+      // DID move keeps the connection to blame.
+      blameTheDeviceIfNothingMoved(stamped, refusal, "put"),
+      highest,
+      file.size,
+      where
+    );
   }
 
   report(file.size, file.size);

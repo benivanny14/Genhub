@@ -19,7 +19,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { readNetworkSnapshot, describeUploadFailure } from "@/lib/upload-client";
-import { TusUploadError } from "@/lib/tus-upload";
+import { VideoUploadError } from "@/lib/upload-error";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -71,14 +71,14 @@ describe("readNetworkSnapshot", () => {
 
 describe("describeUploadFailure", () => {
   it("carries the per-attempt timings as numbers", () => {
-    const error = new TusUploadError("NETWORK", "The connection dropped during upload.");
+    const error = new VideoUploadError("NETWORK", "The connection dropped during upload.");
     error.attemptMs = [12, 9, 14];
 
     expect(describeUploadFailure(error).attemptMs).toEqual([12, 9, 14]);
   });
 
   it("sends null rather than an empty list when no attempt was timed", () => {
-    const missing = new TusUploadError("NETWORK", "The connection dropped during upload.");
+    const missing = new VideoUploadError("NETWORK", "The connection dropped during upload.");
     expect(describeUploadFailure(missing).attemptMs).toBeNull();
 
     // An empty array would say "attempts were measured and there were none",

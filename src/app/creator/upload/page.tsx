@@ -9,19 +9,18 @@ import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import {
-  uploadFileWithTus,
   describeRetry,
-  TusUploadError,
+  VideoUploadError,
   videoSizeError,
   UPLOAD_STALL_WARNING_MS,
-  type TusUploadRetryInfo,
-} from "@/lib/tus-upload";
+  type UploadRetryInfo,
+} from "@/lib/upload-error";
 import { uploadFileWithPut } from "@/lib/upload-put";
 import { ScreenWakeLock } from "@/lib/screen-wake-lock";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
 import { CATEGORIES } from "@/lib/categories";
-import type { UploadTarget } from "@/lib/upload-proxy";
+import type { UploadTarget } from "@/lib/upload-target";
 import {
   CREATOR_GUIDELINES,
   GUIDELINE_ACK_LABEL_EN,
@@ -163,9 +162,10 @@ export default function UploadPage() {
   //      which is the commonest cause removed outright;
   //   2. the creator is TOLD what will break their upload, in the language they
   //      are using the site in, while it is running.
-  // Chunk sizing is the third half — see lib/tus-upload.ts — and the reserved
-  // slot means a dropped transfer resumes where it stopped instead of starting
-  // again from byte zero.
+  // The transport itself is the third half — see lib/upload-put.ts. What it does
+  // NOT do is resume, which is why a failure that cost the creator real time is
+  // reported by name (an expired permission, a device that will not read the
+  // file) rather than as one more "connection dropped".
 
   /** Give the lock back and stop watching. Every ending lands here. */
   const releaseScreenWake = useCallback(() => {
@@ -243,8 +243,8 @@ export default function UploadPage() {
   }
 
   /**
-   * Send the file with TUS so a dropped mobile connection resumes instead of
-   * restarting. `onProgress` is 0..100.
+   * Send the file with one presigned PUT, then hand it to the encoder.
+   * `onProgress` is 0..100.
    *
    * The transfer also drives one small toast that lives exactly as long as the
    * upload does: created sticky so it cannot time out mid-transfer, rewritten
@@ -286,7 +286,7 @@ export default function UploadPage() {
      * the retry names the fault (offline, dropped, stalled) instead of waiting
      * silently.
      */
-    const onRetry = (info: Pick<TusUploadRetryInfo, "attempt" | "totalAttempts" | "reason">) => {
+    const onRetry = (info: Pick<UploadRetryInfo, "attempt" | "totalAttempts" | "reason">) => {
       lastProgressAt.current = Date.now();
       setUploadStalled(false);
       updateToast(toastId, {
@@ -299,22 +299,20 @@ export default function UploadPage() {
       report(Math.round((uploaded / total) * 100));
 
     try {
-      // ONE PUT, WHEN THE FILE FITS. The proxy hands the whole file to Bunny in
-      // a single request, which is the simplest thing the browser can be asked
-      // to do — and the only path that works at all where the resumable endpoint
-      // is unreachable. Anything larger than the proxy accepts keeps the chunked
-      // path: a whole-file PUT that dies has no offset to resume from, so the
-      // file size decides which risk is worth taking. See lib/upload-put.ts.
-      const proxy = credentials.proxy;
-      if (proxy && file.size <= proxy.maxBytes) {
-        await uploadFileWithPut(file, proxy, { onProgress: sendProgress, onRetry, signal });
-      } else {
-        await uploadFileWithTus(file, credentials, {
-          onProgress: sendProgress,
-          onRetry,
-          signal,
-        });
-      }
+      // ONE PUT, STRAIGHT INTO THE BUCKET.
+      //
+      // The server signs a URL for this one object and this one moment
+      // (lib/r2-sign.ts). The browser uploads with it, so the file never passes
+      // through a server of ours and the browser never holds a credential of
+      // ours — which is why the SIZE of the file is not a consideration on this
+      // path: there is no request body for anybody to refuse, which is what used
+      // to push anything over a hundred megabytes down the chunked path. See
+      // lib/upload-put.ts.
+      await uploadFileWithPut(file, credentials.presigned, {
+        onProgress: sendProgress,
+        onRetry,
+        signal,
+      });
       // Done: say so on the same toast, give it a real duration, and let it
       // clear itself. `progress: 100` first so the bar finishes visibly rather
       // than snapping away at 99%.
@@ -329,7 +327,7 @@ export default function UploadPage() {
       updateToast(toastId, {
         type: "error",
         message:
-          error instanceof TusUploadError
+          error instanceof VideoUploadError
             ? error.message
             : "Upload failed. Please try again.",
         progress: undefined,
@@ -435,6 +433,39 @@ export default function UploadPage() {
    * — the "it removes itself, upload it again" the creator saw. Keeping the
    * pair means Retry continues into the same slot.
    */
+  /**
+   * Ask the server to move the finished file from the bucket into Bunny.
+   *
+   * A separate request because it is a separate wait: the file has crossed two
+   * providers by the time this answers, and the creator is told about that wait
+   * instead of it being hidden inside the upload they think already finished.
+   *
+   * Returns false when Bunny does not end up holding the file, which is the only
+   * outcome that matters to the caller — the message to the creator is written
+   * by the route (lib/services/video-ingest.service.ts), so it names the real
+   * cause rather than "upload failed".
+   */
+  async function handOffToBunny(videoId: string, signal?: AbortSignal): Promise<boolean> {
+    try {
+      const res = await fetch("/api/videos/ingest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoId }),
+        signal,
+      });
+      const data = await res.json();
+      if (data.success) return true;
+      toast("error", data.error || "The video could not be prepared after uploading");
+      return false;
+    } catch (error) {
+      // An abort is the creator stopping, not a fault, and saying "network
+      // error" for their own tap is how a cancel starts looking like a bug.
+      if (error instanceof DOMException && error.name === "AbortError") return false;
+      toast("error", "Network error while preparing the video");
+      return false;
+    }
+  }
+
   async function runVideoUpload(file: File, credentials: UploadTarget) {
     setFailedUpload(null);
     setMainUploadActive(true);
@@ -448,14 +479,31 @@ export default function UploadPage() {
     // passes through startVideoUpload. Both are awaited before a byte is sent.
     await holdScreenAwake();
     try {
-      const uploaded = await uploadToBunny(file, credentials, setUploadProgress, controller.signal);
-      if (uploaded) {
+      // A presigned URL dies at its deadline, and the retry button can be pressed
+      // hours later — a creator comes back to the tab, or to the phone. Reusing a
+      // dead URL is a 403 they can do nothing about, so the reservation is taken
+      // again. It replaces the URL AND the slot, which is why everything below
+      // reads `slot` rather than the credentials this call arrived with.
+      let slot = credentials;
+      if (credentials.presigned.expiresAt * 1000 - Date.now() < 5 * 60 * 1000) {
+        const fresh = await initiateUpload();
+        if (fresh) slot = fresh;
+      }
+
+      const uploaded = await uploadToBunny(file, slot, setUploadProgress, controller.signal);
+      // The bucket holding the file is not the same as Bunny holding it, and only
+      // the second one makes a post. When the file went to the bucket, the ingest
+      // is the rest of the upload, so its failure is an upload failure: the retry
+      // button stays useful, and the retry re-sends a file whose permission the
+      // server hands out again rather than one it has to guess about.
+      const accepted = uploaded && (await handOffToBunny(slot.videoId, controller.signal));
+      if (accepted) {
         setUploadProgress(100);
         setUploadedBytes(file.size);
         setUploadReady(true);
       } else {
         setUploadProgress(0);
-        setFailedUpload({ file, credentials });
+        setFailedUpload({ file, credentials: slot });
       }
     } finally {
       if (uploadAbortRef.current === controller) uploadAbortRef.current = null;
@@ -1011,10 +1059,9 @@ export default function UploadPage() {
                     // was reserved and then abandoned.
                     let teaserSlot: UploadTarget | null = null;
                     try {
-                      // Same flow as the main video — reserve a slot, then send
-                      // it the way the file size allows. The trailer used to be
-                      // TUS-only, which meant the one transfer that works where
-                      // the resumable endpoint does not was not offered for it.
+                      // Same flow as the main video, and the same transport: one
+                      // presigned PUT to the bucket, then the ingest that puts it
+                      // in front of the encoder.
                       const res = await fetch("/api/videos/upload-signature", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -1030,18 +1077,15 @@ export default function UploadPage() {
                       teaserSlot = data.data as UploadTarget;
                       const teaserProgress = (uploaded: number, total: number) =>
                         setTeaserProgress(Math.round((uploaded / total) * 100));
-                      const proxy = teaserSlot.proxy;
+                      await uploadFileWithPut(file, teaserSlot.presigned, {
+                        onProgress: teaserProgress,
+                        signal: controller.signal,
+                      });
 
-                      if (proxy && file.size <= proxy.maxBytes) {
-                        await uploadFileWithPut(file, proxy, {
-                          onProgress: teaserProgress,
-                          signal: controller.signal,
-                        });
-                      } else {
-                        await uploadFileWithTus(file, teaserSlot, {
-                          onProgress: teaserProgress,
-                          signal: controller.signal,
-                        });
+                      // Same hand-off as the main video, and for the same reason:
+                      // the trailer's slot is empty until the ingest fills it.
+                      if (!(await handOffToBunny(teaserSlot.videoId, controller.signal))) {
+                        return;
                       }
 
                       setTeaserBunnyVideoId(teaserSlot.videoId);
@@ -1049,7 +1093,7 @@ export default function UploadPage() {
                     } catch (error) {
                       toast(
                         "error",
-                        error instanceof TusUploadError
+                        error instanceof VideoUploadError
                           ? error.message
                           : "Network error while uploading the teaser"
                       );

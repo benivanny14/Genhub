@@ -11,7 +11,6 @@
 // Placeholders in .env.local will fail here until real credentials exist.
 // =============================================================================
 
-import { createHash } from "node:crypto";
 import { loadEnv, ok, warn, fail } from "./_env.mjs";
 
 loadEnv();
@@ -101,11 +100,17 @@ if (args.includes("--storage")) {
   console.log("   (add --storage to also test thumbnail storage upload)");
 }
 
-// 4) Optional signed TUS round trip (what creator uploads actually use)
-//    Creates a video object, uploads a few bytes through the presigned TUS
-//    endpoint, then deletes it — so the library is left exactly as it was.
-//    Without this, a broken upload path can only be discovered by a creator
-//    who has already lost their upload.
+// 4) Optional upload-path check.
+//    A creator's file no longer goes to Bunny from the browser at all: it goes
+//    to an R2 bucket with a presigned URL, and worker/video-ingest moves it into
+//    the slot reserved here. So this checks the two halves a script can check —
+//    that the library accepts a new slot, and that the ingest Worker is up and
+//    configured — and deletes the slot afterwards.
+//
+//    The presigned signature itself is deliberately NOT re-derived here. It is
+//    checked by the application's own tests against AWS's published vector, and
+//    a second implementation in a script is exactly how two copies of a signing
+//    rule start to drift — which is the bug this codebase has already paid for.
 if (args.includes("--upload")) {
   const apiBase = "https://video.bunnycdn.com";
   let createdId = null;
@@ -113,67 +118,31 @@ if (args.includes("--upload")) {
     const created = await fetch(`${apiBase}/library/${libraryId}/videos`, {
       method: "POST",
       headers: { AccessKey: apiKey, "Content-Type": "application/json" },
-      body: JSON.stringify({ title: "genhub-tus-verify" }),
+      body: JSON.stringify({ title: "genhub-upload-verify" }),
       signal: AbortSignal.timeout(15_000),
     });
     if (!created.ok) throw new Error(`create video -> HTTP ${created.status}`);
     createdId = (await created.json()).guid;
     ok(`reserved a video slot (${createdId})`);
 
-    const expirationTime = Math.floor(Date.now() / 1000) + 3600;
-    const signature = createHash("sha256")
-      .update(`${libraryId}${apiKey}${expirationTime}${createdId}`)
-      .digest("hex");
-
-    const payload = Buffer.from("genhub-tus-probe");
-    const reserve = await fetch(`${apiBase}/tusupload`, {
-      method: "POST",
-      headers: {
-        "Tus-Resumable": "1.0.0",
-        "Upload-Length": String(payload.length),
-        "Upload-Metadata": `filetype ${Buffer.from("video/mp4").toString("base64")},title ${Buffer.from("genhub-tus-verify").toString("base64")}`,
-        AuthorizationSignature: signature,
-        AuthorizationExpire: String(expirationTime),
-        LibraryId: libraryId,
-        VideoId: createdId,
-      },
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!reserve.ok) {
-      throw new Error(`TUS reserve -> HTTP ${reserve.status} (${(await reserve.text()).slice(0, 120)})`);
-    }
-    const location = new URL(reserve.headers.get("location"), `${apiBase}/tusupload`).toString();
-    ok("TUS upload authorized with the presigned signature");
-
-    // Bunny needs the authorization on the PATCH as well, not only on reserve.
-    const chunk = await fetch(location, {
-      method: "PATCH",
-      headers: {
-        "Tus-Resumable": "1.0.0",
-        "Upload-Offset": "0",
-        "Content-Type": "application/offset+octet-stream",
-        AuthorizationSignature: signature,
-        AuthorizationExpire: String(expirationTime),
-        LibraryId: libraryId,
-        VideoId: createdId,
-      },
-      body: payload,
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!chunk.ok) {
-      throw new Error(
-        `TUS PATCH -> HTTP ${chunk.status} (${(await chunk.text()).slice(0, 120)})`
-      );
-    }
-    const written = chunk.headers.get("upload-offset");
-    if (Number(written) === payload.length) {
-      ok("bytes accepted — direct upload path works end to end");
+    const ingestUrl = (process.env.VIDEO_INGEST_URL || "").trim();
+    if (!ingestUrl) {
+      console.log("   (set VIDEO_INGEST_URL to also check the ingest Worker)");
     } else {
-      fail(`TUS PATCH reported offset ${written}, expected ${payload.length}`);
-      warnings++;
+      const health = await fetch(new URL("/health", ingestUrl), {
+        signal: AbortSignal.timeout(15_000),
+      });
+      const body = await health.json().catch(() => ({}));
+      if (!health.ok || !body.ok) {
+        throw new Error(`ingest health -> HTTP ${health.status}`);
+      }
+      if (!body.bucketConfigured || !body.secretConfigured || !body.bunnyConfigured) {
+        throw new Error(`the ingest Worker is missing configuration: ${JSON.stringify(body)}`);
+      }
+      ok("the ingest Worker is up, with its bucket, its secret and the library key");
     }
   } catch (error) {
-    fail(`TUS upload test failed: ${error.message || error}`);
+    fail(`upload path check failed: ${error.message || error}`);
     warnings++;
   } finally {
     if (createdId) {

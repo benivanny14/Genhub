@@ -47,7 +47,6 @@ import {
   isBunnyConfigured,
   isBunnyPlaybackConfigured,
   createVideoUpload,
-  createTusCredentials,
   getBunnyVideoDetails,
   deleteBunnyVideo,
   probeSignedPlayback,
@@ -108,7 +107,7 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("Bunny management API host", () => {
-  it("reserves the slot and returns TUS credentials signed for that one video", async () => {
+  it("reserves the slot and returns its id, and nothing else", async () => {
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -121,17 +120,9 @@ describe("Bunny management API host", () => {
     const result = await createVideoUpload("My scene");
 
     expect(calls).toEqual(["POST https://video.bunnycdn.com/library/12345/videos"]);
-    expect(result.videoId).toBe("vid-1");
-    expect(result.libraryId).toBe("12345");
-    expect(result.endpoint).toBe("https://video.bunnycdn.com/tusupload");
-    expect(result.expirationTime).toBeGreaterThan(Math.floor(Date.now() / 1000));
-
-    // sha256(libraryId + apiKey + expiration + videoId), per Bunny's TUS docs.
-    expect(result.signature).toBe(
-      createHash("sha256")
-        .update(`12345test-stream-key${result.expirationTime}vid-1`)
-        .digest("hex")
-    );
+    // The reservation is the whole answer now: an id to fill, and nothing that
+    // could be used to fill anybody else's slot.
+    expect(result).toEqual({ videoId: "vid-1", libraryId: "12345" });
 
     // The client must never receive the library API key: with it, any viewer
     // could delete or replace every video in the library.
@@ -139,10 +130,10 @@ describe("Bunny management API host", () => {
     vi.unstubAllGlobals();
   });
 
-  it("refuses to sign credentials when the library is unconfigured", () => {
+  it("refuses to reserve a slot when the library is unconfigured", async () => {
     const apiKey = bunny.apiKey;
     bunny.apiKey = "";
-    expect(() => createTusCredentials("vid-1")).toThrow(BunnyNotConfiguredError);
+    await expect(createVideoUpload("My scene")).rejects.toThrow(BunnyNotConfiguredError);
     bunny.apiKey = apiKey;
   });
 

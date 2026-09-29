@@ -84,25 +84,33 @@ export default function SystemReference() {
       <Section icon={Upload} title="Video ingestion &amp; processing">
         <p>
           A creator&apos;s file never passes through an application server. The
-          browser uploads it straight to the video host over a resumable protocol,
-          and the server only ever issues a short-lived, per-video credential.
+          browser PUTs it straight into an object-storage bucket with a URL this
+          server signs for one object and one moment, and the bytes reach the
+          video host from there — server to server, on Cloudflare&apos;s network.
         </p>
         <div className="space-y-3 mt-2">
-          <Step n={1} title="Reserve a slot">
+          <Step n={1} title="Reserve a slot and sign the URL">
             <Code>POST /api/videos/upload-signature</Code> creates the video object
-            in the Bunny Stream library (creator-only, KYC-approved, rate limited)
-            and returns presigned TUS credentials. The library API key stays on the
-            server and is never handed to the browser.
+            in the Bunny Stream library (creator-only, KYC-approved, rate limited),
+            then signs a presigned URL for that one object —{" "}
+            <Code>AWS4-HMAC-SHA256</Code>, valid for hours and worthless
+            afterwards. The library key stays on the server and is never handed to
+            the browser: it can delete every video in the library.
           </Step>
           <Step n={2} title="Upload directly from the browser">
-            The browser PATCHes the file to <Code>video.bunnycdn.com/tusupload</Code>{" "}
-            in chunks that follow the connection: 5&nbsp;MiB on a phone, up to
-            32&nbsp;MiB once a chunk proves the link is fast. A dropped connection
-            resumes from the last acknowledged offset instead of restarting, each
-            chunk is retried a few times, and the screen is held awake for the
-            length of the transfer — on a phone the usual cause of a frozen bar is
+            One <Code>PUT</Code> to the bucket, with no credential of ours in the
+            page and no server of ours receiving the body — which is what removed
+            the old chunked path, the 100&nbsp;MB request-body ceiling and the
+            resumable endpoint along with it. The screen is still held awake for the
+            length of the transfer: on a phone the usual cause of a frozen bar is
             the screen locking, not the network. This path is{" "}
-            <Code>src/lib/tus-upload.ts</Code>.
+            <Code>src/lib/upload-put.ts</Code>. Then{" "}
+            <Code>POST /api/videos/ingest</Code> asks <Code>worker/video-ingest</Code>{" "}
+            to move that one object out of the private bucket into the reserved
+            slot, where the only holder of the library key writes it. Retrying it
+            is safe — the same file into the same slot — which is why Bunny&apos;s
+            own fetch API is not used: it creates a video object of its own and
+            returns no id to attach a post to.
           </Step>
           <Step n={3} title="Store the row, live, immediately">
             <Code>POST /api/videos</Code> writes the row <em>published</em> with{" "}

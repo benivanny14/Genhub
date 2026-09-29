@@ -7,12 +7,12 @@
 // route is what turns that callback into a database write, so a finished encode
 // goes playable within seconds.
 //
-// THIS IS THE SOURCE OF TRUTH for the transition to READY. There is no
-// scheduled encoding poller any more (see the note in
-// lib/services/video-encoding.service.ts): a push is the only thing that can
-// observe an encode finishing the moment it finishes, and everything else — the
-// creator's dashboard read, the owner's page read — is a fallback for a
-// deployment whose callbacks are misconfigured.
+// THIS IS THE SOURCE OF TRUTH for the transition to READY. A push is the only
+// thing that can observe an encode finishing the moment it finishes, so
+// everything else is a fallback: the scheduled sweep in
+// /api/cron/video-encoding (which walks rows still carrying an encoding status),
+// the creator's dashboard read, and the owner's page read — each for a
+// deployment whose callbacks are misconfigured or whose callback was missed.
 //
 // A missed callback therefore degrades, rather than strands: the two on-read
 // paths still refresh the row (with a re-check floor), and the client poller on

@@ -493,7 +493,7 @@ interface PipelineTest {
 /** One failed video upload, as reported by the creator's browser. */
 interface UploadFailure {
   at: string;
-  /** TusUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED. */
+  /** VideoUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED. */
   code: string;
   /**
    * Which request died: the reserve POST, a chunk PATCH, or the whole-file PUT

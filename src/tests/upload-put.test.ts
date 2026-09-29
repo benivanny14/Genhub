@@ -1,5 +1,5 @@
 // =============================================================================
-// GENHUB - The whole-file upload (one PUT through the proxy)
+// GENHUB - The whole-file upload (one presigned PUT to the bucket)
 //
 // The transport the creator asked for, and the one that changed the shape of an
 // uploader built around resuming: with no offset to resume from, EVERY retry
@@ -22,11 +22,13 @@ import {
   type PutUploadOptions,
   type PutUploadTarget,
 } from "@/lib/upload-put";
-import { TusUploadError } from "@/lib/tus-upload";
+import { VideoUploadError } from "@/lib/upload-error";
 
 const target: PutUploadTarget = {
-  url: "https://genhub-bunny-upload.example.workers.dev?videoId=vid-1&expires=1&sig=abc",
-  maxBytes: 100 * 1024 * 1024,
+  url:
+    "https://acct.r2.cloudflarestorage.com/genhub-uploads/incoming/vid-1" +
+    "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc",
+  expiresAt: Math.floor(Date.now() / 1000) + 6 * 60 * 60,
 };
 
 const fileOf = (bytes: number, name = "scene.mp4") =>
@@ -134,12 +136,12 @@ async function run(
   file: File,
   options: PutUploadOptions = {},
   advanceMs = 5 * 60_000
-): Promise<{ outcome: "ok" | "error"; error?: TusUploadError }> {
+): Promise<{ outcome: "ok" | "error"; error?: VideoUploadError }> {
   vi.useFakeTimers();
   try {
     const settled = uploadFileWithPut(file, target, options).then(
       () => ({ outcome: "ok" as const }),
-      (error: TusUploadError) => ({ outcome: "error" as const, error })
+      (error: VideoUploadError) => ({ outcome: "error" as const, error })
     );
     await vi.advanceTimersByTimeAsync(advanceMs);
     return await settled;
@@ -153,7 +155,7 @@ afterEach(() => {
 });
 
 describe("uploading the whole file in one PUT", () => {
-  it("sends one PUT to the proxy URL with the headers Bunny's endpoint wants", async () => {
+  it("sends one PUT to the URL it was given, with an octet-stream body", async () => {
     const calls: PutCall[] = [];
     vi.stubGlobal("XMLHttpRequest", fakeXhr({ status: 201 }, calls) as unknown as typeof XMLHttpRequest);
     const file = fileOf(1_000);
@@ -291,8 +293,11 @@ describe("the retry ladder of a transport with nothing to resume from", () => {
   });
 });
 
-describe("what the proxy's answer means", () => {
+describe("what the bucket's answer means", () => {
   it("treats a 413 as a size problem, not as a connection problem", async () => {
+    // Kept after the move to the bucket: the code is now theirs, not ours, and
+    // the classification still has to call it a size problem rather than a
+    // connection one.
     // The client is supposed to check the size first and take the resumable
     // path, so reaching here means two ceilings disagree. Saying so plainly is
     // worth more than another NETWORK row.
@@ -312,12 +317,14 @@ describe("what the proxy's answer means", () => {
       status: 413,
       bytesTotal: 2_000,
     });
-    expect(result.error!.message).toMatch(/sent in pieces/);
+    // The refusal now comes from the bucket rather than from a proxy of ours, so
+    // the sentence says so: nothing we run receives the body any more.
+    expect(result.error!.message).toMatch(/storage service/i);
     // One attempt: retrying a file that is too large just sends it again.
     expect(calls).toHaveLength(1);
   });
 
-  it("does not retry a refusal, and keeps the proxy's own words", async () => {
+  it("does not retry a refusal, and keeps the provider's own words", async () => {
     const calls: PutCall[] = [];
     vi.stubGlobal(
       "XMLHttpRequest",
@@ -424,6 +431,73 @@ describe("what the proxy's answer means", () => {
     expect(timedOut.error).toMatchObject({ reason: "timeout", code: "NETWORK", stage: "put" });
   });
 
+  it("names the device when a refused file never put a byte on the wire", async () => {
+    // This transport had no probe at all, so an unreadable pick used to report
+    // "the connection dropped" here after three attempts — the same wrong sentence
+    // the resumable path printed. Both paths now read the same two facts before
+    // blaming the phone: the device refused a scripted read, and nothing moved.
+    const calls: PutCall[] = [];
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      fakeXhr({ outcome: "error" }, calls) as unknown as typeof XMLHttpRequest
+    );
+    const unreadable = {
+      name: "1000371423.mp4",
+      size: 5_804_475,
+      type: "video/mp4",
+      slice: () => ({
+        size: 1024,
+        arrayBuffer: () =>
+          Promise.reject(
+            Object.assign(new Error("The requested file could not be read."), {
+              name: "NotReadableError",
+            })
+          ),
+      }),
+    } as unknown as File;
+
+    const result = await run(unreadable);
+
+    expect(result.error).toMatchObject({
+      code: "UNSUPPORTED",
+      stage: "put",
+      reason: "preflight",
+      bytesSent: 0,
+      bytesTotal: 5_804_475,
+    });
+    expect(result.error!.message).toContain("NotReadableError");
+    expect(result.error!.message).toMatch(/Files app/);
+    expect(result.error!.providerBody).toBe(
+      "NotReadableError: The requested file could not be read."
+    );
+    expect(calls).toHaveLength(PUT_RETRY_DELAYS.length);
+  });
+
+  it("still blames the connection when a refused file did move bytes", async () => {
+    // The other direction, and the one that keeps this from being dangerous: bytes
+    // acknowledged prove the file was readable, so the probe's opinion is worth
+    // nothing here and the phone must not be blamed for a dropped link.
+    const calls: PutCall[] = [];
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      fakeXhr({ outcome: "error", progress: [400] }, calls) as unknown as typeof XMLHttpRequest
+    );
+    const unreadable = {
+      name: "1000371423.mp4",
+      size: 1_000,
+      type: "video/mp4",
+      slice: () => ({
+        size: 1024,
+        arrayBuffer: () => Promise.reject(new Error("The requested file could not be read.")),
+      }),
+    } as unknown as File;
+
+    const result = await run(unreadable);
+
+    expect(result.error).toMatchObject({ code: "NETWORK", reason: "reset", bytesSent: 400 });
+    expect(result.error!.message).toBe("The connection dropped during upload.");
+  });
+
   it("reports a cancellation as a cancellation, not as a fault", async () => {
     const calls: PutCall[] = [];
     vi.stubGlobal("XMLHttpRequest", fakeXhr({ status: 200 }, calls) as unknown as typeof XMLHttpRequest);
@@ -455,34 +529,40 @@ describe("the guards that run before anything is sent", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("refuses a file bigger than one request, and says which one", async () => {
-    // The caller checks this and takes the resumable path; kept here so a caller
-    // that skips the check gets a sentence about the file rather than a bare 413
-    // from somebody else's server.
+  it("has no file-size ceiling any more", async () => {
+    // The ceiling existed because a proxy had to receive the body, and Cloudflare
+    // refuses a request body over 100 MB on Free and Pro. A presigned URL is not
+    // a proxy: the browser writes to the bucket and the size of the file decides
+    // nothing. This file is larger than the old limit on purpose — under the old
+    // rule it would have been refused before a byte was sent.
     const calls: PutCall[] = [];
     vi.stubGlobal("XMLHttpRequest", fakeXhr({ status: 200 }, calls) as unknown as typeof XMLHttpRequest);
-    const tooBig = target.maxBytes + 1;
+    const big = 140 * 1024 * 1024;
 
-    const result = await run(bigFileOf(tooBig));
-
-    expect(result.error).toMatchObject({
-      code: "UNSUPPORTED",
-      reason: "preflight",
-      stage: "put",
-      bytesSent: 0,
-      bytesTotal: tooBig,
-    });
-    expect(result.error!.message).toMatch(/one request/);
-    expect(calls).toHaveLength(0);
-  });
-
-  it("accepts a file exactly at the ceiling", async () => {
-    const calls: PutCall[] = [];
-    vi.stubGlobal("XMLHttpRequest", fakeXhr({ status: 200 }, calls) as unknown as typeof XMLHttpRequest);
-
-    const result = await run(bigFileOf(target.maxBytes));
+    const result = await run(bigFileOf(big));
 
     expect(result.outcome).toBe("ok");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("names an expired signature instead of blaming the file", async () => {
+    // A 403 part-way through a slow upload on a phone is the bucket refusing a
+    // signature that ran out, not a bad video — and it is the one provider answer
+    // a creator can act on, so it gets its own sentence and is not retried.
+    const calls: PutCall[] = [];
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      fakeXhr(
+        { status: 403, responseText: "Request has expired" },
+        calls
+      ) as unknown as typeof XMLHttpRequest
+    );
+
+    const result = await run(fileOf(2048));
+
+    expect(result.error).toMatchObject({ code: "REJECTED", status: 403, stage: "put" });
+    expect(result.error!.message).toMatch(/permission allowed/i);
+    // Not retryable: the same URL cannot start working again.
     expect(calls).toHaveLength(1);
   });
 });

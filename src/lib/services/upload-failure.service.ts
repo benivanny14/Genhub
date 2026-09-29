@@ -32,7 +32,7 @@
 // =============================================================================
 
 import { cacheGet, cacheSet } from "@/lib/redis";
-import type { TusFailureReason } from "@/lib/tus-upload";
+import type { UploadFailureReason } from "@/lib/upload-error";
 
 /** One key, so this cannot grow without bound. */
 const FAILURES_KEY = "bunny:upload:failures";
@@ -52,7 +52,7 @@ const TTL_SECONDS = 30 * 24 * 60 * 60;
 export interface UploadFailure {
   /** When we heard about it, ISO. */
   at: string;
-  /** TusUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED / ABORTED. */
+  /** VideoUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED / ABORTED. */
   code: string;
   /**
    * Which request died: the reserve POST, a chunk PATCH, or the whole-file PUT
@@ -96,7 +96,7 @@ export interface UploadFailure {
    * with three different answers, and before this field the record could not
    * say which one had happened.
    */
-  reason: TusFailureReason | null;
+  reason: UploadFailureReason | null;
   /**
    * The offset the failing chunk started at, which chunk it was, and how many
    * retries had already been spent on it.
