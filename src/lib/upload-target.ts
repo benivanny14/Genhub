@@ -78,6 +78,39 @@ const PART_TTL_SECONDS = 60 * 60;
 const R2_CONTROL_TIMEOUT_MS = 20_000;
 
 /**
+ * The shape an upload id from the storage service is allowed to have.
+ *
+ * MEASURED, NOT GUESSED, and the measurement is the point: R2 answered a BEGIN
+ * on 2026-09-29 with an id of **343 characters** of base64url. The first version
+ * of this rule capped it at 300 — a number invented for looking tidy — so every
+ * part request, on every file, was refused by our own validation with HTTP 422
+ * "That is not a valid upload id", in 400 milliseconds, before R2 was reached at
+ * all. Two creators' uploads were recorded that way, on 3G, after they had spent
+ * the time to pick a 192 MB file. A bound that sits near the value it is meant
+ * to bound is not a round number, it is a landmine.
+ *
+ * WHAT THE CEILING IS ACTUALLY FOR. Bounding an input, and nothing else: the
+ * character class is the real guard. It keeps the base64 alphabet whole — `/`
+ * and `+` included, because base64 uses them and refusing a character the
+ * service is allowed to issue is the same mistake in the other direction — and
+ * refuses only what could ADD OR CHANGE the operation parameters the signature
+ * covers: `?`, `&`, `=`, `#`, `%`, space and newline (lib/r2-sign.ts puts the id
+ * in the query string). The length is deliberately far above anything the
+ * service issues, because being wrong about it is what broke every upload, while
+ * being generous costs nothing: the request body is already capped by the
+ * platform, and the id only ever lands in a query string.
+ *
+ * It lives HERE, in one place, so the three routes that check it cannot drift.
+ * They did drift from reality together, which is why one fix repairs all three.
+ */
+export const MULTIPART_UPLOAD_ID_RE = /^[A-Za-z0-9+/=_-]{1,1024}$/;
+
+/** Whether this is a shape the storage service could have issued. */
+export function isMultipartUploadId(value: string): boolean {
+  return MULTIPART_UPLOAD_ID_RE.test(value);
+}
+
+/**
  * Where one video's file lives in the bucket.
  *
  * Derived from the video id alone: it is a value the server chose, it is unique

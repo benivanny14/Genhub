@@ -25,17 +25,15 @@ import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { deleteBunnyVideo, isBunnyVideoId } from "@/lib/bunny";
 import config from "@/lib/config";
-import { abortMultipartUpload } from "@/lib/upload-target";
+import { abortMultipartUpload, MULTIPART_UPLOAD_ID_RE } from "@/lib/upload-target";
 import { isR2Configured } from "@/lib/r2-sign";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const UPLOAD_ID_RE = /^[A-Za-z0-9+/=_-]{1,300}$/;
-
 const schema = z.object({
   videoId: z.string().min(1, "A video id is required"),
-  uploadId: z.string().regex(UPLOAD_ID_RE, "That is not a valid upload id"),
+  uploadId: z.string().regex(MULTIPART_UPLOAD_ID_RE, "That is not a valid upload id"),
 });
 
 export async function POST(request: NextRequest) {

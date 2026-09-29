@@ -32,26 +32,21 @@ import { api } from "@/lib/api-response";
 import { isBunnyVideoId } from "@/lib/bunny";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
-import { signPartUpload } from "@/lib/upload-target";
+import { MULTIPART_UPLOAD_ID_RE, signPartUpload } from "@/lib/upload-target";
 import { isR2Configured } from "@/lib/r2-sign";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/**
- * An upload id as R2 issues it: base64url-ish, and bounded.
- *
- * Validated by SHAPE and length rather than matched against anything we stored,
- * because this server keeps no multipart state — the bucket does. What the shape
- * check buys is that nothing with a slash, a query delimiter or a newline can
- * reach the signer, so a crafted id cannot sign a URL for a different object than
- * the one this request names.
- */
-const UPLOAD_ID_RE = /^[A-Za-z0-9+/=_-]{1,300}$/;
-
+// The upload id's shape is checked against ONE rule shared by all three routes
+// (MULTIPART_UPLOAD_ID_RE, lib/upload-target.ts). It is not matched against
+// anything this server stored, because this server keeps no multipart state —
+// the bucket does — and what the check buys is that nothing with a slash, a
+// query delimiter or a newline can reach the signer, so a crafted id cannot sign
+// a URL for a different object than the one this request names.
 const schema = z.object({
   videoId: z.string().min(1, "A video id is required"),
-  uploadId: z.string().regex(UPLOAD_ID_RE, "That is not a valid upload id"),
+  uploadId: z.string().regex(MULTIPART_UPLOAD_ID_RE, "That is not a valid upload id"),
   partNumber: z.number().int().min(1).max(10_000),
 });
 
@@ -59,9 +54,20 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("CREATOR");
 
-    const parsed = schema.safeParse(await request.json().catch(() => ({})));
+    const body = await request.json().catch(() => ({}));
+    const parsed = schema.safeParse(body);
     if (!parsed.success) {
-      return api.validation(parsed.error.errors[0].message);
+      const failed = parsed.error.errors[0];
+      // The LENGTH only, never the id itself. When this rule was wrong it refused
+      // a real 343-character id with a sentence that named no number, and finding
+      // that out took a live probe against the bucket; one line here would have
+      // said it outright.
+      if (failed.path[0] === "uploadId" && typeof body?.uploadId === "string") {
+        console.warn(
+          `[Upload Part] refused an upload id of ${body.uploadId.length} characters — see MULTIPART_UPLOAD_ID_RE`
+        );
+      }
+      return api.validation(failed.message);
     }
 
     const { videoId, uploadId, partNumber } = parsed.data;

@@ -13,10 +13,14 @@
 //     nothing anywhere reports an error.
 // =============================================================================
 
+import { join } from "path";
+import { readFileSync } from "fs";
 import { describe, it, expect } from "vitest";
 import {
+  MULTIPART_UPLOAD_ID_RE,
   UPLOAD_PART_BYTES,
   completeMultipartBody,
+  isMultipartUploadId,
   needsMultipart,
   partCountFor,
   videoObjectKey,
@@ -64,6 +68,88 @@ describe("needsMultipart", () => {
     // transport is the one that existed before this — refusing the upload is not
     // an option when the file may be perfectly sendable in one request.
     expect(needsMultipart(Number.NaN)).toBe(false);
+  });
+});
+
+// =============================================================================
+// THE UPLOAD ID, and the failure this rule caused.
+//
+// On 2026-09-29 the bucket was asked to BEGIN an upload and answered with an id
+// of 343 characters. The rule in place allowed 300, so every part request of
+// every file was refused by our own validation with HTTP 422 in 400 ms — before
+// R2 was reached — and two creators' 192 MB uploads were recorded that way on 3G.
+// These tests exist so the number can never be wrong in that direction again, and
+// so the properties that ARE load-bearing (which the signer depends on) are
+// pinned separately from it.
+// =============================================================================
+describe("the shape of an upload id from the storage service", () => {
+  // The id measured live, 343 characters, with the observed prefix and suffix
+  // kept and the random middle filled in.
+  const PREFIX = "AB06FVTxjYGJnjFXLbFo3pN_A43jmN4hbssWSAO9BCxEcHclBP-TQ0UIgYMN";
+  const SUFFIX = "mT41oFUhLHDpLBEaqPvU";
+  const MEASURED_ID = PREFIX + "k".repeat(343 - PREFIX.length - SUFFIX.length) + SUFFIX;
+
+  it("accepts the id the bucket actually issued — 343 characters, not 300", () => {
+    expect(MEASURED_ID).toHaveLength(343);
+    expect(isMultipartUploadId(MEASURED_ID)).toBe(true);
+  });
+
+  it("leaves room above the measured value, because that gap is the whole fix", () => {
+    // A ceiling that sits near the value it bounds is a landmine: R2's ids are a
+    // random blob, and a future one that is a byte longer must not refuse every
+    // upload. 1024 is far above anything observed and still bounds the input.
+    expect(isMultipartUploadId("A".repeat(1024))).toBe(true);
+    expect(isMultipartUploadId("A".repeat(1025))).toBe(false);
+  });
+
+  it("refuses anything that could point a signed part at another object", () => {
+    // The properties the signer depends on (lib/r2-sign.ts): the id is placed in
+    // the query string, so a character that ends a parameter or starts a new one
+    // would change the operation parameters the signature covers. These are the
+    // ones that do that.
+    for (const hostile of [
+      "abc?partNumber=9",
+      "abc&uploadId=x",
+      "abc def",
+      "abc\ndef",
+      "abc#frag",
+      "abc%2Fdef",
+      "",
+    ]) {
+      expect(isMultipartUploadId(hostile), JSON.stringify(hostile)).toBe(false);
+    }
+  });
+
+  it("keeps the whole base64 alphabet, including what base64 pads with", () => {
+    // `/`, `+` and `=` are all standard base64, so refusing them would be the
+    // same mistake in the other direction: assuming a shape the bucket was never
+    // asked to produce. The measured id used `-` and `_` (base64url, unpadded),
+    // and that is exactly why this test asserts the ALPHABET rather than the one
+    // sample — the last time this rule guessed, it guessed the length.
+    expect(isMultipartUploadId("abc/def+g=")).toBe(true);
+    expect(isMultipartUploadId("abc=xyz")).toBe(true);
+  });
+
+  it("is defined in ONE place, with no route keeping a private copy", () => {
+    // The three routes each used to declare this rule locally — three copies of
+    // one invented bound, all three wrong together, which is why one fix had to
+    // touch three files. The rule is asserted here rather than the behaviour,
+    // because a copy that agrees today is a copy that disagrees later.
+    const routes = [
+      "src/app/api/videos/upload-part/route.ts",
+      "src/app/api/videos/upload-complete/route.ts",
+      "src/app/api/videos/upload-abort/route.ts",
+    ];
+
+    for (const route of routes) {
+      const source = readFileSync(join(process.cwd(), route), "utf8");
+      expect(source, route).toContain("MULTIPART_UPLOAD_ID_RE");
+      // No local declaration of a regex for the upload id.
+      expect(source, route).not.toMatch(/const UPLOAD_ID_RE\s*=/);
+      expect(source, route).not.toMatch(/= \/\^\[A-Za-z0-9/);
+    }
+
+    expect(MULTIPART_UPLOAD_ID_RE.test(MEASURED_ID)).toBe(true);
   });
 });
 

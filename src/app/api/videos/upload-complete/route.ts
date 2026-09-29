@@ -29,17 +29,19 @@ import { api } from "@/lib/api-response";
 import { isBunnyVideoId } from "@/lib/bunny";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
-import { completeMultipartUpload, type CompletedPart } from "@/lib/upload-target";
+import {
+  completeMultipartUpload,
+  MULTIPART_UPLOAD_ID_RE,
+  type CompletedPart,
+} from "@/lib/upload-target";
 import { isR2Configured, StorageError } from "@/lib/r2-sign";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const UPLOAD_ID_RE = /^[A-Za-z0-9+/=_-]{1,300}$/;
-
 const schema = z.object({
   videoId: z.string().min(1, "A video id is required"),
-  uploadId: z.string().regex(UPLOAD_ID_RE, "That is not a valid upload id"),
+  uploadId: z.string().regex(MULTIPART_UPLOAD_ID_RE, "That is not a valid upload id"),
   // Bounded on both ends. An empty list cannot make an object, and 10,000 is the
   // S3 ceiling on parts — a longer list is a request that was refused before it
   // was sent, and saying so here is cheaper than a round trip.
