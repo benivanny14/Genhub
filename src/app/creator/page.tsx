@@ -667,6 +667,11 @@ export default function CreatorDashboard() {
       session = data.data as VideoUploadSession;
       await uploadVideoFile(file, session, {
         onProgress: ({ percent }) => setEditTeaserProgress(percent),
+        // /api/videos/upload-signature has just created this TUS resource. Its
+        // offset is zero by construction, so send the first chunk directly.
+        // A HEAD here can return Bunny's 404 before the first byte is sent and
+        // makes a brand-new teaser look like an expired upload.
+        offset: 0,
       });
 
       const videoId = await completeVideoUpload(session.sessionToken);

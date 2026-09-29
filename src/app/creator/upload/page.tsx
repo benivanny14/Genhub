@@ -268,19 +268,23 @@ export default function UploadPage() {
     }
   }
 
-  async function handleMainFile(file: File) {
+  async function handleMainFile(file: File, resumeExisting = false) {
     const sizeError = videoFileSizeError(file);
     if (sizeError) {
       toast("error", sizeError);
       return;
     }
 
-    // The same file keeps the session — that is what makes a retry a resume from
-    // Bunny's saved offset. A DIFFERENT file must not inherit it, and `reuse` is
-    // captured before any state is reset because setState is asynchronous: the
-    // old `mainSession` is still the one in this closure either way.
+    // Choosing a file is always a new upload. Reusing a session is reserved for
+    // the explicit Resume button: a file picker retry must never accidentally
+    // send a HEAD to a dead Bunny resource and turn a fresh attempt into HTTP
+    // 404. `reuse` is captured before any state is reset because setState is
+    // asynchronous: the old `mainSession` is still the one in this closure.
     const reuse =
-      mainSession && mainFile?.name === file.name && mainFile?.size === file.size
+      resumeExisting &&
+      mainSession &&
+      mainFile?.name === file.name &&
+      mainFile?.size === file.size
         ? mainSession
         : null;
     if (mainSession && !reuse) {
@@ -318,7 +322,7 @@ export default function UploadPage() {
     }
   }
 
-  async function handleTeaserFile(file: File) {
+  async function handleTeaserFile(file: File, resumeExisting = false) {
     if (!mainReady) {
       toast("error", "Upload the main video first");
       return;
@@ -329,7 +333,10 @@ export default function UploadPage() {
       return;
     }
     const reuse =
-      teaserSession && teaserFile?.name === file.name && teaserFile?.size === file.size
+      resumeExisting &&
+      teaserSession &&
+      teaserFile?.name === file.name &&
+      teaserFile?.size === file.size
         ? teaserSession
         : null;
     if (teaserSession && !reuse) {
@@ -482,8 +489,8 @@ export default function UploadPage() {
               <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
             </label>
             {mainFile && <div className="flex items-center justify-between text-sm"><span className="truncate">{mainFile.name} · {formatBytes(mainFile.size)}</span>{mainReady ? <span className="text-emerald-400 flex items-center gap-1"><Check className="w-4 h-4" /> Ready</span> : null}</div>}
-            {(mainUploading || mainProgress) && !mainReady && <ProgressBar percent={mainPercent} label={mainUploading ? `Uploading ${mainPercent}%` : "Upload incomplete — press choose again to resume"} />}
-            {mainSession && !mainReady && !mainUploading && <button type="button" className="btn-ghost text-sm" onClick={() => mainFile && void handleMainFile(mainFile)}>Resume upload</button>}
+            {(mainUploading || mainProgress) && !mainReady && <ProgressBar percent={mainPercent} label={mainUploading ? `Uploading ${mainPercent}%` : "Upload incomplete — press Resume upload to continue"} />}
+            {mainSession && !mainReady && !mainUploading && <button type="button" className="btn-ghost text-sm" onClick={() => mainFile && void handleMainFile(mainFile, true)}>Resume upload</button>}
             {mainSession && !mainReady && <button type="button" className="text-xs text-red-300" onClick={() => { void cancelSession(mainSession); setMainSession(null); setMainFile(null); setMainProgress(null); }}>Cancel this upload</button>}
           </section>
 
@@ -507,6 +514,7 @@ export default function UploadPage() {
             <label className="block text-sm text-white/70">Optional teaser clip<input type="file" accept={VIDEO_ACCEPT} className="input w-full mt-2" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} /></label>
             {teaserFile && <p className="text-xs text-white/60">{teaserFile.name} · {formatBytes(teaserFile.size)}</p>}
             {(teaserUploading || teaserProgress) && !teaserVideoId && <ProgressBar percent={teaserPercent} label={`Teaser ${teaserPercent}%`} />}
+            {teaserSession && !teaserVideoId && !teaserUploading && <button type="button" className="btn-ghost text-sm" onClick={() => teaserFile && void handleTeaserFile(teaserFile, true)}>Resume teaser upload</button>}
           </section>
 
           <label className="flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm"><input type="checkbox" checked={complianceAttested} onChange={(e) => setComplianceAttested(e.target.checked)} className="mt-1" /><span><ShieldAlert className="inline w-4 h-4 text-amber-300 mr-1" /> I confirm all performers are 18+ and required age/consent records are kept.</span></label>
