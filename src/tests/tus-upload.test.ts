@@ -80,18 +80,30 @@ describe("TUS direct upload", () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
+    // What Chrome raises when the read itself is refused. The name is the whole
+    // diagnosis — permission, file gone, or provider refusing — so it is carried
+    // out of the probe rather than swallowed by it.
+    const refused = Object.assign(new Error("The requested file could not be read."), {
+      name: "NotReadableError",
+    });
     const unreadable = {
       name: "1000371423.mp4",
       size: 5_804_475,
       type: "video/mp4",
-      slice: () => ({ arrayBuffer: () => Promise.reject(new Error("NotReadableError")) }),
+      slice: () => ({ arrayBuffer: () => Promise.reject(refused) }),
     } as unknown as File;
 
-    await expect(uploadFileWithTus(unreadable, credentials)).rejects.toMatchObject({
-      code: "UNSUPPORTED",
-      reason: "preflight",
-      stage: undefined,
-    });
+    const error = (await uploadFileWithTus(unreadable, credentials).catch(
+      (caught: unknown) => caught
+    )) as { code: string; reason: string; message: string; providerBody: string };
+
+    expect(error).toMatchObject({ code: "UNSUPPORTED", reason: "preflight" });
+    // Named for the creator, and quoted for whoever reads the record afterwards.
+    expect(error.message).toContain("NotReadableError");
+    expect(error.message).toMatch(/photos and videos/);
+    expect(error.providerBody).toBe(
+      "NotReadableError: The requested file could not be read."
+    );
     // Nothing was reserved and nothing was retried: the fault is the device and
     // no amount of patience or smaller chunks would have changed it.
     expect(fetchSpy).not.toHaveBeenCalled();

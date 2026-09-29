@@ -495,8 +495,12 @@ interface UploadFailure {
   at: string;
   /** TusUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED. */
   code: string;
-  /** Which request died: the reserve POST, or a chunk PATCH. */
-  stage: "reserve" | "chunk" | null;
+  /**
+   * Which request died: the reserve POST, a chunk PATCH, or the whole-file PUT
+   * through the upload proxy. With two transports in the app, this is what says
+   * which way the bytes were going when they stopped.
+   */
+  stage: "reserve" | "chunk" | "put" | null;
   /** Bunny's HTTP status, or null when nothing answered. */
   status: number | null;
   /** What the creator was shown. */
@@ -4275,7 +4279,12 @@ export default function AdminDashboard() {
                       )}
                       {failure.providerBody && (
                         <p className="text-[11px] text-amber-200/80 mt-1 break-all">
-                          Bunny: {failure.providerBody}
+                          {/* A status means Bunny answered, so the body is Bunny's.
+                              No status means nothing answered, and the raw text
+                              is the DEVICE's own error — calling that "Bunny"
+                              would send the reader to the wrong system. */}
+                          {failure.status !== null ? "Bunny: " : "detail: "}
+                          {failure.providerBody}
                         </p>
                       )}
                       <p className="text-[11px] text-white/35 mt-1">

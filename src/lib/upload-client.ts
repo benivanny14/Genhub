@@ -108,7 +108,8 @@ export async function uploadCaptions(file: File): Promise<string> {
 export interface UploadFailureReport {
   /** TusUploadError.code, or UNKNOWN for anything else. */
   code: string;
-  stage?: "reserve" | "chunk" | null;
+  /** Which request died — including which TRANSPORT it belonged to. */
+  stage?: "reserve" | "chunk" | "put" | null;
   status?: number | null;
   message: string;
   providerBody?: string | null;

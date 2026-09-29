@@ -432,8 +432,12 @@ export const creatorPostSchema = z.object({
 export const uploadFailureSchema = z.object({
   /** TusUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED / ABORTED. */
   code: z.string().trim().min(1).max(40),
-  /** Which request died: the reserve POST, or a chunk PATCH. */
-  stage: z.enum(["reserve", "chunk"]).nullish(),
+  /**
+   * Which request died: the reserve POST, a chunk PATCH, or the whole-file PUT
+   * that goes through the upload proxy. Two transports exist, so a record that
+   * did not say which one died would be read as whichever the reader assumed.
+   */
+  stage: z.enum(["reserve", "chunk", "put"]).nullish(),
   /** Bunny's HTTP status, or null when nothing answered. */
   status: z.number().int().min(0).max(599).nullish(),
   /** What the creator was shown. */

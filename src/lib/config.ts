@@ -135,6 +135,24 @@ const config = {
     // rotated without breaking uploads. Empty disables signature checks in dev
     // and fails the route closed in production.
     webhookSecret: process.env.BUNNY_STREAM_WEBHOOK_SECRET || "",
+    // OPTIONAL single-PUT upload proxy — see worker/bunny-upload.
+    //
+    // The management key cannot go to a browser, and Bunny signs its resumable
+    // uploads (TUS) rather than its one-shot PUT. When these two are set, the
+    // browser PUTs the whole file to a Worker that holds the key, and this
+    // server hands out a token that authorizes one video id until one deadline.
+    //
+    // Both empty is the default and means "upload the way we always have": the
+    // proxy is an addition, never a requirement, so a half-configured proxy
+    // (one value set, one missing) is a warning rather than a silent switch to a
+    // path that cannot authorize anything.
+    uploadProxyUrl: process.env.BUNNY_UPLOAD_PROXY_URL || "",
+    uploadProxySecret: process.env.BUNNY_UPLOAD_PROXY_SECRET || "",
+    // A single PUT has no resume, so the file must fit in one request. Cloudflare
+    // Workers refuse a request body over 100 MB on Free and Pro plans, and that
+    // refusal is a 413 the creator cannot act on — so anything larger goes down
+    // the resumable path instead.
+    uploadProxyMaxBytes: Number(process.env.BUNNY_UPLOAD_PROXY_MAX_BYTES || 100 * 1024 * 1024),
   },
 
   // HarakaPay — the only payment gateway (USSD push via mobile money)
@@ -253,6 +271,14 @@ export function productionConfigWarnings(): string[] {
   }
   if (!config.bunny.apiKey || !config.bunny.cdnHostname) {
     warnings.push("Bunny.net Stream credentials are incomplete — uploads/playback will fail");
+  }
+  // Half a proxy is worse than none: the browser would be sent to a Worker that
+  // cannot verify a token this server never signed. Said out loud at boot rather
+  // than discovered as a 401 on the first upload.
+  if (Boolean(config.bunny.uploadProxyUrl) !== Boolean(config.bunny.uploadProxySecret)) {
+    warnings.push(
+      "BUNNY_UPLOAD_PROXY_URL and BUNNY_UPLOAD_PROXY_SECRET must be set together — the single-PUT upload path is disabled until they are"
+    );
   }
   if (!config.email.host) {
     warnings.push("SMTP_HOST is not set — password-reset and welcome emails are only logged, users cannot recover accounts");

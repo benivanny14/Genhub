@@ -38,3 +38,7 @@ public/uploads/
 .freebuff/
 .DS_Store
 
+# Wrangler's build output and local dev state, wherever a Worker lives — it also
+# holds a local secrets file if one is ever written, which must not be committed.
+.wrangler/
+

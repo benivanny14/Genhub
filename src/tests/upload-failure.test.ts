@@ -335,6 +335,17 @@ describe("uploadFailureSchema", () => {
     ).toBe(false);
   });
 
+  it("accepts the stage of either transport, since both now exist", () => {
+    // "put" is the whole-file upload through the proxy. A record that could only
+    // name the resumable path's stages would force the reader to guess which of
+    // two transports died, and there is no way to guess that from a code alone.
+    for (const stage of ["reserve", "chunk", "put"]) {
+      expect(
+        uploadFailureSchema.safeParse({ code: "NETWORK", message: "x", stage }).success
+      ).toBe(true);
+    }
+  });
+
   it("requires a code and a message to render", () => {
     expect(uploadFailureSchema.safeParse({ message: "x" }).success).toBe(false);
     expect(uploadFailureSchema.safeParse({ code: "NETWORK" }).success).toBe(false);

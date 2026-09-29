@@ -54,13 +54,21 @@ export interface UploadFailure {
   at: string;
   /** TusUploadError.code — EXPIRED / REJECTED / NETWORK / UNSUPPORTED / ABORTED. */
   code: string;
-  /** Which request died: the reserve POST, or a chunk PATCH. */
-  stage: "reserve" | "chunk" | null;
+  /**
+   * Which request died: the reserve POST, a chunk PATCH, or the whole-file PUT
+   * through the upload proxy — the transport matters as much as the verdict.
+   */
+  stage: "reserve" | "chunk" | "put" | null;
   /** Bunny's HTTP status, or null when nothing answered. */
   status: number | null;
   /** What the creator was shown. */
   message: string;
-  /** Bunny's own response body, verbatim — the half that names the cause. */
+  /**
+   * The raw words that name the cause: Bunny's own response body, verbatim,
+   * when there was a response — and the browser's own error (its `name` and
+   * message) when the failure never left the device. Both belong here because
+   * they are the same thing: the evidence nobody paraphrased.
+   */
   providerBody: string | null;
   /** The reserved slot, so the orphan can be found (and cleaned) in Bunny. */
   bunnyVideoId: string | null;

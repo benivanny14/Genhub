@@ -266,7 +266,7 @@ export class TusUploadError extends Error {
    * of the pre-flight checks above. Reported to the server so the failure leaves
    * a record — see lib/services/upload-failure.service.ts.
    */
-  stage?: "reserve" | "chunk";
+  stage?: "reserve" | "chunk" | "put";
   /**
    * Bunny's response body, verbatim.
    *
@@ -338,7 +338,7 @@ export class TusUploadError extends Error {
     message: string,
     status?: number,
     extra?: {
-      stage?: "reserve" | "chunk";
+      stage?: "reserve" | "chunk" | "put";
       providerBody?: string;
       reason?: TusFailureReason;
     }
@@ -402,7 +402,7 @@ function authHeaders(credentials: BunnyUploadCredentials): Record<string, string
  *       that was a quarter sent, on a connection that was working again.
  *   429 too many requests
  */
-const TRANSIENT_4XX: ReadonlySet<number> = new Set([408, 409, 423, 429]);
+export const TRANSIENT_4XX: ReadonlySet<number> = new Set([408, 409, 423, 429]);
 
 /**
  * Turn a Bunny/socket failure into something a creator can act on. The 401 case
@@ -567,7 +567,7 @@ async function createUploadWithRetry(
       // difference between an expired key and a flapping network readable.
       tusError.retryCount = attempt;
 
-      if (!isRetryable(tusError)) throw tusError;
+      if (!isRetryableUploadFailure(tusError)) throw tusError;
       lastError = tusError;
     }
   }
@@ -782,8 +782,14 @@ export interface TusUploadRetryInfo {
  * a silent bar leads to giving up on a file that was one chunk from done.
  *
  * Pure, so the wording is pinned by a test rather than by a screenshot.
+ *
+ * Takes only the three fields it reads, so both transports can hand it their own
+ * retry info: the chunked path knows which chunk it is on and the whole-file PUT
+ * does not, and neither fact changes the sentence a creator needs to read.
  */
-export function describeRetry(info: TusUploadRetryInfo): string {
+export function describeRetry(
+  info: Pick<TusUploadRetryInfo, "attempt" | "totalAttempts" | "reason">
+): string {
   const attempt = `${info.attempt} of ${info.totalAttempts}`;
   switch (info.reason) {
     case "offline":
@@ -860,8 +866,14 @@ function withProgress(
  *
  * The transient 4xx list is shared with `describe()` so a status cannot be
  * called transient in one place and permanent in the other — see TRANSIENT_4XX.
+ *
+ * Exported because a second transport now exists (the single PUT through the
+ * upload proxy, lib/upload-put.ts) and it must answer this question the same
+ * way. A retry policy that differs between two ways of sending the same file is
+ * the same class of bug as the two transient lists that disagreed, one commit
+ * before this one.
  */
-function isRetryable(error: TusUploadError): boolean {
+export function isRetryableUploadFailure(error: TusUploadError): boolean {
   if (error.code !== "NETWORK") return false;
   if (error.status === undefined || error.status === null) return true;
   return TRANSIENT_4XX.has(error.status) || error.status >= 500;
@@ -916,16 +928,30 @@ export async function uploadFileWithTus(
   // file is readable — a provider can be revoked mid-transfer — but it turns the
   // case that fails immediately, and fails identically every time, into the
   // device's own words instead of a second misleading report.
+  //
+  // Run against a real Android device (Android emulator, Chrome, a 6 MB file
+  // chosen through the system picker's Downloads folder), BOTH reads succeed:
+  // this slice returns its 1024 bytes and an XHR of a 256 KiB slice reports
+  // progress and answers 200. A failure here is therefore about the file, not
+  // about Android or about reading a picked file in general — which is why the
+  // browser's own error is carried out with it rather than summarised.
   try {
     await file.slice(0, READ_PROBE_BYTES).arrayBuffer();
-  } catch {
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "UnknownError";
+    const detail =
+      error instanceof Error && error.message ? `${name}: ${error.message}` : name;
+
     throw withProgress(
       new TusUploadError(
         "UNSUPPORTED",
-        "This device would not let the page read that video. Videos picked from another app's storage " +
-          "sometimes cannot be read back — move or copy it into Downloads, then choose it again.",
+        `This device would not let the page read that video (${name}). The file is read as it uploads, ` +
+          "and Android can refuse that — check that this browser is allowed to access photos and videos, " +
+          "then choose the video again. Copying it into Downloads first is the surest fix.",
         undefined,
-        { reason: "preflight" }
+        // Bunny never saw this one, so its own words are not what names the
+        // cause — the DEVICE's are, and in the same field for the same reason.
+        { reason: "preflight", providerBody: detail.slice(0, 160) }
       ),
       0,
       file.size
@@ -1033,7 +1059,7 @@ export async function uploadFileWithTus(
         if (attemptStartedAt > 0) attemptMs.push(Date.now() - attemptStartedAt);
 
         // Cancelled or refused outright: retrying cannot help.
-        if (!isRetryable(tusError)) {
+        if (!isRetryableUploadFailure(tusError)) {
           throw withProgress(tusError, chunkStart + maxAttemptSent, file.size, {
             offset: chunkStart,
             chunkIndex,

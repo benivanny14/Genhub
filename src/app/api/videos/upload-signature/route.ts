@@ -2,16 +2,23 @@
 // GENHUB - Bunny.net Upload Credentials Route
 // POST /api/videos/upload-signature
 //
-// Reserves a video slot in Bunny Stream and returns the presigned TUS
-// credentials the creator's browser uploads the file with. The library API key
-// stays on this server — see createTusCredentials() in lib/bunny.ts for why the
-// browser cannot talk to the management API itself.
+// Reserves a video slot in Bunny Stream and returns the credentials the
+// creator's browser uploads the file with. The library API key stays on this
+// server — see createTusCredentials() in lib/bunny.ts for why the browser cannot
+// talk to the management API itself.
+//
+// TWO TRANSPORTS, ONE RESERVATION. The response always carries the presigned TUS
+// credentials; when the upload proxy is configured it also carries a `proxy`
+// target, and the client sends the whole file in one PUT through it when the
+// file fits (lib/upload-put.ts). Either way the slot was reserved here, by this
+// server, with the key — the browser never gets one.
 // =============================================================================
 
 import { NextRequest } from "next/server";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { createVideoUpload } from "@/lib/bunny";
+import { createUploadProxyTarget } from "@/lib/upload-proxy";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 
@@ -73,7 +80,11 @@ export async function POST(request: NextRequest) {
 
     const result = await createVideoUpload(title);
 
-    return api.success(result, "Upload credentials created");
+    // Null whenever the proxy is not configured, which is the default — the
+    // client reads its absence as "use the resumable path".
+    const proxy = await createUploadProxyTarget(result.videoId);
+
+    return api.success({ ...result, proxy }, "Upload credentials created");
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);
