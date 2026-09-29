@@ -15,14 +15,20 @@
 
 import { join } from "path";
 import { readFileSync } from "fs";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 import {
   MULTIPART_UPLOAD_ID_RE,
   UPLOAD_PART_BYTES,
   completeMultipartBody,
   isMultipartUploadId,
   needsMultipart,
+  originMayUpload,
   partCountFor,
+  preflightAllowsOrigin,
   videoObjectKey,
 } from "@/lib/upload-target";
 
@@ -150,6 +156,72 @@ describe("the shape of an upload id from the storage service", () => {
     }
 
     expect(MULTIPART_UPLOAD_ID_RE.test(MEASURED_ID)).toBe(true);
+  });
+});
+
+// =============================================================================
+// The bucket's answer about the page a creator is uploading from.
+//
+// The failure this exists to stop, measured on 2026-09-29: the bucket's CORS
+// policy named two origins, a creator's page was served from a third, and the
+// browser therefore never sent the PUT — the page saw a request that failed in
+// about a second with ZERO bytes moved, four times, and could only say "the
+// connection dropped during upload", which is the same sentence a phone with no
+// signal produces. Nothing in the record could tell them apart.
+// =============================================================================
+describe("the bucket's answer about a page's address", () => {
+  const preflight = (status: number, allowOrigin: string | null) => ({
+    status,
+    headers: { get: (name: string) => (name === "access-control-allow-origin" ? allowOrigin : null) },
+  });
+
+  it("accepts only the origin it names", () => {
+    expect(preflightAllowsOrigin(preflight(204, "https://genhub-two.vercel.app"), "https://genhub-two.vercel.app")).toBe(true);
+    // A policy that names somebody else is a refusal for this page, not a pass.
+    expect(preflightAllowsOrigin(preflight(204, "https://genhub-two.vercel.app"), "https://genhub.co.tz")).toBe(false);
+  });
+
+  it("treats a wildcard policy as a pass", () => {
+    expect(preflightAllowsOrigin(preflight(204, "*"), "https://anything.example")).toBe(true);
+  });
+
+  it("is a refusal when the bucket refuses, however it words it", () => {
+    // Measured: an origin outside the policy is answered 403 with no
+    // allow-origin header at all. Both halves are checked, because either one
+    // alone can be right while the other is wrong.
+    expect(preflightAllowsOrigin(preflight(403, null), "https://genhub.co.tz")).toBe(false);
+    expect(preflightAllowsOrigin(preflight(200, null), "https://genhub.co.tz")).toBe(false);
+  });
+
+  it("asks the bucket nothing when the page is not a browser at all", async () => {
+    const ask = vi.fn();
+    vi.stubGlobal("fetch", ask);
+
+    // No Origin header means no browser: a server-side or scripted caller has no
+    // page to be refused on, and refusing it would break every non-browser path.
+    await expect(originMayUpload("")).resolves.toBe(true);
+    expect(ask).not.toHaveBeenCalled();
+  });
+
+  it("is consulted by the reserve route BEFORE a slot is reserved", () => {
+    // Order matters in both directions. Before, because a slot is a real object
+    // in the Bunny library and one created for an upload that cannot happen is
+    // the orphan this codebase has already cleaned up once. Checked at all,
+    // because the reservation is the last moment the creator can be told the
+    // truth before their data is spent.
+    const route = readFileSync(
+      join(process.cwd(), "src", "app", "api", "videos", "upload-signature", "route.ts"),
+      "utf8"
+    );
+
+    // `await` on both, because the import statements mention the same names and
+    // an earlier version of this test compared the CALL against an IMPORT.
+    const checked = route.indexOf("await originMayUpload(");
+    const reserved = route.indexOf("await createVideoUpload(");
+
+    expect(checked).toBeGreaterThan(-1);
+    expect(reserved).toBeGreaterThan(-1);
+    expect(checked).toBeLessThan(reserved);
   });
 });
 

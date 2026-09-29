@@ -129,6 +129,25 @@ export interface UploadFailure {
    * which only Chrome implements — so a null means "not offered", not "lost".
    */
   userAgent: string | null;
+  /**
+   * The ADDRESS the page was served from, taken from the report's own Origin
+   * header — observed by the server, like `userAgent`, and for the same reason.
+   *
+   * This is the field whose absence made a whole afternoon of measuring
+   * necessary on 2026-09-29. The bucket's CORS policy names the origins that may
+   * send a part; a page on any other origin is refused at the PREFLIGHT, so the
+   * browser never sends the PUT and reports only "the connection dropped" with
+   * zero bytes moved — indistinguishable, in every other field of this record,
+   * from a phone that lost its signal. Four identical attempts on a 3G Android
+   * at 15:28 were exactly that, and the record could not say where the page had
+   * been loaded from. Now it can.
+   *
+   * Optional because the records written before this field existed are still in
+   * the list — the whole afternoon of 2026-09-29 is, including the fifteen
+   * failures this field was added to explain — and a type that demanded it would
+   * make reading those records a compile error rather than a history lesson.
+   */
+  origin?: string | null;
   connectionType: string | null;
   downlinkMbps: number | null;
   rttMs: number | null;
@@ -163,6 +182,7 @@ export async function recordUploadFailure(
       `${entry.connectionType ? ` · on ${entry.connectionType}` : ""}` +
       `${typeof entry.downlinkMbps === "number" ? ` · ${entry.downlinkMbps} Mbps down` : ""}` +
       `${typeof entry.rttMs === "number" ? ` · ${entry.rttMs} ms rtt` : ""}` +
+      `${entry.origin ? ` · from ${entry.origin}` : ""}` +
       `${entry.userAgent ? ` · ${entry.userAgent}` : ""}` +
       ` · creator ${entry.creatorId}` +
       `${entry.fileName ? ` · ${entry.fileName}` : ""}` +
@@ -235,6 +255,7 @@ export async function listUploadFailures(): Promise<UploadFailure[]> {
           ? entry.attemptMs.filter((ms): ms is number => typeof ms === "number")
           : null,
         userAgent: typeof entry.userAgent === "string" ? entry.userAgent : null,
+        origin: typeof entry.origin === "string" ? entry.origin : null,
         connectionType: typeof entry.connectionType === "string" ? entry.connectionType : null,
         downlinkMbps: typeof entry.downlinkMbps === "number" ? entry.downlinkMbps : null,
         rttMs: typeof entry.rttMs === "number" ? entry.rttMs : null,

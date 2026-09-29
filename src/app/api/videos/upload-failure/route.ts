@@ -74,6 +74,14 @@ export async function POST(request: NextRequest) {
     // WiFi" are the same NETWORK row otherwise, and they are not the same bug.
     const userAgent = request.headers.get("user-agent")?.slice(0, 300) ?? null;
 
+    // And WHERE the page was loaded from, observed the same way. A failed part
+    // PUT that moved no bytes has two causes that look identical in every other
+    // field of the record — a page the bucket's CORS policy does not allow, and
+    // a phone with no usable signal — and this is the field that tells them
+    // apart. The Origin header is the browser's own statement of it, which is
+    // why it is read here rather than reported by the page.
+    const origin = request.headers.get("origin")?.slice(0, 200) ?? null;
+
     await recordUploadFailure({
       code,
       stage: stage ?? null,
@@ -91,6 +99,7 @@ export async function POST(request: NextRequest) {
       retryCount: retryCount ?? null,
       attemptMs: attemptMs ?? null,
       userAgent,
+      origin,
       connectionType: connectionType ?? null,
       downlinkMbps: downlinkMbps ?? null,
       rttMs: rttMs ?? null,

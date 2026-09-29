@@ -182,6 +182,76 @@ export function isPresignedUploadConfigured(): boolean {
   );
 }
 
+/**
+ * Whether a preflight answer says this page's address may send the bytes.
+ *
+ * The whole rule, in one place: only an answer that names THIS EXACT origin — or
+ * `*` — authorizes it. A refusal carries no `access-control-allow-origin` header
+ * at all, and the browser then never sends the upload: the page sees a failed
+ * request with zero bytes moved and reports "the connection dropped", which is
+ * the same sentence a phone with no signal produces.
+ */
+export function preflightAllowsOrigin(
+  response: { status: number; headers: { get(name: string): string | null } },
+  origin: string
+): boolean {
+  if (response.status >= 400) return false;
+  const allowed = response.headers.get("access-control-allow-origin");
+  return allowed === origin || allowed === "*";
+}
+
+/**
+ * Ask the bucket whether the page a creator is uploading from may upload at all.
+ *
+ * ASKED OF THE BUCKET, NOT OF A LIST WE KEEP. The origins allowed to send a
+ * part live in the bucket's own CORS policy, and a copy of that list in this
+ * application would be a second source of truth that agrees until somebody
+ * changes one of them. So the preflight is sent for real, to a URL signed for a
+ * probe key that is never written, and the bucket's own answer is the verdict.
+ *
+ * WHY IT IS WORTH A REQUEST. Measured on 2026-09-29: a page on an origin the
+ * policy does not name is refused at the preflight, so the browser never sends
+ * the PUT, no byte is acknowledged, and four attempts fail in about a second
+ * each — a record that reads exactly like a phone that lost its signal, on a
+ * creator's screen as "The connection dropped during upload." This turns that
+ * into a refusal that names the address and what to do about it, before a slot
+ * is reserved and before any of the creator's data is spent.
+ *
+ * FAILS OPEN. A probe that cannot reach the bucket must not refuse an upload:
+ * the PUT itself is the real test and its failure is already recorded, so a
+ * broken probe costs nothing while a false refusal costs a creator their upload.
+ */
+export async function originMayUpload(origin: string, now: Date = new Date()): Promise<boolean> {
+  if (!origin || !isR2Configured(config.r2)) return true;
+
+  try {
+    const probe = presignR2Put(config.r2, "probes/cors-origin", 60, now);
+    const response = await fetch(probe.url, {
+      method: "OPTIONS",
+      headers: {
+        Origin: origin,
+        "Access-Control-Request-Method": "PUT",
+        "Access-Control-Request-Headers": "content-type",
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(R2_CONTROL_TIMEOUT_MS),
+    });
+
+    const allowed = preflightAllowsOrigin(response, origin);
+    if (!allowed) {
+      console.warn(
+        `[Upload Signature] the bucket would not allow an upload from ${origin} — it is not in the bucket's CORS AllowedOrigins`
+      );
+    }
+    return allowed;
+  } catch (error) {
+    console.warn(
+      `[Upload Signature] could not ask the bucket about ${origin}: ${error instanceof Error ? error.name : "UnknownError"}`
+    );
+    return true;
+  }
+}
+
 /** How many parts a file of this size takes. Zero for an empty file. */
 export function partCountFor(fileSize: number): number {
   if (!Number.isFinite(fileSize) || fileSize <= 0) return 0;

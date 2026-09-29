@@ -37,6 +37,7 @@ import {
   createPresignedUploadTarget,
   isPresignedUploadConfigured,
   needsMultipart,
+  originMayUpload,
   partCountFor,
 } from "@/lib/upload-target";
 import { checkRateLimit } from "@/lib/redis";
@@ -107,6 +108,20 @@ export async function POST(request: NextRequest) {
         "Video uploads are not available right now — the upload storage is not configured. Tell support.",
         503,
         "NOT_CONFIGURED"
+      );
+    }
+
+    // AND WHETHER THE PAGE ITSELF MAY UPLOAD, asked of the bucket before a slot
+    // is reserved. An address the bucket's CORS policy does not name is refused
+    // at the preflight, so the browser never sends the file and the creator sees
+    // "the connection dropped" with nothing moved — the least diagnosable
+    // failure in this system. Checked here, it costs one request and one
+    // sentence, and no slot is created for an upload that cannot happen.
+    const origin = request.headers.get("origin");
+    if (origin && !(await originMayUpload(origin))) {
+      return api.forbidden(
+        `This page's address (${origin}) is not allowed to send uploads to the storage bucket, so the browser cannot send the file. ` +
+          "Add that address to the bucket's CORS AllowedOrigins, then reload this page and try again."
       );
     }
 

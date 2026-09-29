@@ -562,6 +562,8 @@ interface UploadFailure {
    * means the browser does not offer them.
    */
   userAgent?: string | null;
+  /** The address the page was loaded from, observed from the report's Origin. */
+  origin?: string | null;
   connectionType?: string | null;
   downlinkMbps?: number | null;
   rttMs?: number | null;
@@ -4262,18 +4264,29 @@ export default function AdminDashboard() {
                       {/* Who reported it. A phone on a proxy browser and Chrome
                           on WiFi produce the same NETWORK row and are not the
                           same bug. */}
-                      {(failure.userAgent ||
+                      {(failure.origin ||
+                        failure.userAgent ||
                         failure.connectionType ||
                         typeof failure.downlinkMbps === "number" ||
                         typeof failure.rttMs === "number") && (
                         <p className="text-[11px] text-white/35 mt-1 break-all">
-                          {failure.userAgent ? `browser ${failure.userAgent}` : ""}
-                          {failure.connectionType ? `${failure.userAgent ? " · " : ""}${failure.connectionType}` : ""}
+                          {/* FIRST, because it is the field that answers the
+                              question this panel is opened with: a part PUT that
+                              moved no bytes is either a page the bucket's CORS
+                              policy does not allow, or no signal — and only this
+                              says which. */}
+                          {failure.origin ? `from ${failure.origin}` : ""}
+                          {failure.userAgent
+                            ? `${failure.origin ? " · " : ""}browser ${failure.userAgent}`
+                            : ""}
+                          {failure.connectionType
+                            ? `${failure.origin || failure.userAgent ? " · " : ""}${failure.connectionType}`
+                            : ""}
                           {typeof failure.downlinkMbps === "number"
-                            ? `${failure.userAgent || failure.connectionType ? " · " : ""}${failure.downlinkMbps} Mbps down`
+                            ? `${failure.origin || failure.userAgent || failure.connectionType ? " · " : ""}${failure.downlinkMbps} Mbps down`
                             : ""}
                           {typeof failure.rttMs === "number"
-                            ? `${failure.userAgent || failure.connectionType || typeof failure.downlinkMbps === "number" ? " · " : ""}${failure.rttMs} ms rtt`
+                            ? `${failure.origin || failure.userAgent || failure.connectionType || typeof failure.downlinkMbps === "number" ? " · " : ""}${failure.rttMs} ms rtt`
                             : ""}
                         </p>
                       )}
