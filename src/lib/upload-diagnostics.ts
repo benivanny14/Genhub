@@ -194,7 +194,17 @@ export function describeProbePair(
     // Reachability alone. Saying "it accepts a write" here would be a claim the
     // probe did not test — and this sentence lands in a failure record, where a
     // wrong one costs somebody an afternoon.
-    return `The ${what} is reachable from this device, so the request that failed was refused for something other than the network — most likely the bucket's CORS policy, which has to name this exact page address.`;
+    //
+    // AND IT USED TO NOMINATE A CAUSE ANYWAY: "most likely the bucket's CORS
+    // policy, which has to name this exact page address". Seen live on
+    // 2026-09-29, in a failure record whose page origin the bucket DOES allow —
+    // read back from the bucket itself, and confirmed with a real signed PUT —
+    // which means the sentence sent the reader to change a policy that was
+    // already correct while the real cause was still one of three. What this
+    // probe observed is a name resolving and a socket opening; a GET to the
+    // host's root and a PUT to an object key are not the same permission, and a
+    // carrier that allows the first and kills the second looks exactly like this.
+    return `The ${what} is reachable from this device, so the browser did not fail at the network. That is all a reachability check can say — the bucket's CORS policy, a phone or carrier that allows a read and refuses a write, and a signature the bucket rejects all look identical from here — so run the network check on this phone (/creator/upload-check): it makes the same signed write from the device and says which one it is.`;
   }
 
   if (!write.ok) {

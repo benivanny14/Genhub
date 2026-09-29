@@ -76,6 +76,25 @@ describe("describeProbePair", () => {
     expect(answered).toContain("not by the connection");
   });
 
+  it("does not nominate a cause when only reachability was tested", () => {
+    // The live sentence this replaces, seen in a real failure record on
+    // 2026-09-29: "...refused for something other than the network — most likely
+    // the bucket's CORS policy, which has to name this exact page address." The
+    // page's origin WAS named by the policy — checked against the bucket — so the
+    // sentence sent the reader to change something that was already right. A GET
+    // to the host's root proves a name resolves; it says nothing about whether a
+    // PUT will be allowed through, and the three remaining causes look the same
+    // from here.
+    const verdict = describeProbePair(reach(true, 120), null, "storage host");
+
+    expect(verdict).toContain("reachable");
+    expect(verdict).not.toMatch(/most likely/);
+    // The honest limit, said out loud rather than filled with a guess.
+    expect(verdict).toContain("all look identical from here");
+    // And the one step that CAN separate them, named with where to do it.
+    expect(verdict).toContain("/creator/upload-check");
+  });
+
   it("says the path works when both probes pass, rather than inventing a fault", () => {
     const verdict = describeProbePair(reach(true, 80), write(true, 200, 250), "storage host");
     expect(verdict).toContain("reachable");
