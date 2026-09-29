@@ -5,10 +5,72 @@
 // resumable TUS endpoint. The application server only creates the upload session
 // and finalizes the database row; it never proxies video bytes and never moves a
 // completed file through a second storage provider.
+//
+// THE SIZE OF ONE REQUEST IS THE WHOLE STORY
+//
+// This file used to send a fixed 16 MiB slice per PATCH under a fixed
+// 120-second timeout, and that pair is where every "connection interrupted" and
+// "connection timed out" report came from. 16 MiB at the 0.4 Mbps this
+// application has measured on a real creator's phone is 134,217,728 bits /
+// 400,000 bps = 335 seconds — almost three times the timeout it was given. So
+// the page aborted its own request mid-body, called it a network failure,
+// resumed from the same byte and failed again, five times, for ten minutes,
+// without moving a single byte closer to the end. On a good connection the same
+// code was perfectly fine, which is why it survived so long.
+//
+// Both numbers now come from the connection instead of from a constant:
+//
+//   * the slice targets VIDEO_UPLOAD_TARGET_CHUNK_MS of measured transfer, so
+//     every request is roughly the same short length whether the link is 0.4
+//     Mbps or 100 Mbps;
+//   * the timeout is four times that chunk's own expected duration, with a
+//     floor, so a slow link is given room and a fast one is not made to wait.
+//
+// Nothing else about the protocol changed: the offset Bunny REPORTS is still
+// the one used, a 409 still re-asks instead of retrying, and a refusal Bunny
+// answered is still not retried.
 // =============================================================================
 
 export const MAX_VIDEO_BYTES = 2_147_483_647;
-export const VIDEO_UPLOAD_CHUNK_BYTES = 16 * 1024 * 1024;
+
+/** The smallest slice worth a round trip. Also the starting slice, because the
+ *  first attempt is the one made blind. */
+export const VIDEO_UPLOAD_MIN_CHUNK_BYTES = 1024 * 1024;
+
+/** The largest slice one request may carry. A ceiling rather than a target: a
+ *  fast link earns bigger requests, never one that takes a minute. */
+export const VIDEO_UPLOAD_MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+
+/**
+ * How long one PATCH should last, in milliseconds.
+ *
+ * This is the number every other number here is derived from. Forty-five
+ * seconds is long enough that a per-request overhead (TCP, TLS, Bunny's own
+ * bookkeeping) is noise, and short enough that a carrier that resets idle or
+ * long-lived sockets rarely gets the chance — which is the fault that produced
+ * most of the NETWORK rows in the failure list.
+ */
+export const VIDEO_UPLOAD_TARGET_CHUNK_MS = 45_000;
+
+/**
+ * The slowest link this transport plans for: 200 kbps.
+ *
+ * Only used until a chunk has actually been sent. It is deliberately *below*
+ * the slowest connection measured on a real creator's phone (0.4 Mbps down),
+ * because underestimating makes the first request small and cheap to abandon,
+ * while overestimating makes it the very time bomb this file was rewritten to
+ * remove.
+ */
+export const VIDEO_UPLOAD_FLOOR_BPS = 25 * 1024;
+
+/** A request is allowed four times its expected duration before it is called a
+ *  timeout. The ratio is the headroom: a link that halves mid-chunk still
+ *  finishes, and one that has genuinely stopped is abandoned in a bounded time. */
+export const VIDEO_UPLOAD_TIMEOUT_FACTOR = 4;
+export const VIDEO_UPLOAD_MIN_TIMEOUT_MS = 90_000;
+export const VIDEO_UPLOAD_MAX_TIMEOUT_MS = 600_000;
+
+/** How many times one chunk may be attempted before the upload gives up. */
 export const VIDEO_UPLOAD_MAX_ATTEMPTS = 5;
 
 /**
@@ -40,6 +102,36 @@ export interface VideoUploadProgress {
   percent: number;
 }
 
+/**
+ * WHY a transfer died, in one word.
+ *
+ * `code` is the verdict the uploader reached; this is the physical fact behind
+ * it. They are not interchangeable: `NETWORK` with no HTTP status covers a phone
+ * that lost signal, a socket a carrier reset, and a request our own timer
+ * aborted, and those need three different answers. Without this field every one
+ * of them arrived in the admin panel as the same word.
+ *
+ * The list is closed and unchanged from the transport this one replaced, because
+ * failure records written by the old uploader are still stored (thirty days) and
+ * a vocabulary that dropped a word would make yesterday's history unreadable.
+ */
+export const UPLOAD_FAILURE_REASONS = [
+  "offline",
+  "reset",
+  "stall",
+  "timeout",
+  "provider",
+  "cancelled",
+  "preflight",
+] as const;
+
+export type UploadFailureReason = (typeof UPLOAD_FAILURE_REASONS)[number];
+
+/** Which request died. `reserve` is the session-creation POST; `chunk` is a
+ *  PATCH. `put` is kept because records written by the whole-file uploader are
+ *  still in the list. */
+export type UploadStage = "reserve" | "chunk" | "put";
+
 export class VideoUploadError extends Error {
   readonly code:
     | "INVALID_FILE"
@@ -50,24 +142,179 @@ export class VideoUploadError extends Error {
     | "ABORTED";
   readonly status?: number;
 
+  /**
+   * The evidence a reader needs to act, carried on the error rather than
+   * reconstructed from a message string later.
+   *
+   * Every one of these is optional so nothing that only needs a message has to
+   * build them, and every one is a fact rather than a guess:
+   *
+   *   reason        which physical fault this was.
+   *   providerBody  Bunny's own words, verbatim, when it answered at all.
+   *   bytesSent     the last byte Bunny confirmed. With a single PATCH there is
+   *                 no upload-progress event to read, so this is the offset the
+   *                 failing request STARTED from — a floor, and the number that
+   *                 says whether the transfer was moving or never got going.
+   *   attemptMs     how long each attempt lasted. Three attempts of 8 ms never
+   *                 left the device; three of 40 s were cut mid-transfer, and
+   *                 those are the same row on screen and different fixes.
+   */
+  reason?: UploadFailureReason;
+  stage?: UploadStage;
+  providerBody?: string;
+  bytesSent?: number;
+  bytesTotal?: number;
+  offset?: number;
+  chunkIndex?: number;
+  retryCount?: number;
+  attemptMs?: number[];
+
   constructor(
     code: VideoUploadError["code"],
     message: string,
-    status?: number
+    status?: number,
+    extra?: {
+      reason?: UploadFailureReason;
+      stage?: UploadStage;
+      /** `null` is accepted so a call site can pass an optional response body
+       *  straight through instead of writing a conditional spread for it. */
+      providerBody?: string | null;
+    }
   ) {
     super(message);
     this.name = "VideoUploadError";
     this.code = code;
     this.status = status;
+    this.reason = extra?.reason;
+    this.stage = extra?.stage;
+    if (extra?.providerBody) this.providerBody = extra.providerBody.slice(0, 600);
   }
 }
 
-function wait(ms: number): Promise<void> {
+function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function now(): number {
+  return Date.now();
+}
+
+/** The retry ladder: 0.5 s, 1 s, 2 s, 4 s, capped at 5 s. */
 function retryDelay(attempt: number): number {
   return Math.min(5_000, 500 * 2 ** Math.max(0, attempt - 1));
+}
+
+/** True when the device itself says it has no network. Only a hint — Chrome
+ *  reports `onLine: true` for a captive portal — but it is the one cause we can
+ *  name without guessing, and it is the one the creator can act on. */
+function deviceIsOffline(): boolean {
+  try {
+    return typeof navigator !== "undefined" && navigator.onLine === false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * How long one PATCH may live.
+ *
+ * Derived from the slice and the rate we have measured, not from a constant: a
+ * small request on a slow link and a big request on a fast one both get the same
+ * generous multiple of the time they should need. The result is stable at about
+ * four times the target chunk duration, and it is only ever wider than that when
+ * a clamp gets in the way.
+ */
+export function chunkTimeoutMs(chunkBytes: number, rateBps: number | null): number {
+  const rate = rateBps && rateBps > 0 ? rateBps : VIDEO_UPLOAD_FLOOR_BPS;
+  const expectedMs = (chunkBytes / rate) * 1000;
+  const timeout = expectedMs * VIDEO_UPLOAD_TIMEOUT_FACTOR;
+  return Math.round(
+    Math.min(VIDEO_UPLOAD_MAX_TIMEOUT_MS, Math.max(VIDEO_UPLOAD_MIN_TIMEOUT_MS, timeout))
+  );
+}
+
+/**
+ * How big the next slice should be.
+ *
+ * The rule is one sentence: a slice should take about VIDEO_UPLOAD_TARGET_CHUNK_MS.
+ * On a phone at 50 KB/s that is roughly 2 MiB, so a 145 MB video is about
+ * seventy short requests instead of nine requests that each outlive the
+ * connection carrying them. On fibre it climbs to the ceiling and the per-request
+ * overhead disappears.
+ */
+export function chunkBytesFor(rateBps: number | null, remaining: number): number {
+  const rate = rateBps && rateBps > 0 ? rateBps : VIDEO_UPLOAD_FLOOR_BPS;
+  const target = Math.round((rate * VIDEO_UPLOAD_TARGET_CHUNK_MS) / 1000);
+  const bounded = Math.min(
+    VIDEO_UPLOAD_MAX_CHUNK_BYTES,
+    Math.max(VIDEO_UPLOAD_MIN_CHUNK_BYTES, target)
+  );
+  return Math.max(1, Math.min(remaining, bounded));
+}
+
+/**
+ * Fold one completed slice into the throughput estimate.
+ *
+ * Moved halfway toward what was just observed rather than replaced by it: one
+ * fast slice on a link that is briefly good should not triple the size of the
+ * next request, and one slow slice on a link that hit a queue should not shrink
+ * it to the floor for the rest of the upload. Halving the distance still doubles
+ * the estimate within two slices, which is fast enough for a fast connection.
+ */
+export function measureRate(
+  bytes: number,
+  elapsedMs: number,
+  previous: number | null
+): number | null {
+  if (!Number.isFinite(elapsedMs) || elapsedMs <= 0 || bytes <= 0) return previous;
+  const observed = (bytes / elapsedMs) * 1000;
+  if (previous === null) return observed;
+  return previous + (observed - previous) * 0.5;
+}
+
+/**
+ * Turn a rejected `fetch` into the error the rest of the application reads.
+ *
+ * A rejected fetch is only ever one of three things, and only the last is
+ * ambiguous — which is why the reason travels with it:
+ *
+ *   1. our own abort, which is a cancellation;
+ *   2. a timer we armed, which is a timeout;
+ *   3. the browser refusing to complete the exchange. That covers a dropped
+ *      socket, a carrier reset, a preflight the host rejected, and a device with
+ *      no route to the internet, and the browser deliberately tells a script
+ *      nothing that would distinguish them. `navigator.onLine` splits off the
+ *      one case we can actually name.
+ */
+function transportFailure(error: unknown, timeoutMs: number, cancelled: boolean): VideoUploadError {
+  if (cancelled) return new VideoUploadError("ABORTED", "Upload cancelled");
+
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new VideoUploadError(
+      "NETWORK",
+      "The upload stopped moving. Press Resume upload to continue from where it stopped.",
+      undefined,
+      { reason: "timeout", providerBody: `aborted after ${Math.round(timeoutMs / 1000)}s` }
+    );
+  }
+
+  if (deviceIsOffline()) {
+    return new VideoUploadError(
+      "NETWORK",
+      "You are offline. Move back to signal, then press Resume upload.",
+      undefined,
+      { reason: "offline" }
+    );
+  }
+
+  const detail =
+    error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 300) : String(error).slice(0, 300);
+  return new VideoUploadError(
+    "NETWORK",
+    "The connection dropped while sending this video. Press Resume upload to continue from where it stopped.",
+    undefined,
+    { reason: "reset", providerBody: detail }
+  );
 }
 
 async function fetchWithTimeout(
@@ -87,17 +334,17 @@ async function fetchWithTimeout(
   try {
     return await fetch(input, { ...init, signal: controller.signal });
   } catch (error) {
-    if (init.signal?.aborted) {
-      throw new VideoUploadError("ABORTED", "Upload cancelled");
-    }
-    if (error instanceof DOMException && error.name === "AbortError") {
-      throw new VideoUploadError("NETWORK", "The upload connection timed out");
-    }
-    throw new VideoUploadError("NETWORK", "The upload connection was interrupted");
+    throw transportFailure(error, timeoutMs, Boolean(init.signal?.aborted));
   } finally {
     window.clearTimeout(timer);
     init.signal?.removeEventListener("abort", onAbort);
   }
+}
+
+/** How much of the file is already acknowledged, in whole percent. */
+function percentOf(offset: number, total: number): number {
+  if (!total) return 0;
+  return Math.min(99, Math.max(0, Math.floor((offset / total) * 100)));
 }
 
 async function readOffset(
@@ -114,11 +361,16 @@ async function readOffset(
         cache: "no-store",
         signal,
       },
-      30_000
+      VIDEO_UPLOAD_MIN_TIMEOUT_MS
     );
   } catch (error) {
     if (error instanceof VideoUploadError && error.code === "ABORTED") throw error;
-    throw new VideoUploadError("NETWORK", "Could not check the saved upload position");
+    const failure =
+      error instanceof VideoUploadError
+        ? error
+        : new VideoUploadError("NETWORK", "Could not check the saved upload position");
+    failure.message = "Could not check the saved upload position";
+    throw failure;
   }
 
   if (response.status === 401 || response.status === 403) {
@@ -158,7 +410,22 @@ function nextOffset(response: Response, current: number, sent: number, total: nu
   return offset;
 }
 
-/** Upload one file, resuming from the offset Bunny already has. */
+/** The offset a 409 claims Bunny holds, when it names one — otherwise null. */
+function offsetFromConflict(body: string): number | null {
+  const match = /file offset:\s*(\d+)/i.exec(body);
+  if (!match) return null;
+  const offset = Number(match[1]);
+  return Number.isSafeInteger(offset) && offset >= 0 ? offset : null;
+}
+
+/**
+ * Upload one file, resuming from the offset Bunny already has.
+ *
+ * The loop is deliberately re-entrant about its own position: every attempt
+ * re-reads `offset` from the variable rather than from the slice it started
+ * with, so a recovery HEAD (after a reset, or a 409) moves the next request
+ * forward instead of re-sending bytes Bunny has already stored.
+ */
 export async function uploadVideoFile(
   file: File,
   session: VideoUploadSession,
@@ -190,23 +457,33 @@ export async function uploadVideoFile(
     );
   }
 
+  const total = file.size;
+  const report = options.onProgress;
   let offset = options.offset ?? (await readOffset(session, options.signal));
-  options.onProgress?.({
-    uploadedBytes: offset,
-    totalBytes: file.size,
-    percent: Math.round((offset / file.size) * 100),
-  });
+  /** Learned, never assumed: null until a slice has actually been sent. */
+  let rateBps: number | null = null;
+  report?.({ uploadedBytes: offset, totalBytes: total, percent: Math.round((offset / total) * 100) });
 
-  while (offset < file.size) {
-    const start = offset;
-    const end = Math.min(file.size, start + VIDEO_UPLOAD_CHUNK_BYTES);
-    const chunk = file.slice(start, end);
-    let succeeded = false;
+  let chunkIndex = 0;
 
-    for (let attempt = 1; attempt <= VIDEO_UPLOAD_MAX_ATTEMPTS; attempt += 1) {
+  while (offset < total) {
+    chunkIndex += 1;
+    const attemptMs: number[] = [];
+    let advanced = false;
+    let lastError: VideoUploadError | null = null;
+
+    for (let attempt = 1; attempt <= VIDEO_UPLOAD_MAX_ATTEMPTS && !advanced; attempt += 1) {
       if (options.signal?.aborted) {
         throw new VideoUploadError("ABORTED", "Upload cancelled");
       }
+
+      // Sliced from THIS attempt's offset: after a recovery HEAD the request has
+      // to continue where Bunny is, not where the previous attempt began.
+      const chunkBytes = chunkBytesFor(rateBps, total - offset);
+      const end = Math.min(total, offset + chunkBytes);
+      const timeoutMs = chunkTimeoutMs(chunkBytes, rateBps);
+      const startedAt = now();
+      let retryCount = attempt - 1;
 
       try {
         const response = await fetchWithTimeout(
@@ -216,21 +493,39 @@ export async function uploadVideoFile(
             headers: {
               ...session.headers,
               "Tus-Resumable": "1.0.0",
-              "Upload-Offset": String(start),
+              "Upload-Offset": String(offset),
               "Content-Type": "application/offset+octet-stream",
             },
-            body: chunk,
+            body: file.slice(offset, end),
             cache: "no-store",
             signal: options.signal,
           },
-          120_000
+          timeoutMs
         );
 
         if (response.status === 409 || response.status === 412) {
-          offset = await readOffset(session, options.signal);
-          succeeded = true;
+          // Our belief and Bunny's disagree — the file is fine and the offset is
+          // stale, so this is not a failure and must not spend the retry budget.
+          // The chunk counts as settled and the outer loop re-slices from
+          // wherever Bunny turns out to be.
+          attemptMs.push(now() - startedAt);
+          const body = await response.text().catch(() => "");
+          const claimed = offsetFromConflict(body);
+          try {
+            offset = await readOffset(session, options.signal);
+          } catch (headError) {
+            if (headError instanceof VideoUploadError && headError.code === "ABORTED") throw headError;
+            // The refusal itself named the offset Bunny holds. When the
+            // confirming HEAD cannot be made, that figure is still better than
+            // an offset we already know is wrong.
+            if (claimed === null) throw headError;
+            offset = claimed;
+          }
+          advanced = true;
+          report?.({ uploadedBytes: offset, totalBytes: total, percent: percentOf(offset, total) });
           break;
         }
+
         if (response.status === 401 || response.status === 403) {
           throw new VideoUploadError(
             "EXPIRED",
@@ -238,62 +533,133 @@ export async function uploadVideoFile(
             response.status
           );
         }
+
         if (!response.ok) {
+          const body = await response.text().catch(() => "");
           throw new VideoUploadError(
             "HTTP",
             `The video service refused a chunk (HTTP ${response.status})`,
-            response.status
+            response.status,
+            {
+              reason: "provider",
+              providerBody: body || response.statusText || null,
+            }
           );
         }
 
-        offset = nextOffset(response, start, chunk.size, file.size);
-        succeeded = true;
-        break;
+        advanced = true;
+        const elapsed = now() - startedAt;
+        attemptMs.push(elapsed);
+        rateBps = measureRate(end - offset, elapsed, rateBps);
+        offset = nextOffset(response, offset, end - offset, total);
       } catch (error) {
+        attemptMs.push(now() - startedAt);
+
         if (error instanceof VideoUploadError && error.code === "ABORTED") throw error;
+
         if (
           error instanceof VideoUploadError &&
           (error.code === "EXPIRED" ||
-            (error.code === "HTTP" && error.status !== undefined && error.status < 500 && error.status !== 409 && error.status !== 412))
+            (error.code === "HTTP" &&
+              error.status !== undefined &&
+              error.status < 500 &&
+              error.status !== 409 &&
+              error.status !== 412))
         ) {
           throw error;
         }
 
-        if (attempt === VIDEO_UPLOAD_MAX_ATTEMPTS) {
-          throw error instanceof VideoUploadError
+        lastError =
+          error instanceof VideoUploadError
             ? error
-            : new VideoUploadError("NETWORK", "The upload connection was interrupted");
-        }
+            : new VideoUploadError("NETWORK", "The upload connection was interrupted", undefined, {
+                reason: "reset",
+              });
 
-        await wait(retryDelay(attempt));
+        if (attempt === VIDEO_UPLOAD_MAX_ATTEMPTS) break;
+
+        retryCount = attempt;
+        await sleep(retryDelay(attempt));
+
         // If the PATCH reached Bunny before the response was lost, this HEAD
         // advances us without sending the same bytes twice.
         try {
-          offset = await readOffset(session, options.signal);
-          if (offset >= end) {
-            succeeded = true;
-            break;
+          const recovered = await readOffset(session, options.signal);
+          if (recovered > offset) {
+            offset = recovered;
+            report?.({ uploadedBytes: offset, totalBytes: total, percent: percentOf(offset, total) });
           }
         } catch (headError) {
-          if (headError instanceof VideoUploadError && headError.code === "ABORTED") {
+          if (headError instanceof VideoUploadError && headError.code === "ABORTED") throw headError;
+          // A session Bunny has genuinely closed is not worth the rest of the
+          // ladder — resume cannot fix it, only a new session can.
+          if (headError instanceof VideoUploadError && headError.code === "EXPIRED") {
             throw headError;
           }
-          // The next PATCH attempt can still recover if HEAD was the request
-          // that lost the connection. Do not turn a temporary HEAD failure into
-          // a permanent upload failure before the retry budget is spent.
+          // Otherwise the next PATCH attempt can still recover if HEAD was the
+          // request that lost the connection. Do not turn a temporary HEAD
+          // failure into a permanent one before the retry budget is spent.
         }
+      }
+
+      if (advanced) break;
+
+      // Attach the shape of the failure to the error that is about to be
+      // retried: if this is the last attempt it is also the error that is
+      // reported, and the offset, the chunk and the timings are what a reader
+      // uses to tell a dead link from a refused request.
+      if (lastError) {
+        lastError.stage = "chunk";
+        lastError.offset = offset;
+        lastError.bytesSent = offset;
+        lastError.bytesTotal = total;
+        lastError.chunkIndex = chunkIndex;
+        lastError.retryCount = retryCount;
+        lastError.attemptMs = [...attemptMs];
       }
     }
 
-    if (!succeeded) {
-      throw new VideoUploadError("NETWORK", "The video chunk could not be saved");
+    if (!advanced) {
+      const failure =
+        lastError ??
+        new VideoUploadError("NETWORK", "The video chunk could not be saved", undefined, {
+          reason: "reset",
+        });
+      failure.stage = "chunk";
+      failure.offset = offset;
+      failure.bytesSent = offset;
+      failure.bytesTotal = total;
+      failure.chunkIndex = chunkIndex;
+      failure.attemptMs = [...attemptMs];
+      failure.message = failureMessage(failure, offset, total);
+      throw failure;
     }
 
-    options.onProgress?.({
-      uploadedBytes: offset,
-      totalBytes: file.size,
-      percent: Math.min(100, Math.round((offset / file.size) * 100)),
-    });
+    report?.({ uploadedBytes: offset, totalBytes: total, percent: percentOf(offset, total) });
+  }
+
+  report?.({ uploadedBytes: total, totalBytes: total, percent: 100 });
+}
+
+/**
+ * The sentence the creator reads, built from where the transfer actually got to.
+ *
+ * A percentage is the only part of this that a creator can act on. "The
+ * connection dropped" alone invites them to start again from zero — the single
+ * most expensive thing they could do on a metered phone — while "43% sent, press
+ * Resume" tells them their data is not lost and roughly what is left.
+ */
+function failureMessage(failure: VideoUploadError, offset: number, total: number): string {
+  const sent = total ? `${Math.floor((offset / total) * 100)}% sent` : "nothing sent yet";
+  switch (failure.reason) {
+    case "offline":
+      return `You are offline (${sent}). Move back to signal, then press Resume upload.`;
+    case "timeout":
+      return `The connection stopped carrying data (${sent}). Press Resume upload to continue.`;
+    case "provider":
+      return failure.message;
+    default:
+      return `The connection dropped while sending this video (${sent}). Press Resume upload to continue from there.`;
   }
 }
 
@@ -306,7 +672,10 @@ export async function completeVideoUpload(sessionToken: string): Promise<string>
       body: JSON.stringify({ sessionToken }),
     });
   } catch {
-    throw new VideoUploadError("NETWORK", "The upload finished, but Genhub could not confirm it");
+    throw new VideoUploadError("NETWORK", "The upload finished, but Genhub could not confirm it", undefined, {
+      reason: "reset",
+      stage: "reserve",
+    });
   }
 
   const body = (await response.json().catch(() => null)) as {
@@ -319,7 +688,8 @@ export async function completeVideoUpload(sessionToken: string): Promise<string>
     throw new VideoUploadError(
       response.status === 409 ? "CONFLICT" : "HTTP",
       body?.error || "Genhub could not confirm the completed upload",
-      response.status
+      response.status,
+      { stage: "reserve", providerBody: body?.error || null }
     );
   }
   return body.data.videoId;

@@ -8,7 +8,7 @@ import { MEDIA_ROUTE_PREFIX, isSafeMediaKey } from "./media";
 // The same 2 GB ceiling the upload form and the transport enforce. One number,
 // three places it is checked, so a file that passes the picker cannot be refused
 // by the schema that stores it.
-import { MAX_VIDEO_BYTES } from "./video-upload";
+import { MAX_VIDEO_BYTES, UPLOAD_FAILURE_REASONS } from "./video-upload";
 import { normalizeUsername, usernameFormatError } from "./usernames";
 
 /**
@@ -418,6 +418,52 @@ export const creatorPostSchema = z.object({
   body: z.string().trim().min(1, "The message cannot be empty").max(1000),
   imageUrl: z.string().url().optional(),
 });
+
+// =============================================================================
+// A failed video upload, as the creator's browser reports it
+//
+// The transfer goes straight to Bunny, so the server has no other way to learn
+// that one died — see lib/services/upload-failure.service.ts. Every field is
+// bounded rather than trusted: the payload is echoed into the admin panel and
+// the log, and it arrives from a browser we do not control.
+//
+// Nothing here is requirable. A report with only a code and a message is still
+// worth storing, and a schema that refused it would turn a partial diagnostic
+// into no diagnostic at all.
+// =============================================================================
+
+export const uploadFailureSchema = z.object({
+  /** VideoUploadError.code — NETWORK / HTTP / EXPIRED / CONFLICT / UNKNOWN. */
+  code: z.string().trim().min(1).max(40),
+  stage: z.enum(["reserve", "chunk", "put"]).nullish(),
+  /** Bunny's HTTP status, or null when nothing answered. */
+  status: z.number().int().min(0).max(599).nullish(),
+  /** What the creator was shown. */
+  message: z.string().trim().min(1).max(300),
+  /** Bunny's own response body, verbatim — the half that names the cause. */
+  providerBody: z.string().max(600).nullish(),
+  /** The physical fault, from the closed set the transport can produce. */
+  reason: z.enum(UPLOAD_FAILURE_REASONS).nullish(),
+  /** The reserved slot, so an operator can find the orphan in the library. */
+  bunnyVideoId: z.string().trim().max(64).nullish(),
+  fileName: z.string().trim().max(200).nullish(),
+  // Twice the ceiling the client enforces: a bound, not a policy.
+  fileSize: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
+  bytesSent: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
+  bytesTotal: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
+  offset: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
+  chunkIndex: z.number().int().min(0).max(1_000_000).nullish(),
+  retryCount: z.number().int().min(0).max(1000).nullish(),
+  // How long each attempt lasted. Bounded in count as well as in value: this is
+  // read by a human and rendered by the panel, not graphed.
+  attemptMs: z.array(z.number().int().min(0).max(3_600_000)).max(20).nullish(),
+  /** What the browser would say about its own link, when it will say anything. */
+  connectionType: z.string().trim().max(20).nullish(),
+  downlinkMbps: z.number().min(0).max(10_000).nullish(),
+  rttMs: z.number().min(0).max(600_000).nullish(),
+});
+
+export type UploadFailureInput = z.infer<typeof uploadFailureSchema>;
 
 // =============================================================================
 // Type exports

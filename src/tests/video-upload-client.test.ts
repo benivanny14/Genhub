@@ -26,9 +26,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   MAX_VIDEO_BYTES,
+  VIDEO_UPLOAD_FLOOR_BPS,
   VIDEO_UPLOAD_MAX_ATTEMPTS,
+  VIDEO_UPLOAD_MAX_CHUNK_BYTES,
+  VIDEO_UPLOAD_TARGET_CHUNK_MS,
   VideoUploadError,
+  chunkBytesFor,
+  chunkTimeoutMs,
   completeVideoUpload,
+  measureRate,
   uploadVideoFile,
   videoFileSizeError,
   type VideoUploadSession,
@@ -273,6 +279,149 @@ describe("uploadVideoFile", () => {
       settleFailure(uploadVideoFile(oversized, sessionFor(MAX_VIDEO_BYTES + 1)))
     ).resolves.toMatchObject({ code: "INVALID_FILE" });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/** 400 kbps down, the figure measured on a real creator's phone. */
+const SLOW_BPS = 50 * 1024;
+
+const ONE_MIB = 1024 * 1024;
+
+/**
+ * How long one slice takes to send, in milliseconds, at a rate in bytes/second.
+ * The unit the whole adaptation is about.
+ */
+function durationMs(bytes: number, bps: number): number {
+  return (bytes / bps) * 1000;
+}
+
+// =============================================================================
+// The sizing rule — the fix for "the upload connection was interrupted"
+//
+// This transport used to send a fixed 16 MiB slice under a fixed 120-second
+// timeout. On the 0.4 Mbps connection this application has measured on a real
+// creator's phone those two constants do not fit: 16 MiB takes 335 seconds to
+// send, so the page aborted its own request, called it a network failure, and
+// failed the same way five times. The tests below pin the rule that replaced
+// them — a slice sized to the connection and a timeout sized to the slice —
+// because it is the difference between an upload that finishes in an hour and
+// one that never moves.
+// =============================================================================
+describe("chunk planning", () => {
+  it("starts with a slice small enough to be cheap to abandon", () => {
+    // The first request is the only one made blind. Sizing it for a fast link
+    // would hand a slow one a six-minute request before a byte is measured.
+    const first = chunkBytesFor(null, 145 * ONE_MIB);
+
+    expect(first).toBeLessThanOrEqual(2 * ONE_MIB);
+    expect(first).toBeGreaterThan(0);
+    // Built from the documented floor rather than from luck.
+    expect(first).toBe(Math.ceil((VIDEO_UPLOAD_FLOOR_BPS * VIDEO_UPLOAD_TARGET_CHUNK_MS) / 1000));
+  });
+
+  it("sizes the slice to the measured connection, not to a constant", () => {
+    const slow = chunkBytesFor(SLOW_BPS, 145 * ONE_MIB);
+    const fast = chunkBytesFor(5 * ONE_MIB, 145 * ONE_MIB);
+
+    // The whole point: a slow link gets many short requests, a fast one gets
+    // few long ones, and neither gets the other's size.
+    expect(fast).toBeGreaterThan(slow * 4);
+    expect(fast).toBe(VIDEO_UPLOAD_MAX_CHUNK_BYTES);
+  });
+
+  it("never sends more than is left, and never more than the ceiling", () => {
+    expect(chunkBytesFor(null, 40)).toBe(40);
+    expect(chunkBytesFor(10 * ONE_MIB, 40)).toBe(40);
+    expect(chunkBytesFor(10 * ONE_MIB, 2 * MAX_VIDEO_BYTES)).toBe(VIDEO_UPLOAD_MAX_CHUNK_BYTES);
+  });
+
+  it("gives every request headroom over the time its own slice needs", () => {
+    // The invariant that was missing. For any connection at or above the
+    // planned floor, the timeout for the slice chosen must exceed the time that
+    // slice takes — otherwise the page aborts a request that was working.
+    for (const bps of [VIDEO_UPLOAD_FLOOR_BPS, SLOW_BPS, 1 * ONE_MIB, 5 * ONE_MIB]) {
+      const bytes = chunkBytesFor(bps, 145 * ONE_MIB);
+      expect(chunkTimeoutMs(bytes, bps)).toBeGreaterThan(durationMs(bytes, bps));
+    }
+  });
+
+  it("keeps a slow link's requests short instead of relying on a long timeout", () => {
+    // At the measured 0.4 Mbps the slice must come out well under a minute of
+    // transfer. A six-minute request is what a carrier resets, and no timeout
+    // makes it survivable — only a smaller request does.
+    const bytes = chunkBytesFor(SLOW_BPS, 145 * ONE_MIB);
+    expect(durationMs(bytes, SLOW_BPS)).toBeLessThanOrEqual(VIDEO_UPLOAD_TARGET_CHUNK_MS);
+    expect(chunkTimeoutMs(bytes, SLOW_BPS)).toBeLessThanOrEqual(VIDEO_UPLOAD_TARGET_CHUNK_MS * 4);
+  });
+
+  it("moves the throughput estimate toward what it just measured", () => {
+    // Halving the distance doubles the estimate within two slices — fast enough
+    // for a fast connection and stable enough not to thrash on a slow one.
+    const first = measureRate(2 * ONE_MIB, 1_000, null);
+    expect(first).toBeCloseTo(2 * ONE_MIB, -3);
+
+    const halved = measureRate(ONE_MIB, 1_000, 4 * ONE_MIB);
+    expect(halved).toBeGreaterThan(4 * ONE_MIB * 0.6);
+    expect(halved).toBeLessThan(4 * ONE_MIB);
+
+    // A measurement that cannot be trusted leaves the estimate alone.
+    expect(measureRate(0, 1_000, 123)).toBe(123);
+    expect(measureRate(100, 0, 123)).toBe(123);
+  });
+});
+
+// =============================================================================
+// A failed upload must be able to explain itself
+//
+// The bytes go straight to Bunny, so a failure leaves no row and no log line —
+// the browser's own error is the only witness. These fields are what the admin
+// panel and the provider log are read from, and a report that carried only "the
+// upload connection was interrupted" is the report this application had for
+// weeks: true, useless, and identical for four different faults.
+// =============================================================================
+describe("the diagnosis on a failed upload", () => {
+  it("carries the reason, the offset and how long each attempt lasted", async () => {
+    let patch = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "HEAD") {
+        return new Response(null, { status: 204, headers: { "upload-offset": "0" } });
+      }
+      patch += 1;
+      throw new TypeError("Failed to fetch");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await settleFailure(uploadVideoFile(fileOf(100), sessionFor(100), { offset: 0 }));
+
+    expect(error).toMatchObject({
+      code: "NETWORK",
+      reason: "reset",
+      stage: "chunk",
+      chunkIndex: 1,
+      offset: 0,
+      bytesSent: 0,
+      bytesTotal: 100,
+    });
+    // One timing per attempt, so the shape of the failure survives the toast.
+    expect(error.attemptMs).toHaveLength(VIDEO_UPLOAD_MAX_ATTEMPTS);
+    // The message names the position, which is the only part a creator can act on.
+    expect(error.message).toMatch(/connection dropped/i);
+    expect(error.message).toMatch(/Resume upload/);
+    expect(patch).toBe(VIDEO_UPLOAD_MAX_ATTEMPTS);
+  });
+
+  it("keeps Bunny's own words when Bunny is what refused the chunk", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.method === "HEAD"
+        ? new Response(null, { status: 204, headers: { "upload-offset": "0" } })
+        : new Response("Library ID missing or invalid.", { status: 400 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await settleFailure(uploadVideoFile(fileOf(100), sessionFor(100), { offset: 0 }));
+
+    expect(error).toMatchObject({ code: "HTTP", status: 400, reason: "provider" });
+    expect(error.providerBody).toBe("Library ID missing or invalid.");
   });
 });
 

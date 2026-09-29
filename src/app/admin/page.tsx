@@ -50,6 +50,12 @@ import {
   Webhook,
 } from "lucide-react";
 import SystemReference from "./SystemReference";
+// Pure, and deliberately its own module: the same reading of a failure record
+// runs in the server log, and one implementation is the whole reason it exists.
+import {
+  describeUploadFailureAttempts,
+  formatUploadBytes,
+} from "@/lib/upload-failure-reading";
 
 /**
  * Live readiness of the things that cannot be fixed from the code — the video
@@ -289,6 +295,39 @@ interface CouponItem {
   usedCount: number;
   expiresAt: string | null;
   createdAt: string;
+}
+
+/**
+ * One failed video upload, as the creator's browser reported it.
+ *
+ * The byte transfer goes straight to Bunny, so this record is the only copy
+ * that exists: there is no video row yet, and the toast died with the tab. Every
+ * field is optional-capable because a report that carried only a code is still
+ * worth more than the nothing that came before it.
+ */
+interface UploadFailureItem {
+  at: string;
+  code: string;
+  reason: string | null;
+  stage: string | null;
+  status: number | null;
+  message: string;
+  providerBody: string | null;
+  bunnyVideoId: string | null;
+  fileName: string | null;
+  fileSize: number | null;
+  bytesSent: number | null;
+  bytesTotal: number | null;
+  offset: number | null;
+  chunkIndex: number | null;
+  retryCount: number | null;
+  attemptMs: number[] | null;
+  userAgent: string | null;
+  origin: string | null;
+  connectionType: string | null;
+  downlinkMbps: number | null;
+  rttMs: number | null;
+  creatorId: string;
 }
 
 /**
@@ -714,6 +753,7 @@ export default function AdminDashboard() {
     | "viewers"
     | "comments"
     | "system"
+    | "uploadFailures"
   >("overview");
   const [loading, setLoading] = useState(true);
   const [kycList, setKycList] = useState<KycItem[]>([]);
@@ -798,6 +838,10 @@ export default function AdminDashboard() {
   const [pipelineBusy, setPipelineBusy] = useState(false);
   const [webhookTest, setWebhookTest] = useState<WebhookTest | null>(null);
   const [webhookBusy, setWebhookBusy] = useState(false);
+  // Failed video uploads, reported by the creators' own browsers. The transfer
+  // goes straight to the video host, so nothing else on this page can see one.
+  const [uploadFailures, setUploadFailures] = useState<UploadFailureItem[]>([]);
+  const [uploadFailuresBusy, setUploadFailuresBusy] = useState(false);
   // Native window.prompt is blocked in some embedded browsers, so the flows that
   // need a typed reason (ban, KYC / payout rejection) use this in-app dialog.
   const [reasonDialog, setReasonDialog] = useState<{
@@ -912,6 +956,10 @@ export default function AdminDashboard() {
       // Cheap on purpose: reading config opens no connections, and this is what
       // populates the tab badge before anyone clicks it.
       fetchSetup();
+      // Also cheap, and the one that must not wait for a click: a creator who
+      // could not upload five minutes ago is the thing an operator is here to
+      // notice.
+      fetchUploadFailures();
     }
     if (activeTab === "setup" && !setup) fetchSetup();
     if (activeTab === "kyc") fetchKyc();
@@ -922,6 +970,7 @@ export default function AdminDashboard() {
     if (activeTab === "blueTicks") fetchBlueTicks();
     if (activeTab === "viewers") fetchViewers();
     if (activeTab === "audit") fetchAudit();
+    if (activeTab === "uploadFailures") fetchUploadFailures();
     if (activeTab === "comments") fetchComments();
     if (activeTab === "earnings") fetchEarnings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1226,6 +1275,39 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (data.success) setCouponList(data.data.coupons);
     } catch {}
+  }
+
+  /** The stored upload failures, newest first. Empty when the cache is down. */
+  async function fetchUploadFailures() {
+    setUploadFailuresBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/upload-failures");
+      const data = await res.json();
+      if (data.success) setUploadFailures(data.data.failures ?? []);
+    } catch {
+      // A cache that cannot be read is not an error worth a toast here: the
+      // panel showing nothing and the cache being empty look the same, and the
+      // operator's next question is about the uploads, not about the cache.
+    } finally {
+      setUploadFailuresBusy(false);
+    }
+  }
+
+  async function clearUploadFailures() {
+    const ok = await confirmDialog({
+      title: "Clear the failed upload list?",
+      message:
+        "This forgets every stored report. Do it once you have confirmed the cause is fixed, so the next failure is the first thing on the page.",
+      confirmLabel: "Clear the list",
+    });
+    if (!ok) return;
+    try {
+      await adminFetch("/api/admin/upload-failures", { method: "DELETE" });
+      setUploadFailures([]);
+      toast("success", "Cleared");
+    } catch {
+      toast("error", "Could not clear the list");
+    }
   }
 
   async function fetchAudit(filter = auditFilter) {
@@ -1824,6 +1906,16 @@ export default function AdminDashboard() {
       id: "audit" as const,
       label: "Audit",
       icon: ScrollText,
+    },
+    {
+      // Sits next to Audit because it is the same kind of thing: a record of
+      // something that happened and that nobody was told about. The badge is the
+      // point of it — a creator who could not upload is invisible otherwise, and
+      // the video host never sees the failure either.
+      id: "uploadFailures" as const,
+      label: "Failed uploads",
+      icon: Upload,
+      badge: uploadFailures.length,
     },
     {
       id: "setup" as const,
@@ -3787,6 +3879,148 @@ export default function AdminDashboard() {
 
         {/* Setup Tab */}
         {/* System Tab - internal reference, deliberately admin-only */}
+        {
+          /* Failed uploads — the only window onto a transfer that never reached
+             us. The bytes go from the creator's browser straight to the video
+             host, so when one dies there is no row, no log line and no counter
+             unless the browser tells us. Everything below is read from the
+             record it leaves behind. */
+        }
+        {activeTab === "uploadFailures" && (
+          <div className="glass-card p-5 space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center">
+                  <Upload className="w-5 h-5 text-red-400" />
+                </div>
+                <div>
+                  <h3 className="font-display font-bold">Failed video uploads</h3>
+                  <p className="text-xs text-white/50">
+                    Reported by the creator&apos;s own browser, newest first. The last 25, kept 30 days.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void fetchUploadFailures()}
+                  disabled={uploadFailuresBusy}
+                  className="btn-ghost text-sm flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {uploadFailuresBusy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="w-4 h-4" />
+                  )}
+                  Re-check
+                </button>
+                {uploadFailures.length > 0 && (
+                  <button
+                    onClick={() => void clearUploadFailures()}
+                    className="btn-ghost text-sm flex items-center gap-1.5 text-red-300"
+                  >
+                    <Trash2 className="w-4 h-4" /> Clear
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {uploadFailures.length === 0 ? (
+              <p className="text-sm text-white/50 py-6 text-center">
+                {uploadFailuresBusy
+                  ? "Loading…"
+                  : "No failed upload has been reported. If a creator says one failed and nothing is here, the report never reached the server — check the deployment log for “Upload Failure”."}
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {uploadFailures.map((failure, index) => (
+                  <div
+                    key={`${failure.at}-${index}`}
+                    className="rounded-xl border border-white/10 p-4 space-y-2"
+                  >
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-red-500/20 text-red-300">
+                          {failure.code}
+                          {failure.reason ? ` · ${failure.reason}` : ""}
+                        </span>
+                        {failure.stage && (
+                          <span className="text-xs text-white/50">at {failure.stage}</span>
+                        )}
+                        {typeof failure.status === "number" && (
+                          <span className="text-xs text-white/50">HTTP {failure.status}</span>
+                        )}
+                        {typeof failure.chunkIndex === "number" && (
+                          <span className="text-xs text-white/50">chunk {failure.chunkIndex}</span>
+                        )}
+                        {typeof failure.retryCount === "number" && failure.retryCount > 0 && (
+                          <span className="text-xs text-white/50">retries {failure.retryCount}</span>
+                        )}
+                      </div>
+                      <span className="text-xs text-white/40">
+                        {new Date(failure.at).toLocaleString()}
+                      </span>
+                    </div>
+
+                    <p className="text-sm text-white/80">{failure.message}</p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-xs text-white/50">
+                      <span>
+                        File: {failure.fileName || "unnamed"}
+                        {failure.fileSize ? ` · ${formatUploadBytes(failure.fileSize)}` : ""}
+                      </span>
+                      <span>
+                        Got to:{" "}
+                        {failure.bytesSent === null
+                          ? "not reported"
+                          : `${formatUploadBytes(failure.bytesSent)}${
+                              failure.bytesTotal
+                                ? ` of ${formatUploadBytes(failure.bytesTotal)}`
+                                : ""
+                            }`}
+                      </span>
+                      <span>
+                        Link: {failure.connectionType || "unknown"}
+                        {typeof failure.downlinkMbps === "number"
+                          ? ` · ${failure.downlinkMbps} Mbps down`
+                          : ""}
+                        {typeof failure.rttMs === "number" ? ` · ${failure.rttMs} ms rtt` : ""}
+                      </span>
+                      <span>
+                        Origin: {failure.origin || "not reported"} · creator {failure.creatorId}
+                      </span>
+                      {failure.bunnyVideoId && (
+                        <span>Reserved slot: {failure.bunnyVideoId}</span>
+                      )}
+                      {failure.attemptMs && failure.attemptMs.length > 0 && (
+                        <span>Attempts: {failure.attemptMs.join(" ms, ")} ms</span>
+                      )}
+                      {failure.userAgent && (
+                        <span className="sm:col-span-2 break-words">{failure.userAgent}</span>
+                      )}
+                    </div>
+
+                    {/* The sentence that reads the numbers above. The BYTES
+                        decide it and the timings only add detail — the other
+                        way round is how a panel once claimed "no progress" and
+                        "bytes were moving" about the same row. */}
+                    {describeUploadFailureAttempts(failure) && (
+                      <p className="text-xs text-amber-300/80">
+                        {describeUploadFailureAttempts(failure)}
+                      </p>
+                    )}
+
+                    {failure.providerBody && (
+                      <p className="text-xs text-white/40 break-words font-mono">
+                        Provider said: {failure.providerBody}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {activeTab === "system" && <SystemReference />}
 
         {activeTab === "setup" && (

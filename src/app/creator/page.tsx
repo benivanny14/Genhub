@@ -50,6 +50,7 @@ import {
   VideoUploadError,
   type VideoUploadSession,
 } from "@/lib/video-upload";
+import { reportUploadFailure } from "@/lib/upload-failure-report";
 import {
   PAYOUT_METHODS,
   PAYOUT_METHOD_LABEL,
@@ -674,6 +675,10 @@ export default function CreatorDashboard() {
       setNewTeaserBunnyVideoId(videoId);
       toast("success", "Trailer uploaded — press Save to attach it");
     } catch (error) {
+      // The server never saw these bytes — they go straight to Bunny — so this
+      // report is the only record the failure will ever have. Sent before the
+      // toast, because the creator's next move is to close the tab.
+      reportUploadFailure(error, { session, file, kind: "teaser" });
       toast(
         "error",
         error instanceof VideoUploadError

@@ -39,6 +39,7 @@ import {
   type VideoUploadProgress,
   type VideoUploadSession,
 } from "@/lib/video-upload";
+import { reportUploadFailure } from "@/lib/upload-failure-report";
 
 type UploadKind = "main" | "teaser";
 
@@ -55,6 +56,17 @@ function formatBytes(bytes: number): string {
 
 function percent(progress: VideoUploadProgress | null): number {
   return progress?.percent ?? 0;
+}
+
+/**
+ * What to put in the toast when a transfer dies.
+ *
+ * The transport's messages already name the fault and how far the file got, so
+ * they are passed through unchanged. This exists for the rest: an error thrown
+ * before the transport was reached must not borrow the transport's words.
+ */
+function failureMessageFor(error: unknown): string {
+  return error instanceof VideoUploadError ? error.message : "The video upload failed. Try again.";
 }
 
 export default function UploadPage() {
@@ -207,8 +219,12 @@ export default function UploadPage() {
       setProgress({ uploadedBytes: file.size, totalBytes: file.size, percent: 100 });
       return { session, videoId };
     } catch (error) {
-      const message =
-        error instanceof VideoUploadError ? error.message : "The video upload failed. Try again.";
+      // This is the only record a failed upload will ever have. The bytes went
+      // straight to Bunny and no video row exists yet, so without this the
+      // failure lives and dies in the creator's toast — which is exactly how a
+      // library accumulated orphaned slots that nobody could explain.
+      reportUploadFailure(error, { session, file, kind });
+      const message = failureMessageFor(error);
       toast("error", message);
       return { session, videoId: "" };
     }
