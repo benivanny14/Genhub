@@ -18,6 +18,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   PUT_RETRY_DELAYS,
+  putBlob,
   uploadFileWithPut,
   type PutUploadOptions,
   type PutUploadTarget,
@@ -49,6 +50,14 @@ interface PutCall {
 interface XhrStep {
   status?: number;
   responseText?: string;
+  /**
+   * The bucket's own ETag header, when it exposes one.
+   *
+   * A whole-object PUT ignores it. A PART cannot: `CompleteMultipartUpload`
+   * names every part by its ETag, so this is the value the multipart transport
+   * (lib/upload-multipart.ts) depends on the bucket exposing.
+   */
+  etag?: string;
   /** Bytes acknowledged, in order — what `xhr.upload.onprogress` reports. */
   progress?: number[];
   outcome?: "load" | "error" | "abort" | "timeout";
@@ -84,6 +93,7 @@ function fakeXhr(steps: XhrStep | XhrStep[], calls: PutCall[] = []) {
     private headers: Record<string, string> = {};
     private method = "";
     private url = "";
+    private etag: string | null = null;
 
     open(method: string, url: string) {
       this.method = method;
@@ -91,6 +101,14 @@ function fakeXhr(steps: XhrStep | XhrStep[], calls: PutCall[] = []) {
     }
     setRequestHeader(name: string, value: string) {
       this.headers[name] = value;
+    }
+    /**
+     * Readable because the bucket's CORS policy exposes it (ExposeHeader: ETag,
+     * measured on the live bucket). A fake without this method is what a bucket
+     * without that header would be — and the whole-file path must not need it.
+     */
+    getResponseHeader(name: string) {
+      return name.toLowerCase() === "etag" ? this.etag : null;
     }
     abort() {
       this.onabort?.();
@@ -109,6 +127,7 @@ function fakeXhr(steps: XhrStep | XhrStep[], calls: PutCall[] = []) {
         if ((step.outcome ?? "load") === "load") {
           this.status = step.status ?? 200;
           this.responseText = step.responseText ?? "";
+          this.etag = step.etag ?? null;
           this.onload?.();
           return;
         }
@@ -195,6 +214,20 @@ describe("uploading the whole file in one PUT", () => {
       // leave the bar at 98% with nothing on screen to explain it.
       [1_000, 1_000],
     ]);
+  });
+
+  it("hands back the ETag the bucket exposed, which is what a part is named by", async () => {
+    // A whole-object PUT throws this away. A PART cannot: the bucket is told
+    // which parts make the video by name, so a transport that lost this would
+    // upload a two-gigabyte file successfully and then be unable to assemble it.
+    vi.stubGlobal(
+      "XMLHttpRequest",
+      fakeXhr({ status: 200, etag: '"d41d8cd98f00b204e9800998ecf8427e"' }, []) as unknown as typeof XMLHttpRequest
+    );
+
+    const { etag } = await putBlob(fileOf(1_000), target, {});
+
+    expect(etag).toBe('"d41d8cd98f00b204e9800998ecf8427e"');
   });
 
   it("never lets the bar walk backwards when an attempt is re-sent", async () => {

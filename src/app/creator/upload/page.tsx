@@ -15,7 +15,7 @@ import {
   UPLOAD_STALL_WARNING_MS,
   type UploadRetryInfo,
 } from "@/lib/upload-error";
-import { uploadFileWithPut } from "@/lib/upload-put";
+import { abandonPendingUpload, sendFileToTarget } from "@/lib/upload-send";
 import { ScreenWakeLock } from "@/lib/screen-wake-lock";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
@@ -190,6 +190,12 @@ export default function UploadPage() {
     return () => {
       uploadAbortRef.current?.abort();
       uploadAbortRef.current = null;
+      // A multipart upload this page was holding is real storage in the bucket
+      // holding every part that reached it, and leaving the page is the one
+      // ending where no retry can ever use them — so it is given up here. A
+      // transfer that FAILED is deliberately not given up: the creator can still
+      // press Retry, and the parts already stored are what makes that cheap.
+      abandonPendingUpload();
       releaseScreenWake();
     };
   }, [releaseScreenWake]);
@@ -221,13 +227,20 @@ export default function UploadPage() {
     };
   }, [transferring, watchScreenWake, releaseScreenWake]);
 
-  /** Reserve the slot and get the short-lived credentials to fill it. */
-  async function initiateUpload(): Promise<UploadTarget | null> {
+  /**
+   * Reserve the slot and get the credentials to fill it.
+   *
+   * `size` IS what chooses the transport, and it is passed on every call rather
+   * than only the first: the server decides from it whether to hand back one
+   * presigned PUT or a multipart plan (lib/upload-target.ts), so a retry that
+   * withheld the size would quietly ask for the transport the file cannot use.
+   */
+  async function initiateUpload(size?: number): Promise<UploadTarget | null> {
     try {
       const res = await fetch("/api/videos/upload-signature", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title }),
+        body: JSON.stringify({ title, size }),
       });
       const data = await res.json();
       if (data.success) {
@@ -243,8 +256,8 @@ export default function UploadPage() {
   }
 
   /**
-   * Send the file with one presigned PUT, then hand it to the encoder.
-   * `onProgress` is 0..100.
+   * Send the file to the bucket — one PUT or many parts, as signed for — then
+   * hand it to the encoder. `onProgress` is 0..100.
    *
    * The transfer also drives one small toast that lives exactly as long as the
    * upload does: created sticky so it cannot time out mid-transfer, rewritten
@@ -294,23 +307,43 @@ export default function UploadPage() {
         progress: lastPercent,
       });
     };
+    /**
+     * Say so when a previous run already delivered part of this file.
+     *
+     * The one thing that tells a creator their phone restarting did not cost
+     * them the transfer — without it, a bar that opens at 40% looks like a bug
+     * rather than an upload that kept what it had.
+     */
+    const onResume = (partsAlreadySent: number) => {
+      lastProgressAt.current = Date.now();
+      setUploadStalled(false);
+      updateToast(toastId, {
+        message: `Continuing ${label} — ${partsAlreadySent} part${
+          partsAlreadySent === 1 ? "" : "s"
+        } already saved`,
+        progress: lastPercent,
+      });
+    };
 
     const sendProgress = (uploaded: number, total: number) =>
       report(Math.round((uploaded / total) * 100));
 
     try {
-      // ONE PUT, STRAIGHT INTO THE BUCKET.
+      // STRAIGHT INTO THE BUCKET, by whichever route the server signed for.
       //
-      // The server signs a URL for this one object and this one moment
-      // (lib/r2-sign.ts). The browser uploads with it, so the file never passes
-      // through a server of ours and the browser never holds a credential of
-      // ours — which is why the SIZE of the file is not a consideration on this
-      // path: there is no request body for anybody to refuse, which is what used
-      // to push anything over a hundred megabytes down the chunked path. See
-      // lib/upload-put.ts.
-      await uploadFileWithPut(file, credentials.presigned, {
+      // The bytes never pass through a server of ours and the browser never
+      // holds a credential of ours. Small files go as ONE presigned PUT
+      // (lib/upload-put.ts); everything bigger arrives as ~8 MiB parts and is
+      // then assembled (lib/upload-multipart.ts) — because measured on this
+      // application's own failure records, a 192 MB file over a 1.55 Mbps link
+      // needs seventeen minutes, the connection was cut after thirty to sixty
+      // seconds, and a transfer with no offset to resume from lost everything it
+      // had sent. Which one this is was decided by the server, from the size the
+      // picker reported — see lib/upload-send.ts.
+      await sendFileToTarget(file, credentials, {
         onProgress: sendProgress,
         onRetry,
+        onResume,
         signal,
       });
       // Done: say so on the same toast, give it a real duration, and let it
@@ -412,7 +445,7 @@ export default function UploadPage() {
     setMainUploadActive(true);
     await holdScreenAwake();
     try {
-      const credentials = await initiateUpload();
+      const credentials = await initiateUpload(file.size);
       if (!credentials) return;
       await runVideoUpload(file, credentials);
     } finally {
@@ -485,8 +518,11 @@ export default function UploadPage() {
       // again. It replaces the URL AND the slot, which is why everything below
       // reads `slot` rather than the credentials this call arrived with.
       let slot = credentials;
-      if (credentials.presigned.expiresAt * 1000 - Date.now() < 5 * 60 * 1000) {
-        const fresh = await initiateUpload();
+      if (
+        slot.presigned &&
+        slot.presigned.expiresAt * 1000 - Date.now() < 5 * 60 * 1000
+      ) {
+        const fresh = await initiateUpload(file.size);
         if (fresh) slot = fresh;
       }
 
@@ -1059,13 +1095,16 @@ export default function UploadPage() {
                     // was reserved and then abandoned.
                     let teaserSlot: UploadTarget | null = null;
                     try {
-                      // Same flow as the main video, and the same transport: one
-                      // presigned PUT to the bucket, then the ingest that puts it
-                      // in front of the encoder.
+                      // Same flow as the main video, and the same transport:
+                      // whichever one the server prepared for a file this size,
+                      // then the ingest that puts it in front of the encoder.
                       const res = await fetch("/api/videos/upload-signature", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ title: `${title || "teaser"} (teaser)` }),
+                        body: JSON.stringify({
+                          title: `${title || "teaser"} (teaser)`,
+                          size: file.size,
+                        }),
                         signal: controller.signal,
                       });
                       const data = await res.json();
@@ -1077,7 +1116,7 @@ export default function UploadPage() {
                       teaserSlot = data.data as UploadTarget;
                       const teaserProgress = (uploaded: number, total: number) =>
                         setTeaserProgress(Math.round((uploaded / total) * 100));
-                      await uploadFileWithPut(file, teaserSlot.presigned, {
+                      await sendFileToTarget(file, teaserSlot, {
                         onProgress: teaserProgress,
                         signal: controller.signal,
                       });

@@ -59,6 +59,20 @@ export interface PutUploadTarget {
   expiresAt?: number;
 }
 
+export interface PutResult {
+  /**
+   * The object's ETag, when the bucket exposed one.
+   *
+   * A whole-object PUT ignores this. A PART cannot: `CompleteMultipartUpload`
+   * names every part by its ETag, so a part whose ETag the browser could not read
+   * is a part that can never be declared — which is why the bucket's CORS policy
+   * has to list the header as exposed. Measured on the live bucket: it does
+   * (`ExposeHeader: ETag`), and the multipart transport depends on it, so a
+   * bucket without it fails at completion rather than at the first part.
+   */
+  etag: string | null;
+}
+
 export interface PutUploadOptions {
   /** Bytes acknowledged so far, out of the file's size. Never walks backwards. */
   onProgress?: (uploaded: number, total: number) => void;
@@ -152,22 +166,28 @@ function describePutStatus(status: number, body: string): VideoUploadError {
 }
 
 /**
- * Send the file once. Resolves when Bunny has the whole thing.
+ * Send one blob to one presigned URL. Resolves when the bucket has all of it.
  *
- * The watchdog is the same rule as the chunked path's: bytes moving means the
- * request is left alone for as long as it takes, and a request with NO bytes
- * moving for the window is aborted and retried. Without it a PUT that the
- * network silently stopped delivering would hang until the browser's own
- * (unhelpfully generous) timeout, with a bar that never moves.
+ * Takes a Blob rather than a File, and is exported, so the multipart transport
+ * (lib/upload-multipart.ts) sends a PART through this same function instead of
+ * growing a second XHR with its own watchdog. Two copies of "abandon a request
+ * that has stopped moving" is how one transport ends up patient and the other
+ * impatient, and this application has already paid for that once.
+ *
+ * The watchdog: bytes moving means the request is left alone for as long as it
+ * takes, and a request with NO bytes moving for the window is aborted and
+ * retried. Without it a PUT that the network silently stopped delivering would
+ * hang until the browser's own (unhelpfully generous) timeout, with a bar that
+ * never moves.
  */
-function putOnce(
-  file: File,
+export function putBlob(
+  source: Blob,
   target: PutUploadTarget,
   options: PutUploadOptions
-): Promise<void> {
+): Promise<PutResult> {
   const { onProgress, signal } = options;
 
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<PutResult>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let stalled = false;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
@@ -190,14 +210,14 @@ function putOnce(
       stopWatchdog();
       signal?.removeEventListener("abort", onCancel);
       if (error) reject(error);
-      else resolve();
+      else resolve({ etag: xhr.getResponseHeader("ETag") });
     };
 
     xhr.open("PUT", target.url);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
 
     xhr.upload.onprogress = (event) => {
-      onProgress?.(Math.min(event.loaded, file.size), file.size);
+      onProgress?.(Math.min(event.loaded, source.size), source.size);
       armWatchdog();
     };
 
@@ -270,7 +290,7 @@ function putOnce(
     armWatchdog();
 
     try {
-      xhr.send(file);
+      xhr.send(source);
     } catch (error) {
       // The device refusing the file, met where this transport actually meets
       // it: `send` hands the WHOLE file to the socket at once, so a pick the
@@ -364,7 +384,7 @@ export async function uploadFileWithPut(
 
     const startedAt = Date.now();
     try {
-      await putOnce(file, target, {
+      await putBlob(file, target, {
         onProgress: report,
         signal,
       });

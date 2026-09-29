@@ -43,7 +43,7 @@ import {
 import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
 import { VideoUploadError, videoSizeError } from "@/lib/upload-error";
-import { uploadFileWithPut } from "@/lib/upload-put";
+import { sendFileToTarget } from "@/lib/upload-send";
 import { describeUploadFailure, reportUploadFailure } from "@/lib/upload-client";
 import type { UploadTarget } from "@/lib/upload-target";
 import {
@@ -622,10 +622,11 @@ export default function CreatorDashboard() {
   /**
    * Attach or replace the trailer clip a non-buyer gets to watch.
    *
-   * Same flow as the upload page: reserve a Bunny slot, then one presigned PUT to
-   * the bucket and the ingest that follows it. The result is held in state and only
-   * written to the video row on Save, so a cancelled edit changes nothing — and
-   * this is the door that finally lets an existing scene grow an intro trailer.
+   * Same flow as the upload page: reserve a Bunny slot, send the file to the
+   * bucket by whichever transport its size calls for, then the ingest that
+   * follows it. The result is held in state and only written to the video row on
+   * Save, so a cancelled edit changes nothing — and this is the door that finally
+   * lets an existing scene grow an intro trailer.
    */
   async function uploadEditTeaser(file: File) {
     // Same guard as the upload form: no slot is reserved for a file that can
@@ -644,7 +645,11 @@ export default function CreatorDashboard() {
       const res = await fetch("/api/videos/upload-signature", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: `${editTitle || "trailer"} (teaser)` }),
+        // The size is what tells the server which transport this file needs —
+        // one presigned PUT or a multipart plan (lib/upload-target.ts). Omitted,
+        // a big trailer would be sent as a single request, which is the transfer
+        // that stalls and loses everything it had sent.
+        body: JSON.stringify({ title: `${editTitle || "trailer"} (teaser)`, size: file.size }),
       });
       const data = await res.json();
       if (!data.success) {
@@ -653,7 +658,7 @@ export default function CreatorDashboard() {
       }
 
       credentials = data.data as UploadTarget;
-      await uploadFileWithPut(file, credentials.presigned, {
+      await sendFileToTarget(file, credentials, {
         onProgress: (uploaded, total) =>
           setEditTeaserProgress(Math.round((uploaded / total) * 100)),
       });

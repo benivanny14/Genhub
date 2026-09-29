@@ -25,11 +25,19 @@
 // creator's object, or delete anything. The browser holds a URL, not a key: a
 // leaked presigned URL dies at its deadline, and every upload gets a fresh one.
 //
-// The signature travels in the query string rather than a header because a
-// browser upload has no way to set an Authorization header on an XHR without
-// becoming a cross-origin request with a preflight of its own. Query-string
-// authentication is the same algorithm in a different place — AWS calls it
-// "presigning a URL" — and it is the only form a browser can use.
+// TWO SHAPES OF THE SAME ALGORITHM, and the difference is who holds the result.
+//
+//   * PRESIGNED — the signature travels in the QUERY STRING, because a browser
+//     upload has no way to set an Authorization header on an XHR without
+//     becoming a cross-origin request with a preflight of its own. AWS calls
+//     this "presigning a URL", and it is the only form a browser can use. The
+//     browser uses it to PUT one part, or one whole object.
+//   * SIGNED — the signature travels in the AUTHORIZATION HEADER and stays on
+//     this server. Used for the three operations that BOUND a multipart upload
+//     (begin it, complete it, abandon it), which the browser must never be able
+//     to make for itself: completion is what turns a list of parts into the
+//     object the ingest Worker reads, and a client that could complete its own
+//     upload could also complete one over a part list nobody signed.
 // =============================================================================
 
 import { createHash, createHmac } from "node:crypto";
@@ -106,6 +114,20 @@ export interface PresignParams {
   expiresInSeconds: number;
   /** The signing moment. Passed in, never read from the clock, so it is testable. */
   date: Date;
+  /**
+   * Parameters that select part of an operation, signed WITH the URL.
+   *
+   * A single-object PUT needs none of these, which is why the first version of
+   * this file had no such field. A multipart upload does: `uploadId` names which
+   * upload a part belongs to and `partNumber` names which part, and both are part
+   * of what the signature authorizes. Left out of the canonical request, R2
+   * accepts the URL and then refuses the request — or worse, honours a part
+   * number the signer never agreed to. They are sorted into the canonical query
+   * string with everything else, because AWS sorts by parameter NAME and a
+   * provider that re-sorts its own copy would otherwise compute a different
+   * string to sign.
+   */
+  extraQuery?: Record<string, string>;
 }
 
 /** Everything a caller needs to reproduce or assert the signature. */
@@ -117,18 +139,26 @@ export interface PresignedRequest {
 }
 
 /**
- * Which query parameters are signed, in the order the canonical request needs
- * them: byte-sorted by name, which for these five names is the order below.
- * `X-Amz-Signature` is deliberately absent — a signature cannot sign itself.
+ * Which query parameters are signed, sorted byte-wise by name as the canonical
+ * request requires. `X-Amz-Signature` is deliberately absent — a signature
+ * cannot sign itself.
+ *
+ * The five authentication parameters come first in this order for the same
+ * reason: an uppercase `X` (0x58) sorts before every lowercase letter, so the
+ * extras (a multipart upload's `partNumber` and `uploadId`) always follow them
+ * and the sort is over the whole set rather than over two halves.
  */
 function authQuery(params: PresignParams, scope: string, amzDate: string) {
-  return [
+  const auth: [string, string][] = [
     ["X-Amz-Algorithm", ALGORITHM],
     ["X-Amz-Credential", `${params.accessKeyId}/${scope}`],
     ["X-Amz-Date", amzDate],
     ["X-Amz-Expires", String(params.expiresInSeconds)],
     ["X-Amz-SignedHeaders", "host"],
-  ] as const;
+  ];
+  const extras = Object.entries(params.extraQuery ?? {});
+
+  return [...auth, ...extras].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /**
@@ -245,6 +275,157 @@ export function presignR2Put(
     expiresInSeconds,
     date,
   });
+}
+
+/**
+ * The sentence R2 puts inside the XML body it refuses with.
+ *
+ * Worth having shared rather than written twice: R2 says exactly what is wrong
+ * and names the field — `<Message>Credential access key has length 31, should be
+ * 32</Message>` is the whole diagnosis — and without it a caller reports a bare
+ * 403, which is the same answer a revoked key, a wrong bucket and a blocked
+ * network all give.
+ */
+export function r2XmlMessage(body: string): string {
+  const message = body.match(/<Message>([^<]{3,140})<\/Message>/)?.[1];
+  return message ? ` — ${message}` : "";
+}
+
+/**
+ * A refusal from the bucket, carrying what it said rather than only that it said
+ * no.
+ *
+ * Named so a route can tell "the bucket refused this" (502, and the creator
+ * should not retry unchanged) apart from its own mistakes (throw something
+ * else).
+ */
+export class StorageError extends Error {
+  status?: number;
+  providerBody?: string;
+
+  constructor(message: string, status?: number, providerBody?: string) {
+    super(message);
+    this.name = "StorageError";
+    this.status = status;
+    this.providerBody = providerBody?.slice(0, 400);
+  }
+}
+
+// =============================================================================
+// Multipart: the same signing, for a file that has to arrive in pieces
+// =============================================================================
+
+/**
+ * A part's presigned PUT.
+ *
+ * `uploadId` and `partNumber` are signed rather than merely appended, so the URL
+ * authorizes exactly one part of exactly one upload — and a URL minted for part
+ * 3 cannot be replayed as part 4, which is the property that makes a part
+ * retried independently of the parts that already succeeded.
+ */
+export function presignR2UploadPart(
+  r2: R2Credentials,
+  key: string,
+  uploadId: string,
+  partNumber: number,
+  expiresInSeconds: number,
+  date: Date
+): PresignedRequest {
+  return presign({
+    host: r2Host(r2.accountId),
+    path: r2ObjectPath(r2.bucket, key),
+    method: "PUT",
+    accessKeyId: r2.accessKeyId,
+    secretAccessKey: r2.secretAccessKey,
+    region: R2_REGION,
+    expiresInSeconds,
+    date,
+    extraQuery: { partNumber: String(partNumber), uploadId },
+  });
+}
+
+/**
+ * A request this process sends itself, authorized by a HEADER.
+ *
+ * Presigning puts the signature in the query string because a browser cannot set
+ * an Authorization header on a cross-origin upload without a preflight. A server
+ * has no such limitation, and the three operations that BOUND a multipart upload
+ * — begin it, finish it, abandon it — are ours to make: the browser must never be
+ * able to declare an upload complete, because completion is what turns a number
+ * of parts into an object the ingest Worker will read.
+ *
+ * The body IS hashed here, unlike a presigned URL. There is a body at signing
+ * time, `CompleteMultipartUpload` refuses a request whose part list was not
+ * covered by the signature, and `UNSIGNED-PAYLOAD` would let a man in the middle
+ * swap the list of parts that make up the creator's video.
+ */
+export function signR2Request(params: {
+  r2: R2Credentials;
+  method: string;
+  /** The object key, or null for a request that names no object. */
+  key: string | null;
+  /** Operation parameters: `{ uploads: "" }` to begin, `{ uploadId }` to finish. */
+  query?: Record<string, string>;
+  /** The exact bytes that will be sent. Omitted means an empty body. */
+  body?: string | Buffer;
+  date: Date;
+}): { url: string; headers: Record<string, string> } {
+  const { r2, method } = params;
+  const body = params.body ?? "";
+  const payloadHash = sha256Hex(body);
+
+  const host = r2Host(r2.accountId);
+  const amzDate = amzDateFrom(params.date);
+  const dateStamp = amzDate.slice(0, 8);
+  const scope = `${dateStamp}/${R2_REGION}/s3/aws4_request`;
+  const path = params.key === null ? `/${r2.bucket}` : r2ObjectPath(r2.bucket, params.key);
+
+  const canonicalQueryString = Object.entries(params.query ?? {})
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, value]) => `${uriEncode(key)}=${uriEncode(value)}`)
+    .join("&");
+
+  const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+  const canonicalHeaders =
+    `host:${host}\n` +
+    `x-amz-content-sha256:${payloadHash}\n` +
+    `x-amz-date:${amzDate}\n`;
+
+  const canonicalRequest = [
+    method.toUpperCase(),
+    uriEncode(path, false),
+    canonicalQueryString,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+
+  const stringToSign = [
+    ALGORITHM,
+    amzDate,
+    scope,
+    sha256Hex(canonicalRequest),
+  ].join("\n");
+
+  let signingKey: Buffer | string = `AWS4${r2.secretAccessKey}`;
+  for (const part of [dateStamp, R2_REGION, "s3", "aws4_request"]) {
+    signingKey = hmac(signingKey, part);
+  }
+  const signature = createHmac("sha256", signingKey)
+    .update(stringToSign, "utf8")
+    .digest("hex");
+
+  return {
+    url: `https://${host}${uriEncode(path, false)}` +
+      (canonicalQueryString ? `?${canonicalQueryString}` : ""),
+    headers: {
+      Authorization:
+        `${ALGORITHM} Credential=${r2.accessKeyId}/${scope}, ` +
+        `SignedHeaders=${signedHeaders}, Signature=${signature}`,
+      "x-amz-content-sha256": payloadHash,
+      "x-amz-date": amzDate,
+    },
+  };
 }
 
 /**

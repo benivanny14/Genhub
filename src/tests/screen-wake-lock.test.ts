@@ -251,7 +251,9 @@ describe("the upload form's use of it", () => {
     const reserve = slice("async function startVideoUpload", "async function runVideoUpload");
 
     const asked = reserve.indexOf("await holdScreenAwake()");
-    const reserved = reserve.indexOf("await initiateUpload()");
+    // The call, not its argument: the size it passes is what picks the transport
+    // (lib/upload-target.ts) and is asserted in tests/upload-send.test.ts.
+    const reserved = reserve.indexOf("await initiateUpload(");
 
     expect(asked).toBeGreaterThan(-1);
     expect(reserved).toBeGreaterThan(-1);
@@ -277,12 +279,27 @@ describe("the upload form's use of it", () => {
     expect(page).toMatch(/if \(!transferring\)[\s\S]{0,400}releaseScreenWake\(\)/);
   });
 
-  it("releases it on unmount, along with the upload itself", () => {
+  it("releases it on unmount, along with the upload, its parts and the slot", () => {
     // Leaving the page mid-transfer is a cancel, and a cancel that leaves an
-    // invisible XHR running holds a lock and an orphaned slot behind it.
-    expect(page).toMatch(
-      /uploadAbortRef\.current\?\.abort\(\)[\s\S]{0,200}releaseScreenWake\(\)/
-    );
+    // invisible XHR running holds a lock and an orphaned slot behind it. A
+    // multipart upload leaves more than that: every part already sent is real,
+    // billed storage in the bucket that no retry can reach once the page is
+    // gone — which is why the transfer is aborted, then given up, then the lock
+    // is released, in that order.
+    // Sliced rather than matched with a bounded gap: the middle of this cleanup
+    // is four lines of comment explaining WHY a failure is not given up, and a
+    // regex with a character budget in it fails when somebody explains better.
+    const abortAt = page.indexOf("uploadAbortRef.current?.abort()");
+    expect(abortAt).toBeGreaterThan(-1);
+    const cleanup = page.slice(abortAt, page.indexOf("}, [releaseScreenWake]);", abortAt));
+
+    const abandoned = cleanup.indexOf("abandonPendingUpload()");
+    const released = cleanup.indexOf("releaseScreenWake()");
+
+    expect(cleanup).toContain("uploadAbortRef.current = null");
+    expect(abandoned).toBeGreaterThan(-1);
+    expect(released).toBeGreaterThan(-1);
+    expect(abandoned).toBeLessThan(released);
   });
 
   it("never touches the Wake Lock API itself", () => {

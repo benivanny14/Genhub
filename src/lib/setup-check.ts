@@ -29,7 +29,7 @@ import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./red
 import { harakaBreakerNotice } from "./payments/harakapay";
 import { assessFloat, floatFloorTzs } from "./services/harakapay-float-alert.service";
 import { bunnyWebhookUrl, lastBunnyWebhookDelivery } from "./services/bunny-webhook.service";
-import { isR2Configured, presignR2Delete, presignR2Put } from "./r2-sign";
+import { isR2Configured, presignR2Delete, presignR2Put, r2XmlMessage } from "./r2-sign";
 import config from "./config";
 
 // ---------------------------------------------------------------- checklist
@@ -751,19 +751,6 @@ async function probeHarakapay(): Promise<ProbeResult> {
  */
 const R2_PROBE_KEY = "probes/health";
 
-/**
- * The sentence R2 puts inside the XML body it refuses with.
- *
- * Worth the twelve lines: R2 names the field and the reason —
- * `<Message>Credential access key has length 31, should be 32</Message>` is the
- * whole diagnosis — and without it the probe reports a bare 403, which is the
- * same answer a revoked key, a wrong bucket and a blocked network all give.
- */
-function r2RefusalMessage(body: string): string {
-  const message = body.match(/<Message>([^<]{3,140})<\/Message>/)?.[1];
-  return message ? ` — ${message}` : "";
-}
-
 async function probeR2(): Promise<ProbeResult> {
   const base = { id: "r2", name: "Upload storage (R2)" };
   if (!isR2Configured(config.r2)) {
@@ -784,7 +771,7 @@ async function probeR2(): Promise<ProbeResult> {
       return {
         ...base,
         state: "fail",
-        detail: `R2 refused a signed upload (HTTP ${res.status}${r2RefusalMessage(body)})`,
+        detail: `R2 refused a signed upload (HTTP ${res.status}${r2XmlMessage(body)})`,
       };
     }
   } catch (error) {

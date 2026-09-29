@@ -7,10 +7,20 @@
 // server — see createVideoUpload() in lib/bunny.ts for why the browser cannot
 // talk to the management API itself.
 //
-// ONE TRANSPORT. The response carries a `presigned` target — a URL that lets the
-// browser PUT the file straight into the R2 bucket, signed for that object and
-// that moment only (lib/r2-sign.ts, lib/upload-target.ts). The slot was reserved
-// here, by this server, with the key: the browser never gets one.
+// TWO TRANSPORTS, ONE ANSWER. The size the file picker reported decides which:
+//
+//   * one presigned URL that lets the browser PUT the whole file straight into
+//     the R2 bucket — for anything that fits in a single part; or
+//   * a multipart plan, begun HERE and answered with its upload id, for
+//     everything bigger (lib/upload-multipart.ts explains why: a 192 MB file
+//     over a 1.55 Mbps link is seventeen minutes, and a single request that is
+//     cut at forty seconds loses everything it had sent).
+//
+// `presigned` and `multipart` are mutually exclusive, so the page never chooses:
+// it sends the file down whichever road this response opened (lib/upload-send.ts).
+//
+// The slot was reserved here, by this server, with the key: the browser never
+// gets one, for either transport.
 //
 // A deployment with no bucket configured answers 503 instead of handing out
 // something the client cannot use. That is a refusal on purpose: the alternative
@@ -21,8 +31,14 @@
 import { NextRequest } from "next/server";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
-import { createVideoUpload } from "@/lib/bunny";
-import { createPresignedUploadTarget, isPresignedUploadConfigured } from "@/lib/upload-target";
+import { createVideoUpload, deleteBunnyVideo } from "@/lib/bunny";
+import {
+  beginMultipartUpload,
+  createPresignedUploadTarget,
+  isPresignedUploadConfigured,
+  needsMultipart,
+  partCountFor,
+} from "@/lib/upload-target";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 
@@ -95,9 +111,56 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json().catch(() => ({}));
-    const title = body.title || `Video ${Date.now()}`;
+    const title =
+      typeof body.title === "string" && body.title.trim()
+        ? body.title.trim().slice(0, 200)
+        : `Video ${Date.now()}`;
+
+    // The size the file picker already knows, and the only thing that decides
+    // which transport this upload gets. It is a LIE THE CLIENT CAN TELL — it
+    // could claim 1 byte and then send 2 GB — and that is deliberate, because the
+    // alternative is the server refusing a file it cannot measure: what a wrong
+    // size costs is a creator whose huge file is sent as one request, which is
+    // exactly what the parts exist to avoid, and never a credential the server
+    // did not mean to hand out. The key is derived from the video id either way,
+    // and both transports write the same object.
+    const reportedSize = Number(body.size);
 
     const result = await createVideoUpload(title);
+
+    if (Number.isFinite(reportedSize) && needsMultipart(reportedSize)) {
+      try {
+        // Begun here rather than by the browser: an unfinished multipart upload
+        // is a real entry in the bucket, and a client that could begin them at
+        // will could leave thousands behind.
+        console.info(
+          `[Upload Signature] ${result.videoId}: multipart, ${partCountFor(reportedSize)} parts of ~8 MiB for ${reportedSize} bytes`
+        );
+        const multipart = await beginMultipartUpload(result.videoId, reportedSize);
+        return api.success(
+          {
+            ...result,
+            presigned: null,
+            multipart,
+            presignedConfigured: isPresignedUploadConfigured(),
+          },
+          "Upload credentials created"
+        );
+      } catch (error) {
+        // The slot is already reserved, and a reservation that cannot be filled
+        // must not stay in the library: this is the exact shape that filled a
+        // live library with empty slots. Best effort — the creator's failure is
+        // the one worth reporting, and a bucket that will not begin an upload
+        // will usually not let go of a video either.
+        await deleteBunnyVideo(result.videoId).catch(() => undefined);
+        console.error("[Upload Signature Error]", error);
+        return api.error(
+          "The video storage refused to start the upload. Please try again in a moment — if it keeps happening, tell support.",
+          502,
+          "STORAGE_REFUSED"
+        );
+      }
+    }
 
     // A last line of defence rather than a real branch: the check above already
     // refused a deployment that cannot sign, so reaching here means the two
@@ -106,6 +169,7 @@ export async function POST(request: NextRequest) {
     const presigned = createPresignedUploadTarget(result.videoId);
 
     if (!presigned) {
+      await deleteBunnyVideo(result.videoId).catch(() => undefined);
       return api.error(
         "Video uploads are not available right now — the upload storage is not configured. Tell support.",
         503,
@@ -114,7 +178,12 @@ export async function POST(request: NextRequest) {
     }
 
     return api.success(
-      { ...result, presigned, presignedConfigured: isPresignedUploadConfigured() },
+      {
+        ...result,
+        presigned,
+        multipart: null,
+        presignedConfigured: isPresignedUploadConfigured(),
+      },
       "Upload credentials created"
     );
   } catch (error) {

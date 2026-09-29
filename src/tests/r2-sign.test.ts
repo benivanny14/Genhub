@@ -19,9 +19,11 @@ import {
   presign,
   presignR2Delete,
   presignR2Put,
+  presignR2UploadPart,
   r2Host,
   r2ObjectPath,
   sha256Hex,
+  signR2Request,
   uriEncode,
   type R2Credentials,
 } from "@/lib/r2-sign";
@@ -213,6 +215,74 @@ describe("presignR2Delete", () => {
     const { url } = presignR2Delete(R2, "probes/health", 120, NOW);
     expect(url).not.toContain(R2.secretAccessKey);
     expect(url).toContain("X-Amz-Expires=120");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Multipart, which is what a file too big for one request arrives in.
+//
+// Verified against the live bucket as well as here: a cycle of create, two
+// presigned parts, complete, HEAD reported exactly the bytes sent, and a URL
+// minted for part 1 replayed as part 9 answered 403.
+// -----------------------------------------------------------------------------
+describe("presignR2UploadPart", () => {
+  it("signs the part number and the upload id, so neither can be swapped", () => {
+    const { url, canonicalRequest } = presignR2UploadPart(R2, "incoming/v1", "UP-1", 3, 300, NOW);
+
+    // In the canonical request, not merely in the URL: this is what makes R2
+    // check them. Appended without signing, R2 would accept the URL and ignore
+    // which part it was for.
+    expect(canonicalRequest.split("\n")[2]).toContain("partNumber=3");
+    expect(canonicalRequest.split("\n")[2]).toContain("uploadId=UP-1");
+    // Sorted by name, as AWS requires: uppercase auth params before lowercase.
+    expect(canonicalRequest.split("\n")[2]).toMatch(
+      /X-Amz-SignedHeaders=host&partNumber=3&uploadId=UP-1$/
+    );
+    expect(url).toContain("partNumber=3");
+  });
+
+  it("gives a different signature to every part and every upload", () => {
+    const base = presignR2UploadPart(R2, "k", "UP-1", 1, 300, NOW).signature;
+    expect(presignR2UploadPart(R2, "k", "UP-1", 2, 300, NOW).signature).not.toBe(base);
+    expect(presignR2UploadPart(R2, "k", "UP-2", 1, 300, NOW).signature).not.toBe(base);
+  });
+
+  it("still carries the deadline and no secret", () => {
+    const { url } = presignR2UploadPart(R2, "k", "UP-1", 1, 300, NOW);
+    expect(url).toContain("X-Amz-Expires=300");
+    expect(url).not.toContain(R2.secretAccessKey);
+  });
+});
+
+describe("signR2Request", () => {
+  it("authorizes by header, which the browser never gets to see", () => {
+    const { headers } = signR2Request({ r2: R2, method: "POST", key: "k", date: NOW });
+
+    expect(headers.Authorization).toMatch(/^AWS4-HMAC-SHA256 Credential=key-id\/20260929\/auto\/s3\/aws4_request/);
+    expect(headers.Authorization).toContain("SignedHeaders=host;x-amz-content-sha256;x-amz-date");
+    expect(headers["x-amz-date"]).toBe("20260929T130000Z");
+    // The body is hashed into the signature, unlike a presigned URL: the part
+    // list of a complete-multipart request must not be swappable in flight.
+    expect(headers["x-amz-content-sha256"]).toBe(sha256Hex(""));
+    expect(headers.Authorization).not.toContain(R2.secretAccessKey);
+  });
+
+  it("hashes the body, so a different part list is a different signature", () => {
+    const one = signR2Request({ r2: R2, method: "POST", key: "k", body: "<a/>", date: NOW });
+    const two = signR2Request({ r2: R2, method: "POST", key: "k", body: "<b/>", date: NOW });
+
+    expect(one.headers["x-amz-content-sha256"]).not.toBe(two.headers["x-amz-content-sha256"]);
+    expect(one.headers.Authorization).not.toBe(two.headers.Authorization);
+  });
+
+  it("puts the operation parameters in the URL and in the canonical query", () => {
+    const { url } = signR2Request({ r2: R2, method: "POST", key: "k", query: { uploads: "" }, date: NOW });
+    expect(url).toBe("https://a1b2c3.r2.cloudflarestorage.com/genhub-uploads/k?uploads=");
+  });
+
+  it("can name the bucket itself, for a request about no one object", () => {
+    const { url } = signR2Request({ r2: R2, method: "GET", key: null, date: NOW });
+    expect(url).toBe("https://a1b2c3.r2.cloudflarestorage.com/genhub-uploads");
   });
 });
 
