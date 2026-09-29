@@ -17,6 +17,7 @@ import {
   amzDateFrom,
   isR2Configured,
   presign,
+  presignR2Delete,
   presignR2Put,
   r2Host,
   r2ObjectPath,
@@ -186,6 +187,32 @@ describe("presignR2Put", () => {
   it("signs a key with slashes as one path, not three segments", () => {
     const { canonicalRequest } = presignR2Put(R2, "incoming/a/b", 60, NOW);
     expect(canonicalRequest.split("\n")[1]).toBe("/genhub-uploads/incoming/a/b");
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The delete half, which exists only so the upload-storage probe can clean up
+// after itself. Its failure mode is quiet — a wrong signature leaves four bytes
+// in the bucket — so what matters is that it is SIGNED, and that its signature
+// is not the PUT's.
+// -----------------------------------------------------------------------------
+describe("presignR2Delete", () => {
+  it("addresses the same object and differs from the PUT's signature", () => {
+    const del = presignR2Delete(R2, "probes/health", 120, NOW);
+    const put = presignR2Put(R2, "probes/health", 120, NOW);
+
+    // Same object, same deadline: only the method differs, and the method is
+    // inside the signature — so a URL signed for one cannot do the other, which
+    // is the property that keeps a creator's PUT unable to delete anything.
+    expect(del.url.split("?")[0]).toBe(put.url.split("?")[0]);
+    expect(del.signature).not.toBe(put.signature);
+    expect(del.canonicalRequest.startsWith("DELETE\n")).toBe(true);
+  });
+
+  it("carries no secret and dies on its own", () => {
+    const { url } = presignR2Delete(R2, "probes/health", 120, NOW);
+    expect(url).not.toContain(R2.secretAccessKey);
+    expect(url).toContain("X-Amz-Expires=120");
   });
 });
 

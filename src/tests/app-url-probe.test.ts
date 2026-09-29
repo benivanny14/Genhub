@@ -22,7 +22,7 @@ import { join } from "node:path";
 
 import { describe, it, expect } from "vitest";
 
-import { classifyAppUrlAnswer } from "@/lib/setup-check";
+import { HARAKA_PROBE_TIMEOUTS_MS, classifyAppUrlAnswer } from "@/lib/setup-check";
 
 const URL_ = "https://genhub.example.test";
 
@@ -105,5 +105,51 @@ describe("warn is not a failure to the alarm", () => {
     // ever joined this list, the probe fix above would silently stop working and
     // the watchdog would alarm on a URL that is fine.
     expect(source).toMatch(/const\s+failing\s*=\s*probes\.filter\(\(p\)\s*=>\s*p\.state\s*===\s*["']fail["']\)/);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// The HarakaPay probe's budget. A bound, like the ones in
+// redis-bounded.test.ts and harakapay-bounded.test.ts, because the failure it
+// prevents is silent.
+//
+// The probe shares /api/health/services with eight others inside a function
+// whose `maxDuration` kills it mid-probe — and a killed function answers the
+// watchdog exactly the way an unreachable service does. So a budget raised past
+// that ceiling takes the alarm down while looking like a timeout, which is why
+// the SUM of both attempts is asserted rather than trusted.
+//
+// The bug this suite is a sibling of: one 15 s attempt reported "The operation
+// was aborted due to timeout" while both the key and the gateway were healthy,
+// and because /api/health/services is what the post-deploy check and the uptime
+// watchdog read, every deploy and every alarm went red for a fault no code
+// change could fix. An alarm that is red nearly all the time is its own failure.
+// -----------------------------------------------------------------------------
+describe("the HarakaPay probe's budget", () => {
+  const route = readFileSync(
+    join(process.cwd(), "src", "app", "api", "health", "services", "route.ts"),
+    "utf8"
+  );
+
+  it("fits inside the route's function budget, retry included", () => {
+    const maxDuration = Number(route.match(/export\s+const\s+maxDuration\s*=\s*(\d+)/)?.[1]);
+    const worstCaseMs = HARAKA_PROBE_TIMEOUTS_MS.reduce((total, ms) => total + ms, 0);
+
+    expect(maxDuration).toBeGreaterThan(0);
+    expect(worstCaseMs).toBeLessThan(maxDuration * 1000);
+  });
+
+  it("gives the first attempt longer than the gateway's measured cold start", () => {
+    // Measured against the live gateway on 2026-09-29: the first request on a
+    // cold connection took 11.8 s, another took longer than 20 s, and a request
+    // that followed a completed one took 0.667 s — the gateway pays a one-off
+    // cost and then answers quickly. A budget at or below that cost reports a
+    // timeout for a gateway that is working.
+    const MEASURED_COLD_START_MS = 11_800;
+    expect(HARAKA_PROBE_TIMEOUTS_MS[0]).toBeGreaterThan(MEASURED_COLD_START_MS);
+  });
+
+  it("retries exactly once, so one more attempt cannot push it past the ceiling", () => {
+    expect(HARAKA_PROBE_TIMEOUTS_MS).toHaveLength(2);
   });
 });

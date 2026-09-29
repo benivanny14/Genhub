@@ -29,6 +29,7 @@ import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./red
 import { harakaBreakerNotice } from "./payments/harakapay";
 import { assessFloat, floatFloorTzs } from "./services/harakapay-float-alert.service";
 import { bunnyWebhookUrl, lastBunnyWebhookDelivery } from "./services/bunny-webhook.service";
+import { isR2Configured, presignR2Delete, presignR2Put } from "./r2-sign";
 import config from "./config";
 
 // ---------------------------------------------------------------- checklist
@@ -640,55 +641,171 @@ async function probeSmtp(): Promise<ProbeResult> {
   }
 }
 
+/**
+ * Budget for the balance read's two attempts, in order (ms).
+ *
+ * 15 s on its own was not enough. Measured against the live gateway on
+ * 2026-09-29: the FIRST request on a cold connection took 11.8 s, another took
+ * longer than 20 s, and a request that followed a completed one took 0.667 s.
+ * The gateway pays a one-off cost — its own session with the operator network —
+ * and answers quickly afterwards, so the slow thing is a cold connection, not
+ * this key and not this route.
+ *
+ * HOW IT USED TO FAIL: one 15 s attempt put that one-off cost exactly on the
+ * boundary. The probe reported "The operation was aborted due to timeout" while
+ * both the key and the gateway were healthy, and because
+ * `/api/health/services` is what the post-deploy check and the uptime watchdog
+ * read, every deploy and every alarm went red for a fault no code change could
+ * fix. An alarm that is red nearly all the time is its own failure (§4.0.2).
+ *
+ * THE SECOND BUDGET IS SHORT ON PURPOSE, and 15 + 12 must stay under the
+ * route's `maxDuration = 30`: a probe killed mid-flight is indistinguishable
+ * from an unreachable gateway, which would silence the alarm this exists to
+ * raise.
+ */
+export const HARAKA_PROBE_TIMEOUTS_MS = [15_000, 12_000] as const;
+
 async function probeHarakapay(): Promise<ProbeResult> {
   const base = { id: "harakapay", name: "HarakaPay" };
   const key = env("HARAKAPAY_API_KEY");
   if (!key) return { ...base, state: "skip", detail: "HARAKAPAY_API_KEY not set" };
 
   const url = `${env("HARAKAPAY_BASE_URL") || "https://harakapay.net"}/api/v1/balance`;
-  try {
-    const res = await fetch(url, { headers: { "X-API-Key": key }, signal: timeout(15_000) });
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok || body.success === false) {
-      return { ...base, state: "fail", detail: `HTTP ${res.status} - the API key was rejected` };
-    }
 
-    // Where the float sits. This is a BALANCE on the merchant's HarakaPay
-    // account, not a broken credential: the key is valid, the gateway answers,
-    // and the app's collect path never reads the float — so it is reported as a
-    // warning, never a failure. A `fail` here turned every deploy and uptime
-    // check red for a state no code change fixes and nothing blocks on. A
-    // rejected key or an unresponsive gateway still fails (the branches above
-    // and below); this one only lowers the level.
-    const float = Number(body.float_balance ?? 0);
-    const floor = floatFloorTzs();
-    const level = assessFloat(float, floor);
-    // The probe proves the gateway answers *now*; the breaker says whether this
-    // process has been skipping it. Both are needed: a healthy probe with an
-    // open breaker means the fault is intermittent, not fixed.
-    const breakerNotice = harakaBreakerNotice();
+  // Two attempts at most. The retry exists for a request that never arrived —
+  // see HARAKA_PROBE_TIMEOUTS_MS — so an answer that DID arrive (a rejected key,
+  // an HTTP error) is returned from inside the loop rather than asked for twice.
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < HARAKA_PROBE_TIMEOUTS_MS.length; attempt += 1) {
+    try {
+      const res = await fetch(url, {
+        headers: { "X-API-Key": key },
+        signal: timeout(HARAKA_PROBE_TIMEOUTS_MS[attempt]),
+      });
+      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok || body.success === false) {
+        return { ...base, state: "fail", detail: `HTTP ${res.status} - the API key was rejected` };
+      }
+
+      // Where the float sits. This is a BALANCE on the merchant's HarakaPay
+      // account, not a broken credential: the key is valid, the gateway answers,
+      // and the app's collect path never reads the float — so it is reported as a
+      // warning, never a failure. A `fail` here turned every deploy and uptime
+      // check red for a state no code change fixes and nothing blocks on. A
+      // rejected key or an unresponsive gateway still fails (the branches above
+      // and below); this one only lowers the level.
+      const float = Number(body.float_balance ?? 0);
+      const floor = floatFloorTzs();
+      const level = assessFloat(float, floor);
+      // The probe proves the gateway answers *now*; the breaker says whether this
+      // process has been skipping it. Both are needed: a healthy probe with an
+      // open breaker means the fault is intermittent, not fixed.
+      const breakerNotice = harakaBreakerNotice();
+      return {
+        ...base,
+        state: level === "ok" && !breakerNotice ? "ok" : "warn",
+        detail:
+          `key valid · wallet ${body.wallet_balance ?? 0} · float ${float}` +
+          (attempt > 0
+            ? " · answered on the retry (its first connection is slow, not its key)"
+            : "") +
+          (level === "empty"
+            ? " · float is 0 — top up the merchant float so collections keep settling"
+            : level === "low"
+              ? ` · under the ${floor} TZS floor — top up before it reaches 0`
+              : "") +
+          (breakerNotice ? ` · ${breakerNotice}` : ""),
+      };
+    } catch (error) {
+      // Only a request that never produced an answer reaches here, which is the
+      // one case where the extra seconds are worth spending.
+      lastError = error;
+    }
+  }
+
+  const breakerNotice = harakaBreakerNotice();
+  return {
+    ...base,
+    state: "fail",
+    detail:
+      String((lastError as Error)?.message || lastError).slice(0, 160) +
+      ` · gave up after ${HARAKA_PROBE_TIMEOUTS_MS.length} attempts` +
+      (breakerNotice ? ` · ${breakerNotice}` : ""),
+  };
+}
+
+/**
+ * Whether this deployment's upload storage actually accepts a file.
+ *
+ * The one dependency in the upload path with no probe, and the one whose failure
+ * is invisible until a creator has already spent their data: a wrong R2
+ * credential signs a URL that R2 refuses with 403, so the browser's PUT dies with
+ * nothing the creator can act on. `uploadStorageReadiness()` cannot catch it — it
+ * compares variable NAMES, and an access key of 31 characters (R2 requires 32) is
+ * a name that is present.
+ *
+ * So this signs a real PUT, sends four bytes to a key nothing reads, then deletes
+ * it again. Self-cleaning like the Redis probe's write, bounded to a couple of
+ * seconds, and under its own prefix so it can never collide with an upload —
+ * which lives under `incoming/`.
+ */
+const R2_PROBE_KEY = "probes/health";
+
+/**
+ * The sentence R2 puts inside the XML body it refuses with.
+ *
+ * Worth the twelve lines: R2 names the field and the reason —
+ * `<Message>Credential access key has length 31, should be 32</Message>` is the
+ * whole diagnosis — and without it the probe reports a bare 403, which is the
+ * same answer a revoked key, a wrong bucket and a blocked network all give.
+ */
+function r2RefusalMessage(body: string): string {
+  const message = body.match(/<Message>([^<]{3,140})<\/Message>/)?.[1];
+  return message ? ` — ${message}` : "";
+}
+
+async function probeR2(): Promise<ProbeResult> {
+  const base = { id: "r2", name: "Upload storage (R2)" };
+  if (!isR2Configured(config.r2)) {
     return {
       ...base,
-      state: level === "ok" && !breakerNotice ? "ok" : "warn",
-      detail:
-        `key valid · wallet ${body.wallet_balance ?? 0} · float ${float}` +
-        (level === "empty"
-          ? " · float is 0 — top up the merchant float so collections keep settling"
-          : level === "low"
-            ? ` · under the ${floor} TZS floor — top up before it reaches 0`
-            : "") +
-        (breakerNotice ? ` · ${breakerNotice}` : ""),
+      state: "skip",
+      detail: "R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET not set",
     };
+  }
+
+  const now = new Date();
+  const put = presignR2Put(config.r2, R2_PROBE_KEY, 120, now);
+
+  try {
+    const res = await fetch(put.url, { method: "PUT", body: "genhub", signal: timeout(8_000) });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return {
+        ...base,
+        state: "fail",
+        detail: `R2 refused a signed upload (HTTP ${res.status}${r2RefusalMessage(body)})`,
+      };
+    }
   } catch (error) {
-    const breakerNotice = harakaBreakerNotice();
     return {
       ...base,
       state: "fail",
-      detail:
-        String((error as Error)?.message || error).slice(0, 160) +
-        (breakerNotice ? ` · ${breakerNotice}` : ""),
+      detail: `R2 unreachable (${String((error as Error)?.message || error).slice(0, 90)})`,
     };
   }
+
+  // The question is answered; the cleanup is best-effort on purpose. A four-byte
+  // marker left under `probes/` is not worth turning a working upload path red,
+  // and because the key is fixed it can never accumulate.
+  try {
+    const del = presignR2Delete(config.r2, R2_PROBE_KEY, 120, now);
+    await fetch(del.url, { method: "DELETE", signal: timeout(8_000) });
+  } catch {
+    /* leave it */
+  }
+
+  return { ...base, state: "ok", detail: `signed PUT accepted by bucket "${config.r2.bucket}"` };
 }
 
 /**
@@ -767,6 +884,7 @@ export async function runLiveProbes(): Promise<ProbeResult[]> {
   return Promise.all([
     probeDatabase(),
     probeRedis(),
+    probeR2(),
     probeBunny(),
     probeWebhook(),
     probeCdn(),

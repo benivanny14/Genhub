@@ -18,7 +18,10 @@
 // =============================================================================
 
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
+import { INGEST_TIMEOUT_MS } from "@/lib/services/video-ingest.service";
 import {
   signVideoIngestToken,
   videoIngestTokenPayload,
@@ -287,5 +290,34 @@ describe("the ingest worker", () => {
     expect(res.status).toBe(502);
     expect(body.bunnyStatus).toBe(401);
     expect(String(body.bunnyBody)).toContain("Authentication has been denied");
+  });
+});
+
+// =============================================================================
+// The caller's budget, which has to lose to the route's own
+// =============================================================================
+
+describe("the ingest route's patience", () => {
+  const route = readFileSync(
+    join(process.cwd(), "src", "app", "api", "videos", "ingest", "route.ts"),
+    "utf8"
+  );
+
+  it("gives up before the function does, so the creator is told a reason", () => {
+    // Both were 60s, which meant the abort and the kill landed on the same
+    // instant: the request died with no body, the page could only say "Network
+    // error while preparing the video", and the one step that knows what went
+    // wrong reported nothing. The abort has to come FIRST.
+    const maxDuration = Number(route.match(/export\s+const\s+maxDuration\s*=\s*(\d+)/)?.[1]);
+
+    expect(maxDuration).toBeGreaterThan(0);
+    expect(INGEST_TIMEOUT_MS).toBeLessThan(maxDuration * 1000);
+  });
+
+  it("still leaves the abort room to serialise an answer", () => {
+    // Not merely less than maxDuration: it has to be far enough under it that
+    // the route can log, build the response and flush it after the abort fires.
+    const maxDuration = Number(route.match(/export\s+const\s+maxDuration\s*=\s*(\d+)/)![1]);
+    expect(maxDuration * 1000 - INGEST_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000);
   });
 });

@@ -41,8 +41,20 @@ import { isR2Configured } from "@/lib/r2-sign";
  * Bunny answers, and if this route is cut short the ingest it started may still
  * be running. That is safe, because a retry writes the same file into the same
  * reserved slot.
+ *
+ * IT MUST STAY UNDER THE ROUTE'S OWN BUDGET. `/api/videos/ingest` declares
+ * `maxDuration = 60`, and this was 60_000 as well — so the two fired at the same
+ * instant and the function was killed exactly when the abort was about to
+ * produce a sentence. A killed function answers the browser with nothing at all,
+ * which the upload page can only report as "Network error while preparing the
+ * video": the one message that names no cause, on the one step where the cause
+ * is knowable. The headroom below is what lets the abort win that race, so the
+ * creator gets this file's real reason (describeIngestFailure) instead.
+ *
+ * Exported so the relationship is asserted rather than remembered — see
+ * tests/video-ingest.test.ts.
  */
-const INGEST_TIMEOUT_MS = 60_000;
+export const INGEST_TIMEOUT_MS = 55_000;
 
 export type IngestFailureReason =
   | "not-configured"

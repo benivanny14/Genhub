@@ -246,3 +246,30 @@ export function presignR2Put(
     date,
   });
 }
+
+/**
+ * A one-object DELETE, for cleaning up after a probe.
+ *
+ * Same signature, same narrow scope as the PUT above: this authorizes the named
+ * object and nothing else, so it can remove the four bytes a health probe wrote
+ * and cannot empty a bucket. It is deliberately not reachable from a browser
+ * request — nothing in the upload path deletes, and the presigned URL a creator
+ * holds must stay unable to.
+ */
+export function presignR2Delete(
+  r2: R2Credentials,
+  key: string,
+  expiresInSeconds: number,
+  date: Date
+): PresignedRequest {
+  return presign({
+    host: r2Host(r2.accountId),
+    path: r2ObjectPath(r2.bucket, key),
+    method: "DELETE",
+    accessKeyId: r2.accessKeyId,
+    secretAccessKey: r2.secretAccessKey,
+    region: R2_REGION,
+    expiresInSeconds,
+    date,
+  });
+}
