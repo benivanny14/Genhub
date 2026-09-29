@@ -511,15 +511,23 @@ export async function uploadVideoFile(
           attemptMs.push(now() - startedAt);
           const body = await response.text().catch(() => "");
           const claimed = offsetFromConflict(body);
-          try {
-            offset = await readOffset(session, options.signal);
-          } catch (headError) {
-            if (headError instanceof VideoUploadError && headError.code === "ABORTED") throw headError;
-            // The refusal itself named the offset Bunny holds. When the
-            // confirming HEAD cannot be made, that figure is still better than
-            // an offset we already know is wrong.
-            if (claimed === null) throw headError;
+
+          // Bunny's OWN figure first, because the refusal it just sent is the
+          // most direct answer available: "Offset does not match file. File
+          // offset: 10." It is Bunny stating what it holds, measured against the
+          // live API, and it cannot be mistaken for anything else.
+          //
+          // The HEAD is only the fallback, and that order matters. A signed HEAD
+          // answers 404 the moment Bunny no longer has the resource — with no
+          // way to tell that apart from "you sent no signature" — and four live
+          // failure records in the admin panel are exactly that: an upload that
+          // got this far and then died on a confirmation request. Asking Bunny
+          // to confirm something it has already told us is a round trip that can
+          // only lose information.
+          if (claimed !== null && claimed > offset && claimed <= total) {
             offset = claimed;
+          } else {
+            offset = await readOffset(session, options.signal);
           }
           advanced = true;
           report?.({ uploadedBytes: offset, totalBytes: total, percent: percentOf(offset, total) });

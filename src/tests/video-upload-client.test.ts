@@ -183,6 +183,34 @@ describe("uploadVideoFile", () => {
     expect(patch).toBe(1);
   });
 
+  it("continues from the offset a 409 names, even when the confirming HEAD is gone", async () => {
+    // The live failure this reproduces: Bunny answers 409 and says exactly where
+    // the upload is, and then the confirmation HEAD comes back 404 — which is
+    // indistinguishable from a missing signature and used to end the upload as
+    // "the video service has closed this upload". Bunny had already said where
+    // the file was, so the upload continues from there.
+    let patch = 0;
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "HEAD") return new Response(null, { status: 404 });
+      if (init?.method === "GET") return new Response(null, { status: 404 });
+      patch += 1;
+      if (patch === 1) {
+        return new Response("Offset does not match file. File offset: 60. Request offset: 0", {
+          status: 409,
+        });
+      }
+      return acknowledged(100);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await settle(uploadVideoFile(fileOf(100), sessionFor(100), { offset: 0 }));
+
+    const sent = patches(fetchMock);
+    expect(sent).toHaveLength(2);
+    expect((sent[1][1].headers as Record<string, string>)["Upload-Offset"]).toBe("60");
+    expect((sent[1][1].body as Blob).size).toBe(40);
+  });
+
   it("does not retry a refusal Bunny answered", async () => {
     // A 400 is an answer. Five attempts at a request the host has already
     // rejected spends a creator's data to learn the same thing again.
