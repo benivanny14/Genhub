@@ -302,7 +302,12 @@ export default function UploadPage() {
       }
 
       const result = await uploadOne(file, "main", reuse);
-      if (!result) return;
+      if (!result) {
+        // Do not leave a dead session behind when the replacement reservation
+        // itself fails; Resume would otherwise repeat the same Bunny 404.
+        if (reuse) setMainSession(null);
+        return;
+      }
       setMainSession(result.discardSession ? null : result.session);
       if (!result.videoId) return;
       setBunnyVideoId(result.videoId);
@@ -336,7 +341,10 @@ export default function UploadPage() {
     setTeaserUploading(true);
     try {
       const result = await uploadOne(file, "teaser", reuse);
-      if (!result) return;
+      if (!result) {
+        if (reuse) setTeaserSession(null);
+        return;
+      }
       setTeaserSession(result.discardSession ? null : result.session);
       if (!result.videoId) return;
       setTeaserVideoId(result.videoId);
