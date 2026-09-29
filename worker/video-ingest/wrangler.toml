@@ -2,7 +2,10 @@
 # GENHUB - Video ingest (Cloudflare Worker)
 #
 # The last hop of an upload: this Worker reads one object out of the private R2
-# bucket and PUTs it into the Bunny slot the server already reserved. It is the
+# bucket and moves it into the Bunny slot the server already reserved, in 64 MB
+# TUS PATCHes — a single PUT of the whole file cannot work here, because
+# Cloudflare caps a subrequest's request body at 100 MB and Genhub accepts 2 GB.
+# It is the
 # only place in the system that holds the Bunny library key on this path, and the
 # browser never talks to it.
 #

@@ -17,6 +17,7 @@
 // under worker/video-ingest is imported, not reimplemented.
 // =============================================================================
 
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -28,7 +29,7 @@ import {
   videoIngestUrl,
   verifyVideoIngestToken,
 } from "@/lib/video-ingest-token";
-import worker from "../../worker/video-ingest/index";
+import worker, { CHUNK_BYTES } from "../../worker/video-ingest/index";
 
 const SECRET = "test-ingest-secret";
 const KEY = "incoming/045b5638-6eff-45bb-8ef9-92479ebc3c3b";
@@ -52,11 +53,88 @@ const urlOf = () =>
     })
   );
 
+/**
+ * A fake bucket: `head` for the LENGTH (metadata, no body), `get` for the
+ * slices.
+ *
+ * The two are separate calls because the Worker asks for them separately — an
+ * upload has to declare how long it is before the first byte moves, which is a
+ * question about metadata, not about bytes.
+ */
 function bucketWith(body: ReadableStream | null, size = 3) {
   return {
-    get: vi.fn(async () => (body ? { body, size } : null)),
+    head: vi.fn(async () => (body ? { size } : null)),
+    get: vi.fn(async (_key: string, options?: { range?: { offset: number; length: number } }) =>
+      body ? { body, size: options?.range?.length ?? size } : null
+    ),
   };
 }
+
+interface BunnyCall {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+/**
+ * The Bunny side of a TUS upload, as three requests: create, HEAD, PATCH.
+ *
+ * `slices` is the size of each PATCH's body, in order, so the fake can report
+ * the offsets a real server would — that is the value the Worker uses to decide
+ * how far it has got, so it cannot be faked without faking it here.
+ */
+function fakeBunny(options: {
+  slices: number[];
+  offsetStart?: number;
+  createStatus?: number;
+  createBody?: string;
+  location?: string | null;
+  patchStatus?: number;
+  throwOnPatch?: boolean;
+}) {
+  const calls: BunnyCall[] = [];
+  let offset = options.offsetStart ?? 0;
+  let sliceIndex = 0;
+
+  const impl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    calls.push({ url, method, headers, body: init?.body });
+
+    if (url.endsWith("/tusupload")) {
+      const outHeaders: Record<string, string> = {};
+      if (options.location !== null) outHeaders.location = options.location ?? "/tusupload/probe-session";
+      return new Response(options.createBody ?? "{}", {
+        status: options.createStatus ?? 201,
+        headers: outHeaders,
+      });
+    }
+
+    if (method === "HEAD") {
+      return new Response("", { status: 200, headers: { "upload-offset": String(offset) } });
+    }
+
+    if (options.throwOnPatch) throw new TypeError("network down");
+    if (options.patchStatus && options.patchStatus >= 400) {
+      return new Response('{"message":"refused"}', { status: options.patchStatus });
+    }
+
+    offset += options.slices[sliceIndex] ?? 0;
+    sliceIndex += 1;
+    // A 204 must carry no body at all: `new Response("", {status: 204})` throws
+    // inside the fake, which would look like Bunny refusing every chunk.
+    return new Response(null, { status: 204, headers: { "upload-offset": String(offset) } });
+  });
+
+  vi.stubGlobal("fetch", impl);
+  return { calls, patches: () => calls.filter((call) => call.method === "PATCH") };
+}
+
+/** What Bunny's signature must be, computed here from the docs' own rule. */
+const tusSignature = (libraryId: string, apiKey: string, expire: string, videoId: string) =>
+  createHash("sha256").update(`${libraryId}${apiKey}${expire}${videoId}`).digest("hex");
 
 function envWith(bucket: unknown) {
   return {
@@ -254,32 +332,95 @@ describe("the ingest worker", () => {
     expect(res.status).toBe(500);
   });
 
-  it("PUTs the streamed object to the reserved slot with the library key", async () => {
+  it("opens a TUS upload for the reserved slot and sends the object through it", async () => {
     const stream = new ReadableStream();
     const bucket = bucketWith(stream, 1234);
-    const bunny = vi.fn(async () => new Response('{"success":true}', { status: 200 }));
-    vi.stubGlobal("fetch", bunny);
+    const bunny = fakeBunny({ slices: [1234] });
 
     const res = await worker.fetch(await signedRequest(), envWith(bucket));
-
     expect(res.status).toBe(200);
-    expect(bucket.get).toHaveBeenCalledWith(KEY);
 
-    const [target, init] = bunny.mock.calls[0] as unknown as [string, RequestInit];
-    expect(target).toBe(`https://video.bunnycdn.com/library/760553/videos/${VIDEO_ID}`);
-    expect(init.method).toBe("PUT");
-    const headers = init.headers as Record<string, string>;
-    expect(headers.AccessKey).toBe("test-library-key");
-    expect(headers["Content-Type"]).toBe("application/octet-stream");
-    // Streamed, not buffered: the body is the object's stream itself.
-    expect(init.body).toBe(stream);
+    const create = bunny.calls[0];
+    expect(create.url).toBe("https://video.bunnycdn.com/tusupload");
+    expect(create.method).toBe("POST");
+    // The slot and the length, declared before a byte moves: TUS requires both.
+    expect(create.headers.VideoId).toBe(VIDEO_ID);
+    expect(create.headers.LibraryId).toBe("760553");
+    expect(create.headers["Upload-Length"]).toBe("1234");
+    expect(create.headers["Tus-Resumable"]).toBe("1.0.0");
+    // Bunny's own rule, recomputed here: library id, key, deadline, video id.
+    expect(create.headers.AuthorizationSignature).toBe(
+      tusSignature("760553", "test-library-key", create.headers.AuthorizationExpire, VIDEO_ID)
+    );
+    // Metadata is required and base64-encoded.
+    expect(create.headers["Upload-Metadata"]).toContain("filetype " + Buffer.from("video/mp4").toString("base64"));
+
+    // The Location Bunny returns is RELATIVE, so the PATCH has to be addressed
+    // against the API host rather than used as it arrives.
+    const patch = bunny.patches()[0];
+    expect(patch.url).toBe("https://video.bunnycdn.com/tusupload/probe-session");
+    expect(patch.headers["Upload-Offset"]).toBe("0");
+    expect(patch.headers["Content-Type"]).toBe("application/offset+octet-stream");
+    // Bunny revalidates the signature on EVERY request, so a PATCH without these
+    // is answered 400 "Library ID missing or invalid" — measured live.
+    expect(patch.headers.LibraryId).toBe("760553");
+    expect(patch.headers.AuthorizationSignature).toBe(create.headers.AuthorizationSignature);
+    // Streamed, not buffered: the body is the bucket's own slice.
+    expect(patch.body).toBe(stream);
+
+    await expect(res.json()).resolves.toMatchObject({ ok: true, bytes: 1234, chunks: 1 });
+  });
+
+  it("sends the file in pieces, each under the cap that made one PUT impossible", async () => {
+    // The reason this Worker exists in this shape: Cloudflare caps a subrequest's
+    // request body at 100 MB, and a creator's 192 MB file made the old single PUT
+    // throw in 1.8 seconds before Bunny was even reached.
+    expect(CHUNK_BYTES).toBeLessThan(100 * 1024 * 1024);
+
+    const total = CHUNK_BYTES + 10;
+    const bucket = bucketWith(new ReadableStream(), total);
+    const bunny = fakeBunny({ slices: [CHUNK_BYTES, 10] });
+
+    const res = await worker.fetch(await signedRequest(), envWith(bucket));
+    expect(res.status).toBe(200);
+
+    // Read by RANGE: the file is never held in the Worker's memory.
+    expect(bucket.get.mock.calls.map((call) => call[1])).toEqual([
+      { range: { offset: 0, length: CHUNK_BYTES } },
+      { range: { offset: CHUNK_BYTES, length: 10 } },
+    ]);
+
+    const patches = bunny.patches();
+    expect(patches.map((patch) => patch.headers["Upload-Offset"])).toEqual([
+      "0",
+      String(CHUNK_BYTES),
+    ]);
+    await expect(res.json()).resolves.toMatchObject({ ok: true, bytes: total, chunks: 2 });
+  });
+
+  it("continues from the offset Bunny already holds instead of starting again", async () => {
+    // What makes a second attempt cheap: a first one that was cut short left its
+    // bytes at Bunny, and Bunny is asked where they end rather than trusting
+    // anything this Worker would have had to remember.
+    const total = CHUNK_BYTES + 10;
+    const bucket = bucketWith(new ReadableStream(), total);
+    const bunny = fakeBunny({ slices: [10], offsetStart: CHUNK_BYTES });
+
+    await worker.fetch(await signedRequest(), envWith(bucket));
+
+    expect(bucket.get.mock.calls.map((call) => call[1])).toEqual([
+      { range: { offset: CHUNK_BYTES, length: 10 } },
+    ]);
+    expect(bunny.patches()).toHaveLength(1);
+    expect(bunny.patches()[0].headers["Upload-Offset"]).toBe(String(CHUNK_BYTES));
   });
 
   it("passes Bunny's refusal back with its own words", async () => {
-    const bunny = vi.fn(
-      async () => new Response('{"message":"Authentication has been denied"}', { status: 401 })
-    );
-    vi.stubGlobal("fetch", bunny);
+    const bunny = fakeBunny({
+      slices: [3],
+      createStatus: 401,
+      createBody: '{"message":"Authentication has been denied"}',
+    });
 
     const res = await worker.fetch(
       await signedRequest(),
@@ -290,6 +431,39 @@ describe("the ingest worker", () => {
     expect(res.status).toBe(502);
     expect(body.bunnyStatus).toBe(401);
     expect(String(body.bunnyBody)).toContain("Authentication has been denied");
+    // Nothing was sent to a library that had already refused us.
+    expect(bunny.patches()).toHaveLength(0);
+  });
+
+  it("answers JSON when the connection to Bunny dies, rather than throwing", async () => {
+    // The old code let this escape as an exception, and Cloudflare answered the
+    // caller with an HTML "Worker threw exception" page: the app could only say
+    // "could not be handed to the video service", and the real reason existed
+    // nowhere a creator or an operator could read it.
+    fakeBunny({ slices: [3], throwOnPatch: true });
+
+    const res = await worker.fetch(
+      await signedRequest(),
+      envWith(bucketWith(new ReadableStream(), 3))
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+
+    expect(res.status).toBe(502);
+    expect(String(body.bunnyBody)).toMatch(/network down/);
+  });
+
+  it("stops rather than pretending a refusal was a transfer", async () => {
+    const bunny = fakeBunny({ slices: [3], patchStatus: 415 });
+
+    const res = await worker.fetch(
+      await signedRequest(),
+      envWith(bucketWith(new ReadableStream(), 3))
+    );
+
+    expect(res.status).toBe(502);
+    // One chunk was refused, so the loop stopped there instead of hammering the
+    // same offset and spending three requests on a foregone conclusion.
+    expect(bunny.patches()).toHaveLength(1);
   });
 });
 

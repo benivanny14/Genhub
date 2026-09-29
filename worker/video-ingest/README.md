@@ -3,17 +3,48 @@
 The last hop of a Genhub upload. A video goes:
 
 ```
-browser ──presigned PUT──▶ Cloudflare R2 ──▶ this Worker ──PUT + AccessKey──▶ Bunny Stream
-                                             (token-checked)                    (reserved slot)
+browser ──presigned PUT──▶ Cloudflare R2 ──▶ this Worker ──TUS in 64 MB PATCHes──▶ Bunny Stream
+                                             (token-checked)     + library key       (reserved slot)
 ```
 
 - **The browser uploads to R2 with a presigned URL.** The server signs it
   (`src/lib/r2-sign.ts`) for one object, one method, one deadline. No credential
   of ours is in the browser, and no server of ours receives the file.
-- **This Worker moves the object into Bunny.** The Next server calls
-  `POST /ingest` with a token naming one object key and one video id; the Worker
-  verifies that token, reads that object, and PUTs it into the Bunyy slot the
-  server reserved before the upload started.
+- **This Worker moves the object into Bunny**, through Bunny's TUS endpoint. The
+  Next server calls `POST /ingest` with a token naming one object key and one
+  video id; the Worker verifies that token, then reads that object by range and
+  PATCHes it into the slot the server reserved before the upload started.
+
+## Why the file goes in pieces, and why that is not a preference
+
+It used to be one `PUT` of the whole object, and that cannot work from inside a
+Worker: Cloudflare caps a subrequest's request body at **100 MB** (Free and Pro;
+200 MB Business), while Genhub accepts up to 2 GB.
+
+Measured on 2026-09-29 with a real creator's file, on this exact code path:
+
+| Object | What happened |
+| --- | --- |
+| 1 MB | Bunny answered normally — the code was fine |
+| 192 MB | the Worker threw in **1.8 s**, before Bunny was reached, and the caller got Cloudflare's HTML `Worker threw exception` page instead of any JSON |
+
+That HTML page is why the failure named nothing anywhere: the app could only
+report "could not be handed to the video service", and the real reason existed
+in no log and no record. So the transfer is now:
+
+1. `POST /tusupload` against the reserved guid, declaring `Upload-Length`;
+2. `HEAD` the upload resource Bunny names, to learn **where a previous attempt
+   left off** — this is what makes a retry a continuation rather than a restart;
+3. `PATCH` 64 MB at a time, each one read from R2 by `range`, so the file is
+   never held in the Worker's memory and every request body stays under the cap;
+4. every ending becomes JSON, including a thrown connection — a Worker that
+   throws tells the caller nothing.
+
+Two details cost real time to find and are pinned in `src/tests/video-ingest.test.ts`:
+Bunny's `Location` is **relative** (`/tusupload/<id>`) and must be resolved
+against the API host, and the `Authorization*` / `LibraryId` headers are
+revalidated on **every** POST, HEAD and PATCH — a PATCH without them is answered
+`400 Library ID missing or invalid`.
 
 ## Why the ingest is a Worker and not Bunny's own fetch API
 
@@ -37,7 +68,7 @@ idempotent: the same file, into the same slot, as many times as it takes.
 | `BUNNY_STREAM_API_KEY` | secret. The library key. It can delete every video in the library, which is exactly why the browser never sees it and never talks to this Worker. |
 | `VIDEO_INGEST_SECRET` | secret. HMAC secret shared with the Next deployment. Same string on both sides or every ingest answers 401. |
 | `BUNNY_STREAM_LIBRARY_ID` | var. Public by design — it is in every playback URL. |
-| `BUCKET` | binding. Read-only in practice: the code calls `get` and nothing else. |
+| `BUCKET` | binding. Read-only in practice: the code calls `head` and `get` (ranged) and nothing else. |
 
 ## Setup, in order
 
@@ -132,9 +163,12 @@ curl -s -X POST "https://genhub-video-ingest.<account>.workers.dev/ingest?key=x&
 curl -s https://genhub-video-ingest.<account>.workers.dev/health | grep -q '"bucketConfigured":true'
 ```
 
-The end-to-end proof is one real upload: after the PUT finishes, the Bunny slot
-should climb from `0 bytes` to the size of the file within seconds of the
-ingest call, and the row should be created with a `bunnyVideoId` that matches.
+The end-to-end proof is one real upload: after the transfer finishes, the Bunny
+slot should climb from `0 bytes` to the size of the file, and the row should be
+created with a `bunnyVideoId` that matches. For a large file this takes as long
+as the bytes take to cross between the two providers — the caller's patience
+(`INGEST_TIMEOUT_MS`, 55 s) is shorter than that for a multi-gigabyte video, and
+a second call continues from the offset Bunny reports rather than starting over.
 
 ## Failure signatures
 
@@ -145,16 +179,19 @@ ingest call, and the row should be created with a `bunnyVideoId` that matches.
 | Ingest answers `401` | `VIDEO_INGEST_SECRET` differs between Vercel and the Worker. |
 | Ingest answers `502` with `bunnyStatus: 401` | `BUNNY_STREAM_API_KEY` on the Worker is wrong. |
 | Ingest answers `502` with `bunnyStatus: 404` | The reserved slot is gone (deleted from the library mid-upload). |
-| Ingest answers `404` | The object is not in the bucket: the PUT never finished, or the key does not match `R2_BUCKET`. |
+| Ingest answers `404` | The object is not in the bucket: the upload never finished, or the key does not match `R2_BUCKET`. |
 | Ingest answers `503` | The Next deployment has no R2 or ingest configured. |
+| Caller receives an HTML page, not JSON | The Worker threw. This is what a body over the 100 MB subrequest cap looked like; every path now returns JSON, so a reappearance means a new unguarded throw. |
+| Ingest answers `502` with `bunnyStatus: 400` | Bunny wanted a header we did not send. The `Authorization*` / `LibraryId` set is required on POST, HEAD and PATCH alike. |
 
 ## One assumption worth knowing about
 
-The object is **streamed** into Bunny rather than buffered, so the outgoing
-request is chunked and carries no `Content-Length` (a Worker cannot set that
-header on a stream, and buffering a video in memory to obtain it would bound the
-ingest to the Worker's memory rather than to the size of the file). Bunny has
-accepted this in every test we could run without touching a live library, but it
-is the one part of this path that only a real upload proves. If Bunny ever
-answers `411 Length Required`, the fix is one line here — hand Bunny a body it
-can measure — and nothing else in the system changes.
+Each PATCH body is **streamed** from the bucket rather than buffered, so it is
+chunked and carries no `Content-Length` — a Worker cannot set that header on a
+stream, and buffering would bound the ingest to the Worker's memory instead of
+to the size of the file. TUS clients stream by design and Bunny accepted the
+handshake, the create and a PATCH in a live test, but the live test sent a
+measurable body: this is the one part of the path only a real upload proves. If
+Bunny answers `411 Length Required` on a PATCH, the fix is to hand it a body it
+can measure — a smaller `CHUNK_BYTES` buffered with `arrayBuffer()` fits well
+inside the Worker's 128 MB — and nothing else in the system changes.
