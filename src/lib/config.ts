@@ -255,6 +255,46 @@ const config = {
 
 export default config;
 
+/**
+ * Which of the six upload variables are missing, BY NAME — and never a value.
+ *
+ * `productionConfigWarnings()` can say that the two halves of the presigned path
+ * disagree, but a sentence in an array is the wrong shape for "which one": the
+ * R2 four and the ingest two are set in different consoles, so the reader is
+ * sent to the wrong one half the time.
+ *
+ * The silence this replaces is the part worth remembering. The check is a
+ * COMPARISON between two readiness flags, not a floor, so a deployment with all
+ * six variables absent is equal to itself and warns about nothing — and on
+ * 2026-09-29 that is exactly how one sat, looking to /api/health exactly like a
+ * deployment that was fully configured. Reporting the flags themselves is what
+ * lets the endpoint answer the question an operator actually has.
+ *
+ * A variable set to the empty string counts as missing, because that is how it
+ * behaves: R2_BUCKET="" signs a URL for a bucket with no name.
+ */
+export function uploadStorageReadiness(): {
+  r2Configured: boolean;
+  ingestConfigured: boolean;
+  missing: string[];
+} {
+  const missingR2: string[] = [];
+  if (!config.r2.accountId) missingR2.push("R2_ACCOUNT_ID");
+  if (!config.r2.accessKeyId) missingR2.push("R2_ACCESS_KEY_ID");
+  if (!config.r2.secretAccessKey) missingR2.push("R2_SECRET_ACCESS_KEY");
+  if (!config.r2.bucket) missingR2.push("R2_BUCKET");
+
+  const missingIngest: string[] = [];
+  if (!config.videoIngest.url) missingIngest.push("VIDEO_INGEST_URL");
+  if (!config.videoIngest.secret) missingIngest.push("VIDEO_INGEST_SECRET");
+
+  return {
+    r2Configured: missingR2.length === 0,
+    ingestConfigured: missingIngest.length === 0,
+    missing: [...missingR2, ...missingIngest],
+  };
+}
+
 // =============================================================================
 // Production config audit — non-secret warnings surfaced by /api/health and
 // PRODUCTION.md. Never includes actual secret values.
@@ -300,13 +340,24 @@ export function productionConfigWarnings(): string[] {
   // R2, the browser is handed a URL this server cannot sign. Both arrive as a
   // 401 or a 403 on the creator's screen, so the incomplete state is said out
   // loud at boot instead.
-  const r2Ready = Boolean(
-    config.r2.accountId && config.r2.accessKeyId && config.r2.secretAccessKey && config.r2.bucket
-  );
-  const ingestReady = Boolean(config.videoIngest.url && config.videoIngest.secret);
-  if (r2Ready !== ingestReady) {
+  //
+  // The names of what is missing ride along with the sentence. "Must be set
+  // together" is true of a pair and silent about which half is absent, and the
+  // two halves are fixed in different consoles.
+  const { r2Configured, ingestConfigured, missing } = uploadStorageReadiness();
+  if (r2Configured !== ingestConfigured) {
     warnings.push(
-      "R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET and VIDEO_INGEST_URL / VIDEO_INGEST_SECRET must be set together — video uploads are refused until they are, because there is no second transport"
+      "R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET and VIDEO_INGEST_URL / VIDEO_INGEST_SECRET must be set together — video uploads are refused until they are, because there is no second transport" +
+        (missing.length > 0 ? ` (missing: ${missing.join(", ")})` : "")
+    );
+  } else if (!r2Configured) {
+    // NEITHER half is set, which the comparison above cannot see: two empty
+    // halves are equal to each other, so a deployment with nothing configured
+    // warned about nothing while refusing every upload — and from /api/health it
+    // looked exactly like one with no complaints at all. That is the state this
+    // file was read in while an upload was being tested against it.
+    warnings.push(
+      `Video uploads are refused: no upload storage is configured — set ${missing.join(", ")}`
     );
   }
   if (!config.email.host) {

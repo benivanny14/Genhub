@@ -8,7 +8,7 @@
 
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
-import config, { productionConfigWarnings } from "@/lib/config";
+import config, { productionConfigWarnings, uploadStorageReadiness } from "@/lib/config";
 import { getCronHealth, summarizeCronHealth } from "@/lib/services/cron-heartbeat.service";
 
 // Without this, Next prerenders this route at build time — it reads no cookies
@@ -81,6 +81,7 @@ export async function GET(_request: NextRequest) {
   }
 
   const warnings = productionConfigWarnings();
+  const uploadStorage = uploadStorageReadiness();
 
   // Named with the command that fixes it: a health check that says "degraded"
   // and stops there costs the operator the ten minutes it takes to find out
@@ -118,6 +119,18 @@ export async function GET(_request: NextRequest) {
         // "sandbox" = no USSD push and no real money moves (dev default)
         payments: config.harakaPay.sandbox ? "sandbox" : "live",
         bunny: config.bunny.apiKey ? "configured" : "missing",
+        // Two flags rather than one verdict, and the names of whatever is
+        // absent. The R2 four and the ingest two are set in different consoles,
+        // so "the upload path is not configured" costs the reader the ten
+        // minutes of checking both — and a deployment with NEITHER half set used
+        // to publish no warning at all, because the warning is a comparison
+        // between the two flags rather than a floor. These are variable NAMES;
+        // no value is ever echoed here.
+        uploadStorage: {
+          r2: uploadStorage.r2Configured,
+          ingest: uploadStorage.ingestConfigured,
+          missing: uploadStorage.missing,
+        },
         backgroundJobs,
       },
       warnings,
