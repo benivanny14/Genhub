@@ -197,20 +197,39 @@ export default function UploadPage() {
       });
     }
 
+    /**
+     * One restart is allowed, and only one.
+     *
+     * The video host closes an upload the moment it decides the transfer is
+     * over, and the admin panel has now recorded a live case of it: a 192 MB
+     * video whose session was gone by the time the page asked where it had got
+     * to. There is no offset worth keeping in that state — the resource no
+     * longer exists — so the only move is a fresh session and the bytes again
+     * from zero. Doing it here rather than telling the creator to do it is the
+     * difference between a recovery and a dead end: "choose the video again"
+     * re-picks the SAME file, which reuses the SAME dead session, and nothing
+     * about that changes until the page stops asking the question.
+     *
+     * The guard is on the flag, not on where the session came from: a session
+     * the page created a moment ago dies the same way and deserves the same one
+     * attempt. It cannot loop, because the retry is outside this try.
+     */
+    let restarted = false;
+
     try {
       try {
         await send(session, existing ? undefined : 0);
       } catch (error) {
-        // An upload Bunny has closed cannot be resumed — and "choose the video
-        // again" was a dead end, because choosing the SAME file reuses this very
-        // session: the creator could never send it, and the only way out was
-        // Cancel. A session that no longer exists has no offset worth keeping,
-        // so a fresh one is opened and the bytes go again. Only the resumable
-        // case is retried; a fresh session that is refused this way is a real
-        // refusal, and it has to stay visible.
-        if (!existing || !(error instanceof VideoUploadError) || error.code !== "EXPIRED") {
+        if (!(error instanceof VideoUploadError) || error.code !== "EXPIRED" || restarted) {
           throw error;
         }
+        restarted = true;
+        // Said out loud, because the progress bar is about to go back to zero
+        // and a bar that resets with no explanation reads as data lost.
+        toast(
+          "warning",
+          "The video host closed that upload, so it is being sent again from the start."
+        );
         session = await createSession(file, kind);
         if (!session) return null;
         await send(session, 0);
