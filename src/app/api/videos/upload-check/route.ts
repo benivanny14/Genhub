@@ -25,14 +25,21 @@
 // state in the bucket, and the abort is made here when the device reports — so a
 // check that runs leaves nothing behind, whatever it found. Best effort: the
 // creator's answer must never depend on a bucket letting go.
+//
+// AND WHY THE ANSWER IS NOW KEPT. The report used to end at a log line and a
+// screen on a phone, which meant the one person who can act on it had to be sent
+// a screenshot. It is recorded through lib/services/upload-check.service.ts so
+// /admin shows which creator's phone cannot reach the bucket, with the same
+// reading sentence the creator was shown.
 // =============================================================================
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
-import { checkRateLimit, cacheSet } from "@/lib/redis";
+import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
+import { recordUploadCheck } from "@/lib/services/upload-check.service";
 import { isR2Configured, signR2Request } from "@/lib/r2-sign";
 import {
   UPLOAD_PART_BYTES,
@@ -105,24 +112,48 @@ export async function GET() {
   }
 }
 
+/**
+ * A probe id this route handed out. Bounded to the one shape probeId() makes.
+ *
+ * NOT COSMETIC. The id is used to name the object this route deletes, so an
+ * unbounded string lets a creator submit a report whose cleanup removes somebody
+ * else's upload — a diagnostic that becomes a way to destroy data. The id is
+ * generated here and returned to the device, so nothing legitimate fails it.
+ */
+const PROBE_ID_RE = /^probe-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A probe that ran: `ok` and `ms` are required, because a probe without them is
+ *  not a result and must not reach the panel as one. */
+const writeProbeSchema = z.object({
+  ok: z.boolean(),
+  // `default(null)` rather than `.optional()`: an absent status is the one this
+  // page exists for (nothing answered) and it must reach the record as the same
+  // value the reader compares against, not as a third state between null and a
+  // number that the panel would have to know about.
+  status: z.number().int().min(100).max(599).nullable().default(null),
+  ms: z.number().min(0).max(120_000),
+  etag: z.string().max(200).nullable().default(null),
+  error: z.string().max(200).optional(),
+});
+
+const reachProbeSchema = z.object({
+  ok: z.boolean(),
+  ms: z.number().min(0).max(120_000),
+  error: z.string().max(200).optional(),
+});
+
 const schema = z.object({
-  probeId: z.string().min(1).max(200),
+  probeId: z.string().regex(PROBE_ID_RE, "That is not a probe this server handed out"),
   uploadId: z.string().min(1).max(1024),
-  reach: z
-    .object({ ok: z.boolean(), ms: z.number(), error: z.string().optional() })
-    .partial()
-    .nullable()
-    .optional(),
-  whole: z
-    .object({ ok: z.boolean(), status: z.number().nullable(), ms: z.number(), error: z.string().optional() })
-    .partial()
-    .nullable()
-    .optional(),
-  part: z
-    .object({ ok: z.boolean(), status: z.number().nullable(), ms: z.number(), error: z.string().optional() })
-    .partial()
-    .nullable()
-    .optional(),
+  reach: reachProbeSchema.nullable().optional(),
+  whole: writeProbeSchema.nullable().optional(),
+  part: writeProbeSchema.nullable().optional(),
+  // What the phone knows about its own link. Chrome-only, so absent is normal —
+  // and this is the context that turns "refused" into a sentence: 3g at 0.4 Mbps
+  // with a 750 ms round trip is a different problem from 4g at 20 Mbps.
+  connectionType: z.string().max(20).optional(),
+  downlinkMbps: z.number().min(0).max(10_000).optional(),
+  rttMs: z.number().min(0).max(60_000).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -132,16 +163,32 @@ export async function POST(request: NextRequest) {
     const parsed = schema.safeParse(await request.json().catch(() => ({})));
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
 
-    const { probeId: id, uploadId, reach, whole, part } = parsed.data;
+    const { probeId: id, uploadId, reach, whole, part, connectionType, downlinkMbps, rttMs } =
+      parsed.data;
+
+    // Read from the request rather than from the payload, and the same way the
+    // failure reports do it: these are the two facts about the failing client the
+    // server can observe for itself, and a diagnostic a client could misreport
+    // would be worth less than the one it cannot. Where the page was loaded from
+    // is the field that decides between "the bucket will not accept this address"
+    // and "this phone has no usable signal".
+    const userAgent = request.headers.get("user-agent")?.slice(0, 300) ?? null;
+    const origin = request.headers.get("origin")?.slice(0, 200) ?? null;
 
     // Recorded before it is cleaned up, so a check that ran is readable after the
     // bucket has forgotten it — this is the one screen-free way a creator's answer
     // to "what can your phone reach?" reaches somebody who can act on it.
-    const summary = { at: new Date().toISOString(), reach, whole, part };
-    if (process.env.NODE_ENV === "production") {
-      console.info(`[Upload Check] ${auth.userId}: ${JSON.stringify(summary)}`);
-    }
-    await cacheSet(`upload:check:${auth.userId}`, summary, 7 * 24 * 60 * 60);
+    await recordUploadCheck({
+      creatorId: auth.userId,
+      origin,
+      userAgent,
+      connectionType: connectionType ?? null,
+      downlinkMbps: downlinkMbps ?? null,
+      rttMs: rttMs ?? null,
+      reach: reach ?? null,
+      whole: whole ?? null,
+      part: part ?? null,
+    });
 
     await abortMultipartUpload(id, uploadId);
     await deleteProbeObject(`incoming/${id}`);

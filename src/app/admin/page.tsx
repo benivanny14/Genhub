@@ -9,6 +9,7 @@ import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { formatTZS } from "@/lib/utils";
 import { describeAttemptShape } from "@/lib/upload-failure-reading";
+import { describeProbePair } from "@/lib/upload-diagnostics";
 import {
   Shield,
   HelpCircle,
@@ -570,6 +571,67 @@ interface UploadFailure {
   creatorId: string;
 }
 
+/**
+ * What a creator's phone reported it could reach.
+ *
+ * The diagnostic page runs the two requests an upload makes FROM THE DEVICE
+ * that is failing, because that is the only place the answer exists: a browser
+ * tells the page nothing about why a cross-origin request failed. One row per
+ * creator, from their last check. See lib/services/upload-check.service.ts.
+ */
+interface UploadCheck {
+  at: string;
+  creatorId: string;
+  /** The address the page was open on, observed from the report's Origin. */
+  origin?: string | null;
+  userAgent?: string | null;
+  /** Chrome-only: a null means the browser does not offer it, not that the link
+   *  is fine. */
+  connectionType?: string | null;
+  downlinkMbps?: number | null;
+  rttMs?: number | null;
+  /** Whether the device could reach the storage host at all. */
+  reach: CheckReach | null;
+  /** A real signed write of one whole small object. */
+  whole: CheckWrite | null;
+  /** A real signed write of PART ONE of a real multipart upload. */
+  part: CheckWrite | null;
+}
+
+interface CheckReach {
+  ok: boolean;
+  ms: number;
+  error?: string;
+}
+
+interface CheckWrite {
+  ok: boolean;
+  /** null means nothing answered, which is the case this page exists for. */
+  status: number | null;
+  ms: number;
+  /** The one value that proves the bucket WROTE the object. */
+  etag?: string | null;
+  error?: string;
+}
+
+/**
+ * One probe, as a line rather than as three fields to decode.
+ *
+ * "no — TypeError after 45 ms" and "yes, in 120 ms" are the two shapes a reader
+ * has to tell apart at a glance during an incident, and they are told apart here
+ * rather than left to whoever reads the raw numbers.
+ */
+function describeProbeLine(probe: CheckWrite | CheckReach | null): string {
+  if (!probe) return "not run — the check stopped before this one";
+  if (probe.ok) return `yes, in ${probe.ms} ms`;
+
+  const why =
+    "status" in probe && probe.status !== null
+      ? `HTTP ${probe.status}`
+      : (probe.error ?? "no answer");
+  return `no — ${why} after ${probe.ms} ms`;
+}
+
 interface WebhookTest {
   verdict: "ok" | "not-configured" | "failed";
   headline: string;
@@ -883,6 +945,11 @@ export default function AdminDashboard() {
   // See lib/services/upload-failure.service.ts.
   const [uploadFailures, setUploadFailures] = useState<UploadFailure[]>([]);
   const [failuresBusy, setFailuresBusy] = useState(false);
+  // What creators' phones reported they could reach, newest per creator. The
+  // verdict only exists on the device, so this is where it becomes readable.
+  // See lib/services/upload-check.service.ts.
+  const [uploadChecks, setUploadChecks] = useState<UploadCheck[]>([]);
+  const [checksBusy, setChecksBusy] = useState(false);
   // Native window.prompt is blocked in some embedded browsers, so the flows that
   // need a typed reason (ban, KYC / payout rejection) use this in-app dialog.
   const [reasonDialog, setReasonDialog] = useState<{
@@ -1001,6 +1068,9 @@ export default function AdminDashboard() {
     if (activeTab === "setup" && !setup) fetchSetup();
     // Same tab, read-only and cheap: the list a failed upload leaves behind.
     if (activeTab === "setup") fetchUploadFailures();
+    // And the other half: not what failed on the wire, but whether the DEVICE can
+    // reach the bucket at all. Read-only and cache-backed, like the list above.
+    if (activeTab === "setup") fetchUploadChecks();
     if (activeTab === "kyc") fetchKyc();
     if (activeTab === "reports") fetchReports();
     if (activeTab === "payouts") fetchPayouts();
@@ -1834,6 +1904,28 @@ export default function AdminDashboard() {
       // much, and a broken diagnostic must not become an error on screen.
     } finally {
       setFailuresBusy(false);
+    }
+  }
+
+  /**
+   * What the creators' own devices reported.
+   *
+   * Beside the failure list and not inside it: the failure records say what went
+   * wrong on the wire, and this says whether the phone can reach the bucket AT
+   * ALL — the question a device that fails every attempt without moving a byte
+   * raises, and the one no other record in this panel can answer.
+   */
+  async function fetchUploadChecks() {
+    setChecksBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/upload-checks");
+      const data = await res.json();
+      if (data.success) setUploadChecks(data.data.checks || []);
+    } catch {
+      // Same rule as the failure list: a diagnostic that cannot be read must not
+      // become an error on the screen it was opened to explain.
+    } finally {
+      setChecksBusy(false);
     }
   }
 
@@ -4307,6 +4399,139 @@ export default function AdminDashboard() {
                       </p>
                     </li>
                   ))}
+                </ul>
+              )}
+            </div>
+
+            {/*
+              What the creator's phone said it could reach.
+
+              The failing device is a phone in somebody's hand, and a browser
+              refuses to say why a cross-origin request died — so the check has to
+              be run THERE and reported back. Before this list existed, the verdict
+              was a sentence on a creator's screen and only a photograph could
+              carry it to the person who can act on it. */}
+            <div className="glass-card p-5">
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="min-w-0">
+                  <h2 className="font-display font-bold flex items-center gap-2">
+                    <Smartphone className="w-5 h-5 text-brand-400" />
+                    Phone network checks
+                  </h2>
+                  <p className="text-sm text-white/50 mt-1">
+                    Run on the creator&apos;s own device when an upload keeps failing,
+                    because the browser tells the page nothing about a refused
+                    cross-origin request. One row per creator, newest first.
+                  </p>
+                </div>
+                <button
+                  onClick={fetchUploadChecks}
+                  disabled={checksBusy}
+                  className="btn-ghost text-sm flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {checksBusy ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <RefreshCcw className="w-4 h-4" />
+                  )}
+                  Refresh
+                </button>
+              </div>
+
+              {uploadChecks.length === 0 ? (
+                <p className="text-sm text-white/40 mt-3">
+                  {checksBusy
+                    ? "Reading…"
+                    : "No creator has run the check yet. They are sent to it when an upload fails, and can open it themselves from the upload page."}
+                </p>
+              ) : (
+                <ul className="mt-3 space-y-2">
+                  {uploadChecks.map((check, i) => {
+                    // The PART write is the request that keeps failing on the
+                    // handsets, so the row is coloured by it and not by the small
+                    // object — which is also why the reading sentence below is
+                    // built from the same pair the creator was shown.
+                    const partOk = check.part ? check.part.ok : null;
+                    return (
+                      <li
+                        key={`${check.at}-${i}`}
+                        className={`rounded-xl border p-3 ${
+                          partOk === null
+                            ? "border-white/10 bg-white/5"
+                            : partOk
+                              ? "border-emerald-500/20 bg-emerald-500/5"
+                              : "border-red-500/20 bg-red-500/5"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3 flex-wrap">
+                          <span
+                            className={`text-xs font-medium ${
+                              partOk === null
+                                ? "text-white/60"
+                                : partOk
+                                  ? "text-emerald-300"
+                                  : "text-red-300"
+                            }`}
+                          >
+                            {partOk === null
+                              ? "Check stopped before the part probe"
+                              : partOk
+                                ? "This phone can write a part"
+                                : "This phone cannot write a part"}
+                          </span>
+                          <span className="text-[11px] text-white/40">
+                            {check.at.replace("T", " ").slice(0, 16)}
+                          </span>
+                        </div>
+
+                        <p className="text-[11px] text-white/60 mt-1">
+                          Write one small object: {describeProbeLine(check.whole)}
+                        </p>
+                        <p className="text-[11px] text-white/60">
+                          Write part 1: {describeProbeLine(check.part)}
+                        </p>
+                        <p className="text-[11px] text-white/60">
+                          Reach the storage host: {describeProbeLine(check.reach)}
+                        </p>
+
+                        {/* The sentence the creator was shown, from the same
+                            function, so the two screens cannot disagree about what
+                            a refused write means. */}
+                        <p className="text-xs text-white/70 mt-1">
+                          {describeProbePair(check.reach, check.part, "storage host, for a part")}
+                        </p>
+
+                        {/* The fields that decide between two faults that look
+                            identical everywhere else: the bucket refusing this
+                            ADDRESS, and a phone with no usable signal. */}
+                        {(check.origin ||
+                          check.userAgent ||
+                          check.connectionType ||
+                          typeof check.downlinkMbps === "number" ||
+                          typeof check.rttMs === "number") && (
+                          <p className="text-[11px] text-white/35 mt-1 break-all">
+                            {check.origin ? `from ${check.origin}` : ""}
+                            {check.userAgent
+                              ? `${check.origin ? " · " : ""}browser ${check.userAgent}`
+                              : ""}
+                            {check.connectionType
+                              ? `${check.origin || check.userAgent ? " · " : ""}${check.connectionType}`
+                              : ""}
+                            {typeof check.downlinkMbps === "number"
+                              ? `${check.origin || check.userAgent || check.connectionType ? " · " : ""}${check.downlinkMbps} Mbps down`
+                              : ""}
+                            {typeof check.rttMs === "number"
+                              ? `${check.origin || check.userAgent || check.connectionType || typeof check.downlinkMbps === "number" ? " · " : ""}${check.rttMs} ms rtt`
+                              : ""}
+                          </p>
+                        )}
+
+                        <p className="text-[11px] text-white/35 mt-1">
+                          creator {check.creatorId}
+                        </p>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>

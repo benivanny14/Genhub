@@ -181,7 +181,9 @@ export default function UploadCheckPage() {
     });
     setLines([...found]);
 
-    // 6. Send it back and let the server clean up after itself.
+    // 6. Send it back and let the server clean up after itself — and keep it, so
+    //    support reads the same verdict this screen is showing instead of asking
+    //    for a photograph of it.
     try {
       await fetch("/api/videos/upload-check", {
         method: "POST",
@@ -190,8 +192,27 @@ export default function UploadCheckPage() {
           probeId: id,
           uploadId: part.uploadId,
           reach,
-          whole: { ok: wholeProbe.ok, status: wholeProbe.status, ms: wholeProbe.ms, error: wholeProbe.error },
-          part: { ok: partProbe.ok, status: partProbe.status, ms: partProbe.ms, error: partProbe.error },
+          whole: {
+            ok: wholeProbe.ok,
+            status: wholeProbe.status,
+            ms: wholeProbe.ms,
+            // The ETag is the one value that says the bucket WROTE the object
+            // rather than merely answering the request.
+            etag: wholeProbe.etag ?? null,
+            error: wholeProbe.error,
+          },
+          part: {
+            ok: partProbe.ok,
+            status: partProbe.status,
+            ms: partProbe.ms,
+            etag: partProbe.etag ?? null,
+            error: partProbe.error,
+          },
+          // What the phone knows about its own link. Chrome-only, so a null here
+          // means the browser does not offer it, not that the link is fine.
+          connectionType: connection?.effectiveType,
+          downlinkMbps: typeof connection?.downlink === "number" ? connection.downlink : undefined,
+          rttMs: typeof connection?.rtt === "number" ? connection.rtt : undefined,
         }),
       });
       found.push({
