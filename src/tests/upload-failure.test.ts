@@ -49,6 +49,12 @@ const failure = {
   offset: 12 * 1024 * 1024,
   chunkIndex: 3,
   retryCount: 1,
+  attemptMs: [12, 9, 14, 11, 13, 10],
+  userAgent:
+    "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Mobile Safari/537.36",
+  connectionType: "4g",
+  downlinkMbps: 1.5,
+  rttMs: 180,
   creatorId: "creator-1",
 };
 
@@ -84,6 +90,29 @@ describe("recordUploadFailure", () => {
     expect(line).toContain("(offline)");
     expect(line).toContain("chunk 3");
     expect(line).toContain("retry 3");
+  });
+
+  it("names the browser and the shape of the attempts, not only the retry count", async () => {
+    // The gap this closes, seen live: thirteen reports from one creator's phone,
+    // every one of them "NETWORK · chunk · 6 retries", all with the server
+    // offset sitting at zero. Nothing in the record said which browser, which
+    // link, or whether the attempts had lasted milliseconds or minutes — and
+    // those are the only three things that could have told a request that never
+    // left the handset from a transfer that kept being cut.
+    const entry = await recordUploadFailure({ ...failure, reason: "reset", attemptMs: [12, 9, 14] });
+
+    expect(entry.attemptMs).toEqual([12, 9, 14]);
+    expect(entry.userAgent).toContain("Chrome/113");
+    expect(entry.connectionType).toBe("4g");
+
+    const line = logged.join("\n");
+    // The numbers, not a summary of them: "attempts of a few milliseconds" is a
+    // judgement, and the reader is the one who gets to make it.
+    expect(line).toContain("attempts 12ms, 9ms, 14ms");
+    expect(line).toContain("on 4g");
+    expect(line).toContain("1.5 Mbps down");
+    expect(line).toContain("180 ms rtt");
+    expect(line).toContain("Chrome/113");
   });
 
   it("keeps Bunny's status and body, which are the reason the record exists", async () => {
@@ -187,6 +216,30 @@ describe("listUploadFailures", () => {
     expect(entry.retryCount).toBeNull();
   });
 
+  it("normalises the fields added after those, so the panel never maps over undefined", async () => {
+    // The same hazard one layer further out. The panel maps over `attemptMs` to
+    // print the timings, and `undefined.map` is a crash — on the one screen that
+    // exists to explain an incident, during the incident.
+    const older: Record<string, unknown> = { ...failure, at: new Date().toISOString() };
+    delete older.attemptMs;
+    delete older.userAgent;
+    delete older.connectionType;
+    delete older.downlinkMbps;
+    delete older.rttMs;
+    // A field that arrived as something other than a number is treated exactly
+    // like one that never arrived, rather than being handed to the renderer.
+    older.rttMs = "180";
+    mocks.cacheGet.mockResolvedValue([older]);
+
+    const [entry] = await listUploadFailures();
+
+    expect(entry.attemptMs).toBeNull();
+    expect(entry.userAgent).toBeNull();
+    expect(entry.connectionType).toBeNull();
+    expect(entry.downlinkMbps).toBeNull();
+    expect(entry.rttMs).toBeNull();
+  });
+
   it("never hands a malformed entry to the panel", async () => {
     const good = { ...failure, at: new Date().toISOString() };
     mocks.cacheGet.mockResolvedValue([good, null, "junk", { noAt: true }]);
@@ -229,6 +282,49 @@ describe("uploadFailureSchema", () => {
   it("refuses a status that cannot be an HTTP status", () => {
     expect(
       uploadFailureSchema.safeParse({ code: "NETWORK", message: "x", status: 9999 }).success
+    ).toBe(false);
+  });
+
+  it("accepts how the browser describes itself, and bounds every number in it", () => {
+    // Lenient about the browser itself — a new User-Agent or a connection type
+    // we have never seen is still the answer to "which device is failing?" —
+    // and strict about the shape, so the report cannot become a channel for
+    // arbitrary blobs or for a clock that jumped overnight.
+    expect(
+      uploadFailureSchema.safeParse({
+        code: "NETWORK",
+        message: "The connection dropped during upload.",
+        stage: "chunk",
+        attemptMs: [12, 9, 14],
+        connectionType: "4g",
+        downlinkMbps: 1.5,
+        rttMs: 180,
+      }).success
+    ).toBe(true);
+
+    expect(
+      uploadFailureSchema.safeParse({ code: "NETWORK", message: "x", attemptMs: [-1] }).success
+    ).toBe(false);
+    // Longer than any ladder the uploader can produce is not a report.
+    expect(
+      uploadFailureSchema.safeParse({
+        code: "NETWORK",
+        message: "x",
+        attemptMs: Array.from({ length: 17 }, () => 1),
+      }).success
+    ).toBe(false);
+    expect(
+      uploadFailureSchema.safeParse({
+        code: "NETWORK",
+        message: "x",
+        attemptMs: [60 * 60_000],
+      }).success
+    ).toBe(false);
+    expect(
+      uploadFailureSchema.safeParse({ code: "NETWORK", message: "x", downlinkMbps: -1 }).success
+    ).toBe(false);
+    expect(
+      uploadFailureSchema.safeParse({ code: "NETWORK", message: "x", rttMs: 200_000 }).success
     ).toBe(false);
   });
 

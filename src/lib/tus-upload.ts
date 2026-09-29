@@ -306,6 +306,20 @@ export class TusUploadError extends Error {
    * single drop.
    */
   retryCount?: number;
+  /**
+   * How long each attempt at this chunk lasted, in milliseconds, oldest first.
+   *
+   * The one measurement that tells "a link too slow to finish the chunk" apart
+   * from "a request that never got going". Six attempts that each ended in
+   * twelve milliseconds cannot be a transfer; six attempts that each lasted
+   * forty seconds are a transfer that keeps being cut, and the two need opposite
+   * fixes — smaller chunks versus a network that cannot reach the host at all.
+   * A count of retries alone says neither, because both spend the same ladder.
+   *
+   * The backoff sleeps between attempts are deliberately NOT in these numbers: a
+   * wait we chose is not evidence about a connection.
+   */
+  attemptMs?: number[];
   /** Which physical fault this was — see TusFailureReason. */
   reason?: TusFailureReason;
 
@@ -812,13 +826,22 @@ function withProgress(
    * optional so the pre-flight guards (which have no chunk and no offset) still
    * produce a report with an honest byte count and nothing invented.
    */
-  where?: { offset?: number; chunkIndex?: number; retryCount?: number }
+  where?: {
+    offset?: number;
+    chunkIndex?: number;
+    retryCount?: number;
+    attemptMs?: number[];
+  }
 ): TusUploadError {
   error.bytesSent = Math.max(0, Math.min(bytesSent, bytesTotal));
   error.bytesTotal = bytesTotal;
   if (where?.offset !== undefined) error.offset = where.offset;
   if (where?.chunkIndex !== undefined) error.chunkIndex = where.chunkIndex;
   if (where?.retryCount !== undefined) error.retryCount = where.retryCount;
+  // Copied rather than referenced: the caller keeps pushing onto its own array
+  // for the attempts that follow, and a report that changed after the fact would
+  // describe a different failure from the one it was written for.
+  if (where?.attemptMs && where.attemptMs.length > 0) error.attemptMs = [...where.attemptMs];
   return error;
 }
 
@@ -928,10 +951,18 @@ export async function uploadFileWithTus(
     // different fault from one that was (see bytesSent on TusUploadError).
     let attemptSent = 0;
     let maxAttemptSent = 0;
+    // How long each attempt at THIS chunk lasted. Collected because the ladder
+    // spends the same number of rungs whether the connection is slow or the
+    // request is refused instantly, and those are different faults — see
+    // attemptMs on TusUploadError.
+    const attemptMs: number[] = [];
 
     for (let attempt = 0; attempt < CHUNK_RETRY_DELAYS.length; attempt++) {
       attemptSent = 0;
       try {
+        // Cleared before the wait, so a failure that lands while sleeping cannot
+        // charge the backoff we chose to the attempt before it.
+        attemptStartedAt = 0;
         if (CHUNK_RETRY_DELAYS[attempt] > 0) await sleep(CHUNK_RETRY_DELAYS[attempt], signal);
         attemptStartedAt = Date.now();
         offset = await sendChunk(
@@ -954,12 +985,18 @@ export async function uploadFileWithTus(
             ? error
             : new TusUploadError("NETWORK", "Upload failed");
 
+        // Before anything else, because it is about THIS attempt only: how long
+        // it lasted. Zero means it failed inside the backoff sleep, and such an
+        // attempt gets no entry rather than a misleading duration.
+        if (attemptStartedAt > 0) attemptMs.push(Date.now() - attemptStartedAt);
+
         // Cancelled or refused outright: retrying cannot help.
         if (!isRetryable(tusError)) {
           throw withProgress(tusError, chunkStart + maxAttemptSent, file.size, {
             offset: chunkStart,
             chunkIndex,
             retryCount: attempt,
+            attemptMs,
           });
         }
 
@@ -1000,6 +1037,7 @@ export async function uploadFileWithTus(
         // the first try died, which is a different finding from a connection
         // that refused it six times over a minute.
         retryCount: CHUNK_RETRY_DELAYS.length - 1,
+        attemptMs,
       });
     }
     reportProgress(offset);

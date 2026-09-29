@@ -100,6 +100,30 @@ export interface UploadFailure {
   offset: number | null;
   chunkIndex: number | null;
   retryCount: number | null;
+  /**
+   * How long each attempt at that chunk lasted, in milliseconds, oldest first.
+   *
+   * The count of attempts says how patient the uploader was; this says what kind
+   * of fault it was being patient with. An attempt that lasted twelve
+   * milliseconds never put a request on the wire, so every rung of the ladder
+   * was spent on a connection that refuses the host outright. An attempt that
+   * lasted forty seconds was a transfer that went somewhere and was cut, which
+   * is the same row on screen and a different fix in the code.
+   */
+  attemptMs: number[] | null;
+  /**
+   * The browser that reported the failure, and what it knew about its link.
+   *
+   * `userAgent` is taken from the report request's own header rather than from
+   * the payload: it is the one fact about the client the server can observe for
+   * itself, and a diagnostic that a client could misreport would be worth less
+   * than the one it cannot. Everything else here is the Network Information API,
+   * which only Chrome implements — so a null means "not offered", not "lost".
+   */
+  userAgent: string | null;
+  connectionType: string | null;
+  downlinkMbps: number | null;
+  rttMs: number | null;
   /** Who was uploading. The admin panel already knows every creator id. */
   creatorId: string;
 }
@@ -124,6 +148,14 @@ export async function recordUploadFailure(
       `${entry.status !== null ? ` · HTTP ${entry.status}` : ""}` +
       `${typeof entry.chunkIndex === "number" ? ` · chunk ${entry.chunkIndex}` : ""}` +
       `${typeof entry.retryCount === "number" ? ` · retry ${entry.retryCount}` : ""}` +
+      // The shape of the attempts, which is what separates a slow link from a
+      // refused one. Written even when the numbers are tiny: "1ms, 2ms" is the
+      // whole diagnosis, and it reads as noise only until you need it.
+      `${entry.attemptMs?.length ? ` · attempts ${entry.attemptMs.map((ms) => `${ms}ms`).join(", ")}` : ""}` +
+      `${entry.connectionType ? ` · on ${entry.connectionType}` : ""}` +
+      `${typeof entry.downlinkMbps === "number" ? ` · ${entry.downlinkMbps} Mbps down` : ""}` +
+      `${typeof entry.rttMs === "number" ? ` · ${entry.rttMs} ms rtt` : ""}` +
+      `${entry.userAgent ? ` · ${entry.userAgent}` : ""}` +
       ` · creator ${entry.creatorId}` +
       `${entry.fileName ? ` · ${entry.fileName}` : ""}` +
       `${entry.fileSize !== null ? ` (${(entry.fileSize / 1024 / 1024).toFixed(1)} MB)` : ""}` +
@@ -187,6 +219,17 @@ export async function listUploadFailures(): Promise<UploadFailure[]> {
         offset: typeof entry.offset === "number" ? entry.offset : null,
         chunkIndex: typeof entry.chunkIndex === "number" ? entry.chunkIndex : null,
         retryCount: typeof entry.retryCount === "number" ? entry.retryCount : null,
+        // Same rule again for the fields added after THOSE: an entry written
+        // before them has no `attemptMs` at all, and the panel maps over the
+        // array — `undefined.map` is a crash on the one screen that exists to
+        // explain an incident.
+        attemptMs: Array.isArray(entry.attemptMs)
+          ? entry.attemptMs.filter((ms): ms is number => typeof ms === "number")
+          : null,
+        userAgent: typeof entry.userAgent === "string" ? entry.userAgent : null,
+        connectionType: typeof entry.connectionType === "string" ? entry.connectionType : null,
+        downlinkMbps: typeof entry.downlinkMbps === "number" ? entry.downlinkMbps : null,
+        rttMs: typeof entry.rttMs === "number" ? entry.rttMs : null,
       }))
   );
 }

@@ -70,6 +70,15 @@ interface Attempt {
   silent?: boolean;
   /** The creator presses Cancel during this attempt. */
   abort?: boolean;
+  /**
+   * How long the attempt lasts before it settles, in milliseconds.
+   *
+   * Without this the fake PATCH fails in the same tick it was sent, which is a
+   * fault no real transfer has: a request that never left and one that was cut
+   * forty seconds in are different diagnoses, and the only thing that tells them
+   * apart is the clock the uploader sleeps on.
+   */
+  ms?: number;
 }
 
 /**
@@ -119,20 +128,28 @@ function scriptedXhr(script: Attempt[], onSend?: (offset: number) => void) {
         this.upload.onprogress?.({ lengthComputable: true, loaded: step.sentBytes });
       }
 
+      // A scripted attempt with a duration settles on a timer instead of on the
+      // microtask queue, so the faked clock advances across it exactly as it
+      // would across a real transfer.
+      const settle = (fire: () => void) => {
+        if (step.ms) setTimeout(fire, step.ms);
+        else queueMicrotask(fire);
+      };
+
       if (step.abort) {
-        queueMicrotask(() => this.onabort?.());
+        settle(() => this.onabort?.());
         return;
       }
       if (step.silent) return;
       if (step.drop) {
-        queueMicrotask(() => this.onerror?.());
+        settle(() => this.onerror?.());
         return;
       }
 
       this.status = step.status ?? 204;
       this.responseText = step.body ?? "";
       this.nextOffset = String(offset + blob.size);
-      queueMicrotask(() => this.onload?.());
+      settle(() => this.onload?.());
     }
   };
 }
@@ -251,6 +268,34 @@ describe("retrying a dropped chunk", () => {
 
     expect(error).toBeNull();
     expect(sends).toHaveLength(3);
+  });
+
+  it("records how long each attempt lasted, which is what actually names the fault", async () => {
+    // The number the admin panel needs and did not have. Six attempts that each
+    // ended in twelve milliseconds never reached the host at all — the same
+    // "6 retries" row as a transfer that was cut forty seconds in, and the two
+    // want opposite fixes.
+    const { error, sends } = await run(fileOf(CHUNK), [{ drop: true, ms: 12 }], {
+      headOffset: null,
+    });
+
+    expect(sends).toHaveLength(CHUNK_RETRY_DELAYS.length);
+    expect(error?.attemptMs).toHaveLength(CHUNK_RETRY_DELAYS.length);
+    // Every attempt is timed, and each one is the measure of the attempt alone:
+    // the backoff sleeps between them are deliberately excluded.
+    for (const ms of error?.attemptMs ?? []) expect(ms).toBeGreaterThanOrEqual(12);
+    expect(error?.attemptMs?.every((ms) => ms < 1_000)).toBe(true);
+  });
+
+  it("times a single refusal too, so a slow attempt is not reported as instantaneous", async () => {
+    // A 401 is refused outright, so there is no ladder — but the attempt itself
+    // still took as long as it took, and a report that omitted the timing
+    // whenever a retry was not spent would make the two rows indistinguishable.
+    const { error, sends } = await run(fileOf(CHUNK), [{ status: 401, body: "no", ms: 4_000 }]);
+
+    expect(sends).toHaveLength(1);
+    expect(error?.attemptMs).toHaveLength(1);
+    expect(error?.attemptMs?.[0]).toBeGreaterThanOrEqual(4_000);
   });
 
   it("keeps retrying a 423 Locked, which is what Bunny says about a session the lost PATCH still holds", async () => {

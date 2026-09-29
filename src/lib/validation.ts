@@ -475,6 +475,24 @@ export const uploadFailureSchema = z.object({
   offset: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),
   chunkIndex: z.number().int().min(0).max(100_000).nullish(),
   retryCount: z.number().int().min(0).max(100).nullish(),
+  /**
+   * How long each attempt at the failing chunk lasted, in milliseconds.
+   *
+   * Bounded in both directions on purpose. A length cap keeps the array from
+   * being a channel for arbitrary blobs, and a per-entry cap means a clock that
+   * jumped — or a tab that stayed frozen overnight — cannot describe an attempt
+   * as lasting eleven hours. The ladder is eight rungs, so sixteen entries is
+   * already twice what the uploader can produce.
+   */
+  attemptMs: z.array(z.number().int().min(0).max(600_000)).max(16).nullish(),
+  /**
+   * What the browser knew about its own connection as it sent the report.
+   * `navigator.connection` is Chrome-only, so all three are nullable by design
+   * rather than because a client forgot them.
+   */
+  connectionType: z.string().trim().max(20).nullish(),
+  downlinkMbps: z.number().min(0).max(100_000).nullish(),
+  rttMs: z.number().int().min(0).max(120_000).nullish(),
 });
 
 // =============================================================================

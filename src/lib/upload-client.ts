@@ -149,6 +149,68 @@ export interface UploadFailureReport {
   chunkIndex?: number | null;
   /** How many retries at that chunk had already been spent. */
   retryCount?: number | null;
+  /**
+   * How long each attempt at that chunk lasted, in milliseconds, oldest first.
+   *
+   * Retry count and this together say which fault it was. Six attempts that each
+   * ended in ten milliseconds is a request that never gets going — a blocked or
+   * refused connection — while six attempts of forty seconds each is a transfer
+   * that keeps being cut, which wants smaller chunks. Both record `retryCount: 5`
+   * and, with no HTTP status on either, are otherwise the same row.
+   */
+  attemptMs?: number[] | null;
+}
+
+/**
+ * What the browser knows about its own connection, when it knows anything.
+ *
+ * `navigator.connection` is Chrome-only, so these are all nullable by design —
+ * a missing value is not a fault, it is a browser that does not offer the field.
+ * It is worth asking for anyway: `effectiveType` distinguishes a phone on 2G
+ * from one on WiFi, and `downlink` turns "the connection dropped" into a number
+ * a support answer can be based on.
+ */
+export interface UploadNetworkSnapshot {
+  connectionType: string | null;
+  downlinkMbps: number | null;
+  rttMs: number | null;
+}
+
+/** The few members of the Network Information API this reads. */
+interface NetworkInformationLike {
+  effectiveType?: string;
+  downlink?: number;
+  rtt?: number;
+}
+
+const NO_NETWORK_INFO: UploadNetworkSnapshot = {
+  connectionType: null,
+  downlinkMbps: null,
+  rttMs: null,
+};
+
+export function readNetworkSnapshot(): UploadNetworkSnapshot {
+  try {
+    const connection =
+      typeof navigator === "undefined"
+        ? undefined
+        : (navigator as Navigator & { connection?: NetworkInformationLike }).connection;
+
+    return {
+      connectionType:
+        typeof connection?.effectiveType === "string" ? connection.effectiveType : null,
+      downlinkMbps: typeof connection?.downlink === "number" ? connection.downlink : null,
+      rttMs: typeof connection?.rtt === "number" ? Math.round(connection.rtt) : null,
+    };
+  } catch {
+    // This runs while a failure is being reported, and its return value is
+    // spread into the payload — so a browser whose connection object throws on
+    // access would take the WHOLE report down with it, discarding the Bunny
+    // status and the offset that are the reason the report exists. The detail is
+    // the optional half; losing it costs nothing, losing the rest costs the
+    // incident.
+    return NO_NETWORK_INFO;
+  }
 }
 
 /**
@@ -180,6 +242,10 @@ export function describeUploadFailure(
       offset: error.offset ?? null,
       chunkIndex: error.chunkIndex ?? null,
       retryCount: error.retryCount ?? null,
+      // Absent rather than empty when there was only ever one attempt with no
+      // timing: a report that sometimes carries `[]` would make "no attempts
+      // recorded" and "one attempt" read the same.
+      attemptMs: error.attemptMs?.length ? error.attemptMs : null,
       ...context,
     };
   }
@@ -196,17 +262,25 @@ export function describeUploadFailure(
     offset: null,
     chunkIndex: null,
     retryCount: null,
+    attemptMs: null,
     ...context,
   };
 }
 
-/** POST one report to the server. Never throws. */
+/**
+ * POST one report to the server. Never throws.
+ *
+ * The connection snapshot is added HERE, at the moment of sending, rather than
+ * inside `describeUploadFailure`: it describes the link as the report goes out,
+ * not the failure that produced it, and keeping the mapper pure is what lets the
+ * shape of a report be tested without a browser standing in for a phone.
+ */
 export async function reportUploadFailure(report: UploadFailureReport): Promise<void> {
   try {
     await fetch("/api/videos/upload-failure", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(report),
+      body: JSON.stringify({ ...report, ...readNetworkSnapshot() }),
       // The creator is usually staring at the failure when this goes out, and
       // the next thing they do is close the tab or hit retry. keepalive lets the
       // request finish anyway.

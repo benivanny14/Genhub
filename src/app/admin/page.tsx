@@ -539,6 +539,27 @@ interface UploadFailure {
   offset?: number | null;
   chunkIndex?: number | null;
   retryCount?: number | null;
+  /**
+   * How long each attempt at the failing chunk lasted, in milliseconds.
+   *
+   * Optional like the fields above, and for the same reason: an entry written
+   * before this existed has no such field. This is the one measurement that
+   * says WHICH fault the retry count was recording — attempts of a few
+   * milliseconds never reached the host, attempts of tens of seconds were cut
+   * mid-transfer — and the two want different fixes.
+   */
+  attemptMs?: number[] | null;
+  /**
+   * The browser that reported the failure, and what it knew about its link.
+   *
+   * The User-Agent comes from the report request itself, so it is observed
+   * rather than claimed; the connection figures are Chrome-only and a null
+   * means the browser does not offer them.
+   */
+  userAgent?: string | null;
+  connectionType?: string | null;
+  downlinkMbps?: number | null;
+  rttMs?: number | null;
   creatorId: string;
 }
 
@@ -4208,6 +4229,42 @@ export default function AdminDashboard() {
                             : ""}
                           {typeof failure.retryCount === "number"
                             ? `${typeof failure.chunkIndex === "number" || typeof failure.offset === "number" ? " · " : ""}${failure.retryCount} retry(ies) spent`
+                            : ""}
+                        </p>
+                      )}
+                      {/*
+                        The shape of the attempts, which is what the retry count
+                        alone could never say. A ladder spent on attempts that
+                        each lasted milliseconds is a request that never left
+                        the browser; the same ladder spent on attempts of forty
+                        seconds each is a transfer that keeps being cut. Both
+                        read "6 retries" and they are not the same fault, so the
+                        numbers are shown and the reading is spelled out. */}
+                      {Array.isArray(failure.attemptMs) && failure.attemptMs.length > 0 && (
+                        <p className="text-[11px] text-white/45 mt-1">
+                          {`${failure.attemptMs.length} attempt(s) on this chunk lasted ${failure.attemptMs
+                            .map((ms) => (ms < 1_000 ? `${ms} ms` : `${(ms / 1_000).toFixed(1)} s`))
+                            .join(", ")}`}
+                          {failure.attemptMs.every((ms) => ms < 200)
+                            ? " — every one ended before a request could have been sent, so nothing was ever on the wire and a smaller chunk will not help."
+                            : " — bytes were moving, so the transfer is being cut rather than refused."}
+                        </p>
+                      )}
+                      {/* Who reported it. A phone on a proxy browser and Chrome
+                          on WiFi produce the same NETWORK row and are not the
+                          same bug. */}
+                      {(failure.userAgent ||
+                        failure.connectionType ||
+                        typeof failure.downlinkMbps === "number" ||
+                        typeof failure.rttMs === "number") && (
+                        <p className="text-[11px] text-white/35 mt-1 break-all">
+                          {failure.userAgent ? `browser ${failure.userAgent}` : ""}
+                          {failure.connectionType ? `${failure.userAgent ? " · " : ""}${failure.connectionType}` : ""}
+                          {typeof failure.downlinkMbps === "number"
+                            ? `${failure.userAgent || failure.connectionType ? " · " : ""}${failure.downlinkMbps} Mbps down`
+                            : ""}
+                          {typeof failure.rttMs === "number"
+                            ? `${failure.userAgent || failure.connectionType || typeof failure.downlinkMbps === "number" ? " · " : ""}${failure.rttMs} ms rtt`
                             : ""}
                         </p>
                       )}

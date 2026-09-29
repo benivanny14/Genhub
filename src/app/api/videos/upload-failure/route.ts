@@ -62,7 +62,17 @@ export async function POST(request: NextRequest) {
       offset,
       chunkIndex,
       retryCount,
+      attemptMs,
+      connectionType,
+      downlinkMbps,
+      rttMs,
     } = parsed.data;
+
+    // Read from the request rather than from the payload, and read here rather
+    // than in the browser: this is the one fact about the failing client that
+    // the server can observe for itself. "A phone on Opera Mini" and "Chrome on
+    // WiFi" are the same NETWORK row otherwise, and they are not the same bug.
+    const userAgent = request.headers.get("user-agent")?.slice(0, 300) ?? null;
 
     await recordUploadFailure({
       code,
@@ -79,6 +89,11 @@ export async function POST(request: NextRequest) {
       offset: offset ?? null,
       chunkIndex: chunkIndex ?? null,
       retryCount: retryCount ?? null,
+      attemptMs: attemptMs ?? null,
+      userAgent,
+      connectionType: connectionType ?? null,
+      downlinkMbps: downlinkMbps ?? null,
+      rttMs: rttMs ?? null,
       creatorId: auth.userId,
     });
 
