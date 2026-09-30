@@ -23,11 +23,13 @@ describe("category registry", () => {
     }
   });
 
-  it("gives every category a label, a description and an image seed", () => {
+  // Covers are no longer stored on the registry: a category's image is the
+  // thumbnail of the first video published into it (see
+  // services/category-cover.service.ts), so there is no seed to assert.
+  it("gives every category a label and a description", () => {
     for (const c of CATEGORIES) {
       expect(c.label.trim().length).toBeGreaterThan(0);
       expect(c.description.trim().length).toBeGreaterThan(0);
-      expect(c.imageSeed.length).toBeGreaterThan(0);
     }
   });
 

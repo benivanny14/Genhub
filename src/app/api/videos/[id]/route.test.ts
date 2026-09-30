@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   accessUpsert: vi.fn(),
   transactionFindFirst: vi.fn(),
   subscriptionFindFirst: vi.fn(),
+  userFindUnique: vi.fn(),
   currentUser: vi.fn(),
   requireAuth: vi.fn(),
   claimOnce: vi.fn(),
@@ -38,9 +39,10 @@ vi.mock("@/lib/db", () => ({
       findUnique: mocks.videoFindUnique,
       update: mocks.videoUpdate,
     },
-    videoAccess: { findUnique: mocks.accessFindUnique, upsert: mocks.accessUpsert },
+    videoAccess: { findUnique: mocks.accessFindUnique, findFirst: mocks.accessFindUnique, upsert: mocks.accessUpsert },
     transaction: { findFirst: mocks.transactionFindFirst },
     creatorSubscription: { findFirst: mocks.subscriptionFindFirst },
+    user: { findUnique: mocks.userFindUnique },
   },
 }));
 
@@ -140,6 +142,7 @@ beforeEach(() => {
   mocks.accessFindUnique.mockResolvedValue(null);
   mocks.transactionFindFirst.mockResolvedValue(null);
   mocks.subscriptionFindFirst.mockResolvedValue(null);
+  mocks.userFindUnique.mockResolvedValue({ freeAccess: false });
 });
 
 describe("GET /api/videos/[id] — unpublished videos", () => {

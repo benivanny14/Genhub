@@ -48,6 +48,7 @@ import {
   Sparkles,
   Mail,
   Webhook,
+  Gift,
 } from "lucide-react";
 import SystemReference from "./SystemReference";
 // Pure, and deliberately its own module: the same reading of a failure record
@@ -213,6 +214,8 @@ interface CreatorItem {
   kycStatus: string;
   strikes: number;
   walletBalance: number;
+  /** An admin opened this account to watch everything free. */
+  freeAccess: boolean;
   createdAt: string;
   _count: { videos: number };
   /**
@@ -373,6 +376,8 @@ interface ViewerItem {
   walletBalance: number;
   kycStatus: string;
   locale: string;
+  /** An admin opened this account to watch everything free. */
+  freeAccess: boolean;
   lastLoginAt: string | null;
   createdAt: string;
   _count: { videoAccess: number; subscriptions: number; sentMessages: number };
@@ -1376,7 +1381,9 @@ export default function AdminDashboard() {
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS"
-      | "SEND_RESET_LINK",
+      | "SEND_RESET_LINK"
+      | "GRANT_FREE_ACCESS"
+      | "REVOKE_FREE_ACCESS",
     role: "CREATOR" | "VIEWER",
     reason?: string
   ) {
@@ -1414,6 +1421,8 @@ export default function AdminDashboard() {
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS"
       | "SEND_RESET_LINK"
+      | "GRANT_FREE_ACCESS"
+      | "REVOKE_FREE_ACCESS"
   ) {
     handlePersonAction(userId, action, "CREATOR");
   }
@@ -1426,7 +1435,14 @@ export default function AdminDashboard() {
    */
   function handleViewerAction(
     userId: string,
-    action: "BAN" | "UNBAN" | "WARN" | "DELETE_ACCOUNT" | "SEND_RESET_LINK"
+    action:
+      | "BAN"
+      | "UNBAN"
+      | "WARN"
+      | "DELETE_ACCOUNT"
+      | "SEND_RESET_LINK"
+      | "GRANT_FREE_ACCESS"
+      | "REVOKE_FREE_ACCESS"
   ) {
     handlePersonAction(userId, action, "VIEWER");
   }
@@ -1442,7 +1458,9 @@ export default function AdminDashboard() {
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS"
-      | "SEND_RESET_LINK",
+      | "SEND_RESET_LINK"
+      | "GRANT_FREE_ACCESS"
+      | "REVOKE_FREE_ACCESS",
     role: "CREATOR" | "VIEWER"
   ) {
     const who = role === "VIEWER" ? "user" : "creator";
@@ -2896,6 +2914,11 @@ export default function AdminDashboard() {
                                 {viewer.strikes} strike{viewer.strikes === 1 ? "" : "s"}
                               </span>
                             )}
+                            {viewer.freeAccess && (
+                              <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                                FREE ACCESS
+                              </span>
+                            )}
                           </p>
                           <p className="text-xs text-white/50 truncate">
                             {viewer.email || "no email"} · {viewer.phone || "no phone"}
@@ -2949,6 +2972,27 @@ export default function AdminDashboard() {
                             </button>
                           </>
                         )}
+                        <button
+                          onClick={() =>
+                            handleViewerAction(
+                              viewer.id,
+                              viewer.freeAccess ? "REVOKE_FREE_ACCESS" : "GRANT_FREE_ACCESS"
+                            )
+                          }
+                          className={
+                            viewer.freeAccess
+                              ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                              : "bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          }
+                          title={
+                            viewer.freeAccess
+                              ? "Close this account again — paid videos need to be unlocked again"
+                              : "Let this account watch every video free until you switch it back"
+                          }
+                        >
+                          <Gift className="w-3 h-3" />
+                          {viewer.freeAccess ? "Lock videos" : "Unlock all videos"}
+                        </button>
                         <button
                           onClick={() => handleViewerAction(viewer.id, "SEND_RESET_LINK")}
                           className="bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
@@ -3096,6 +3140,11 @@ export default function AdminDashboard() {
                                 BANNED
                               </span>
                             )}
+                            {creator.freeAccess && (
+                              <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-1.5 py-0.5 rounded">
+                                FREE ACCESS
+                              </span>
+                            )}
                           </p>
                           <p className="text-xs text-white/50">{creator.email || creator.phone}</p>
                           <p className="text-xs text-white/40">
@@ -3194,6 +3243,27 @@ export default function AdminDashboard() {
                         className="btn-ghost text-xs flex items-center gap-1"
                       >
                         <RotateCcw className="w-3 h-3" /> Resume withdrawals
+                      </button>
+                      <button
+                        onClick={() =>
+                          handleCreatorAction(
+                            creator.id,
+                            creator.freeAccess ? "REVOKE_FREE_ACCESS" : "GRANT_FREE_ACCESS"
+                          )
+                        }
+                        className={
+                          creator.freeAccess
+                            ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                            : "bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                        }
+                        title={
+                          creator.freeAccess
+                            ? "Close this account again — paid videos need to be unlocked again"
+                            : "Let this account watch every video free until you switch it back"
+                        }
+                      >
+                        <Gift className="w-3 h-3" />
+                        {creator.freeAccess ? "Lock videos" : "Unlock all videos"}
                       </button>
                       <button
                         onClick={() => handleCreatorAction(creator.id, "DELETE_ACCOUNT")}

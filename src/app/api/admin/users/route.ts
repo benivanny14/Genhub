@@ -51,6 +51,10 @@ export async function GET(request: NextRequest) {
         verifiedUntil: true,
         messagesEnabled: true,
         payoutFrozenUntil: true,
+        // Whether an admin has opened this account to watch everything free.
+        // Surfaced on every row so the list can show the state and offer the
+        // other direction of the switch.
+        freeAccess: true,
         locale: true,
         lastLoginAt: true,
         createdAt: true,
@@ -130,6 +134,8 @@ const ACTIONS = [
   "FREEZE_PAYOUTS",
   "UNFREEZE_PAYOUTS",
   "SEND_RESET_LINK",
+  "GRANT_FREE_ACCESS",
+  "REVOKE_FREE_ACCESS",
 ] as const;
 
 export async function POST(request: NextRequest) {
@@ -156,6 +162,7 @@ export async function POST(request: NextRequest) {
         strikes: true,
         displayName: true,
         email: true,
+        freeAccess: true,
       },
     });
     if (!target) return api.notFound("User not found");
@@ -275,6 +282,50 @@ export async function POST(request: NextRequest) {
         detail: { strikes: nextStrikes, reason },
       });
       return api.success({ strikes: nextStrikes }, "Warning sent");
+    }
+
+    // GRANT_FREE_ACCESS / REVOKE_FREE_ACCESS — open one account to the whole
+    // catalogue for free, or close it again.
+    //
+    // While it is on, resolveVideoEntitlement grants every paid scene without a
+    // purchase, subscription or charge — see User.freeAccess. It is per-account
+    // and reversible, so it is a switch rather than a coupon or a price of zero:
+    // revoking restores exactly what the account had before (a viewer with no
+    // purchases pays again; one who bought a scene keeps it, because the grant
+    // never wrote a purchase row).
+    if (action === "GRANT_FREE_ACCESS" || action === "REVOKE_FREE_ACCESS") {
+      const grant = action === "GRANT_FREE_ACCESS";
+      const note = body?.reason?.toString().slice(0, 500) || null;
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { freeAccess: grant },
+      });
+      await prisma.notification.create({
+        data: {
+          userId,
+          title: grant ? "Free access unlocked 🎁" : "Free access ended",
+          message: grant
+            ? "An admin has opened your account: you can watch every video on Genhub for free for now."
+            : "Your free access has ended. Paid videos need to be unlocked again.",
+          type: grant ? "success" : "info",
+          link: "/",
+        },
+      });
+      await recordAudit({
+        actorId: auth.userId,
+        action: grant ? AUDIT_ACTIONS.userFreeAccess : AUDIT_ACTIONS.userRevokeFreeAccess,
+        targetType: "User",
+        targetId: userId,
+        summary: `${grant ? "Granted free access to" : "Revoked free access from"} ${
+          target.displayName || target.email || userId
+        }${note ? ` — ${note}` : ""}`,
+        detail: { freeAccess: grant, note },
+      });
+      return api.success(
+        { freeAccess: grant },
+        grant ? "Free access granted" : "Free access revoked"
+      );
     }
 
     // FREEZE_PAYOUTS / UNFREEZE_PAYOUTS — block withdrawals until a date.

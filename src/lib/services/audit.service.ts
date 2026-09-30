@@ -32,6 +32,11 @@ export const AUDIT_ACTIONS = {
   userUnban: "user.unban",
   userWarn: "user.warn",
   userDelete: "user.delete",
+  // An admin switching one account to watch the whole catalogue free, and the
+  // switch back. Both directions are logged: a grant with no matching revoke is
+  // exactly the thing an operator needs to be able to see.
+  userFreeAccess: "user.free_access",
+  userRevokeFreeAccess: "user.revoke_free_access",
   // Issuing a password-reset link on somebody's behalf. Worth a durable record:
   // it is an admin handing out account access, and "who reset this account, and
   // when?" is asked weeks later, not at the time.

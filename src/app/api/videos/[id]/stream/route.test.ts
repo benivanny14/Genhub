@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => ({
   accessUpsert: vi.fn(),
   transactionFindFirst: vi.fn(),
   subscriptionFindFirst: vi.fn(),
+  userFindUnique: vi.fn(),
   currentUser: vi.fn(),
 }));
 
@@ -51,6 +52,7 @@ vi.mock("@/lib/db", () => ({
     videoAccess: { findFirst: mocks.accessFindFirst, upsert: mocks.accessUpsert },
     transaction: { findFirst: mocks.transactionFindFirst },
     creatorSubscription: { findFirst: mocks.subscriptionFindFirst },
+    user: { findUnique: mocks.userFindUnique },
   },
 }));
 
@@ -137,6 +139,7 @@ beforeEach(() => {
   bunnyConfig.tokenSecret = SECRET;
   mocks.videoFindFirst.mockResolvedValue(ROW);
   setAccessRows();
+  mocks.userFindUnique.mockResolvedValue({ freeAccess: false });
   mocks.accessUpsert.mockResolvedValue({ id: "access-1" });
   mocks.transactionFindFirst.mockResolvedValue(null);
   mocks.subscriptionFindFirst.mockResolvedValue(null);

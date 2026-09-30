@@ -79,7 +79,12 @@ function primeDb() {
     .mockResolvedValueOnce(row) // popular
     .mockResolvedValueOnce(row) // rated
     .mockResolvedValueOnce(row) // free
-    .mockResolvedValueOnce(row); // trending pool
+    .mockResolvedValueOnce(row) // trending pool
+    // category covers — one row per category, first video's thumbnail
+    .mockResolvedValueOnce([
+      { category: "music", thumbnailUrl: "https://cdn.test/music.jpg" },
+      { category: "tech", thumbnailUrl: "https://cdn.test/tech.jpg" },
+    ]);
   mocks.videoGroupBy.mockResolvedValueOnce([
     { category: null, _count: { _all: 4 } },
     { category: "music", _count: { _all: 5 } },
@@ -121,13 +126,18 @@ describe("GET /api/home-feed", () => {
     const body = await res.json();
 
     expect(body.success).toBe(true);
-    expect(mocks.videoFindMany).toHaveBeenCalledTimes(6);
+    expect(mocks.videoFindMany).toHaveBeenCalledTimes(7);
     expect(mocks.cacheSet).toHaveBeenCalledTimes(1);
 
     const [key, payload, ttl] = mocks.cacheSet.mock.calls[0];
-    expect(key).toBe("home:feed:v1");
+    expect(key).toBe("home:feed:v2");
     expect(ttl).toBe(60);
     expect(payload.totalVideos).toBe(24);
+    // Covers come from the first video in each category, and the "all" tile
+    // takes the earliest one overall.
+    expect(payload.categoryCovers.music).toBe("https://cdn.test/music.jpg");
+    expect(payload.categoryCovers.tech).toBe("https://cdn.test/tech.jpg");
+    expect(payload.categoryCovers[""]).toBe("https://cdn.test/music.jpg");
     expect(payload.featured.id).toBe("v-featured");
     expect(Object.keys(payload.rows).sort()).toEqual([
       "free",
@@ -238,7 +248,8 @@ describe("GET /api/home-feed", () => {
       .mockResolvedValueOnce(paidNoTrailer)
       .mockResolvedValueOnce(paidNoTrailer)
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce(paidNoTrailer);
+      .mockResolvedValueOnce(paidNoTrailer)
+      .mockResolvedValueOnce([]);
     mocks.videoGroupBy.mockResolvedValueOnce([]);
     mocks.videoCount.mockResolvedValueOnce(1);
     mocks.userFindMany.mockResolvedValueOnce([]);
@@ -264,7 +275,8 @@ describe("GET /api/home-feed", () => {
       .mockResolvedValueOnce(withTrailer)
       .mockResolvedValueOnce(withTrailer)
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce(withTrailer);
+      .mockResolvedValueOnce(withTrailer)
+      .mockResolvedValueOnce([]);
     mocks.videoGroupBy.mockResolvedValueOnce([]);
     mocks.videoCount.mockResolvedValueOnce(1);
     mocks.userFindMany.mockResolvedValueOnce([]);

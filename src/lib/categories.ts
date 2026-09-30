@@ -15,8 +15,6 @@ export interface CategoryDef {
   label: string;
   /** One-line SEO description for the browse page */
   description: string;
-  /** Deterministic thumbnail seed (picsum) for the tile/OG image */
-  imageSeed: string;
 }
 
 /**
@@ -105,7 +103,6 @@ export const CATEGORIES: CategoryDef[] = RAW_CATEGORIES.map(([id, label, descrip
   description:
     description ??
     `Watch ${label} videos on Genhub — premium scenes from verified creators.`,
-  imageSeed: `genhub-${id}`,
 }));
 
 export const CATEGORY_IDS: string[] = CATEGORIES.map((c) => c.id);

@@ -86,6 +86,12 @@ interface HomeFeed {
     trending: Video[];
   };
   categories: Record<string, number>;
+  /**
+   * Category id -> cover image (the thumbnail of the first video published into
+   * that category), with "" holding the "All Videos" cover. Missing or empty
+   * means the category has nothing published yet, and the tile shows a gradient.
+   */
+  categoryCovers?: Record<string, string>;
   totalVideos: number;
   /** Creators with at least one published video — the same rule the strip uses. */
   totalCreators: number;
@@ -112,13 +118,16 @@ const DATE_LABELS = ["Any time", "Today", "This week", "This month", "This year"
 // kicks in (24 demo videos => 2 pages), realistic for production too.
 const PAGE_SIZE = 12;
 
-// Brazzers-style category browser: image tiles viewers tap to open /browse/[category]
+// Brazzers-style category browser: tiles viewers tap to open /browse/[category].
+// The artwork is NOT here — each tile's cover is the thumbnail of the first
+// video published into that category, which only the feed knows (see
+// services/category-cover.service.ts). A category with nothing published gets a
+// gradient rather than a placeholder photo.
 const CATEGORY_TILES = CATEGORIES.map((c) => ({
   // home chips use "" for "all"; browse URLs use the "all" slug
   id: c.id === "all" ? "" : c.id,
   label: c.label,
   href: categoryHref(c.id),
-  img: `https://picsum.photos/seed/${c.imageSeed}/480/320`,
 }));
 
 // Demo fallback when /api/home-feed is unreachable — same shapes, static data.
@@ -137,6 +146,21 @@ function buildDemoFeed(): HomeFeed {
   for (const v of all) {
     if (v.category) categories[v.category] = (categories[v.category] || 0) + 1;
   }
+
+  // Demo equivalents of the real category covers: the first (oldest) video in
+  // each category, so the tiles still look right with no database behind them.
+  const oldestFirst = [...all].sort(
+    (a, b) => +new Date(a.createdAt) - +new Date(b.createdAt)
+  );
+  const categoryCovers: Record<string, string> = {};
+  for (const v of oldestFirst) {
+    if (!v.thumbnailUrl) continue;
+    const key = v.category ?? "";
+    if (!categoryCovers[key]) categoryCovers[key] = v.thumbnailUrl;
+  }
+  const firstCover = oldestFirst.find((v) => v.thumbnailUrl)?.thumbnailUrl;
+  if (firstCover) categoryCovers[""] = firstCover;
+
   return {
     featured: byNew.find((v) => v.isFeatured) || byNew[0] || null,
     rows: {
@@ -147,6 +171,7 @@ function buildDemoFeed(): HomeFeed {
       trending: byViews.slice(0, 10),
     },
     categories,
+    categoryCovers,
     totalVideos: all.length,
     totalCreators: DEMO_CREATORS.filter((c) =>
       DEMO_VIDEOS.some((v) => v.creator.id === c.id)
@@ -170,6 +195,7 @@ function emptyFeed(): HomeFeed {
     featured: null,
     rows: { new: [], popular: [], rated: [], free: [], trending: [] },
     categories: { "": 0 },
+    categoryCovers: {},
     totalVideos: 0,
     totalCreators: 0,
     creators: [],
@@ -536,6 +562,7 @@ export default function HomePage() {
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             {tiles.map((tile) => {
               const active = category === tile.id;
+              const cover = feed.categoryCovers?.[tile.id];
               return (
                 <Link
                   key={tile.id}
@@ -547,13 +574,19 @@ export default function HomePage() {
                       : "border-white/10 hover:border-brand-500/60"
                   )}
                 >
-                  <Image
-                    src={tile.img}
-                    alt={tile.label}
-                    fill
-                    sizes="(max-width: 640px) 50vw, 20vw"
-                    className="object-cover opacity-70 group-hover:opacity-95 group-hover:scale-105 transition"
-                  />
+                  {cover ? (
+                    <Image
+                      src={cover}
+                      alt={tile.label}
+                      fill
+                      sizes="(max-width: 640px) 50vw, 20vw"
+                      className="object-cover opacity-70 group-hover:opacity-95 group-hover:scale-105 transition"
+                    />
+                  ) : (
+                    /* Nothing published here yet — a gradient, never a
+                       placeholder image. */
+                    <div className="absolute inset-0 bg-gradient-to-br from-brand-700/70 via-accent-700/60 to-gray-950" />
+                  )}
                   <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
                   <div className="absolute inset-0 flex flex-col items-center justify-end pb-2.5 text-center">
                     <span className="text-sm font-bold text-white drop-shadow">

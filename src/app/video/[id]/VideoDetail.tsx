@@ -109,7 +109,14 @@ interface VideoData {
    * the scene is included in a monthly payment, so the paywall must not offer to
    * sell it again.
    */
-  accessSource?: "free" | "purchase" | "subscription" | "admin" | "owner" | null;
+  accessSource?:
+    | "free"
+    | "purchase"
+    | "subscription"
+    | "admin"
+    | "owner"
+    | "granted"
+    | null;
   /** Set when a charge for this video was approved but never settled. */
   paymentUnderInvestigation?: {
     transactionId: string;
@@ -1321,32 +1328,40 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
             {/* End card — the trailer is over, and the only way forward is to pay */}
             {introPlaysLikeTrailer && introFinished && (
-              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black/85 px-6 text-center backdrop-blur-sm">
-                <p className="text-xs font-bold uppercase tracking-[0.2em] text-brand-300">
-                  Intro finished
-                </p>
-                <p className="max-w-md text-sm text-white/70">
-                  You just watched the trailer. The full scene stays locked until
-                  you unlock it.
-                </p>
-                <button
-                  onClick={unlockFullScene}
-                  className="btn-brand inline-flex items-center gap-2 text-base"
-                >
-                  <Shield className="w-4 h-4" />
-                  {effectiveUser
-                    ? `Unlock the full scene — ${format(video.price)}`
-                    : "Sign in to unlock the full scene"}
-                </button>
-                <button
-                  onClick={() => {
-                    setIntroFinished(false);
-                    setIntroKey((k) => k + 1);
-                  }}
-                  className="text-xs text-white/50 underline-offset-2 hover:text-white hover:underline"
-                >
-                  Watch the intro again
-                </button>
+              /*
+                A compact card along the bottom, not a full-screen black sheet.
+                The full-cover version hid the whole picture the moment the
+                intro ended, so the poster behind the offer — the thing that
+                sells the scene — was the one thing the viewer could not see.
+              */
+              <div className="absolute inset-x-0 bottom-0 z-10 p-2 sm:p-3">
+                <div className="mx-auto flex max-w-md flex-col items-center gap-2 rounded-xl border border-white/10 bg-black/80 px-3 py-2.5 text-center backdrop-blur-sm">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brand-300">
+                    Intro finished
+                  </p>
+                  <p className="text-xs text-white/70">
+                    You just watched the trailer. The full scene stays locked until
+                    you unlock it.
+                  </p>
+                  <button
+                    onClick={unlockFullScene}
+                    className="btn-brand inline-flex items-center gap-1.5 py-1.5 text-xs"
+                  >
+                    <Shield className="w-3.5 h-3.5" />
+                    {effectiveUser
+                      ? `Unlock the full scene — ${format(video.price)}`
+                      : "Sign in to unlock the full scene"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIntroFinished(false);
+                      setIntroKey((k) => k + 1);
+                    }}
+                    className="text-[11px] text-white/50 underline-offset-2 hover:text-white hover:underline"
+                  >
+                    Watch the intro again
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1419,56 +1434,58 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
             {/* The end card, which for the stitched clip is a real ending. */}
             {showIntroMontage && introFinished && (
-              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 bg-black/85 px-6 text-center backdrop-blur-sm">
-                <p className="text-xs font-bold uppercase tracking-[0.2em] text-brand-300">
-                  Intro finished
-                </p>
-                <p className="max-w-md text-sm text-white/70">
-                  Those were clips from the scene. The rest stays locked until you
-                  unlock it.
-                </p>
-                <button
-                  onClick={unlockFullScene}
-                  className="btn-brand inline-flex items-center gap-2 text-base"
-                >
-                  <Shield className="w-4 h-4" />
-                  {effectiveUser
-                    ? `Unlock the full scene — ${format(video.price)}`
-                    : "Sign in to unlock the full scene"}
-                </button>
-                <button
-                  onClick={() => {
-                    setIntroFinished(false);
-                    setIntroKey((k) => k + 1);
-                  }}
-                  className="text-xs text-white/50 underline-offset-2 hover:text-white hover:underline"
-                >
-                  Watch the intro again
-                </button>
+              <div className="absolute inset-x-0 bottom-0 z-10 p-2 sm:p-3">
+                <div className="mx-auto flex max-w-md flex-col items-center gap-2 rounded-xl border border-white/10 bg-black/80 px-3 py-2.5 text-center backdrop-blur-sm">
+                  <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brand-300">
+                    Intro finished
+                  </p>
+                  <p className="text-xs text-white/70">
+                    Those were clips from the scene. The rest stays locked until you
+                    unlock it.
+                  </p>
+                  <button
+                    onClick={unlockFullScene}
+                    className="btn-brand inline-flex items-center gap-1.5 py-1.5 text-xs"
+                  >
+                    <Shield className="w-3.5 h-3.5" />
+                    {effectiveUser
+                      ? `Unlock the full scene — ${format(video.price)}`
+                      : "Sign in to unlock the full scene"}
+                  </button>
+                  <button
+                    onClick={() => {
+                      setIntroFinished(false);
+                      setIntroKey((k) => k + 1);
+                    }}
+                    className="text-[11px] text-white/50 underline-offset-2 hover:text-white hover:underline"
+                  >
+                    Watch the intro again
+                  </button>
+                </div>
               </div>
             )}
 
             {!introFinished && (
-              <div className="absolute inset-x-0 bottom-0 p-4 sm:p-6">
-                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-brand-300">
+              <div className="absolute inset-x-0 bottom-0 p-3 sm:p-4">
+                <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brand-300">
                   {showIntroMontage
                     ? "Intro · clips from this scene"
                     : "Auto-playing intro · silent"}
                 </p>
-                <h3 className="mt-1 line-clamp-1 font-display text-lg font-bold text-white sm:text-2xl">
+                <h3 className="mt-1 line-clamp-1 font-display text-base font-bold text-white sm:text-xl">
                   {video.title}
                 </h3>
-                <div className="mt-3 flex flex-wrap items-center gap-3">
+                <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
                     onClick={unlockFullScene}
-                    className="btn-brand inline-flex items-center gap-2"
+                    className="btn-brand inline-flex items-center gap-1.5 py-1.5 text-xs"
                   >
-                    <Shield className="w-4 h-4" />
+                    <Shield className="w-3.5 h-3.5" />
                     {effectiveUser
                       ? `Watch the full scene — ${format(video.price)}`
                       : "Sign in to watch the full scene"}
                   </button>
-                  <span className="text-xs text-white/50">
+                  <span className="text-[11px] text-white/50">
                     The full scene is locked until you unlock it.
                   </span>
                 </div>
@@ -1514,14 +1531,14 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               </button>
             )}
 
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-4 sm:p-6">
-              <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-brand-300">
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-3 sm:p-4">
+              <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-brand-300">
                 {video.price > 0 ? "Locked scene" : "Preview unavailable"}
               </p>
-              <h3 className="mt-1 line-clamp-1 font-display text-lg font-bold text-white sm:text-2xl">
+              <h3 className="mt-0.5 line-clamp-1 font-display text-base font-bold text-white sm:text-xl">
                 {video.title}
               </h3>
-              <p className="mt-1 text-xs text-white/60">
+              <p className="mt-0.5 text-[11px] text-white/60">
                 {video.price > 0
                   ? "This scene has no intro clip yet — the full scene is one unlock away."
                   : "This scene has no preview clip."}
@@ -1529,9 +1546,9 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               {!canPlayFull && video.price > 0 && (
                 <button
                   onClick={unlockFullScene}
-                  className="pointer-events-auto btn-brand mt-3 inline-flex items-center gap-2"
+                  className="pointer-events-auto btn-brand mt-2 inline-flex items-center gap-1.5 py-1.5 text-xs"
                 >
-                  <Shield className="w-4 h-4" />
+                  <Shield className="w-3.5 h-3.5" />
                   {effectiveUser
                     ? `Unlock the full scene — ${format(video.price)}`
                     : "Sign in to unlock the full scene"}
@@ -1543,22 +1560,22 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
         {/* Intro paywall bar — under the trailer, never over its controls */}
         {introPlaysLikeTrailer && !introFinished && (
-          <div className="mt-3 flex flex-col gap-3 rounded-2xl border border-brand-500/25 bg-brand-500/10 p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-2 flex flex-col gap-2 rounded-xl border border-brand-500/25 bg-brand-500/10 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
-              <p className="flex items-center gap-2 text-sm font-semibold text-brand-200">
-                <Play className="w-4 h-4 fill-current" />
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-brand-200">
+                <Play className="w-3.5 h-3.5 fill-current" />
                 This is the intro trailer
               </p>
-              <p className="mt-0.5 text-xs text-white/60">
+              <p className="mt-0.5 text-[11px] text-white/60">
                 The full scene ({formatDuration(video.duration ?? 0)}) is locked until
                 you unlock it.
               </p>
             </div>
             <button
               onClick={unlockFullScene}
-              className="btn-brand inline-flex shrink-0 items-center justify-center gap-2"
+              className="btn-brand inline-flex shrink-0 items-center justify-center gap-1.5 py-1.5 text-xs"
             >
-              <Shield className="w-4 h-4" />
+              <Shield className="w-3.5 h-3.5" />
               {effectiveUser ? `Watch full scene — ${format(video.price)}` : "Sign in to watch"}
             </button>
           </div>
@@ -1705,6 +1722,13 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               </span>
             ) : video.accessSource === "admin" ? (
               <span className="badge-success text-sm px-4 py-2">Admin access</span>
+            ) : video.accessSource === "granted" ? (
+              /* The admin opened this account to the whole catalogue. Said in
+                 the account holder's own words rather than an "Admin access"
+                 badge, which would read as if THEY were the admin. */
+              <span className="badge-success text-sm px-4 py-2">
+                🎁 Free access — you can watch everything
+              </span>
             ) : video.accessSource === "free" ? (
               <span className="badge-success text-sm px-4 py-2">Free to watch</span>
             ) : (

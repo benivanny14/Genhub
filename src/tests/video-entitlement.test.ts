@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   accessUpsert: vi.fn(),
   transactionFindFirst: vi.fn(),
   subscriptionFindFirst: vi.fn(),
+  userFindUnique: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -38,6 +39,7 @@ vi.mock("@/lib/db", () => ({
     videoAccess: { findFirst: mocks.accessFindFirst, upsert: mocks.accessUpsert },
     transaction: { findFirst: mocks.transactionFindFirst },
     creatorSubscription: { findFirst: mocks.subscriptionFindFirst },
+    user: { findUnique: mocks.userFindUnique },
   },
 }));
 
@@ -66,6 +68,8 @@ beforeEach(() => {
   mocks.transactionFindFirst.mockResolvedValue(null);
   mocks.subscriptionFindFirst.mockResolvedValue(null);
   mocks.accessUpsert.mockResolvedValue({ id: "access-1" });
+  // No admin comp unless a test says so — every account is a normal payer.
+  mocks.userFindUnique.mockResolvedValue({ freeAccess: false });
 });
 
 describe("free videos", () => {
@@ -217,6 +221,30 @@ describe("a purchase", () => {
       videoId: "row-1",
       type: "PPV_PURCHASE",
       status: "SUCCESS",
+    });
+  });
+});
+
+describe("an admin-granted free account", () => {
+  it("watches a paid scene with no purchase, subscription or charge", async () => {
+    mocks.userFindUnique.mockResolvedValue({ freeAccess: true });
+
+    expect(await resolveVideoEntitlement(VIDEO, VIEWER)).toEqual({
+      entitled: true,
+      source: "granted",
+      healed: false,
+    });
+    // The comp is not a purchase: nothing should be written to the access table.
+    expect(mocks.accessUpsert).not.toHaveBeenCalled();
+  });
+
+  it("goes back to paying when the admin switch is off", async () => {
+    mocks.userFindUnique.mockResolvedValue({ freeAccess: false });
+
+    expect(await resolveVideoEntitlement(VIDEO, VIEWER)).toEqual({
+      entitled: false,
+      source: null,
+      healed: false,
     });
   });
 });

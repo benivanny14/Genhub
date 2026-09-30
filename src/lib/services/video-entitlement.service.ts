@@ -41,7 +41,16 @@
 
 import prisma from "@/lib/db";
 
-export type EntitlementSource = "free" | "purchase" | "subscription" | "admin" | "owner";
+export type EntitlementSource =
+  | "free"
+  | "purchase"
+  | "subscription"
+  | "admin"
+  | "owner"
+  // An admin switched this account to watch everything free (User.freeAccess).
+  // Distinct from "admin" on purpose: the person watching is not an admin, and
+  // the page should say so rather than showing them an admin badge.
+  | "granted";
 
 export interface EntitlementVideo {
   /** The video ROW id — required, because access is keyed on it. */
@@ -76,7 +85,13 @@ export async function resolveVideoEntitlement(
 
   const now = new Date();
 
-  const [access, expiredAccess, purchase, subscription] = await Promise.all([
+  const [account, access, expiredAccess, purchase, subscription] = await Promise.all([
+    // The admin-granted free-access flag. Read here, with the rest, so a comped
+    // account costs one extra parallel query and never a second round trip.
+    prisma.user.findUnique({
+      where: { id: viewer.userId },
+      select: { freeAccess: true },
+    }),
     // Live access: a row with no expiry (lifetime) or one that has not passed.
     prisma.videoAccess.findFirst({
       where: {
@@ -116,6 +131,12 @@ export async function resolveVideoEntitlement(
       select: { id: true },
     }),
   ]);
+
+  // The admin switch short-circuits everything below: an account the admin has
+  // opened watches any paid scene, whatever its purchase history says. Checked
+  // before the self-heal so a comp is never mistaken for a purchase and no
+  // access row is written for a viewer who is not actually buying anything.
+  if (account?.freeAccess) return { entitled: true, source: "granted", healed: false };
 
   let healed = false;
 

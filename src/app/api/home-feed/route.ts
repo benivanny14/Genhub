@@ -12,6 +12,7 @@ import { api } from "@/lib/api-response";
 import { cacheGet, cacheSet } from "@/lib/redis";
 import { introClipPath, resolveTeaserUrl } from "@/lib/bunny";
 import { rankTrending, buildCategoryCounts, activeCreators } from "@/lib/trending";
+import { firstVideoCoverByCategory } from "@/lib/services/category-cover.service";
 
 const ROW_SIZE = 10;
 const CREATOR_SIZE = 16;
@@ -96,7 +97,9 @@ function mapVideos(raw: RawVideo[]) {
 
 export async function GET(_request: NextRequest) {
   try {
-    const cacheKey = "home:feed:v1";
+    // Bumped to v2 when the category covers were added: a shopper holding the
+    // v1 payload would keep seeing the old placeholder tiles for a minute.
+    const cacheKey = "home:feed:v2";
     const cached = await cacheGet(cacheKey);
     if (cached) return api.success(cached);
 
@@ -117,6 +120,7 @@ export async function GET(_request: NextRequest) {
       totalVideos,
       creatorsRaw,
       totalCreators,
+      categoryCoversResult,
     ] = await Promise.all([
       // Hero: newest featured video
       prisma.video.findMany({
@@ -195,6 +199,9 @@ export async function GET(_request: NextRequest) {
           videos: { some: baseWhere },
         },
       }),
+      // Category tile artwork: the thumbnail of the first video in each
+      // category. LAST again, for the same positional reason as the count above.
+      firstVideoCoverByCategory(),
     ]);
 
     const now = Date.now();
@@ -222,6 +229,10 @@ export async function GET(_request: NextRequest) {
         trending: mapVideos(trending as unknown as RawVideo[]),
       },
       categories: counts,
+      // categoryId -> cover image URL, and "" for the "All Videos" tile. An
+      // empty object is a valid answer: a category with nothing published has no
+      // cover, and the client draws a gradient instead of a stock photo.
+      categoryCovers: categoryCoversResult,
       totalVideos,
       // Real counts, straight from the database. The hero used to print a
       // hardcoded "10K+ Creators · 50K+ Videos" no matter what was published,

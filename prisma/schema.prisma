@@ -171,6 +171,14 @@ model User {
   // who forgets to unfreeze does not leave a creator locked out forever.
   payoutFrozenUntil  DateTime?
   payoutFrozenReason String?
+  // "This account watches everything free." An admin turns it on for one user
+  // and off again; while it is on, resolveVideoEntitlement grants every paid
+  // scene without a purchase, subscription or charge. A boolean rather than a
+  // date because it is a switch an admin flips, not a subscription that lapses
+  // — the admin who granted it is recorded in AdminAuditLog (user.free_access
+  // / user.revoke_free_access), so "who gave this away, and when?" is answered
+  // there rather than by another column here.
+  freeAccess         Boolean  @default(false)
   // The version of the creator guidelines this account accepted, and when.
   // 0 = never accepted. Kept on the account rather than in the browser so the
   // re-acceptance gate is the same on every device the creator signs in on, and
