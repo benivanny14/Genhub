@@ -79,7 +79,38 @@ export const VIDEO_EXTENSIONS = [
   "ts",
 ] as const;
 
-export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "heic", "heif", "gif"] as const;
+/**
+ * Every picture format this app will take as a cover, an avatar or a KYC photo.
+ *
+ * Deliberately wide, and wider than it was. The rule used to be "the formats we
+ * are sure we can handle", which is a rule about US, applied to a creator's
+ * picture: a HEIC off an Android gallery, an AVIF saved by a browser, a BMP
+ * exported by an old editor — each was refused by name, and the creator was
+ * told to choose an image while looking at the image they had chosen.
+ *
+ * What a format has to earn is narrower now: it has to BE a picture. What
+ * happens to it afterwards is a separate question with a separate answer — the
+ * browser re-encodes what it can decode (lib/image-downscale), and what it
+ * cannot is still accepted as-is, with the framing step skipped rather than the
+ * file refused.
+ *
+ * SVG is the one deliberate absence, and it is not a picture in this sense: it
+ * is a document that can carry script, and this app serves its uploads from its
+ * own origin.
+ */
+export const IMAGE_EXTENSIONS = [
+  "jpg",
+  "jpeg",
+  "png",
+  "webp",
+  "avif",
+  "bmp",
+  "tif",
+  "tiff",
+  "gif",
+  "heic",
+  "heif",
+] as const;
 
 const extensionsOf = (list: readonly string[]) => list.map((ext) => `.${ext}`).join(",");
 
@@ -179,6 +210,9 @@ const CONTENT_TYPES: Record<string, string> = {
   heif: "image/heif",
   gif: "image/gif",
   avif: "image/avif",
+  bmp: "image/bmp",
+  tif: "image/tiff",
+  tiff: "image/tiff",
   // Captions. The media proxy serves whatever Content-Type the key implies, and
   // a browser refuses to parse a <track> whose response is
   // application/octet-stream — the captions would simply never appear, with no

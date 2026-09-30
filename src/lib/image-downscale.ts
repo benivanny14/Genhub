@@ -37,11 +37,25 @@ const DEFAULTS: Required<DownscaleOptions> = {
   quality: 0.85,
 };
 
-/** Formats a canvas can safely re-encode. */
+/**
+ * Formats a canvas can safely re-encode.
+ *
+ * GIF is deliberately absent — re-encoding one turns an animation into a still.
+ * HEIC/HEIF are present because a decode of one either works or fails cleanly,
+ * and a browser that can read a HEIC can also re-encode it as a JPEG that every
+ * viewer can read (Safari can, and Android Chrome can where the platform codec
+ * is available). AVIF and BMP are here because both decode in every current
+ * browser and come out smaller and more portable as JPEG.
+ *
+ * A format that is not in this set is not refused — it is passed through
+ * untouched, and the framing step is skipped rather than the file (see below).
+ */
 const REENCODABLE = new Set([
   "image/jpeg",
   "image/png",
   "image/webp",
+  "image/avif",
+  "image/bmp",
   "image/heic",
   "image/heif",
 ]);
@@ -52,6 +66,10 @@ const IMAGE_TYPE_BY_EXTENSION: Record<string, string> = {
   jpeg: "image/jpeg",
   png: "image/png",
   webp: "image/webp",
+  avif: "image/avif",
+  bmp: "image/bmp",
+  tif: "image/tiff",
+  tiff: "image/tiff",
   heic: "image/heic",
   heif: "image/heif",
 };

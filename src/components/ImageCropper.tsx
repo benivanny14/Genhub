@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Move, X, ZoomIn } from "lucide-react";
+import { HEIF_NOT_DECODABLE_MESSAGE, isHeifContainer } from "@/lib/image-bytes";
 
 export type CropShape = "square" | "wide";
 
@@ -41,6 +42,13 @@ interface ImageCropperProps {
 
 /** How much of the picture must be inside the frame at its widest (1 = cover). */
 const MAX_ZOOM = 4;
+
+/**
+ * The sentence for everything that is not a HEIF container — a truncated file, a
+ * .jpg that is really something else, a picture the phone could not hand over in
+ * full. It stays because it is still true, and it is no longer the only answer.
+ */
+const CANNOT_OPEN_IMAGE = "That file could not be opened as an image. Try another one.";
 
 const LAYOUTS: Record<CropShape, { viewportW: number; viewportH: number; outW: number; outH: number }> = {
   square: { viewportW: 288, viewportH: 288, outW: 512, outH: 512 },
@@ -65,7 +73,14 @@ export default function ImageCropper({
   const { viewportW, viewportH, outW, outH } = LAYOUTS[shape];
 
   const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [loadError, setLoadError] = useState(false);
+  //
+  // A MESSAGE, not a flag. "That file could not be opened as an image" was the
+  // only thing this could ever say, and for the case it actually happens in — a
+  // HEIC photo, which is what an iPhone and many Android cameras save, and which
+  // no browser except Safari can decode — that sentence is a dead end. The file
+  // is fine; the browser is the limit. Naming the format is what turns it into a
+  // detour: the creator takes the picture with the camera instead.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [working, setWorking] = useState(false);
@@ -85,15 +100,47 @@ export default function ImageCropper({
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
+  /**
+   * What to say when this browser will not open the picture.
+   *
+   * The bytes decide, not the filename: a HEIC saved under a `.jpg` name by a
+   * gallery or a chat app is the same file and fails the same way, and the
+   * filename is exactly the part that is wrong. `isHeifContainer` is the same
+   * read the upload route uses, so the client and the server cannot disagree
+   * about what a picture is.
+   */
+  async function explainFailure() {
+    let undecodable = false;
+    try {
+      const head = new Uint8Array(await file.slice(0, 32).arrayBuffer());
+      undecodable = isHeifContainer(head);
+    } catch {
+      // Could not even read the header — fall through to the generic sentence.
+    }
+    setLoadError(undecodable ? HEIF_NOT_DECODABLE_MESSAGE : CANNOT_OPEN_IMAGE);
+  }
+
   useEffect(() => {
     if (!objectUrl) return;
+    // `cancelled` guards the answer, not the request: a slow failure from a
+    // picture the creator already moved on from must not overwrite the picture
+    // they are looking at now.
+    let cancelled = false;
     setImage(null);
-    setLoadError(false);
+    setLoadError(null);
     const img = new window.Image();
-    img.onload = () => setImage(img);
-    img.onerror = () => setLoadError(true);
+    img.onload = () => {
+      if (!cancelled) setImage(img);
+    };
+    img.onerror = () => {
+      if (!cancelled) void explainFailure();
+    };
     img.src = objectUrl;
-  }, [objectUrl]);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectUrl, file]);
 
   // Escape closes the dialog — a modal with no keyboard way out is a trap.
   useEffect(() => {
@@ -246,9 +293,41 @@ export default function ImageCropper({
         </p>
 
         {loadError ? (
-          <p className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
-            That file could not be opened as an image. Try another one.
-          </p>
+          <div className="space-y-3">
+            <p className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
+              {loadError}
+            </p>
+            {/*
+              The way through, and the reason this is not just an error box.
+
+              A picture this browser cannot decode is still the creator's
+              picture, and refusing it by format meant telling them to choose an
+              image while they were looking at the image they had chosen. So the
+              framing step is what gets skipped — never the file: the original
+              bytes are handed to the caller exactly as they came off the phone,
+              and it becomes the cover without ever being re-encoded here.
+
+              What that costs is said out loud rather than implied: the crop did
+              not happen, so the picture is shown in whatever shape it is, and a
+              format no browser can draw (a HEIC, on a machine without the
+              codec) will look broken wherever it is displayed.
+            */}
+            <button
+              type="button"
+              onClick={() => onConfirm(file)}
+              disabled={busy}
+              className="btn-ghost w-full disabled:opacity-50"
+            >
+              Tumia picha hii kama ilivyo — use this picture as it is
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="w-full text-xs text-white/50 underline underline-offset-2 hover:text-white/80 transition"
+            >
+              Or choose a different picture
+            </button>
+          </div>
         ) : (
           <>
             <div

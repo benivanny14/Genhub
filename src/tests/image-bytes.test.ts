@@ -15,7 +15,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { isHeifContainer, isHeifExtension } from "@/lib/image-bytes";
+import { isHeifContainer, isHeifExtension, HEIF_NOT_DECODABLE_MESSAGE } from "@/lib/image-bytes";
 
 const upload = readFileSync(
   join(process.cwd(), "src", "app", "api", "upload", "route.ts"),
@@ -65,6 +65,31 @@ describe("isHeifExtension", () => {
     expect(isHeifExtension("public/images/a.jpg")).toBe(false);
     expect(isHeifExtension(null)).toBe(false);
     expect(isHeifExtension(undefined)).toBe(false);
+  });
+});
+
+describe("what a creator is told when their browser will not open a HEIC", () => {
+  it("names the format instead of dead-ending", () => {
+    // Measured, both halves: a real HEIC in `new Image()` fires onerror in
+    // Chromium, and sharp answers "heif: Support for this compression format has
+    // not been built in". "That file could not be opened as an image" is true of
+    // this case and useless for it — the file is fine and the browser is the
+    // limit, so the sentence has to say so and name the way out.
+    expect(HEIF_NOT_DECODABLE_MESSAGE).toMatch(/HEIC/);
+    expect(HEIF_NOT_DECODABLE_MESSAGE).toMatch(/Take a photo/);
+    expect(HEIF_NOT_DECODABLE_MESSAGE).toMatch(/JPEG|PNG/);
+    // Swahili first, because this is read on a phone in Dar es Salaam.
+    expect(HEIF_NOT_DECODABLE_MESSAGE.indexOf("HEIC")).toBeLessThan(
+      HEIF_NOT_DECODABLE_MESSAGE.indexOf("This is a HEIC")
+    );
+  });
+
+  it("is reached by the bytes, so a HEIC named .jpg is not missed", () => {
+    // The filename is the part that is wrong: a gallery or a chat app saves HEIC
+    // content under a .jpg name, and the container brands are what identify it.
+    for (const brand of ["heic", "heix", "mif1", "msf1"]) {
+      expect(isHeifContainer(ftyp(brand)), brand).toBe(true);
+    }
   });
 });
 

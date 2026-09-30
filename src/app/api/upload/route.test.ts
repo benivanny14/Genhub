@@ -201,6 +201,48 @@ describe("images still behave", () => {
     expect(storedKey()).toMatch(/\.heic$/);
   });
 
+  it("accepts an honest AVIF, which IS a HEIF container", async () => {
+    // The disguise check refuses a HEIF under a non-HEIF name. An AVIF IS a HEIF
+    // container, so "refuse every HEIF" refused the format itself — a file
+    // rejected by the very rule written to catch something pretending to be it.
+    const avif = new Uint8Array(16);
+    avif[4] = 0x66;
+    avif[5] = 0x74;
+    avif[6] = 0x79;
+    avif[7] = 0x70;
+    "avif".split("").forEach((c, i) => (avif[8 + i] = c.charCodeAt(0)));
+
+    for (const [name, type] of [
+      ["holiday.avif", "image/avif"],
+      ["holiday.avif", ""],
+    ]) {
+      fetchMock.mockClear();
+      const res = await POST(upload(new File([avif], name, { type })));
+
+      expect(res.status).toBe(200);
+      expect(storedKey()).toMatch(/\.avif$/);
+    }
+  });
+
+  it("takes every picture format, named or not", async () => {
+    // The rule that matters is "is this a picture", not "is this a picture we
+    // are sure about". A BMP off an old editor, a TIFF off a scanner: each used
+    // to be refused by name while the creator looked at the file they had
+    // chosen.
+    for (const [name, ext] of [
+      ["scan.tiff", ".tiff"],
+      ["scan.TIF", ".tiff"],
+      ["old.bmp", ".bmp"],
+      ["anim.gif", ".gif"],
+    ]) {
+      fetchMock.mockClear();
+      const res = await POST(upload(new File(["x"], name, { type: "" })));
+
+      expect(res.status).toBe(200);
+      expect(storedKey()).toMatch(new RegExp(`${ext}$`));
+    }
+  });
+
   it("still refuses a HEIF container dressed as a JPEG, typed or not", async () => {
     // The security property that must NOT move with the extension fallback.
     const heif = new Uint8Array(16);

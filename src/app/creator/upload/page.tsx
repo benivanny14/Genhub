@@ -439,7 +439,7 @@ export default function UploadPage() {
 
     for (const file of files) {
       if (classifyFile(file) !== "image") {
-        toast("error", `"${file.name}" is not a picture. Choose a JPG, PNG, WebP or HEIC image.`);
+        toast("error", `"${file.name}" is not a picture. Chagua picha ya aina yoyote.`);
         continue;
       }
       if (isLikelyCloudCopy(file.name)) toast("warning", CLOUD_COPY_WARNING);

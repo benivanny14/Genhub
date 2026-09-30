@@ -40,6 +40,9 @@ const ALLOWED_TYPES: Record<string, string> = {
   "image/png": ".png",
   "image/webp": ".webp",
   "image/gif": ".gif",
+  "image/avif": ".avif",
+  "image/bmp": ".bmp",
+  "image/tiff": ".tiff",
   "image/heic": ".heic",
   "image/heif": ".heif",
   // WebVTT captions. Same route, same key shape, different bucket folder — a
@@ -68,6 +71,10 @@ const UNTYPED_IMAGE_EXTENSIONS: Record<string, string> = {
   png: ".png",
   webp: ".webp",
   gif: ".gif",
+  avif: ".avif",
+  bmp: ".bmp",
+  tif: ".tiff",
+  tiff: ".tiff",
   heic: ".heic",
   heif: ".heif",
 };
@@ -156,7 +163,8 @@ export async function POST(request: NextRequest) {
     const ext = extensionFor(file);
     if (!ext) {
       return api.validation(
-        "Only JPEG, PNG, WebP, GIF, HEIC or HEIF images, or a .vtt captions file, are allowed"
+        "Only picture files (JPEG, PNG, WebP, GIF, AVIF, BMP, TIFF, HEIC, HEIF) " +
+          "or a .vtt captions file are allowed"
       );
     }
     const maxBytes = ext === ".vtt" ? MAX_CAPTION_BYTES : MAX_IMAGE_BYTES;
@@ -197,7 +205,13 @@ export async function POST(request: NextRequest) {
     // those are now equally valid declarations — and a .HEIC from a photo
     // library with no MIME type is an honest HEIC, not a disguise. The check
     // below is about the BYTES either way.
-    const declaredHeif = ext === ".heic" || ext === ".heif";
+    //
+    // `.avif` is on this list for the same reason and not as a loophole: an
+    // AVIF IS a HEIF container (`ftyp avif`), so without it every honest AVIF
+    // was refused by the disguise check — the format was rejected by the very
+    // rule meant to catch something pretending to be it. What the rule is for
+    // is a HEIF wearing a name that is NOT a HEIF name, and that is unchanged.
+    const declaredHeif = ext === ".heic" || ext === ".heif" || ext === ".avif";
     if (!declaredHeif && isHeifContainer(buffer)) {
       return api.validation(
         "That image could not be read — please upload a JPEG, PNG or WebP"

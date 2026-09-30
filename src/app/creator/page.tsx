@@ -638,7 +638,7 @@ export default function CreatorDashboard() {
         "error",
         kind === "video"
           ? "That is a video, not a picture. Choose a photo for the cover."
-          : `"${file.name}" is not a picture. Choose a JPG, PNG, WebP or HEIC photo.`
+          : `"${file.name}" is not a picture. Chagua picha ya aina yoyote.`
       );
       return;
     }
@@ -2056,7 +2056,7 @@ export default function CreatorDashboard() {
                       />
                     </label>
                     <p className="text-xs text-white/40">
-                      JPEG, PNG, WebP or HEIC, up to 10 MB — a big photo is shrunk to fit
+                      Any picture format — JPEG, PNG, WebP, HEIC, AVIF, GIF — up to 10 MB; a big photo is shrunk to fit
                       automatically. This is the picture on the feed —
                       you can move and zoom it before it is saved.
                     </p>

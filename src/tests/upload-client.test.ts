@@ -16,6 +16,7 @@
 
 import { describe, it, expect } from "vitest";
 import { imageUploadRefusal } from "@/lib/upload-client";
+import { IMAGE_EXTENSIONS } from "@/lib/media";
 
 /** A file as the picker hands it over: a name and whatever MIME it claimed. */
 const picked = (name: string, type: string) => ({ name, type });
@@ -58,10 +59,21 @@ describe("imageUploadRefusal", () => {
 
   it("names what IS accepted, so the refusal is actionable", () => {
     // "Please choose an image file" told a creator holding a photo that their
-    // photo was not a photo. The sentence names the types instead.
+    // photo was not a photo. The sentence names the types instead — and it names
+    // them as "any kind", because the rule is now "is this a picture" rather
+    // than "is this one of the three formats we happen to think of".
     const message = imageUploadRefusal(picked("clip.mp4", "video/mp4"));
+    expect(message).toMatch(/any kind/);
     expect(message).toMatch(/JPEG/);
-    expect(message).toMatch(/PNG/);
+    expect(message).toMatch(/PNG|HEIC/);
     expect(message).toMatch(/HEIC/);
+  });
+
+  it("takes every picture format the app offers in its pickers", () => {
+    // One list, read by the picker, the classifier and the server: a format that
+    // is offered must never be refused by the code that reads it back.
+    for (const ext of IMAGE_EXTENSIONS) {
+      expect(imageUploadRefusal(picked(`photo.${ext}`, "")), ext).toBeNull();
+    }
   });
 });

@@ -60,7 +60,8 @@ export function imageUploadRefusal(file: {
 }): string | null {
   return classifyFile(file) === "image"
     ? null
-    : "Please choose a picture — a JPEG, PNG, WebP or HEIC image";
+    : "That file is not a picture — choose an image of any kind " +
+      "(JPEG, PNG, HEIC, GIF, AVIF, BMP, TIFF…)";
 }
 
 export async function uploadImage(file: File, options: UploadOptions = {}): Promise<string> {

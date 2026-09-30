@@ -113,6 +113,32 @@ describe("a picture the browser did not type", () => {
     }
   });
 
+  it("recognises the formats a creator actually brings", async () => {
+    // Not a claim about decoding — a BMP and an AVIF both come back re-encoded
+    // as JPEG here, which is the point: the picker takes them, so this step has
+    // to know they are pictures rather than pass a 6 MB file through unshrunk.
+    for (const [name, type] of [
+      ["shot.avif", ""],
+      ["old.bmp", "image/bmp"],
+      ["IMG_9.HEIC", ""],
+    ]) {
+      const source = new File([new Uint8Array(6 * 1024 * 1024)], name, { type });
+      const result = await downscaleImage(source);
+
+      expect(result, name).not.toBe(source);
+      expect(result.type, name).toBe("image/jpeg");
+    }
+  });
+
+  it("passes a TIFF through untouched rather than refusing it", async () => {
+    // A TIFF is the one picture no browser can draw, so the crop step is skipped
+    // for it upstream — but the file still goes to the server as the creator
+    // chose it, which is what "do not refuse it by format" has to mean.
+    const source = photo("scan.tiff", "image/tiff");
+
+    expect(await downscaleImage(source)).toBe(source);
+  });
+
   it("keeps a PNG a PNG so transparency survives", async () => {
     const result = await downscaleImage(photo("logo.png", ""));
 

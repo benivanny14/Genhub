@@ -44,6 +44,26 @@ const HEIF_BRANDS = new Set([
  * Layout: a 32-bit box size, the ASCII `ftyp`, then the major brand. Checking
  * the brand and not just `ftyp` matters — an MP4 video would otherwise match.
  */
+/**
+ * Can this browser open a HEIC/HEIF picture at all?
+ *
+ * Measured, not assumed: a real HEIC loaded into `new Image()` fires `onerror`
+ * in Chromium, and sharp on the server answers "heif: Support for this
+ * compression format has not been built in" because its prebuilt libheif has no
+ * HEVC decoder. So a HEIC that reaches a creator's browser cannot be cropped,
+ * and one we store cannot be displayed by any viewer outside Safari.
+ *
+ * That is worth knowing BEFORE a creator spends a tap on it, because the two
+ * are the same finding: the file is fine, the browser is the limit. The way out
+ * is a picture the browser CAN open — the camera, or a JPEG/PNG from the
+ * gallery — and saying so is the difference between a dead end and a detour.
+ */
+export const HEIF_NOT_DECODABLE_MESSAGE =
+  "Hii ni picha ya HEIC/HEIF (ndiyo aina ambayo iPhone na simu nyingi huhifadhi). " +
+  "Browser hii haiwezi kuifungua. Tumia kitufe cha \"Take a photo\" au \"Record now\", " +
+  "au chagua picha ya JPEG/PNG. — This is a HEIC/HEIF photo, which this browser " +
+  "cannot open. Use the camera button, or choose a JPEG or PNG.";
+
 export function isHeifContainer(bytes: Uint8Array): boolean {
   if (bytes.length < 12) return false;
   if (
