@@ -160,7 +160,14 @@ export interface VideoUploadProgress {
  * where a creator's video goes, and data: URLs and lookalike hosts both parse.
  */
 export async function openVideoUpload(session: VideoUploadSession): Promise<OpenedVideoUpload> {
-  const metadata = `filetype ${btoa(session.mimeType || "video/mp4")},title ${btoa(session.videoId)}`;
+  // What Bunny is TOLD the file is. A video's own type is passed through so an
+  // MKV is described as an MKV; anything else is declared as MP4, which is what
+  // the host reads for itself anyway. Forwarding whatever the picker said would
+  // announce `application/octet-stream` for files that are ordinary videos —
+  // and accepting that value (see the upload route) means agreeing that it is
+  // not worth acting on, not passing it along as if it were.
+  const declaredType = /^video\//i.test(session.mimeType || "") ? session.mimeType : "video/mp4";
+  const metadata = `filetype ${btoa(declaredType)},title ${btoa(session.videoId)}`;
 
   let response: Response;
   try {
@@ -617,6 +624,24 @@ async function readChunkSlice(file: File, start: number, end: number): Promise<A
     });
   }
   return bytes;
+}
+
+/** How much of a file is read to prove the device can read it at all. */
+export const VIDEO_UPLOAD_READ_PROBE_BYTES = 64 * 1024;
+
+/**
+ * Prove the device can produce this file's bytes, before anything is spent.
+ *
+ * Called the moment a creator picks a file, which is the difference between two
+ * very different experiences: this answer arriving on the file itself, or the
+ * same answer arriving after a title has been typed, a Bunny slot reserved and a
+ * round trip made. It matters most for the files a picker CAN see but a phone
+ * cannot read — the cloud-backed ones — because those are the creators who
+ * otherwise leave an orphaned slot behind for every attempt.
+ */
+export async function assertFileReadable(file: File): Promise<void> {
+  if (!file?.size) return;
+  await readChunkSlice(file, 0, Math.min(file.size, VIDEO_UPLOAD_READ_PROBE_BYTES));
 }
 
 /**

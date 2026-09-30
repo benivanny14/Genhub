@@ -8,6 +8,7 @@ import {
   Check,
   CheckCircle,
   FileVideo,
+  FolderOpen,
   Image as ImageIcon,
   Loader2,
   ShieldAlert,
@@ -19,7 +20,7 @@ import ImageCropper from "@/components/ImageCropper";
 import { fetchCurrentUser } from "@/lib/current-user";
 import { useToast } from "@/components/Toast";
 import { uploadImage } from "@/lib/upload-client";
-import { VIDEO_ACCEPT } from "@/lib/media";
+import { ANY_FILE_ACCEPT, VIDEO_ACCEPT } from "@/lib/media";
 import { CATEGORIES } from "@/lib/categories";
 import {
   CREATOR_GUIDELINES,
@@ -32,6 +33,7 @@ import {
 import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
 import {
   abortVideoUpload,
+  assertFileReadable,
   completeVideoUpload,
   openVideoUpload,
   uploadVideoFile,
@@ -282,12 +284,36 @@ export default function UploadPage() {
     }
   }
 
+  /**
+   * The device's own answer about a file, asked on the file itself.
+   *
+   * A file the phone cannot read fails at the first PATCH with the same
+   * `TypeError: Failed to fetch` a dropped connection produces, so without this
+   * the creator learns the truth only after typing a title and reserving a slot
+   * — and every attempt at a cloud-backed file leaves another orphan behind.
+   * Asked here, the answer arrives while they are still looking at the picker.
+   */
+  async function readableOrReport(file: File, kind: UploadKind): Promise<boolean> {
+    try {
+      await assertFileReadable(file);
+      return true;
+    } catch (error) {
+      toast("error", error instanceof Error ? error.message : "That file could not be read");
+      reportUploadFailure(error, { file, kind });
+      return false;
+    }
+  }
+
   async function handleMainFile(file: File, resumeExisting = false) {
     const sizeError = videoFileSizeError(file);
     if (sizeError) {
       toast("error", sizeError);
       return;
     }
+    // A RESUMED upload has already proved it: the bytes are at Bunny, and the
+    // one thing that must not happen here is a re-read refusing a file whose
+    // first half is already stored.
+    if (!resumeExisting && !(await readableOrReport(file, "main"))) return;
 
     // Choosing a file is always a new upload. Reusing a session is reserved for
     // the explicit Resume button: a file picker retry must never accidentally
@@ -346,6 +372,7 @@ export default function UploadPage() {
       toast("error", sizeError);
       return;
     }
+    if (!resumeExisting && !(await readableOrReport(file, "teaser"))) return;
     const reuse =
       resumeExisting &&
       teaserSession &&
@@ -499,8 +526,15 @@ export default function UploadPage() {
             <label className="block border-2 border-dashed border-white/15 rounded-2xl p-8 text-center cursor-pointer hover:border-brand-400/60 transition">
               <Upload className="w-8 h-8 mx-auto text-brand-400 mb-3" />
               <span className="block font-medium">Choose a video</span>
-              <span className="block text-xs text-white/40 mt-1">MP4, MOV, MKV, WebM and common video formats · maximum 2 GB</span>
+              <span className="block text-xs text-white/40 mt-1">MP4, MOV, MKV, WebM and other video formats · any folder on this device · maximum 2 GB</span>
               <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
+            </label>
+            {/* The second door. A type filter is kept by the phone's own file
+                index, so a video a chat app saved or one sitting on a card can
+                be missing from the picker above while being perfectly readable. */}
+            <label className="flex items-center justify-center gap-2 text-xs text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
+              <FolderOpen className="w-4 h-4" /> Can&apos;t find it? Browse every folder and app on this device
+              <input type="file" accept={ANY_FILE_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
             </label>
             {mainFile && <div className="flex items-center justify-between text-sm"><span className="truncate">{mainFile.name} · {formatBytes(mainFile.size)}</span>{mainReady ? <span className="text-emerald-400 flex items-center gap-1"><Check className="w-4 h-4" /> Ready</span> : null}</div>}
             {(mainUploading || mainProgress) && !mainReady && <ProgressBar percent={mainPercent} label={mainUploading ? `Uploading ${mainPercent}%` : "Upload incomplete — press Resume upload to continue"} />}
@@ -526,6 +560,10 @@ export default function UploadPage() {
             {thumbnailUploading && <ProgressBar percent={100} label="Uploading cover…" />}
             {thumbnailUrl && <p className="text-xs text-emerald-400">Cover ready</p>}
             <label className="block text-sm text-white/70">Optional teaser clip<input type="file" accept={VIDEO_ACCEPT} className="input w-full mt-2" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} /></label>
+            <label className="flex items-center gap-2 text-xs text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
+              <FolderOpen className="w-4 h-4" /> Can&apos;t find the clip? Browse every folder and app on this device
+              <input type="file" accept={ANY_FILE_ACCEPT} className="hidden" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
+            </label>
             {teaserFile && <p className="text-xs text-white/60">{teaserFile.name} · {formatBytes(teaserFile.size)}</p>}
             {(teaserUploading || teaserProgress) && !teaserVideoId && <ProgressBar percent={teaserPercent} label={`Teaser ${teaserPercent}%`} />}
             {teaserSession && !teaserVideoId && !teaserUploading && <button type="button" className="btn-ghost text-sm" onClick={() => teaserFile && void handleTeaserFile(teaserFile, true)}>Resume teaser upload</button>}

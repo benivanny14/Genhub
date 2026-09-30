@@ -29,10 +29,12 @@ import {
   VIDEO_UPLOAD_FLOOR_BPS,
   VIDEO_UPLOAD_MAX_ATTEMPTS,
   VIDEO_UPLOAD_MAX_CHUNK_BYTES,
+  VIDEO_UPLOAD_READ_PROBE_BYTES,
   VIDEO_UPLOAD_READ_TIMEOUT_MS,
   VIDEO_UPLOAD_TARGET_CHUNK_MS,
   VIDEO_UPLOAD_TUS_ENDPOINT,
   VideoUploadError,
+  assertFileReadable,
   chunkBytesFor,
   chunkTimeoutMs,
   completeVideoUpload,
@@ -519,6 +521,41 @@ function durationMs(bytes: number, bps: number): number {
 // because it is the difference between an upload that finishes in an hour and
 // one that never moves.
 // =============================================================================
+describe("assertFileReadable", () => {
+  it("passes a file the device can hand over", async () => {
+    await expect(assertFileReadable(fileOf(200_000))).resolves.toBeUndefined();
+  });
+
+  it("names the file, not the connection, when the bytes cannot be produced", async () => {
+    // This is the pre-flight version of the same fault the transport now names:
+    // it runs the moment a file is picked, so the creator hears it while they
+    // are still looking at the picker rather than after a slot was reserved.
+    await expect(rejection(assertFileReadable(unreadableFileOf(100)))).resolves.toMatchObject({
+      code: "INVALID_FILE",
+      reason: "unreadable",
+      stage: "chunk",
+    });
+  });
+
+  it("reads a probe and not the file, so a 2 GB video costs nothing to check", async () => {
+    const sizes: number[] = [];
+    const file = fileOf(1_500_000);
+    const tracked = {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      slice: (start: number, end: number) => {
+        sizes.push(end - start);
+        return file.slice(start, end);
+      },
+    } as unknown as File;
+
+    await assertFileReadable(tracked);
+
+    expect(sizes).toEqual([VIDEO_UPLOAD_READ_PROBE_BYTES]);
+  });
+});
+
 describe("chunk planning", () => {
   it("starts with a slice small enough to be cheap to abandon", () => {
     // The first request is the only one made blind. Sizing it for a fast link

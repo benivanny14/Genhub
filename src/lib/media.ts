@@ -54,6 +54,25 @@ import { isHeifExtension } from "./image-bytes";
 export const VIDEO_ACCEPT =
   "video/*,.mp4,.m4v,.mov,.3gp,.3g2,.mkv,.webm,.avi,.wmv,.flv,.mts,.m2ts,.mpg,.mpeg,.ts";
 
+/**
+ * A picker that hides NOTHING.
+ *
+ * Every filter above is a promise about a file that the picker has to decide
+ * before anyone has read it, and on a phone that promise is kept by the system
+ * document provider — which answers from an index, not from the disk. A video a
+ * chat app saved into its own folder, a recording on a card the media scanner
+ * never walked, a file sitting in the cloud: all of them are absent or greyed
+ * out under a type filter, and NONE of that is visible from here. The creator
+ * sees a picker with their video missing and concludes the app cannot do it.
+ *
+ * So this is the second door, and it is deliberately untyped: asking for every
+ * type asks for every provider and every folder, which is the only thing a web
+ * page can request that cannot hide a file. What the file IS gets decided
+ * afterwards, by reading it — which is the only place that question has an
+ * honest answer anyway.
+ */
+export const ANY_FILE_ACCEPT = "*/*";
+
 export const MEDIA_ROUTE_PREFIX = "/api/media/";
 
 export type MediaKind = "public" | "private";

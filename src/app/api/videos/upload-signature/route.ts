@@ -24,12 +24,24 @@ export const maxDuration = 30;
 const schema = z.object({
   title: z.string().trim().min(1).max(200),
   size: z.number().int().positive().max(MAX_VIDEO_BYTES),
-  mimeType: z
-    .string()
-    .trim()
-    .max(100)
-    .refine((value) => value === "" || value.startsWith("video/"), "Choose a video file")
-    .optional(),
+  /**
+   * What the device called the file — a HINT, never a gate.
+   *
+   * This used to refuse anything that did not start with `video/`, and the
+   * intent behind that was good: keep a creator from pushing a 2 GB document
+   * through a video pipeline. What it did in practice was refuse the videos.
+   * The value comes from the picker, and on Android that is the document
+   * provider's guess: a `.mkv` off an SD card, a `.mov` a camera app wrote
+   * itself, anything downloaded by a chat app arrives as an empty string or as
+   * `application/octet-stream`, and every one of them was turned away here with
+   * "Choose a video file" — for a file the creator had just chosen and could
+   * see playing in their gallery.
+   *
+   * Bunny decides what a file is by reading its bytes, and the encoding
+   * lifecycle already takes down anything that turns out not to be a video, so
+   * nothing is gained by guessing first. Bounded in length only.
+   */
+  mimeType: z.string().trim().max(100).optional(),
 });
 
 export async function POST(request: NextRequest) {

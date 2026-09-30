@@ -40,7 +40,7 @@ import {
   Check,
   Share2,
 } from "lucide-react";
-import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
+import { ANY_FILE_ACCEPT, VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
 import {
   abortVideoUpload,
@@ -49,6 +49,7 @@ import {
   completeVideoUpload,
   videoFileSizeError,
   VideoUploadError,
+  assertFileReadable,
   type OpenedVideoUpload,
   type VideoUploadSession,
 } from "@/lib/video-upload";
@@ -643,6 +644,17 @@ export default function CreatorDashboard() {
     const sizeError = videoFileSizeError(file);
     if (sizeError) {
       toast("error", sizeError);
+      return;
+    }
+    // The second half of that guard, and the one that catches the files a
+    // picker can see but a phone cannot read: asked here, it arrives while the
+    // creator is still looking at the picker, instead of after a slot has been
+    // reserved and a first chunk has failed looking like a dropped connection.
+    try {
+      await assertFileReadable(file);
+    } catch (error) {
+      toast("error", error instanceof Error ? error.message : "That file could not be read");
+      reportUploadFailure(error, { file, kind: "teaser" });
       return;
     }
     setUploadingEditTeaser(true);
@@ -2059,6 +2071,22 @@ export default function CreatorDashboard() {
                     <input
                       type="file"
                       accept={VIDEO_ACCEPT}
+                      className="hidden"
+                      disabled={uploadingEditTeaser}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) uploadEditTeaser(file);
+                      }}
+                    />
+                  </label>
+                  {/* The same second door as the upload page: a type filter is
+                      applied by the phone's own file index, so a clip saved by
+                      a chat app can be missing from the picker on the left. */}
+                  <label className="text-xs text-white/45 underline underline-offset-2 cursor-pointer hover:text-white/75">
+                    Can&apos;t find the clip? Browse every folder and app
+                    <input
+                      type="file"
+                      accept={ANY_FILE_ACCEPT}
                       className="hidden"
                       disabled={uploadingEditTeaser}
                       onChange={(e) => {
