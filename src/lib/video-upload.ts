@@ -234,6 +234,16 @@ export const UPLOAD_FAILURE_REASONS = [
   "provider",
   "cancelled",
   "preflight",
+  /**
+   * The device could not produce the bytes at all — appended rather than
+   * inserted, and appended late, for the reason the paragraph above gives:
+   * stored records are read back against this list, so a word may be ADDED at
+   * the end but never reordered or removed without making old rows unreadable.
+   * It earns its own word because it is the one cause here that is not about
+   * the network at all, and "reset" was telling creators to fix a connection
+   * that was working while their file was the problem.
+   */
+  "unreadable",
 ] as const;
 
 export type UploadFailureReason = (typeof UPLOAD_FAILURE_REASONS)[number];
@@ -530,6 +540,86 @@ function offsetFromConflict(body: string): number | null {
 }
 
 /**
+ * What a creator is told when their own device cannot hand over the bytes.
+ *
+ * Not "the connection dropped": the connection is not the problem, the file is,
+ * and the two need opposite advice. A creator told to retry a dropped
+ * connection retries the same file on the same phone and loses the same data
+ * again, which on a metered East African connection is the most expensive
+ * possible way to be wrong.
+ */
+const UNREADABLE_FILE_MESSAGE =
+  "This device could not read the video file, so nothing was sent. Move the video into the " +
+  "phone's own storage (Downloads) and choose it again — a file that lives in the cloud can only " +
+  "be read in part, and a file on a removed card not at all.";
+
+/**
+ * How long one local slice may take before it is called unreadable.
+ *
+ * Reading the phone's own storage is a millisecond operation, so this bounds one
+ * thing only: bytes that are not on the phone at all. It has to exist because
+ * reading in this module is NOT inside a request's timeout the way a streamed
+ * Blob body used to be — without it, a slice waiting on a cloud provider that
+ * never answers would leave the progress bar frozen with no error to read, which
+ * is the one outcome worse than a failure.
+ *
+ * Generous on purpose, and deliberately in the same league as the first chunk's
+ * own timeout (four times the time its bytes should need): a 16 MiB slice off a
+ * cold cloud file can honestly take a while, and refusing one that would have
+ * arrived trades a slow upload for no upload at all.
+ */
+export const VIDEO_UPLOAD_READ_TIMEOUT_MS = 120_000;
+
+/**
+ * The bytes of one slice, in memory, or a refusal that says why.
+ *
+ * `fetch` accepts a Blob and streams it from wherever it lives, which is the
+ * cheapest thing for a healthy file on a healthy disk and a trap for anything
+ * else. When the body cannot be produced — a cloud-backed file, a card that went
+ * away, a picker grant that expired — the exchange rejects with a bare
+ * `TypeError: Failed to fetch`, which is EXACTLY what a reset socket produces,
+ * and the retry ladder then spends five attempts on a device-side fault it can
+ * never fix. Reading the slice here converts the whole class into a local answer
+ * with a cause attached, before a single byte is offered to the network.
+ *
+ * A SHORT read is a failure too, not something to send. The PATCH promises
+ * `Upload-Offset` and the host advances by what actually arrived, so a body that
+ * silently turned out smaller than the slice it names would leave a hole in the
+ * file that no later request can fill — an upload that finishes at 100% into a
+ * video that will not play.
+ */
+async function readChunkSlice(file: File, start: number, end: number): Promise<ArrayBuffer> {
+  const wanted = end - start;
+  let bytes: ArrayBuffer | null = null;
+
+  // Raced rather than merely awaited: nothing can cancel a read that has begun,
+  // so the only way to keep an unanswerable file from freezing the upload is to
+  // stop WAITING for it. The losing promise stays attached to the race, so its
+  // later rejection — or its eventual bytes — cannot surface as an unhandled
+  // rejection somewhere else.
+  const expired = Symbol("read-timeout");
+  try {
+    let timer: number | undefined;
+    const deadline = new Promise<typeof expired>((resolve) => {
+      timer = window.setTimeout(() => resolve(expired), VIDEO_UPLOAD_READ_TIMEOUT_MS);
+    });
+    const outcome = await Promise.race([file.slice(start, end).arrayBuffer(), deadline]);
+    window.clearTimeout(timer);
+    bytes = outcome === expired ? null : (outcome as ArrayBuffer);
+  } catch {
+    bytes = null;
+  }
+
+  if (!bytes || bytes.byteLength !== wanted) {
+    throw new VideoUploadError("INVALID_FILE", UNREADABLE_FILE_MESSAGE, undefined, {
+      reason: "unreadable",
+      stage: "chunk",
+    });
+  }
+  return bytes;
+}
+
+/**
  * Upload one file, resuming from the offset Bunny already has.
  *
  * The loop is deliberately re-entrant about its own position: every attempt
@@ -583,6 +673,18 @@ export async function uploadVideoFile(
     let advanced = false;
     let lastError: VideoUploadError | null = null;
 
+    /**
+     * The bytes of the slice currently being sent, read once per slice.
+     *
+     * Held across the attempts at ONE slice deliberately. The offsets do not move
+     * between retries of the same request, so re-reading on every rung of the
+     * ladder would spend a file read per retry to obtain identical bytes — and on
+     * a phone slow enough to be retried at all, that read is the expensive part.
+     * A recovery HEAD that advances the offset makes this stale, which is what
+     * the `start`/`end` key exists to notice.
+     */
+    let slice: { start: number; end: number; bytes: ArrayBuffer } | null = null;
+
     for (let attempt = 1; attempt <= VIDEO_UPLOAD_MAX_ATTEMPTS && !advanced; attempt += 1) {
       if (options.signal?.aborted) {
         throw new VideoUploadError("ABORTED", "Upload cancelled");
@@ -593,6 +695,15 @@ export async function uploadVideoFile(
       const chunkBytes = chunkBytesFor(rateBps, total - offset);
       const end = Math.min(total, offset + chunkBytes);
       const timeoutMs = chunkTimeoutMs(chunkBytes, rateBps);
+
+      // Read BEFORE the request, never during it, and OUTSIDE the try: a slice
+      // this device cannot produce is a fact about the file, not a fault worth
+      // retrying, so it must not spend the retry budget or be reported as one.
+      if (!slice || slice.start !== offset || slice.end !== end) {
+        slice = { start: offset, end, bytes: await readChunkSlice(file, offset, end) };
+      }
+      const body = slice.bytes;
+
       const startedAt = now();
       let retryCount = attempt - 1;
 
@@ -607,7 +718,7 @@ export async function uploadVideoFile(
               "Upload-Offset": String(offset),
               "Content-Type": "application/offset+octet-stream",
             },
-            body: file.slice(offset, end),
+            body,
             cache: "no-store",
             signal: options.signal,
           },
@@ -776,6 +887,9 @@ function failureMessage(failure: VideoUploadError, offset: number, total: number
     case "timeout":
       return `The connection stopped carrying data (${sent}). Press Resume upload to continue.`;
     case "provider":
+    case "unreadable":
+      // Both already say the whole thing, and in the second case the sentence is
+      // the only one a creator can act on.
       return failure.message;
     default:
       return `The connection dropped while sending this video (${sent}). Press Resume upload to continue from there.`;

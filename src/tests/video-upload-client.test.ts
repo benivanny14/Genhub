@@ -29,6 +29,7 @@ import {
   VIDEO_UPLOAD_FLOOR_BPS,
   VIDEO_UPLOAD_MAX_ATTEMPTS,
   VIDEO_UPLOAD_MAX_CHUNK_BYTES,
+  VIDEO_UPLOAD_READ_TIMEOUT_MS,
   VIDEO_UPLOAD_TARGET_CHUNK_MS,
   VIDEO_UPLOAD_TUS_ENDPOINT,
   VideoUploadError,
@@ -69,6 +70,31 @@ function sessionFor(totalBytes: number): OpenedVideoUpload {
 
 function fileOf(bytes: number, name = "scene.mp4"): File {
   return new File([new Uint8Array(bytes)], name, { type: "video/mp4" });
+}
+
+/**
+ * A file whose bytes the device cannot produce — a cloud-only file, a card that
+ * has been removed, a picker grant that expired.
+ *
+ * Chrome gives a script no way to tell this apart from a reset socket: both
+ * reject the exchange with a bare `TypeError: Failed to fetch`, which is why the
+ * transport now reads the slice itself and this shape has to be testable.
+ */
+function unreadableFileOf(bytes: number, readable = 0): File {
+  const real = fileOf(bytes);
+  return {
+    name: real.name,
+    size: real.size,
+    type: real.type,
+    // `readable` shorter than the slice is the other half of the same fault: a
+    // provider that answers in part. 0 means it answers not at all.
+    slice: (start: number, end: number) => ({
+      arrayBuffer: () =>
+        readable === 0
+          ? Promise.reject(new TypeError("Failed to fetch"))
+          : Promise.resolve(new Uint8Array(Math.min(readable, end - start)).buffer),
+    }),
+  } as unknown as File;
 }
 
 /** A 204 with the one header TUS is read through. */
@@ -182,7 +208,9 @@ describe("uploadVideoFile", () => {
     const sent = patches(fetchMock);
     expect(sent).toHaveLength(1);
     expect((sent[0][1].headers as Record<string, string>)["Upload-Offset"]).toBe("60");
-    expect((sent[0][1].body as Blob).size).toBe(40);
+    // The body is an ArrayBuffer this module read off the file, not the Blob
+    // itself: the bytes are known to exist before the request is made.
+    expect((sent[0][1].body as ArrayBuffer).byteLength).toBe(40);
     // The first progress report is Bunny's truth, not an assumed zero: a
     // resumed upload must not tell the creator they are back at the start.
     expect(progress[0]).toBe(60);
@@ -224,7 +252,7 @@ describe("uploadVideoFile", () => {
     const sent = patches(fetchMock);
     expect(sent).toHaveLength(2);
     expect((sent[1][1].headers as Record<string, string>)["Upload-Offset"]).toBe("30");
-    expect((sent[1][1].body as Blob).size).toBe(70);
+    expect((sent[1][1].body as ArrayBuffer).byteLength).toBe(70);
   });
 
   it("recovers a 409 by asking Bunny where the upload actually is", async () => {
@@ -270,7 +298,101 @@ describe("uploadVideoFile", () => {
     const sent = patches(fetchMock);
     expect(sent).toHaveLength(2);
     expect((sent[1][1].headers as Record<string, string>)["Upload-Offset"]).toBe("60");
-    expect((sent[1][1].body as Blob).size).toBe(40);
+    expect((sent[1][1].body as ArrayBuffer).byteLength).toBe(40);
+  });
+
+  it("names a file the device cannot read instead of blaming the connection", async () => {
+    // The live signature this reproduces: five PATCH attempts of 214, 455, 234,
+    // 230 and 248 ms, `bytesSent: 0`, all `TypeError: Failed to fetch`. A reset
+    // socket is what that reads as, and on a 192 MB file it was the file.
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await rejection(
+      uploadVideoFile(unreadableFileOf(100), sessionFor(100), { offset: 0 })
+    );
+
+    expect(error.code).toBe("INVALID_FILE");
+    expect(error.reason).toBe("unreadable");
+    expect(error.stage).toBe("chunk");
+    expect(error.message).toMatch(/could not read the video file/);
+    // Nothing was offered to the network: this is a fact about the file, and no
+    // rung of the retry ladder can change it.
+    expect(patches(fetchMock)).toHaveLength(0);
+  });
+
+  it("gives up on a slice that never arrives instead of hanging the upload", async () => {
+    // Reading off the phone is instant, so a read is also the one place a cloud
+    // file can stall forever with nothing on screen — no request to time out, no
+    // error from Chrome, just a progress bar that never moves. The read is raced
+    // against a deadline for exactly this shape.
+    const file = {
+      name: "cloud.mp4",
+      size: 100,
+      type: "video/mp4",
+      slice: () => ({ arrayBuffer: () => new Promise<ArrayBuffer>(() => {}) }),
+    } as unknown as File;
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    // The handler is attached before the clock moves, so the rejection this test
+    // is about cannot be reported as an unhandled one.
+    const upload = rejection(uploadVideoFile(file, sessionFor(100), { offset: 0 }));
+    await vi.advanceTimersByTimeAsync(VIDEO_UPLOAD_READ_TIMEOUT_MS + 1_000);
+
+    const error = await upload;
+    expect(error.code).toBe("INVALID_FILE");
+    expect(error.reason).toBe("unreadable");
+    expect(patches(fetchMock)).toHaveLength(0);
+  });
+
+  it("refuses a short read rather than sending a body shorter than its slice", async () => {
+    // The PATCH promises Upload-Offset and Bunny advances by what arrived, so a
+    // body that quietly came back short would leave a hole no later request can
+    // fill — an upload that reaches 100% into a video that will not play.
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await rejection(
+      uploadVideoFile(unreadableFileOf(100, 10), sessionFor(100), { offset: 0 })
+    );
+
+    expect(error.code).toBe("INVALID_FILE");
+    expect(error.reason).toBe("unreadable");
+    expect(patches(fetchMock)).toHaveLength(0);
+  });
+
+  it("re-reads the file when a recovery moves the slice, keeping the bytes in step", async () => {
+    // The slice is read once per slice, so a retry that starts from a NEW offset
+    // must not reuse the previous read: that would send bytes Bunny already has
+    // and leave the upload one slice short at the end.
+    const seen: number[] = [];
+    const file = fileOf(100);
+    const tracked = {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      slice: (start: number, end: number) => {
+        seen.push(start);
+        return file.slice(start, end);
+      },
+    } as unknown as File;
+
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PATCH") throw new TypeError("Failed to fetch");
+      return new Response(null, { status: 200, headers: { "upload-offset": "60" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await settleFailure(uploadVideoFile(tracked, sessionFor(100), { offset: 0 }));
+
+    expect(error.code).toBe("NETWORK");
+    // Read at 0, then read AGAIN when the recovery moved the position to 60 —
+    // and not once more after that, because the last three attempts are retries
+    // of the same slice and the bytes cannot have changed.
+    expect(seen).toEqual([0, 60]);
+    // The record says where the transfer actually got to, not where it began.
+    expect(error.offset).toBe(60);
   });
 
   it("does not retry a refusal Bunny answered", async () => {
