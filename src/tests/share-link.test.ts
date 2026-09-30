@@ -1,93 +1,127 @@
 // =============================================================================
-// GENHUB - The watch page's share link, and the URL it puts on the clipboard
+// GENHUB - The copy-link controls, and the clipboard behind them
 //
-// The button used to do one thing OR the other, never both: if the browser
-// exposed `navigator.share` it handed the URL to the OS sheet and stopped —
-// so on the many phones and Safari builds that do, the link was never copied
-// at all. Dismissing that sheet also landed in a `catch` that reported
-// "Could not share", turning a cancel into an error. And the URL it carried
-// came from `window.location.href`, so anything the viewer had in their query
-// string travelled with the link.
+// `navigator.clipboard.writeText` refuses in two ordinary situations: there is
+// no secure context (a plain-HTTP LAN address has no `navigator.clipboard` at
+// all) and the document is not focused (it rejects with NotAllowedError,
+// "Document is not focused"). Every copy control called it directly and caught
+// the throw into a warning, so on those pages the link was never copied.
 //
 // Three rules are pinned here, each an absence a later commit can undo:
 //
-//   1. A failed or dismissed share falls THROUGH to the copy, which always
-//      works — it is not an error and it does not stop at the sheet.
-//   2. The copied URL is the canonical watch path built from the slug, not the
-//      raw address bar.
-//   3. The copy is confirmed, and a copy that genuinely fails says what to do
-//      instead rather than reporting a share failure.
+//   1. One helper owns the copy. No surface calls `navigator.clipboard` itself,
+//      so the fallback cannot be forgotten at one call site.
+//   2. The fallback exists and is selection-based — the only copy that works
+//      without a secure context or a focused document.
+//   3. The watch page's control is a copy-link button. It copies; it does not
+//      hand the click to an OS share sheet and leave the clipboard untouched.
 //
-// This is a source-level check on purpose: the handler is a handful of lines
-// whose arrangement is the deliverable.
+// The first two are source-level checks because the deliverable is the
+// arrangement of a few lines; a wording or ordering change is the thing guarded.
 // =============================================================================
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 
+const HELPER = readFileSync("src/lib/clipboard.ts", "utf8");
 const DETAIL = readFileSync("src/app/video/[id]/VideoDetail.tsx", "utf8");
+const CREATOR = readFileSync("src/app/creator/page.tsx", "utf8");
+const PROFILE = readFileSync("src/app/profile/page.tsx", "utf8");
+
+/** Every copy control in the app, with the label used in failure messages. */
+const SURFACES: { name: string; source: string }[] = [
+  { name: "watch page", source: DETAIL },
+  { name: "creator dashboard", source: CREATOR },
+  { name: "profile page", source: PROFILE },
+];
 
 /**
- * The body of `handleShare`, from its declaration to the matching close, with
- * line comments stripped — the comments explain the rule and are allowed to
- * name the thing the rule forbids.
+ * A function body, from its declaration to the next sibling at the same
+ * indentation, with line comments stripped — the comments explain the rule and
+ * are allowed to name the thing the rule forbids.
  */
-function handleShare(): string {
-  const start = DETAIL.indexOf("async function handleShare()");
-  expect(start, "handleShare is missing").toBeGreaterThan(-1);
-  const end = DETAIL.indexOf("\n  }\n", start);
-  expect(end, "handleShare has no end").toBeGreaterThan(start);
-  return DETAIL.slice(start, end)
+function body(source: string, declaration: string): string {
+  const start = source.indexOf(declaration);
+  expect(start, `"${declaration}" was not found`).toBeGreaterThan(-1);
+  const end = source.indexOf("\n  }\n", start);
+  expect(end, `"${declaration}" has no end`).toBeGreaterThan(start);
+  return source
+    .slice(start, end)
     .split("\n")
     .map((line) => line.replace(/\/\/.*$/, ""))
     .join("\n");
 }
 
-describe("watch page share link", () => {
-  it("falls through to the copy when sharing is dismissed or unavailable", () => {
-    const body = handleShare();
+describe("clipboard helper", () => {
+  it("falls back to the selection copy when the async API is missing", () => {
+    // `navigator.clipboard.writeText` is attempted, but only inside a try that
+    // falls through — the helper must never return false just because the
+    // async API threw.
+    expect(HELPER).toMatch(/navigator\.clipboard\?\.writeText/);
+    expect(HELPER).toMatch(/catch\s*\{[\s\S]*?\}\s*return legacyCopy/);
 
-    const shareIndex = body.indexOf("navigator.share");
-    expect(shareIndex, "the share attempt is missing").toBeGreaterThan(-1);
+    // The fallback is the selection-based copy, and nothing else.
+    expect(HELPER).toMatch(/document\.execCommand\(\s*"copy"\s*\)/);
+    expect(HELPER).toMatch(/document\.createElement\(\s*"textarea"\s*\)/);
 
-    // The first catch after the share attempt is the share catch.
-    const shareCatch = body.indexOf("catch", shareIndex);
-    expect(shareCatch, "the share attempt has no catch").toBeGreaterThan(shareIndex);
+    // A hidden element cannot be selected, so the copy would take nothing —
+    // the temporary area must stay laid out and merely be moved away.
+    expect(HELPER).not.toMatch(/display\s*=\s*"none"/);
+    expect(HELPER).not.toMatch(/visibility\s*=\s*"hidden"/);
+    expect(HELPER).toMatch(/position\s*=\s*"fixed"/);
+  });
 
-    // A `return` inside that catch would abandon the copy — the regression.
-    const shareCatchEnd = body.indexOf("}", body.indexOf("{", shareCatch));
-    expect(body.slice(shareCatch, shareCatchEnd)).not.toMatch(/\breturn\b/);
+  it("returns a falsy value instead of throwing when there is no document", () => {
+    // Server-render and test environments have no document; the helper must
+    // answer, not throw.
+    expect(HELPER).toMatch(/typeof document === "undefined"/);
+  });
+});
 
-    // The copy sits outside the share branch, so it runs in every case: no
-    // share support, share dismissed, and plain copy alike.
-    const copyIndex = body.indexOf("clipboard.writeText");
-    expect(copyIndex, "the copy is gone").toBeGreaterThan(-1);
-    expect(copyIndex, "the copy must come after the share fall-through").toBeGreaterThan(
-      shareCatchEnd
+describe("every copy control", () => {
+  it("copies through the shared helper, never the raw API", () => {
+    for (const { name, source } of SURFACES) {
+      expect(source, `${name} does not use the helper`).toMatch(
+        /import \{ copyToClipboard \} from "@\/lib\/clipboard"/
+      );
+      expect(source, `${name} still calls the raw clipboard API`).not.toMatch(
+        /navigator\.clipboard\.writeText/
+      );
+    }
+  });
+});
+
+describe("watch page copy-link button", () => {
+  const handler = body(DETAIL, "async function handleShare()");
+
+  it("copies the link instead of handing the click to a share sheet", () => {
+    expect(handler, "the copy control must not open a share sheet").not.toMatch(
+      /navigator\.share/
     );
+    expect(handler).toMatch(/await copyToClipboard\(url\)/);
   });
 
   it("copies the canonical watch URL instead of the address bar", () => {
-    const body = handleShare();
-    expect(body).not.toMatch(/window\.location\.href/);
-    expect(body).toMatch(/window\.location\.origin/);
-    expect(body).toMatch(/\/video\/\$\{video\.slug \|\| video\.id\}/);
+    expect(handler).not.toMatch(/window\.location\.href/);
+    expect(handler).toMatch(/window\.location\.origin/);
+    expect(handler).toMatch(/\/video\/\$\{video\.slug \|\| video\.id\}/);
   });
 
-  it("confirms the copy and names a way out when it fails", () => {
-    const body = handleShare();
-
-    const success = body.match(/toast\(\s*"success"\s*,\s*"([^"]*)"/);
+  it("confirms a copy and names a way out when even that fails", () => {
+    const success = handler.match(/toast\(\s*"success"\s*,\s*"([^"]*)"/);
     expect(success, "the copy is not confirmed").not.toBeNull();
     expect(success![1]).toMatch(/kopiwa|copied/i);
 
-    // No "could not share" anywhere — a dismissed sheet is not a failure, and a
-    // failed copy is the clipboard's problem, not sharing's.
-    expect(body).not.toMatch(/Could not share/);
+    // A failure is the clipboard's problem, not sharing's — the old wording
+    // blamed sharing for a dismissed sheet that was never an error.
+    expect(handler).not.toMatch(/Could not share/);
 
-    const failure = body.match(/toast\(\s*"(?:error|warning)"\s*,\s*"([^"]*)"/);
+    const failure = handler.match(/toast\(\s*"(?:error|warning)"\s*,\s*"([^"]*)"/);
     expect(failure, "a failed copy says nothing").not.toBeNull();
     expect(failure![1]).toMatch(/copy it by hand|nakili/i);
+
+    // The failure path must return, so the success toast cannot follow it.
+    expect(handler).toMatch(/if\s*\(!copied\)\s*\{[\s\S]*?return;[\s\S]*?\}/);
   });
 
   it("shows the viewer that the link is on their clipboard", () => {

@@ -25,6 +25,7 @@ import {
 import { USERNAME_RULES_HINT, displayHandle, usernameFromDisplayName } from "@/lib/usernames";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
+import { copyToClipboard } from "@/lib/clipboard";
 import { canOptimizeImage } from "@/lib/media";
 import { cn } from "@/lib/utils";
 
@@ -136,11 +137,13 @@ export default function ProfilePage() {
 
   async function copyReferralLink() {
     if (!referral?.link) return;
-    try {
-      await navigator.clipboard.writeText(referral.link);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {}
+    const copied = await copyToClipboard(referral.link);
+    if (!copied) {
+      toast("warning", "Could not copy it — select the link and copy it by hand.");
+      return;
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }
 
   useEffect(() => {

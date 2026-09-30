@@ -11,6 +11,7 @@ import Image from "next/image";
 import ImageCropper from "@/components/ImageCropper";
 import RowMenu from "@/components/RowMenu";
 import { displayHandle } from "@/lib/usernames";
+import { copyToClipboard } from "@/lib/clipboard";
 import {
   Wallet,
   Eye,
@@ -1072,14 +1073,14 @@ export default function CreatorDashboard() {
   }
 
   async function copyProfileLink() {
-    try {
-      await navigator.clipboard.writeText(profileUrl);
-      setLinkCopied(true);
-      setTimeout(() => setLinkCopied(false), 2000);
-      toast("success", "Link copied — send it to anyone.");
-    } catch {
+    const copied = await copyToClipboard(profileUrl);
+    if (!copied) {
       toast("warning", "Could not copy it — select the link and copy it by hand.");
+      return;
     }
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+    toast("success", "Link copied — send it to anyone.");
   }
 
   async function shareProfileLink() {
