@@ -317,6 +317,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [playlistBusy, setPlaylistBusy] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
   const { toast } = useToast();
   const { format } = useCurrency();
 
@@ -442,17 +443,30 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
   async function handleShare() {
     if (!video) return;
-    const url = typeof window !== "undefined" ? window.location.href : "";
+    // Share the canonical watch URL rather than window.location.href, which can
+    // carry query strings and hash fragments that mean nothing to a recipient.
+    const url =
+      typeof window !== "undefined"
+        ? `${window.location.origin}/video/${video.slug || video.id}`
+        : "";
 
-    try {
-      if (typeof navigator !== "undefined" && navigator.share) {
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
         await navigator.share({ title: video.title, url });
         return;
+      } catch {
+        // Dismissed, or sharing is not actually available — neither is an error.
+        // Fall through to the copy, which always works.
       }
+    }
+
+    try {
       await navigator.clipboard.writeText(url);
-      toast("success", "Kiungo kimekopiwa");
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+      toast("success", "Kiungo kimekopiwa — tuma kwa mtu yeyote. / Link copied — send it to anyone.");
     } catch {
-      toast("error", "Could not share");
+      toast("warning", "Siwezi kunakili — chagua kiungo na ukinakili mwenyewe. / Could not copy it — select the link and copy it by hand.");
     }
   }
 
@@ -1782,8 +1796,14 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             >
               <MessageCircle className="w-4 h-4" /> Message creator
             </Link>
-            <button onClick={handleShare} className="btn-ghost flex items-center gap-2 text-sm">
-              <Share2 className="w-4 h-4" /> Share
+            <button
+              onClick={handleShare}
+              className="btn-ghost flex items-center gap-2 text-sm"
+              aria-label={linkCopied ? "Link copied" : "Share or copy link"}
+              title="Copy link"
+            >
+              {linkCopied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
+              {linkCopied ? "Copied" : "Share"}
             </button>
             <button
               onClick={() => setShowReportModal(true)}
