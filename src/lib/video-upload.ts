@@ -29,6 +29,23 @@
 // Nothing else about the protocol changed: the offset Bunny REPORTS is still
 // the one used, a 409 still re-asks instead of retrying, and a refusal Bunny
 // answered is still not retried.
+//
+// WHO OPENS THE UPLOAD, AND WHY IT MATTERS
+//
+// Bunny's TUS resource is visible only from the network that created it. An
+// upload opened by the application server — one Vercel function, in one region —
+// answers every later HEAD and PATCH from a creator's phone with an empty 404
+// "Not Found". A live run on an emulator showed exactly that: the same URL with
+// the same valid signature returned 200 (offset 0) to the server that opened it
+// and 404 to the phone that had to fill it, and real uploads died at a few
+// percent with Bunny's own words in the failure list.
+//
+// So the slot is still created server-side and its credentials are still signed
+// there — but the create POST is made from HERE, in the browser, before the
+// first chunk, in the same place the bytes come from. That is Bunny's own
+// documented shape for a browser upload (their signing example hands the
+// presigned headers to a client-side TUS library), and it is why
+// `openVideoUpload` exists instead of a ready-made `uploadUrl` in the session.
 // =============================================================================
 
 export const MAX_VIDEO_BYTES = 2_147_483_647;
@@ -87,19 +104,113 @@ export function videoFileSizeError(file: { size: number }): string | null {
   return null;
 }
 
+/** Bunny's resumable endpoint, and the only host this module will send video
+ *  bytes to. The create POST and every PATCH below both go here. */
+export const VIDEO_UPLOAD_TUS_ENDPOINT = "https://video.bunnycdn.com/tusupload";
+const VIDEO_UPLOAD_TUS_HOST = "video.bunnycdn.com";
+
+/** How long Bunny is given to open an upload resource. It answers in about a
+ *  second when it is healthy, so this only bounds a hang. */
+export const VIDEO_UPLOAD_CREATE_TIMEOUT_MS = 30_000;
+
+/**
+ * What the server signs and hands to the browser.
+ *
+ * `headers` are Bunny's own presigned credentials: a SHA-256 over the library
+ * id, the key, the expiry and the video id. They are safe to hand over by
+ * design — the library KEY is not one of them — and they are what let the
+ * browser open the upload itself. There is deliberately no `uploadUrl` here:
+ * the browser learns it from Bunny, at the moment it opens the upload.
+ */
 export interface VideoUploadSession {
   sessionToken: string;
   videoId: string;
+  headers: Record<string, string>;
+  totalBytes: number;
+  mimeType: string;
+  expiresAt: number;
+}
+
+/** Everything one PATCH needs: where to send it, with what, and how much. */
+export interface VideoUploadTarget {
   uploadUrl: string;
   headers: Record<string, string>;
   totalBytes: number;
-  expiresAt: number;
 }
+
+/** A session whose upload resource this browser has already opened. */
+export type OpenedVideoUpload = VideoUploadSession & { uploadUrl: string };
 
 export interface VideoUploadProgress {
   uploadedBytes: number;
   totalBytes: number;
   percent: number;
+}
+
+/**
+ * Open the resumable upload, from here rather than from the server.
+ *
+ * The slot (and the id every later step refers to) was created server-side, and
+ * these credentials were signed there, so no API key is involved on this side.
+ * What this request does is register the upload with the Bunny node the browser
+ * is actually talking to — the one that will have to accept every byte.
+ *
+ * `Location` comes back relative ("tusupload/<id>"), so it is resolved against
+ * Bunny's own endpoint and then checked: it is the single field that decides
+ * where a creator's video goes, and data: URLs and lookalike hosts both parse.
+ */
+export async function openVideoUpload(session: VideoUploadSession): Promise<OpenedVideoUpload> {
+  const metadata = `filetype ${btoa(session.mimeType || "video/mp4")},title ${btoa(session.videoId)}`;
+
+  let response: Response;
+  try {
+    response = await fetch(VIDEO_UPLOAD_TUS_ENDPOINT, {
+      method: "POST",
+      headers: {
+        ...session.headers,
+        "Tus-Resumable": "1.0.0",
+        "Upload-Length": String(session.totalBytes),
+        "Upload-Metadata": metadata,
+      },
+      signal: AbortSignal.timeout(VIDEO_UPLOAD_CREATE_TIMEOUT_MS),
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 200) : null;
+    throw new VideoUploadError(
+      "NETWORK",
+      "The video service could not be reached to start this upload. Press Resume upload to try again.",
+      undefined,
+      { reason: "reset", stage: "reserve", providerBody: detail }
+    );
+  }
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new VideoUploadError(
+      "HTTP",
+      `The video service would not open this upload (HTTP ${response.status}). Press Resume upload to try again.`,
+      response.status,
+      { reason: "provider", stage: "reserve", providerBody: body.slice(0, 300) || response.statusText || null }
+    );
+  }
+
+  const location = response.headers.get("location");
+  let url: URL | null = null;
+  try {
+    url = location ? new URL(location, VIDEO_UPLOAD_TUS_ENDPOINT) : null;
+  } catch {
+    url = null;
+  }
+  if (!url || url.protocol !== "https:" || url.hostname !== VIDEO_UPLOAD_TUS_HOST) {
+    throw new VideoUploadError(
+      "HTTP",
+      "The video service opened this upload somewhere unexpected, so nothing was sent. Press Resume upload to try again.",
+      502,
+      { reason: "provider", stage: "reserve", providerBody: location ? location.slice(0, 200) : null }
+    );
+  }
+
+  return { ...session, uploadUrl: url.toString() };
 }
 
 /**
@@ -348,7 +459,7 @@ function percentOf(offset: number, total: number): number {
 }
 
 async function readOffset(
-  session: VideoUploadSession,
+  session: VideoUploadTarget,
   signal?: AbortSignal
 ): Promise<number> {
   let response: Response;
@@ -428,14 +539,14 @@ function offsetFromConflict(body: string): number | null {
  */
 export async function uploadVideoFile(
   file: File,
-  session: VideoUploadSession,
+  session: VideoUploadTarget,
   options: {
     onProgress?: (progress: VideoUploadProgress) => void;
     signal?: AbortSignal;
     /**
      * Where to start, when it is already known.
      *
-     * A session the server has just created holds nothing, and that is not a
+     * An upload this browser has just opened holds nothing, and that is not a
      * guess: Bunny answers a brand-new TUS resource with offset 0. Supplying it
      * removes the opening HEAD, which is one round trip off every upload and —
      * on a connection slow enough to lose it — one more way for the transfer to

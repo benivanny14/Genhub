@@ -30,14 +30,16 @@ import {
   VIDEO_UPLOAD_MAX_ATTEMPTS,
   VIDEO_UPLOAD_MAX_CHUNK_BYTES,
   VIDEO_UPLOAD_TARGET_CHUNK_MS,
+  VIDEO_UPLOAD_TUS_ENDPOINT,
   VideoUploadError,
   chunkBytesFor,
   chunkTimeoutMs,
   completeVideoUpload,
   measureRate,
+  openVideoUpload,
   uploadVideoFile,
   videoFileSizeError,
-  type VideoUploadSession,
+  type OpenedVideoUpload,
 } from "@/lib/video-upload";
 
 beforeEach(() => {
@@ -53,13 +55,14 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function sessionFor(totalBytes: number): VideoUploadSession {
+function sessionFor(totalBytes: number): OpenedVideoUpload {
   return {
     sessionToken: "session-token",
     videoId: "video-1",
     uploadUrl: "https://video.bunnycdn.com/tusupload/session-1",
     headers: { LibraryId: "lib-1", VideoId: "video-1" },
     totalBytes,
+    mimeType: "video/mp4",
     expiresAt: Math.floor(Date.now() / 1000) + 3_600,
   };
 }
@@ -99,6 +102,65 @@ async function settle(promise: Promise<void>): Promise<void> {
 
 const patches = (mock: ReturnType<typeof vi.fn>) =>
   mock.mock.calls.filter(([, init]) => (init as RequestInit)?.method === "PATCH");
+
+/** The error a call rejected with, for a step that does not sleep. */
+async function rejection<T>(promise: Promise<T>): Promise<VideoUploadError> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as VideoUploadError;
+  }
+  throw new Error("expected the call to fail");
+}
+
+describe("openVideoUpload", () => {
+  it("opens the upload itself and resolves Bunny's relative Location", async () => {
+    // Bunny serves a TUS resource only to the network that opened it, so the
+    // browser has to be the one that opens it. `Location` comes back relative.
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      new Response(null, { status: 201, headers: { location: "tusupload/abc123" } })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const opened = await openVideoUpload(sessionFor(100));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(VIDEO_UPLOAD_TUS_ENDPOINT);
+    expect(init.method).toBe("POST");
+    const headers = init.headers as Record<string, string>;
+    expect(headers["Upload-Length"]).toBe("100");
+    expect(headers["Tus-Resumable"]).toBe("1.0.0");
+    expect(headers["Upload-Metadata"]).toContain("filetype ");
+    // The presigned credentials travel with it; the library key never does.
+    expect(headers.LibraryId).toBe("lib-1");
+    expect(opened.uploadUrl).toBe("https://video.bunnycdn.com/tusupload/abc123");
+    expect(opened.sessionToken).toBe("session-token");
+  });
+
+  it("refuses a Location that is not Bunny", async () => {
+    // This field decides where a creator's video goes, and it is read back out
+    // of a response, so it is checked before a single byte is sent.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 201, headers: { location: "https://evil.example.com/tusupload/abc" } }))
+    );
+
+    const error = await rejection(openVideoUpload(sessionFor(100)));
+
+    expect(error).toMatchObject({ code: "HTTP", stage: "reserve" });
+    expect(error.message).toMatch(/somewhere unexpected/i);
+  });
+
+  it("names a refusal instead of pretending the upload started", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("Not Found", { status: 404 })));
+
+    const error = await rejection(openVideoUpload(sessionFor(100)));
+
+    expect(error).toMatchObject({ code: "HTTP", status: 404, reason: "provider", stage: "reserve" });
+    expect(error.providerBody).toBe("Not Found");
+  });
+});
 
 describe("uploadVideoFile", () => {
   it("resumes from the offset Bunny already holds, not from zero", async () => {

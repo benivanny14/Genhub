@@ -44,10 +44,12 @@ import { VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
 import {
   abortVideoUpload,
+  openVideoUpload,
   uploadVideoFile,
   completeVideoUpload,
   videoFileSizeError,
   VideoUploadError,
+  type OpenedVideoUpload,
   type VideoUploadSession,
 } from "@/lib/video-upload";
 import { reportUploadFailure } from "@/lib/upload-failure-report";
@@ -427,7 +429,7 @@ export default function CreatorDashboard() {
   // teaser but not clear one, so an untouched field must send nothing.
   const [editTeaserAttached, setEditTeaserAttached] = useState(false);
   const [newTeaserBunnyVideoId, setNewTeaserBunnyVideoId] = useState("");
-  const [newTeaserUploadSession, setNewTeaserUploadSession] = useState<VideoUploadSession | null>(null);
+  const [newTeaserUploadSession, setNewTeaserUploadSession] = useState<OpenedVideoUpload | null>(null);
   const [editTeaserProgress, setEditTeaserProgress] = useState(0);
   const [uploadingEditTeaser, setUploadingEditTeaser] = useState(false);
   const [editCoverUrl, setEditCoverUrl] = useState<string | null>(null);
@@ -647,7 +649,7 @@ export default function CreatorDashboard() {
     setEditTeaserProgress(0);
     // Declared out here so the catch below can name the slot that was reserved
     // and abandoned — it is the only handle on the orphan left in the library.
-    let session: VideoUploadSession | null = null;
+    let session: OpenedVideoUpload | null = null;
     try {
       const res = await fetch("/api/videos/upload-signature", {
         method: "POST",
@@ -664,13 +666,15 @@ export default function CreatorDashboard() {
         return;
       }
 
-      session = data.data as VideoUploadSession;
+      // The slot is reserved server-side; the upload resource is opened here,
+      // because Bunny only serves it to the network that opened it.
+      session = await openVideoUpload(data.data as VideoUploadSession);
       await uploadVideoFile(file, session, {
         onProgress: ({ percent }) => setEditTeaserProgress(percent),
-        // /api/videos/upload-signature has just created this TUS resource. Its
-        // offset is zero by construction, so send the first chunk directly.
-        // A HEAD here can return Bunny's 404 before the first byte is sent and
-        // makes a brand-new teaser look like an expired upload.
+        // This browser has just opened the TUS resource. Its offset is zero by
+        // construction, so send the first chunk directly. A HEAD here can
+        // return Bunny's 404 before the first byte is sent and makes a
+        // brand-new teaser look like an expired upload.
         offset: 0,
       });
 

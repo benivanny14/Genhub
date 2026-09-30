@@ -33,9 +33,11 @@ import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
 import {
   abortVideoUpload,
   completeVideoUpload,
+  openVideoUpload,
   uploadVideoFile,
   videoFileSizeError,
   VideoUploadError,
+  type OpenedVideoUpload,
   type VideoUploadProgress,
   type VideoUploadSession,
 } from "@/lib/video-upload";
@@ -86,14 +88,14 @@ export default function UploadPage() {
   const [complianceAttested, setComplianceAttested] = useState(false);
 
   const [mainFile, setMainFile] = useState<File | null>(null);
-  const [mainSession, setMainSession] = useState<VideoUploadSession | null>(null);
+  const [mainSession, setMainSession] = useState<OpenedVideoUpload | null>(null);
   const [mainProgress, setMainProgress] = useState<VideoUploadProgress | null>(null);
   const [mainUploading, setMainUploading] = useState(false);
   const [mainReady, setMainReady] = useState(false);
   const [bunnyVideoId, setBunnyVideoId] = useState("");
 
   const [teaserFile, setTeaserFile] = useState<File | null>(null);
-  const [teaserSession, setTeaserSession] = useState<VideoUploadSession | null>(null);
+  const [teaserSession, setTeaserSession] = useState<OpenedVideoUpload | null>(null);
   const [teaserProgress, setTeaserProgress] = useState<VideoUploadProgress | null>(null);
   const [teaserUploading, setTeaserUploading] = useState(false);
   const [teaserVideoId, setTeaserVideoId] = useState("");
@@ -150,7 +152,16 @@ export default function UploadPage() {
     }
   }
 
-  async function createSession(file: File, kind: UploadKind): Promise<VideoUploadSession | null> {
+  /**
+   * Reserve a slot, then open the upload from HERE.
+   *
+   * The second half is not optional. Bunny serves a TUS resource only to the
+   * network that opened it, so a URL opened by the application server is a 404
+   * to every later request this browser makes — the fault that stalled real
+   * uploads at a few percent while the server that opened them saw a healthy
+   * resource. See `openVideoUpload`.
+   */
+  async function createSession(file: File, kind: UploadKind): Promise<OpenedVideoUpload | null> {
     try {
       const response = await fetch("/api/videos/upload-signature", {
         method: "POST",
@@ -166,9 +177,12 @@ export default function UploadPage() {
         toast("error", body.error || "Could not start the video upload");
         return null;
       }
-      return body.data as VideoUploadSession;
-    } catch {
-      toast("error", "Could not reach Genhub to start the upload");
+      return await openVideoUpload(body.data as VideoUploadSession);
+    } catch (error) {
+      toast(
+        "error",
+        error instanceof VideoUploadError ? error.message : "Could not reach Genhub to start the upload"
+      );
       return null;
     }
   }
@@ -176,9 +190,9 @@ export default function UploadPage() {
   async function uploadOne(
     file: File,
     kind: UploadKind,
-    existing: VideoUploadSession | null
+    existing: OpenedVideoUpload | null
   ): Promise<{
-    session: VideoUploadSession | null;
+    session: OpenedVideoUpload | null;
     videoId: string;
     /**
      * True when the session this upload was using no longer exists at the host.
@@ -203,7 +217,7 @@ export default function UploadPage() {
      * upload itself; a session already in hand is the one whose position can have
      * moved, and that is the only case worth a round trip.
      */
-    async function send(target: VideoUploadSession, from?: number) {
+    async function send(target: OpenedVideoUpload, from?: number) {
       setProgress({ uploadedBytes: from ?? 0, totalBytes: file.size, percent: 0 });
       await uploadVideoFile(file, target, {
         onProgress: setProgress,

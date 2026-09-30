@@ -27,9 +27,9 @@ function sessionFor(videoId = "slot-1"): VideoUploadSession {
   return {
     sessionToken: "token",
     videoId,
-    uploadUrl: "https://video.bunnycdn.com/tusupload/session-1",
     headers: {},
     totalBytes: 145 * 1024 * 1024,
+    mimeType: "video/mp4",
     expiresAt: Math.floor(Date.now() / 1000) + 3_600,
   };
 }
