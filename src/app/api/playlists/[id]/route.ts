@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 
 async function ownedPlaylist(id: string, userId: string) {
   return prisma.playlist.findFirst({ where: { id, userId } });
@@ -72,7 +73,7 @@ export async function PATCH(
     if (!playlist) return api.notFound("Playlist not found");
     if (playlist.isWatchLater) return api.error("Watch Later cannot be renamed", 409, "SYSTEM_LIST");
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const name = typeof body?.name === "string" ? body.name.trim() : "";
     if (name.length < 2) return api.validation("A playlist name must be at least 2 characters");
 

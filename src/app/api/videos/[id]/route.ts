@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { getCurrentUser, requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { updateVideoSchema } from "@/lib/validation";
 import {
   resolvePlaybackUrl,
@@ -333,7 +334,7 @@ export async function PATCH(
       return api.forbidden();
     }
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = updateVideoSchema.safeParse(body);
 
     if (!result.success) {

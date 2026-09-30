@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { z } from "zod";
 import config from "@/lib/config";
 import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
@@ -40,7 +41,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = subscribeSchema.safeParse(body);
     if (!result.success) return api.validation(result.error.errors[0].message);
 
@@ -178,8 +179,17 @@ export async function POST(request: NextRequest) {
           where: { id: transaction.id },
           data: { status: "FAILED", metadata: { gatewayError: reason } },
         });
-        console.error("[HarakaPay Subscribe Error]", reason, harakaError);
-        return api.error(`Payment failed — HarakaPay: ${reason}`, 502, "GATEWAY_ERROR");
+        // Detail to the log, a plain sentence to the subscriber — see api.upstream.
+        return api.upstream(
+          `subscription collect failed for transaction ${transaction.id}: ${reason}`,
+          {
+            context: "Payments",
+            status: 502,
+            code: "GATEWAY_ERROR",
+            message:
+              "We could not start the payment just now. Nothing has been charged — please try again.",
+          }
+        );
       }
     }
 
@@ -309,7 +319,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const parsed = autoRenewSchema.safeParse(body);
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
     const { creatorId, autoRenew } = parsed.data;
@@ -354,7 +364,7 @@ export async function DELETE(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const result = subscribeSchema.safeParse(body);
     if (!result.success) return api.validation(result.error.errors[0].message);
     const { creatorId } = result.data;

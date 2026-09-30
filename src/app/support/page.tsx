@@ -10,7 +10,7 @@ import { LifeBuoy, ArrowLeft, Mail, Phone, MapPin, Send, AlertTriangle } from "l
 import Link from "next/link";
 import { useTheme } from "@/lib/ThemeProvider";
 import { cn, toTelHref } from "@/lib/utils";
-import config from "@/lib/config";
+import publicConfig from "@/lib/public-config";
 import { fetchCurrentUser } from "@/lib/current-user";
 
 const TOPICS = [
@@ -110,14 +110,14 @@ export default function SupportPage() {
             {
               icon: Mail,
               label: "Email",
-              value: config.compliance.supportEmail,
-              href: `mailto:${config.compliance.supportEmail}`,
+              value: publicConfig.compliance.supportEmail,
+              href: `mailto:${publicConfig.compliance.supportEmail}`,
             },
             {
               icon: Phone,
               label: "Phone",
-              value: config.compliance.phone,
-              href: toTelHref(config.compliance.phone),
+              value: publicConfig.compliance.phone,
+              href: toTelHref(publicConfig.compliance.phone),
             },
             { icon: MapPin, label: "Office", value: "Dar es Salaam, TZ", href: null },
           ].map((c) => (
@@ -235,7 +235,7 @@ export default function SupportPage() {
 
           <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/40")}>
             Tickets reach support immediately. If you would rather write to us yourself, our
-            address is {config.compliance.supportEmail}.
+            address is {publicConfig.compliance.supportEmail}.
           </p>
         </form>
       </main>

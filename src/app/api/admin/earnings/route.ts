@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import config from "@/lib/config";
 import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
 
@@ -97,7 +98,7 @@ export async function POST(request: NextRequest) {
   try {
     await requireRole("ADMIN");
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const creatorId =
       typeof body?.creatorId === "string" && body.creatorId ? body.creatorId : undefined;
 

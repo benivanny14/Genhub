@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { getCurrentUser, requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 
@@ -79,7 +80,7 @@ export async function POST(
     );
     if (!allowed) return api.rateLimited("Too many actions — please wait a moment");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const type = body.type as "like" | "dislike" | "favorite";
 
     if (!type || !["like", "dislike", "favorite"].includes(type)) {

@@ -11,6 +11,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { confirmVideoUpload, verifyVideoUploadSession } from "@/lib/video-upload-session";
 
 export const runtime = "nodejs";
@@ -22,7 +23,7 @@ const schema = z.object({ sessionToken: z.string().min(80).max(20_000) });
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("CREATOR");
-    const parsed = schema.safeParse(await request.json().catch(() => null));
+    const parsed = schema.safeParse(await readJsonBody(request));
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
 
     const session = await verifyVideoUploadSession(parsed.data.sessionToken, auth.userId);

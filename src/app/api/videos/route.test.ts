@@ -405,6 +405,7 @@ describe("POST /api/videos — finalization is idempotent", () => {
   });
 
   it("refuses an id the host says belongs to a different video", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     mocks.findUnique.mockResolvedValue(null);
     mocks.bunnyGuid = "a-different-guid";
 
@@ -412,7 +413,14 @@ describe("POST /api/videos — finalization is idempotent", () => {
     const data = await response.json();
 
     expect(response.status).toBe(502);
-    expect(data.code).toBe("BUNNY_ASSET_MISMATCH");
+    expect(data.code).toBe("ASSET_MISMATCH");
+    // The two ids involved are the diagnosis and stay in the log; the creator is
+    // told the upload could not be confirmed, without the provider's name.
+    expect(data.error).not.toMatch(/Bunny|bunny/i);
+    expect(String(data.reference)).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
+    expect(logged.mock.calls.flat().join(" ")).toContain("a-different-guid");
     expect(mocks.create).not.toHaveBeenCalled();
+
+    logged.mockRestore();
   });
 });

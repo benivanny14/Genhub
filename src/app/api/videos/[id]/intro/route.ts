@@ -80,7 +80,14 @@ export async function GET(
         cache: "no-store",
       });
     } catch {
-      return api.error("The video host did not answer", 504);
+      // The timeout and the URL go to the log with a reference; the viewer gets a
+      // sentence a person can act on (the page also falls back to its own card).
+      return api.upstream(`intro preview fetch timed out after ${UPSTREAM_TIMEOUT_MS}ms`, {
+        context: "IntroPreview",
+        status: 504,
+        code: "UPSTREAM_TIMEOUT",
+        message: "The preview could not be loaded right now. Please try again in a moment.",
+      });
     }
 
     if (!response.ok) {

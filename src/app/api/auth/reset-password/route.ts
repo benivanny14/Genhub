@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import bcrypt from "bcryptjs";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import { hashResetToken } from "@/lib/token-hash";
@@ -23,7 +24,7 @@ export async function POST(request: NextRequest) {
     const { allowed } = await checkRateLimit(`reset:${ip}`, 5, 60_000);
     if (!allowed) return api.rateLimited("Too many attempts");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = resetSchema.safeParse(body);
     if (!result.success) return api.validation(result.error.errors[0].message);
 

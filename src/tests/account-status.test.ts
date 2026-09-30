@@ -14,6 +14,12 @@
 // a credential for nobody), while a database error reads as allowed and is NOT
 // cached, so the next request asks again.
 //
+// The same read also carries the account's CURRENT role, which is the second
+// half of the same idea: a token asserts what was true when it was signed, and a
+// demoted admin must not keep admin power for the rest of the week. `role: null`
+// means "no answer" — the row is gone or the database is unreachable — and the
+// caller then keeps the role its token claims.
+//
 // Prisma and the clock are mocked: no database, no waiting.
 // =============================================================================
 
@@ -39,7 +45,7 @@ beforeEach(() => {
   resetAccountStatusCache();
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-09-25T10:00:00Z"));
-  mocks.userFindUnique.mockResolvedValue({ isBanned: false });
+  mocks.userFindUnique.mockResolvedValue({ isBanned: false, role: "VIEWER" });
 });
 
 afterEach(() => {
@@ -51,16 +57,26 @@ describe("the verdict", () => {
     await expect(accountStatusFor("u1")).resolves.toEqual({
       exists: true,
       banned: false,
+      role: "VIEWER",
     });
   });
 
   it("reads a banned account as banned", async () => {
-    mocks.userFindUnique.mockResolvedValue({ isBanned: true });
+    mocks.userFindUnique.mockResolvedValue({ isBanned: true, role: "CREATOR" });
 
     await expect(accountStatusFor("u1")).resolves.toEqual({
       exists: true,
       banned: true,
+      role: "CREATOR",
     });
+  });
+
+  it("reads the role that is on the row NOW", async () => {
+    // Authority has to be current: this is the value an admin route will compare
+    // against, so it must be the row's role and nothing else.
+    mocks.userFindUnique.mockResolvedValue({ isBanned: false, role: "ADMIN" });
+
+    await expect(accountStatusFor("u1")).resolves.toMatchObject({ role: "ADMIN" });
   });
 
   it("says the account is gone when the row is gone", async () => {
@@ -71,6 +87,7 @@ describe("the verdict", () => {
     await expect(accountStatusFor("u1")).resolves.toEqual({
       exists: false,
       banned: false,
+      role: null,
     });
   });
 });
@@ -117,6 +134,9 @@ describe("when the database cannot answer", () => {
     await expect(accountStatusFor("u1")).resolves.toEqual({
       exists: true,
       banned: false,
+      // No answer about the role either: the caller keeps the one it has rather
+      // than being demoted by an outage.
+      role: null,
     });
   });
 
@@ -126,10 +146,11 @@ describe("when the database cannot answer", () => {
     mocks.userFindUnique.mockRejectedValueOnce(new Error("connection refused"));
     await accountStatusFor("u1");
 
-    mocks.userFindUnique.mockResolvedValue({ isBanned: true });
+    mocks.userFindUnique.mockResolvedValue({ isBanned: true, role: "VIEWER" });
     await expect(accountStatusFor("u1")).resolves.toEqual({
       exists: true,
       banned: true,
+      role: "VIEWER",
     });
   });
 });

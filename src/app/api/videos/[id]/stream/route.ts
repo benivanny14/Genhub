@@ -75,12 +75,19 @@ export async function GET(
 
     // Without the secret nothing can be signed, and a manifest of unauthorised
     // URLs is worse than a clear refusal: it would load and then die on the
-    // first segment. Say which variable is missing instead.
+    // first segment. The missing variable is named in the LOG, where the operator
+    // reads it — the viewer gets a plain sentence and the reference that finds
+    // the log line, because a playback failure is not the place to publish which
+    // environment variables this deployment runs on.
     if (!isBunnyPlaybackConfigured()) {
-      return api.error(
-        "Playback is not configured (BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET)",
-        503,
-        "NOT_CONFIGURED"
+      return api.upstream(
+        "playback is not configured: BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET are not both set",
+        {
+          context: "StreamProxy",
+          status: 503,
+          code: "NOT_CONFIGURED",
+          message: "This video cannot be played right now. Please try again in a moment.",
+        }
       );
     }
 
@@ -167,12 +174,16 @@ export async function GET(
         name === "TimeoutError" || name === "AbortError"
           ? `did not answer within ${UPSTREAM_TIMEOUT_MS / 1000}s`
           : (error as Error)?.message || String(error);
-      console.error(`[Stream Proxy] ${config.bunny.cdnHostname} ${detail}`);
-      return api.error(
-        `The video host ${config.bunny.cdnHostname} could not be reached (${detail}) — ` +
-          "check BUNNY_CDN_HOSTNAME",
-        502,
-        "UPSTREAM_UNREACHABLE"
+      // Hostname, path and the underlying reason go to the log with the
+      // reference the viewer is shown. The response names none of them.
+      return api.upstream(
+        `manifest fetch failed: ${config.bunny.cdnHostname}/${upstreamPath} ${detail}`,
+        {
+          context: "StreamProxy",
+          status: 502,
+          code: "UPSTREAM_UNREACHABLE",
+          message: "This video is not available right now. Please try again in a moment.",
+        }
       );
     }
 
@@ -184,25 +195,31 @@ export async function GET(
       // and a pull zone whose key was rotated — and the diagnosis has to be
       // readable by whoever is staring at the deployed site.
       if (upstream.status === 401 || upstream.status === 403) {
-        console.error(
-          `[Stream Proxy] ${config.bunny.cdnHostname} refused the signed manifest ` +
-            `(HTTP ${upstream.status}) for ${upstreamPath} — BUNNY_TOKEN_SECRET does not match ` +
-            "this pull zone's Token Authentication Key"
-        );
-        return api.error(
-          `The video host refused the signature (HTTP ${upstream.status} from ${config.bunny.cdnHostname}) — ` +
-            "BUNNY_TOKEN_SECRET must be this pull zone's Token Authentication Key, copied exactly",
-          502,
-          "UPSTREAM_REFUSED"
+        // The whole diagnosis — host, status, path, and which secret it must
+        // match — stays in this log line, keyed by the reference on the screen.
+        return api.upstream(
+          `${config.bunny.cdnHostname} refused the signed manifest (HTTP ${upstream.status}) ` +
+            `for ${upstreamPath} — BUNNY_TOKEN_SECRET does not match this pull zone's ` +
+            "Token Authentication Key",
+          {
+            context: "StreamProxy",
+            status: 502,
+            code: "UPSTREAM_REFUSED",
+            message: "This video is not available right now. Please try again in a moment.",
+          }
         );
       }
       if (upstream.status === 404) {
         return api.notFound("This video has no playable rendition yet");
       }
-      return api.error(
-        `The video host answered HTTP ${upstream.status} for ${manifestPath}`,
-        502,
-        "UPSTREAM_ERROR"
+      return api.upstream(
+        `upstream answered HTTP ${upstream.status} for ${manifestPath}`,
+        {
+          context: "StreamProxy",
+          status: 502,
+          code: "UPSTREAM_ERROR",
+          message: "This video is not available right now. Please try again in a moment.",
+        }
       );
     }
 

@@ -30,7 +30,8 @@
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole, AuthError } from "@/lib/auth";
-import { api } from "@/lib/api-response";
+import { api, serverFailure } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { CRON_WORKERS, findWorker, getCronHealth } from "@/lib/services/cron-heartbeat.service";
 import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 
@@ -50,7 +51,7 @@ export async function POST(request: NextRequest) {
 
     let body: unknown = null;
     try {
-      body = await request.json();
+      body = await readJsonBody(request);
     } catch {
       return api.validation("Expected a JSON body like { \"worker\": \"release-earnings\" }.");
     }
@@ -83,9 +84,17 @@ export async function POST(request: NextRequest) {
     } catch (error) {
       // The job died. Its heartbeat already says ERROR, so the card will show
       // that too — but the operator who clicked deserves the actual reason.
-      const message = error instanceof Error ? error.message : "unknown error";
-      console.error(`[Admin Run Job] ${def.id} failed:`, error);
-      return api.error(`${def.name} failed: ${message}`, 500, "JOB_FAILED");
+      // The raw failure goes to the log only, tagged with a reference the
+      // operator can quote back. The panel gets the worker's label and the
+      // reference, never the underlying error text (which can name a host, a
+      // table, or a provider that must not travel to a browser).
+      return serverFailure(
+        `worker ${def.id} failed: ${error instanceof Error ? error.message : error}`,
+        "Admin Run Job",
+        500,
+        "JOB_FAILED",
+        `${def.name} could not finish. Try again, and quote the reference if it keeps failing.`
+      );
     }
 
     if (!outcome.ran) {

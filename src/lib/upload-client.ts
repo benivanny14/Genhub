@@ -5,6 +5,7 @@
 // =============================================================================
 
 import { downscaleImage } from "./image-downscale";
+import { classifyFile } from "./media";
 
 export class UploadError extends Error {
   constructor(message: string) {
@@ -39,10 +40,32 @@ async function post(file: File, kind: "public" | "private", what: string): Promi
   return body.data.url;
 }
 
+/**
+ * Why this file will not be sent as a picture, or null when it will be.
+ *
+ * The check used to be `file.type.startsWith("image/")`, which is a claim the
+ * browser makes and a phone often does not: a gallery photo or a picture saved
+ * by a chat app arrives as `""` or `application/octet-stream`, and a real picture
+ * was answered with "Please choose an image file" — the report this exists to
+ * stop. classifyFile reads the extension when the MIME says nothing useful
+ * (see lib/media), so a `photo.jpg` with no type is a picture and a `clip.mp4`
+ * is not, whatever the picker called them.
+ *
+ * Pure on purpose — no canvas, no network — so the rule is pinned by a test
+ * rather than discovered on somebody's phone.
+ */
+export function imageUploadRefusal(file: {
+  name?: string | null;
+  type?: string | null;
+}): string | null {
+  return classifyFile(file) === "image"
+    ? null
+    : "Please choose a picture — a JPEG, PNG, WebP or HEIC image";
+}
+
 export async function uploadImage(file: File, options: UploadOptions = {}): Promise<string> {
-  if (!file.type.startsWith("image/")) {
-    throw new UploadError("Please choose an image file");
-  }
+  const refusal = imageUploadRefusal(file);
+  if (refusal) throw new UploadError(refusal);
 
   const prepared = await downscaleImage(file);
   if (prepared.size > MAX_IMAGE_BYTES) {

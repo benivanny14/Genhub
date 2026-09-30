@@ -135,10 +135,30 @@ export async function requireAuth(options?: { allowBanned?: boolean }): Promise<
     );
   }
 
+  // The role comes from the ROW, not from the token.
+  //
+  // A token asserts what was true when it was signed and lives for seven days;
+  // a role is authority, and authority has to be current. Without this, an admin
+  // demoted (or an account downgraded) an hour ago kept every admin power for the
+  // rest of that week merely by not signing in again — the same fault the ban check
+  // above was written for, in the same place, for the same reason.
+  //
+  // `null` is "the database did not answer" (see account-status.service.ts): the
+  // token's own role is kept then, matching the ban check's fail-open direction,
+  // because a blip must not demote everybody on a working site. The answer is
+  // cached for a minute, and the admin routes that change a role clear it, so the
+  // window is bounded in the direction that matters.
+  if (status.role) {
+    return { ...user, role: status.role };
+  }
+
   return user;
 }
 
 // Require specific role
+//
+// The comparison is against the live role requireAuth resolved, never against
+// the role claim inside the token — see the comment there.
 export async function requireRole(role: "VIEWER" | "CREATOR" | "ADMIN"): Promise<AuthPayload> {
   const user = await requireAuth();
   if (user.role !== role && user.role !== "ADMIN") {

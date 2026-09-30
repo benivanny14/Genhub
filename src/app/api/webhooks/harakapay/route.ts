@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/db";
 import config from "@/lib/config";
+import { readJsonBody, MAX_WEBHOOK_BODY_BYTES } from "@/lib/request-body";
 import { processPaymentWebhook } from "@/lib/services/webhook.service";
 import type { HarakaWebhookPayload } from "@/lib/payments/harakapay";
 import { harakaStatusToInternal } from "@/lib/payments/harakapay";
@@ -46,7 +47,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid token" }, { status: 401 });
     }
 
-    const payload: HarakaWebhookPayload = await request.json();
+    // The webhook envelope is the one body that is allowed to be larger; a payment
+// notification is not a form field.
+const payload = (await readJsonBody(request, null, MAX_WEBHOOK_BODY_BYTES)) as
+  | HarakaWebhookPayload
+  | null;
 
     if (!payload?.order_id) {
       return NextResponse.json({ error: "order_id missing" }, { status: 400 });

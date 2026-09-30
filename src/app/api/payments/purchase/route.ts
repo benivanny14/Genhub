@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { initiatePaymentSchema } from "@/lib/validation";
 import {
   harakaCollect,
@@ -51,7 +52,7 @@ export async function POST(request: NextRequest) {
     );
     if (!allowed) return api.rateLimited("Wait for the prompt before trying again");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = initiatePaymentSchema.safeParse(body);
 
     if (!result.success) {
@@ -431,8 +432,17 @@ export async function POST(request: NextRequest) {
         where: { id: transaction.id },
         data: { status: "FAILED", metadata: { gatewayError: reason } },
       });
-      console.error("[HarakaPay Collect Error]", reason, harakaError);
-      return api.error(`Payment failed — HarakaPay: ${reason}`, 502, "GATEWAY_ERROR");
+      // The gateway's own words go to the log with a reference; the buyer gets a
+      // sentence about their money and the reference. The old answer named the
+      // gateway and repeated its reason, which told a customer nothing they could
+      // act on and handed anyone watching the response a map of the payment path.
+      return api.upstream(`collect failed for transaction ${transaction.id}: ${reason}`, {
+        context: "Payments",
+        status: 502,
+        code: "GATEWAY_ERROR",
+        message:
+          "We could not start the payment just now. Nothing has been charged — please try again.",
+      });
     }
   } catch (error) {
     if (error instanceof AuthError) {

@@ -8,6 +8,7 @@ import bcrypt from "bcryptjs";
 import prisma from "@/lib/db";
 import { generateToken, setAuthCookie } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { loginSchema, emailMatch } from "@/lib/validation";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
       return api.rateLimited("Too many attempts. Please wait a few minutes.");
     }
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = loginSchema.safeParse(body);
 
     if (!result.success) {

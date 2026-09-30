@@ -26,6 +26,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import {
   expirePaymentCharge,
   recheckPaymentCharge,
@@ -127,7 +128,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("ADMIN");
 
-    const raw = await request.json().catch(() => ({}));
+    const raw = await readJsonBody(request, {});
     const result = actionSchema.safeParse(raw);
     if (!result.success) return api.validation(result.error.errors[0].message);
 

@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, getCurrentUser, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 
 // GET /api/videos/[id]/progress - Saved position (for resume playback)
 export async function GET(
@@ -42,7 +43,7 @@ export async function POST(
     const auth = await requireAuth();
     const { id } = await params;
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const positionSeconds = Math.max(0, Math.floor(Number(body?.positionSeconds) || 0));
     const duration = Math.floor(Number(body?.duration) || 0);
     const percent =

@@ -9,6 +9,7 @@ import { randomBytes } from "crypto";
 import prisma from "@/lib/db";
 import { requireAuth, requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { createVideoSchema } from "@/lib/validation";
 import { generateSlug, intParam } from "@/lib/utils";
 import {
@@ -330,7 +331,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = createVideoSchema.safeParse(body);
 
     if (!result.success) {
@@ -376,7 +377,9 @@ export async function POST(request: NextRequest) {
     if (existing) {
       const { creatorId: existingCreatorId, ...existingPublic } = existing;
       if (existingCreatorId !== auth.userId) {
-        return api.forbidden("This Bunny video is already linked to another creator");
+        // No provider name in a client-facing message: which host holds the
+        // asset is our business, and the creator's question is whose video it is.
+        return api.forbidden("That video is already linked to another creator");
       }
 
       const awaitingTranscode = existingPublic.encodingStatus !== null;
@@ -439,10 +442,14 @@ export async function POST(request: NextRequest) {
     // sure Bunny still knows both assets before the database commit.
     if (isBunnyConfigured()) {
       if (!isBunnyVideoId(bunnyVideoId)) {
-        return api.validation("The uploaded video id is not a valid Bunny asset");
+        return api.validation(
+          "That upload could not be verified. Please upload the video again."
+        );
       }
       if (teaserBunnyVideoId && !isBunnyVideoId(teaserBunnyVideoId)) {
-        return api.validation("The teaser id is not a valid Bunny asset");
+        return api.validation(
+          "That trailer could not be verified. Please upload the trailer again."
+        );
       }
       try {
         const assets = await Promise.all([
@@ -455,7 +462,19 @@ export async function POST(request: NextRequest) {
           const expected = index === 0 ? bunnyVideoId : teaserBunnyVideoId;
           const returned = String((asset as { guid?: unknown })?.guid ?? "");
           if (expected && returned && returned.toLowerCase() !== expected.toLowerCase()) {
-            return api.error("Bunny returned a different video asset", 502, "BUNNY_ASSET_MISMATCH");
+            // A mismatch is an upstream fault and reads as one. The ids involved
+            // are logged with a reference; the creator is told the upload could
+            // not be confirmed and what to do about it.
+            return api.upstream(
+              `asset mismatch: asked for ${expected}, host returned ${returned}`,
+              {
+                context: "VideoCreate",
+                status: 502,
+                code: "ASSET_MISMATCH",
+                message:
+                  "That upload could not be confirmed. Please submit it again — nothing has been published.",
+              }
+            );
           }
         }
       } catch (error) {

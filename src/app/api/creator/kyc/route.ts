@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { submitKycSchema } from "@/lib/validation";
 
 export async function POST(request: NextRequest) {
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = submitKycSchema.safeParse(body);
 
     if (!result.success) {

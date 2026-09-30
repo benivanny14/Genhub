@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
 import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 import { checkRateLimit } from "@/lib/redis";
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
     );
     if (!allowed) return api.rateLimited("Please wait before sending another tip");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = tipSchema.safeParse(body);
     if (!result.success) return api.validation(result.error.errors[0].message);
 

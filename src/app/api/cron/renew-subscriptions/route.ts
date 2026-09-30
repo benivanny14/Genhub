@@ -14,6 +14,7 @@
 
 import { NextRequest } from "next/server";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { cronOrigin, requireCronSecret } from "@/lib/cron-auth";
 import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 import {
@@ -53,7 +54,7 @@ async function handle(request: NextRequest) {
     // A GET has no body and a POST without one is the ordinary scheduled call, so
     // the body is parsed only when the query has not already answered: a POST that
     // does not ask to be a dry run must reach the runner exactly as it did before.
-    const body = queryWantsDryRun(request) ? null : await request.json().catch(() => null);
+    const body = queryWantsDryRun(request) ? null : await readJsonBody(request);
 
     if (queryWantsDryRun(request) || bodyWantsDryRun(body)) {
       const preview = await previewDueRenewals();

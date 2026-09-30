@@ -88,10 +88,16 @@ export async function GET(
     const { id } = await params;
 
     if (!isBunnyPlaybackConfigured()) {
-      return api.error(
-        "Playback is not configured (BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET)",
-        503,
-        "NOT_CONFIGURED"
+      // Which variable is missing is a line in the log, next to the reference the
+      // viewer sees — not a public list of this deployment's environment.
+      return api.upstream(
+        "intro clip: playback is not configured (BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET)",
+        {
+          context: "IntroClip",
+          status: 503,
+          code: "NOT_CONFIGURED",
+          message: "The trailer is not available right now. Please try again in a moment.",
+        }
       );
     }
 
@@ -127,11 +133,15 @@ export async function GET(
       // and not a viewer problem — name the variable, because the symptom inside
       // the app (a card with no motion) says nothing about the cause.
       if (master.status === 401 || master.status === 403) {
-        return api.error(
-          `The video host refused the signature (HTTP ${master.status} from ${config.bunny.cdnHostname}) — ` +
+        return api.upstream(
+          `${config.bunny.cdnHostname} refused the signed intro manifest (HTTP ${master.status}) — ` +
             "BUNNY_TOKEN_SECRET must be this pull zone's Token Authentication Key, copied exactly",
-          502,
-          "UPSTREAM_REFUSED"
+          {
+            context: "IntroClip",
+            status: 502,
+            code: "UPSTREAM_REFUSED",
+            message: "The trailer is not available right now. Please try again in a moment.",
+          }
         );
       }
       return api.notFound("This scene has no intro clip yet");

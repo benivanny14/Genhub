@@ -24,6 +24,7 @@
 import { NextRequest } from "next/server";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 import { uploadFailureSchema } from "@/lib/validation";
@@ -43,7 +44,7 @@ export async function POST(request: NextRequest) {
     );
     if (!allowed) return api.rateLimited("Too many reports at once.");
 
-    const parsed = uploadFailureSchema.safeParse(await request.json().catch(() => null));
+    const parsed = uploadFailureSchema.safeParse(await readJsonBody(request));
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
 
     const data = parsed.data;

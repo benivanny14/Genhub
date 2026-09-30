@@ -12,6 +12,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { usernameShapeSchema } from "@/lib/validation";
 import { normalizeUsername, usernameFormatError } from "@/lib/usernames";
 import { cacheDel } from "@/lib/redis";
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
-    const body = (await request.json().catch(() => null)) as { username?: unknown } | null;
+    const body = (await readJsonBody(request)) as { username?: unknown } | null;
 
     // Shape only, so a value that fails the *rules* below can still be compared
     // with what the account already has. Two statements, and the order matters:

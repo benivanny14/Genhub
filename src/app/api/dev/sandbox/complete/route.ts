@@ -10,6 +10,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import config from "@/lib/config";
 import { processPaymentWebhook } from "@/lib/services/webhook.service";
 import { developmentOnlyEnabled } from "@/lib/dev-only";
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const orderId = typeof body?.orderId === "string" ? body.orderId : "";
     const status = body?.status === "FAILED" ? "FAILED" : "SUCCESS";
 

@@ -9,7 +9,7 @@ import { Info, ArrowLeft, Heart, Globe, Shield, Zap } from "lucide-react";
 import Link from "next/link";
 import { useTheme } from "@/lib/ThemeProvider";
 import { cn } from "@/lib/utils";
-import config from "@/lib/config";
+import publicConfig from "@/lib/public-config";
 
 const VALUES = [
   {
@@ -110,9 +110,9 @@ export default function AboutPage() {
           </section>
 
           <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/40")}>
-            {config.compliance.legalName}
-            {config.compliance.address ? ` — ${config.compliance.address}` : " — Tanzania"}.{" "}
-            {config.compliance.supportEmail}
+            {publicConfig.compliance.legalName}
+            {publicConfig.compliance.address ? ` — ${publicConfig.compliance.address}` : " — Tanzania"}.{" "}
+            {publicConfig.compliance.supportEmail}
           </p>
         </div>
       </main>

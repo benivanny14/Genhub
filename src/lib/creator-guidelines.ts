@@ -5,16 +5,28 @@
 // numbers the platform backs them with. Two reasons this is a module and not
 // prose pasted into the upload page:
 //
-//   1. The upload page renders them, and the server enforces the two that can be
-//      measured (duration, and the accountability of a confirmed violation).
-//      Both read MIN_VIDEO_DURATION_SECONDS from here, so the screen and the
-//      rule cannot drift apart — the failure that produced this file was a rule
-//      written in one place and checked in none.
+//   1. The upload page renders them, and the numbers they quote come from here
+//      (the withdrawal floor, the holding period, the recommended length) so the
+//      screen and the platform cannot drift apart — the failure that produced
+//      this file was a rule written in one place and checked in none.
+//
+//      The length is GUIDANCE, not a gate: an upload of any duration is accepted,
+//      and nothing takes a published video down for being short. It used to be
+//      enforced twice — a probe in the upload page and a length check in the
+//      encoding lifecycle — which meant a creator who chose a shorter scene lost
+//      the upload they had already paid for. Eight minutes is what these
+//      guidelines ask for and what performs here, which is why the number is
+//      still quoted on this screen and nowhere in a refusal.
 //   2. Bilingual. The audience is Tanzanian creators who read Kiswahili first;
 //      an English-only gate is a gate a creator clicks past without reading.
 // =============================================================================
 
-/** A paid scene shorter than this never publishes itself. 8 minutes = 480s. */
+/**
+ * The length these guidelines recommend for a scene. 8 minutes = 480s.
+ *
+ * A RECOMMENDATION. It is quoted on the guidelines screen and in no refusal:
+ * see the header, and note that nothing measures a video against it any more.
+ */
 export const MIN_VIDEO_DURATION_SECONDS = 8 * 60;
 
 /**
@@ -56,9 +68,11 @@ export const CREATOR_GUIDELINES: CreatorGuideline[] = [
   },
   {
     id: "duration",
-    sw: `Video iwe na urefu wa angalau dakika 8 (${MIN_VIDEO_DURATION_SECONDS} sekunde) na kuendelea. Video fupi kuliko hapo haitachapishwa.`,
-    en: `Your video must be at least 8 minutes long (${MIN_VIDEO_DURATION_SECONDS} seconds). Anything shorter will not publish.`,
-    severe: true,
+    sw: `Video inashauriwa kuwa na urefu wa angalau dakika 8 (${MIN_VIDEO_DURATION_SECONDS} sekunde) — urefu huo huwafanya watazamaji wabaki na kupenda video zako. Video fupi pia inaruhusiwa; hakuna video inayokataliwa kwa ajili ya urefu wake.`,
+    en: `A video of at least 8 minutes (${MIN_VIDEO_DURATION_SECONDS} seconds) is recommended — that is what holds viewers and builds your audience. Shorter clips are allowed: no video is refused, and none is taken down, because of its length.`,
+    // No longer `severe`: a severe rule is one with a stated consequence, and the
+    // consequence is gone. Keeping the flag would make the gate that renders it
+    // promise a punishment the platform does not carry out.
   },
   {
     id: "clean-set",

@@ -38,6 +38,21 @@
 // account was erased (see account-erasure.service.ts), and a token naming a user
 // that no longer exists must stop working at once — otherwise the deletion
 // leaves a live credential behind for the rest of its seven days.
+//
+// -----------------------------------------------------------------------------
+// The role, from the same read
+// -----------------------------------------------------------------------------
+// The same one lookup also carries the account's CURRENT role, because a role is
+// exactly the same kind of claim as "this account may act": the token asserts
+// what was true when it was signed, and an admin demoted an hour ago should not
+// still be an admin until the token expires seven days later. Reading it here
+// rather than in a second query is deliberate — the ban check was already paying
+// for the round trip, so the role rides along with it, and thirty admin routes
+// get a live role check without thirty edits.
+//
+// `role: null` means "no answer": either the row is gone, or the database could
+// not be reached. Callers keep the token's own role in that case, which is the
+// same fail-open direction as the ban check and for the same reason.
 // =============================================================================
 
 import prisma from "../db";
@@ -45,11 +60,18 @@ import prisma from "../db";
 /** How long a verdict is reused. See the header: one minute, on purpose. */
 export const ACCOUNT_STATUS_TTL_MS = 60_000;
 
+export type AccountRole = "VIEWER" | "CREATOR" | "ADMIN";
+
 export interface AccountStatus {
   /** The user row still exists. */
   exists: boolean;
   /** The row exists and is flagged as banned. */
   banned: boolean;
+  /**
+   * The role on the row right now, or null when there was no answer to read
+   * (the account is gone, or the database could not be reached).
+   */
+  role: AccountRole | null;
 }
 
 interface CacheEntry {
@@ -77,20 +99,25 @@ export async function accountStatusFor(userId: string): Promise<AccountStatus> {
   try {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { isBanned: true },
+      select: { isBanned: true, role: true },
     });
 
     const status: AccountStatus = user
-      ? { exists: true, banned: user.isBanned }
-      : { exists: false, banned: false };
+      ? {
+          exists: true,
+          banned: user.isBanned,
+          role: (user.role as AccountRole) ?? null,
+        }
+      : { exists: false, banned: false, role: null };
 
     if (cache.size >= MAX_ENTRIES) cache.clear();
     cache.set(userId, { status, at: now });
     return status;
   } catch {
     // Fail open — an outage is not a ban. Not cached, so it is retried on the
-    // next request rather than being remembered as a healthy account.
-    return { exists: true, banned: false };
+    // next request rather than being remembered as a healthy account. The role
+    // is null for the same reason: no answer, so the caller keeps its own.
+    return { exists: true, banned: false, role: null };
   }
 }
 

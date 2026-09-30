@@ -101,3 +101,38 @@ describe("no session", () => {
     expect(mocks.userFindUnique).not.toHaveBeenCalled();
   });
 });
+
+// -----------------------------------------------------------------------------
+// Authority is current, not historical
+//
+// A token lives for seven days and asserts the role the account had when it was
+// signed. An admin demoted an hour ago used to keep every admin power for the
+// rest of that week merely by not signing in again — the same shape as the ban
+// bug above, in the same guard, so it is pinned in the same file.
+// -----------------------------------------------------------------------------
+describe("a role that changed after the token was minted", () => {
+  it("stops being an admin immediately", async () => {
+    await signInAs("admin-1", "ADMIN");
+    // The row says CREATOR now; only the token still claims ADMIN.
+    mocks.userFindUnique.mockResolvedValue({ isBanned: false, role: "CREATOR" });
+
+    await expect(requireRole("ADMIN")).rejects.toMatchObject({ statusCode: 403 });
+    await expect(requireAuth()).resolves.toMatchObject({ role: "CREATOR" });
+  });
+
+  it("grants a promotion without waiting for a new token", async () => {
+    await signInAs("u1", "VIEWER");
+    mocks.userFindUnique.mockResolvedValue({ isBanned: false, role: "ADMIN" });
+
+    await expect(requireRole("ADMIN")).resolves.toMatchObject({ role: "ADMIN" });
+  });
+
+  it("keeps the token's role when the database cannot answer", async () => {
+    // A database blip must not demote anybody on a working site — the same
+    // direction the ban check fails in.
+    await signInAs("admin-1", "ADMIN");
+    mocks.userFindUnique.mockRejectedValue(new Error("connection refused"));
+
+    await expect(requireRole("ADMIN")).resolves.toMatchObject({ userId: "admin-1" });
+  });
+});

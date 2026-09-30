@@ -76,6 +76,17 @@ import { displayHandle } from "@/lib/usernames";
  */
 const INTRO_ANIM_MAX_ATTEMPTS = 1;
 
+/**
+ * How long the end card waits before the next scene starts on its own.
+ *
+ * A finished video used to stop dead on a black frame with nothing to do next,
+ * which is the one moment every site a viewer has used answers for them. Long
+ * enough to read a title and change your mind, short enough that somebody who
+ * put the phone down is not left staring at black — and the Cancel button is
+ * what makes the wait fair rather than a redirect nobody asked for.
+ */
+const UP_NEXT_SECONDS = 8;
+
 interface VideoData {
   id: string;
   title: string;
@@ -248,6 +259,16 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   // browser with no HLS). The card then falls back to the webp animation.
   const [introClipFailed, setIntroClipFailed] = useState(false);
 
+  // End of a scene: what happens when the picture stops.
+  //
+  // `sceneEnded` outlives the overlay being dismissed on purpose — it is the
+  // fact that the film finished, and the progress bar below reads it to offer a
+  // replay. `upNextSeconds` counts down to the hand-off to the top related
+  // scene, and `upNextDismissed` is the viewer having said no.
+  const [sceneEnded, setSceneEnded] = useState(false);
+  const [upNextDismissed, setUpNextDismissed] = useState(false);
+  const [upNextSeconds, setUpNextSeconds] = useState(UP_NEXT_SECONDS);
+
   // Intro state belongs to ONE scene. Walking from one video to the next reuses
   // this component, so a failure on the last scene must not mute the next
   // scene's intro, and a finished trailer must not carry its end card along.
@@ -257,7 +278,31 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     setIntroClipFailed(false);
     setIntroFinished(false);
     setIntroKey(0);
+    // The end card belongs to one scene too: walking to the next video has to
+    // bring its own, fresh countdown rather than inherit a finished one.
+    setSceneEnded(false);
+    setUpNextDismissed(false);
+    setUpNextSeconds(UP_NEXT_SECONDS);
   }, [video?.id, viewAsVisitor]);
+
+  // The end-of-scene hand-off.
+  //
+  // It reads `related` here rather than taking the target as a prop because the
+  // list is still being filled in when a short video ends: a scene watched twice
+  // in a row can finish before the sidebar has answered, and a hand-off that
+  // fired on a missing target would navigate to `/video/undefined`. Nothing is
+  // pushed until there is something to push to.
+  useEffect(() => {
+    if (!sceneEnded || upNextDismissed) return;
+    const target = related[0];
+    if (!target) return;
+    if (upNextSeconds <= 0) {
+      router.push(`/video/${target.slug || target.id}`);
+      return;
+    }
+    const timer = setTimeout(() => setUpNextSeconds((seconds) => seconds - 1), 1000);
+    return () => clearTimeout(timer);
+  }, [sceneEnded, upNextDismissed, upNextSeconds, related, router]);
 
   // Library state: Watch Later bookmark, playlists picker, gallery lightbox
   const [inWatchLater, setInWatchLater] = useState(false);
@@ -1025,6 +1070,23 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     toast("info", "That was the intro — unlock the full scene to keep watching.");
   }
 
+  /**
+   * The picture reached its end.
+   *
+   * Whatever just finished — the paid scene or, for a viewer without access,
+   * the teaser — the page does not stop here. It offers the next scene, and it
+   * counts down to it, with a Cancel for anyone who wants to stay.
+   */
+  function handleSceneEnded() {
+    setSceneEnded(true);
+    setUpNextDismissed(false);
+    setUpNextSeconds(UP_NEXT_SECONDS);
+  }
+
+  // The next scene, if the sidebar has one. Declared here, after the early
+  // returns, so the overlay below reads it directly.
+  const upNext = related[0] ?? null;
+
   const totalVotes = likesCount + dislikesCount;
   const ratingPct = totalVotes > 0 ? Math.round((likesCount / totalVotes) * 100) : 100;
   const ratingLabel = totalVotes > 0 ? `${ratingPct}%` : "Rate";
@@ -1180,12 +1242,73 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               startAt={canPlayFull ? startAt : 0}
               onDownload={canPlayFull ? () => handleDownload() : undefined}
               downloading={downloading}
-              onEnded={showIntroTrailer ? handleIntroEnded : undefined}
+              onEnded={showIntroTrailer ? handleIntroEnded : handleSceneEnded}
               // Captions belong to the scene, so a viewer previewing the teaser
               // does not get the full scene's captions over a clip they may not be
               // entitled to hear.
               captionsUrl={canPlayFull ? video.captionsUrl : null}
             />
+
+            {/* Up next — what plays when this one ends.
+
+                A finished scene used to stop on a black frame with nothing to do
+                next, which is the one moment every site a viewer has used
+                answers for them: the next scene, offered, counting down, with a
+                way to say no. It is shown over the finished picture and never
+                over the intro, which has its own end card and its own offer.
+
+                The countdown can fire before `related` has arrived (a short
+                scene watched twice), so the overlay is gated on there BEING a
+                next scene — the hand-off itself waits in the effect above. */}
+            {sceneEnded && !upNextDismissed && upNext && !showIntroTrailer && (
+              <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-black/85 px-6 text-center backdrop-blur-sm">
+                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-brand-300">
+                  {upNextSeconds > 0 ? `Up next in ${upNextSeconds}s` : "Up next"}
+                </p>
+                <Link
+                  href={`/video/${upNext.slug || upNext.id}`}
+                  className="group flex w-full max-w-sm items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-2 text-left transition hover:border-brand-500/60"
+                >
+                  <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-surface-300/60">
+                    {upNext.thumbnailUrl ? (
+                      <Image
+                        src={upNext.thumbnailUrl}
+                        alt=""
+                        fill
+                        className="object-cover transition-transform duration-300 group-hover:scale-105"
+                        sizes="112px"
+                      />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center">
+                        <Play className="h-5 w-5 text-white/30" />
+                      </div>
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="line-clamp-2 text-sm font-semibold text-white">
+                      {upNext.title}
+                    </p>
+                    <p className="mt-0.5 text-xs text-white/50">
+                      {displayHandle(upNext.creator, "Creator")}
+                    </p>
+                  </div>
+                </Link>
+                <div className="flex items-center gap-3">
+                  <Link
+                    href={`/video/${upNext.slug || upNext.id}`}
+                    className="btn-brand inline-flex items-center gap-2 text-sm"
+                  >
+                    <Play className="h-4 w-4 fill-current" /> Play now
+                  </Link>
+                  <button
+                    onClick={() => setUpNextDismissed(true)}
+                    className="text-xs text-white/50 underline-offset-2 hover:text-white hover:underline"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* "INTRO" ribbon — the viewer is told this is a trailer, on purpose */}
             {introPlaysLikeTrailer && !introFinished && (

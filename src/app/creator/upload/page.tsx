@@ -29,10 +29,8 @@ import {
   CREATOR_GUIDELINES_VERSION,
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
-  MIN_VIDEO_DURATION_SECONDS,
   needsGuidelineAcceptance,
 } from "@/lib/creator-guidelines";
-import { probeVideoDuration, shortVideoError } from "@/lib/video-duration";
 import {
   abortVideoUpload,
   assertFileReadable,
@@ -494,15 +492,12 @@ export default function UploadPage() {
     setBunnyVideoId("");
     setMainUploading(true);
     try {
-      const durationError = shortVideoError(
-        await probeVideoDuration(file),
-        MIN_VIDEO_DURATION_SECONDS
-      );
-      if (durationError) {
-        toast("error", durationError);
-        return;
-      }
-
+      // No length gate. Every scene used to be measured here and refused under
+      // eight minutes, which decided for a creator what was worth uploading and
+      // cost them the upload they had already started. Eight minutes or more is
+      // still what the guidelines RECOMMEND (see lib/creator-guidelines), and a
+      // recommendation belongs on the guidelines screen — not as a wall in front
+      // of the file they just chose on a phone.
       const result = await uploadOne(file, "main", reuse);
       if (!result) {
         // Do not leave a dead session behind when the replacement reservation

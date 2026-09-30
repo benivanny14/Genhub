@@ -29,6 +29,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { assessSetup, runLiveProbes, SETUP_ITEMS } from "@/lib/setup-check";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 
@@ -79,7 +80,7 @@ export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireRole("ADMIN");
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const stepId = typeof body?.stepId === "string" ? body.stepId : "";
     const done = body?.done !== false; // ticking on unless explicitly undone
 

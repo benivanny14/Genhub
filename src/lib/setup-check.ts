@@ -756,9 +756,17 @@ export function classifyAppUrlAnswer(
   body: unknown,
   url: string
 ): Pick<ProbeResult, "state" | "detail"> {
+  // /api/health answers in ONE of two shapes now: the minimal `{ status }` for
+  // anyone anonymous, and the full diagnostic payload (the one that carries
+  // `checks`) for a caller holding CRON_SECRET or an admin session — which is
+  // what the probe below now presents. Both carry this app's status vocabulary,
+  // so that vocabulary, not the presence of `checks`, is what proves the address
+  // answers with OUR route rather than a different site.
   const payload = body as { status?: unknown; checks?: unknown } | null;
   const isThisApp =
-    !!payload && typeof payload === "object" && "checks" in payload && "status" in payload;
+    !!payload &&
+    typeof payload === "object" &&
+    (payload.status === "ok" || payload.status === "degraded");
 
   // A different site answering 200 is the dangerous case, not a 503 from ours:
   // NEXT_PUBLIC_APP_URL feeds the sitemap, OG tags and the gateway's webhook_url.
@@ -791,7 +799,13 @@ async function probeAppUrl(): Promise<ProbeResult> {
     };
   }
   try {
-    const res = await fetch(`${url}/api/health`, { signal: timeout(15_000) });
+    // Present the shared secret so the health route answers with its full
+    // diagnostics (the shape this is used to), rather than the minimal public
+    // `{ status }`. It is the same secret the schedules already carry and it
+    // stays server-side — this probe runs on the server, never in a browser.
+    const headers: Record<string, string> = {};
+    if (config.cron.secret) headers["x-cron-secret"] = config.cron.secret;
+    const res = await fetch(`${url}/api/health`, { signal: timeout(15_000), headers });
     // A response is an answer even when its status is 503, so the body is read
     // before any verdict is reached.
     const body = await res.json().catch(() => null);

@@ -16,6 +16,7 @@
 import { NextRequest } from "next/server";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import {
   getBlueTickView,
   requestBlueTick,
@@ -45,7 +46,7 @@ export async function POST(request: NextRequest) {
     // The body is optional: one month is what almost every purchase is, and a
     // request with no body at all should mean the obvious thing rather than a
     // parse error.
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const months = Number(body?.months) || 1;
 
     const result = await requestBlueTick({ userId: auth.userId, months });

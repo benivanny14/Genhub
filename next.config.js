@@ -74,6 +74,21 @@ const securityHeaders = [
 // the pattern is narrowed to it. The wildcard is kept only for a build that has
 // no BUNNY_CDN_HOSTNAME configured, where removing it would break every legacy
 // CDN cover instead of protecting anything.
+// `picsum.photos` and `i.pravatar.cc` exist for the DEMO fallbacks in
+// lib/demo-data.ts, which are dead code in a production build (`demoDataEnabled()`
+// is `NODE_ENV !== "production"`, inlined to `false` there). Every host on this
+// list is a host a client-supplied `next/image` src can be pointed at and have
+// our server fetch, so a host nothing in production references is a proxy this
+// deployment does not need. Outside a production build they stay, because the
+// demo screens are the reason they are here.
+const demoImagePatterns =
+  process.env.NODE_ENV === "production"
+    ? []
+    : [
+        { protocol: "https", hostname: "picsum.photos" },
+        { protocol: "https", hostname: "i.pravatar.cc" },
+      ];
+
 const cdnHostname = process.env.BUNNY_CDN_HOSTNAME || "";
 const bunnyImagePatterns = cdnHostname
   ? [{ protocol: "https", hostname: cdnHostname }]
@@ -89,6 +104,12 @@ const nextConfig = {
   // The framework banner told every visitor and every scanner which version of
   // Next is running, which is the first thing a version-based exploit needs.
   poweredByHeader: false,
+  // Stated rather than assumed. The default is already `false`, but a build flag
+  // or a well-meaning "make debugging easier" commit is one line from shipping
+  // the entire source of the app — route logic, comments and all — to every
+  // visitor as `.map` files next to the bundles. A silent default is not a
+  // control, so the value is pinned here and asserted by a test.
+  productionBrowserSourceMaps: false,
   images: {
     remotePatterns: [
       {
@@ -104,14 +125,7 @@ const nextConfig = {
         protocol: "https",
         hostname: "storage.genhub.co.tz",
       },
-      {
-        protocol: "https",
-        hostname: "picsum.photos",
-      },
-      {
-        protocol: "https",
-        hostname: "i.pravatar.cc",
-      },
+      ...demoImagePatterns,
     ],
   },
   experimental: {

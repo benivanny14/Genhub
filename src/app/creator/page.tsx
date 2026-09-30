@@ -40,7 +40,7 @@ import {
   Check,
   Share2,
 } from "lucide-react";
-import { ANY_FILE_ACCEPT, VIDEO_ACCEPT, canOptimizeImage } from "@/lib/media";
+import { ANY_FILE_ACCEPT, IMAGE_ACCEPT, VIDEO_ACCEPT, canOptimizeImage, classifyFile } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
 import {
   abortVideoUpload,
@@ -394,6 +394,19 @@ function EncodingBadge({
   );
 }
 
+/**
+ * What a creator is told when a PICTURE cannot be read off their device.
+ *
+ * The same sentence the upload page uses (see its COVER_UNREADABLE): the
+ * transport's own message is written for a video, and a creator standing on the
+ * cover picker being told about a video file would be reading about the wrong
+ * thing. The advice names the one thing they can act on — a cloud-backed photo
+ * has to come down to the phone first.
+ */
+const COVER_UNREADABLE =
+  "This device could not read that picture, so nothing was sent. Move it into the " +
+  "phone's own storage (Downloads) and choose it again.";
+
 export default function CreatorDashboard() {
   const router = useRouter();
   const { toast } = useToast();
@@ -602,6 +615,41 @@ export default function CreatorDashboard() {
     setEditCoverUrl(video.thumbnailUrl);
     setEditCaptionsUrl(video.captionsUrl || "");
     setOpenMenuId(null);
+  }
+
+  /**
+   * Take a picture the creator chose for this video's cover.
+   *
+   * Everything a picker hands over is classified by READING it, not by trusting
+   * what the picker said about it: on Android a photo from the gallery or a chat
+   * app arrives with no MIME type at all, and the old `file.type.startsWith(
+   * "image/")` gate answered those — real pictures — with "Please choose an image
+   * file", which is the whole report this door was fixed from. The extension is
+   * the second signal, and on a phone it is the one that is usually right.
+   *
+   * Readability is probed BEFORE the cropper, because a cloud-backed photo cannot
+   * be opened as an image either: the creator learns it while the picker is still
+   * one tap away, in a sentence about a picture rather than about a video.
+   */
+  async function chooseCover(file: File) {
+    const kind = classifyFile(file);
+    if (kind !== "image") {
+      toast(
+        "error",
+        kind === "video"
+          ? "That is a video, not a picture. Choose a photo for the cover."
+          : `"${file.name}" is not a picture. Choose a JPG, PNG, WebP or HEIC photo.`
+      );
+      return;
+    }
+    try {
+      await assertFileReadable(file);
+    } catch {
+      toast("error", COVER_UNREADABLE);
+      return;
+    }
+    // Frame it as a 16:9 cover before it is uploaded.
+    setCoverCropFile(file);
   }
 
   /**
@@ -1943,27 +1991,53 @@ export default function CreatorDashboard() {
                         <Upload className="w-3.5 h-3.5" />
                       )}
                       {uploadingCover ? "Uploading…" : editCoverUrl ? "Replace cover" : "Add cover"}
+                      {/*
+                        A picture filter, because a gallery is where the photo is.
+
+                        `accept` used to be a hand-written JPEG/PNG/WebP list,
+                        which is an offer the phone's own file index has to keep:
+                        an iPhone photo is HEIC, and a HEIC file does not match
+                        `image/jpeg`, so the creator opened this picker and their
+                        cover photo was not in it. IMAGE_ACCEPT is `image/*` plus
+                        every extension the app accepts, kept beside the
+                        classifier so the picker and the code cannot disagree.
+                      */}
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp"
+                        accept={IMAGE_ACCEPT}
                         className="hidden"
                         disabled={uploadingCover}
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           // Reset so picking the same file again still fires.
                           e.target.value = "";
-                          if (!file) return;
-                          if (!file.type.startsWith("image/")) {
-                            toast("error", "Please choose an image file");
-                            return;
-                          }
-                          // Frame it as a 16:9 cover before it is uploaded.
-                          setCoverCropFile(file);
+                          if (file) void chooseCover(file);
+                        }}
+                      />
+                    </label>
+                    {/*
+                      The second door, untyped, exactly as the upload page has
+                      it: a type filter is applied by the phone's file index, and
+                      a photo a chat app saved or a card holds can be missing from
+                      the picker on the left. What the file IS gets decided by
+                      reading it, which is the only honest answer anyway.
+                    */}
+                    <label className="block text-xs text-white/45 underline underline-offset-2 cursor-pointer hover:text-white/75">
+                      Can&apos;t find the photo? Browse every folder and app
+                      <input
+                        type="file"
+                        accept={ANY_FILE_ACCEPT}
+                        className="hidden"
+                        disabled={uploadingCover}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = "";
+                          if (file) void chooseCover(file);
                         }}
                       />
                     </label>
                     <p className="text-xs text-white/40">
-                      JPEG, PNG or WebP, up to 10 MB — a big photo is shrunk to fit
+                      JPEG, PNG, WebP or HEIC, up to 10 MB — a big photo is shrunk to fit
                       automatically. This is the picture on the feed —
                       you can move and zoom it before it is saved.
                     </p>

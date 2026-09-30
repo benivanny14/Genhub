@@ -1,10 +1,17 @@
 // =============================================================================
-// GENHUB - How long is this file? (asked before it is uploaded, not after)
+// GENHUB - How long is this file? (read locally, never uploaded to find out)
 //
-// The rule is on the form and always has been: every scene must be at least
-// eight minutes, or it never goes live. Nothing checked it until Bunny had
-// finished encoding — the first moment the real length exists, and minutes
-// after the creator had already spent their data pushing 300 MB over a phone.
+// NOT A GATE. This module was written to enforce an eight-minute minimum before
+// an upload started; that rule is gone (a scene of any length uploads, and
+// nothing takes a published video down for being short — the recommendation
+// lives on the guidelines screen). What is left is a genuinely useful, tested
+// utility: the duration of a LOCAL file, read from its own metadata with no
+// upload, no request and no server round trip, with `null` meaning "this engine
+// cannot say" rather than "zero".
+//
+// The paragraph below is kept because it is the reason the probe is written the
+// careful way it is — it explains what a browser can and cannot measure, which
+// is not something a caller should have to rediscover.
 //
 // That was survivable while an unfinished video stayed unpublished: the
 // offending scene simply never appeared. Now that a post is published the

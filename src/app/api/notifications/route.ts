@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 
 export async function GET(request: NextRequest) {
   try {
@@ -45,7 +46,7 @@ export async function PATCH(request: NextRequest) {
     // Scoped by userId as well as by id: the id comes from the browser, and an
     // update that matched only on it would let any signed-in user mark somebody
     // else's notification read.
-    const body = await request.json().catch(() => null);
+    const body = await readJsonBody(request);
     const id = typeof body?.id === "string" && body.id ? body.id : null;
 
     await prisma.notification.updateMany({

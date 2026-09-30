@@ -58,6 +58,15 @@ describe("classifyAppUrlAnswer", () => {
     expect(verdict.detail).not.toContain("degraded");
   });
 
+  it("passes the minimal public payload an anonymous monitor receives", () => {
+    // /api/health answers `{ status }` alone to anyone anonymous. That is still
+    // this app answering on reachability, so it must not read as a foreign site.
+    expect(classifyAppUrlAnswer(200, { status: "ok" }, URL_).state).toBe("ok");
+    const verdict = classifyAppUrlAnswer(503, { status: "degraded" }, URL_);
+    expect(verdict.state).toBe("warn");
+    expect(verdict.detail).toContain("degraded");
+  });
+
   it("fails when the address answers with something that is not this app", () => {
     // The dangerous shape: a 200 from a different site means NEXT_PUBLIC_APP_URL
     // is pointing somewhere this deployment does not control.

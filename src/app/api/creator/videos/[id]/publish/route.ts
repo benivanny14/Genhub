@@ -26,6 +26,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { describeEncoding } from "@/lib/services/video-encoding.service";
 
 export async function POST(
@@ -37,7 +38,7 @@ export async function POST(
     // Next 15 hands route params over as a promise.
     const { id } = await params;
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     if (typeof body?.published !== "boolean") {
       return api.validation("published must be true or false");
     }

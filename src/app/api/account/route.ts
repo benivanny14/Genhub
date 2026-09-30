@@ -23,6 +23,7 @@ import bcrypt from "bcryptjs";
 import prisma from "@/lib/db";
 import { requireAuth, removeAuthCookie, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import { canEraseAccount, eraseAccount } from "@/lib/services/account-erasure.service";
 
@@ -44,7 +45,7 @@ export async function DELETE(request: NextRequest) {
       return api.rateLimited("Too many attempts — wait a minute and try again.");
     }
 
-    const body = (await request.json().catch(() => null)) as
+    const body = (await readJsonBody(request)) as
       | { password?: string; confirm?: string }
       | null;
 

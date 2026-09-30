@@ -7,6 +7,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { topUpWalletSchema } from "@/lib/validation";
 import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
 import { assertSupportedGateway } from "@/lib/payments/gateway";
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
     );
     if (!allowed) return api.rateLimited("Wait for the prompt before trying again");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = topUpWalletSchema.safeParse(body);
 
     if (!result.success) {
@@ -146,8 +147,14 @@ export async function POST(request: NextRequest) {
         where: { id: transaction.id },
         data: { status: "FAILED", metadata: { gatewayError: reason } },
       });
-      console.error("[HarakaPay TopUp Error]", reason, harakaError);
-      return api.error(`Payment failed — HarakaPay: ${reason}`, 502, "GATEWAY_ERROR");
+      // Detail to the log, a plain sentence to the user — see api.upstream.
+      return api.upstream(`top-up collect failed for transaction ${transaction.id}: ${reason}`, {
+        context: "Payments",
+        status: 502,
+        code: "GATEWAY_ERROR",
+        message:
+          "We could not start the top-up just now. Nothing has been charged — please try again.",
+      });
     }
   } catch (error) {
     if (error instanceof AuthError) {

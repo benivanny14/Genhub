@@ -151,6 +151,20 @@ describe("formatDuration", () => {
   it("should pad single digits", () => {
     expect(formatDuration(301)).toBe("5:01");
   });
+
+  it("should count past an hour the way a viewer counts it", () => {
+    // "75:30" is a number nobody uses; every player writes 1:15:30.
+    expect(formatDuration(3600)).toBe("1:00:00");
+    expect(formatDuration(4530)).toBe("1:15:30");
+    expect(formatDuration(3612)).toBe("1:00:12");
+  });
+
+  it("should never render a length it does not have", () => {
+    // duration is NaN until metadata arrives; a card that shows "NaN:NaN"
+    // looks broken rather than "still loading".
+    expect(formatDuration(Number.NaN)).toBe("0:00");
+    expect(formatDuration(-5)).toBe("0:00");
+  });
 });
 
 describe("isValidTZPhone", () => {

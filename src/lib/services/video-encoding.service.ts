@@ -31,7 +31,6 @@
 
 import prisma from "@/lib/db";
 import config from "@/lib/config";
-import { MIN_VIDEO_DURATION_SECONDS } from "@/lib/creator-guidelines";
 import {
   createVideoUpload,
   deleteBunnyVideo,
@@ -264,37 +263,6 @@ const MAX_STORED_BYTES = 2_147_483_647;
 function clampStoredBytes(bytes: number): number {
   if (!Number.isFinite(bytes) || bytes < 0) return 0;
   return Math.min(Math.round(bytes), MAX_STORED_BYTES);
-}
-
-/**
- * A video that finished at Bunny but is shorter than the 8-minute floor. It is
- * NOT published, and the creator is told why in the same breath — a silent
- * unpublished video is the worst outcome, because they cannot tell it apart
- * from a bug.
- */
-async function notifyTooShort(video: {
-  id: string;
-  creatorId: string;
-  title: string;
-  slug: string | null;
-}, seconds: number): Promise<void> {
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  await prisma.notification.create({
-    data: {
-      userId: video.creatorId,
-      // "Stays unpublished" was true when a post was only created once the
-      // encode finished. Now the post was live for the minutes it took to learn
-      // the length, so the creator is told what actually happened to it.
-      title: "Your video is too short to stay published",
-      message:
-        `“${video.title}” is about ${minutes} minute(s) long. Creator guidelines ` +
-        `require at least ${MIN_VIDEO_DURATION_SECONDS / 60} minutes, so it has ` +
-        `been taken down and cannot be watched. Upload a longer version to put it ` +
-        `back up.`,
-      type: "error",
-      link: "/creator",
-    },
-  });
 }
 
 async function notifyFailed(video: {
@@ -696,36 +664,19 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
     ? { ...result.snapshot, state: "failed", error: STRANDED_UPLOAD_MESSAGE, progress: 0 }
     : result.snapshot;
 
-  // The 8-minute floor, enforced where the real duration finally exists: Bunny
-  // only reports `lengthSeconds` once it has encoded the file, so this is the
-  // first moment the rule can be checked at all. A ready-but-too-short video is
-  // held back instead of published (and taken down if it is already up — see
-  // `shouldUnpublish` below).
-  const tooShort =
-    snapshot.state === "ready" &&
-    typeof result.lengthSeconds === "number" &&
-    result.lengthSeconds > 0 &&
-    result.lengthSeconds < MIN_VIDEO_DURATION_SECONDS;
-
-  // Publish when it becomes playable — and long enough.
-  const shouldPublish = snapshot.state === "ready" && !video.isPublished && !tooShort;
-
-  // ...and take down a video that turns out to break the length rule.
+  // There is no length rule in this lifecycle any more.
   //
-  // This is the ONE case where the lifecycle moves a video the other way, and
-  // it exists because publication is now instant: a post is live from the
-  // moment it is uploaded, so the old behaviour — never publish it at all —
-  // would leave a two-minute scene sitting in the public feed for the minutes
-  // Bunny needs to report its length. The length rule is a platform rule, not
-  // the creator's preference, so it is not the creator overruling themselves;
-  // their own unpublish is still never reversed by a poll.
+  // Every scene used to be held back (and taken down again if it was already
+  // live) until Bunny reported at least MIN_VIDEO_DURATION_SECONDS. That is a
+  // publishing decision about CONTENT, made by the platform, on a file the
+  // creator had already paid to upload — and it is not this service's business:
+  // its job is to move a video through encoding and publish it when it is
+  // playable. Eight minutes or more is still recommended on the guidelines
+  // screen (lib/creator-guidelines), which is where a recommendation belongs.
   //
-  // Once only, by construction: this keeps `encodingNotifiedAt`, which takes
-  // the video out of `pendingWhere()`, so the takedown and its notification
-  // happen together exactly once — and a creator who then publishes it by hand
-  // (the documented override) is not fought by the next sweep.
-  const shouldUnpublish = tooShort && video.isPublished;
-  const shouldNotify = snapshot.state === "ready" && !video.encodingNotifiedAt && !tooShort;
+  // Publish when it becomes playable.
+  const shouldPublish = snapshot.state === "ready" && !video.isPublished;
+  const shouldNotify = snapshot.state === "ready" && !video.encodingNotifiedAt;
 
   await prisma.video.update({
     where: { id: video.id },
@@ -746,15 +697,12 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
         : {}),
       ...(result.lengthSeconds ? { duration: result.lengthSeconds } : {}),
       ...(shouldPublish ? { isPublished: true } : {}),
-      ...(shouldUnpublish ? { isPublished: false } : {}),
-      ...((shouldNotify || tooShort) ? { encodingNotifiedAt: new Date() } : {}),
+      ...(shouldNotify ? { encodingNotifiedAt: new Date() } : {}),
     },
   });
 
   if (shouldNotify) {
     await notifyReady(video);
-  } else if (tooShort && !video.encodingNotifiedAt && result.lengthSeconds) {
-    await notifyTooShort(video, result.lengthSeconds);
   } else if (snapshot.state === "failed" && !video.encodingNotifiedAt) {
     // One notification for a failure too, so the creator is not left waiting.
     await prisma.video.update({

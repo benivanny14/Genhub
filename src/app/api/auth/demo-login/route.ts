@@ -14,6 +14,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { generateToken, setAuthCookie } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
@@ -40,7 +41,7 @@ export async function POST(request: NextRequest) {
     );
     if (!allowed) return api.rateLimited("Too many attempts — please wait a moment");
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const account = body?.account as keyof typeof ACCOUNTS;
     if (!account || !(account in ACCOUNTS)) {
       return api.validation("account must be 'creator' or 'viewer'");

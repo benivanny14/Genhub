@@ -12,6 +12,7 @@
 import { NextRequest } from "next/server";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import {
   approveBlueTick,
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("ADMIN");
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const requestId = body?.requestId?.toString();
     const action = body?.action?.toString();
     const reason = body?.reason?.toString().slice(0, 500);

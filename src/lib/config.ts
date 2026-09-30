@@ -14,6 +14,8 @@
 // deployment, and the customer's payment only lands because the client polls
 // /api/payments/status — which is a safety net, not the design.
 
+import publicConfig from "@/lib/public-config";
+
 export type AppUrlSource =
   | "NEXT_PUBLIC_APP_URL"
   | "VERCEL_PROJECT_PRODUCTION_URL"
@@ -77,7 +79,9 @@ const config = {
   appUrl: resolvedAppUrl.url,
   /** Where appUrl came from — surfaced by /api/health and the admin panel. */
   appUrlSource: resolvedAppUrl.source,
-  appName: process.env.NEXT_PUBLIC_APP_NAME || "Genhub",
+  // Name and compliance identity come from the client-safe module so a public
+  // page and the server can never disagree about them.
+  appName: publicConfig.appName,
   nodeEnv: process.env.NODE_ENV || "development",
 
   // Compliance identity. 28 C.F.R. 75.2 makes these values PUBLIC, and a DMCA
@@ -88,9 +92,9 @@ const config = {
   // kept publishing a different one. On /2257 itself a sentence contradicted
   // the constant three lines above it.
   compliance: {
-    legalName: process.env.NEXT_PUBLIC_COMPANY_LEGAL_NAME || "Genhub",
-    address: process.env.NEXT_PUBLIC_COMPANY_ADDRESS || "",
-    supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@genhub.co.tz",
+    legalName: publicConfig.compliance.legalName,
+    address: publicConfig.compliance.address,
+    supportEmail: publicConfig.compliance.supportEmail,
     // The public support line, and the reason it is here rather than typed into
     // the two pages that show it: the footer and /support published
     // "+255 700 000 000" — a reserved-looking number nobody owns — while the
@@ -98,7 +102,7 @@ const config = {
     // and a reviewer checking the platform's contact details finds a placeholder.
     // One value, one place, so the next change cannot reach one page and miss
     // the other.
-    phone: process.env.NEXT_PUBLIC_SUPPORT_PHONE || "0682642219",
+    phone: publicConfig.compliance.phone,
   },
 
   // Database

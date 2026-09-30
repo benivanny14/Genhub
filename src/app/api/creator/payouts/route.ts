@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { requestPayoutSchema } from "@/lib/validation";
 import { requestPayout } from "@/lib/services/payout.service";
 
@@ -15,7 +16,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("CREATOR");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = requestPayoutSchema.safeParse(body);
 
     if (!result.success) {

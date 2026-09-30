@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import { z } from "zod";
 import { intParam } from "@/lib/utils";
@@ -98,7 +99,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("ADMIN");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = reviewPayoutSchema.safeParse(body);
 
     if (!result.success) {

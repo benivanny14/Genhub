@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Play } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { cn, toTelHref } from "@/lib/utils";
-import config from "@/lib/config";
+import publicConfig from "@/lib/public-config";
 
 export default function Footer() {
   const { theme } = useTheme();
@@ -67,15 +67,15 @@ export default function Footer() {
             <ul className="space-y-2">
               <li><Link href="/support" className={cn("text-sm hover:text-brand-400 transition", isLight ? "text-gray-500" : "text-white/40")}>Help &amp; Support</Link></li>
               <li><Link href="/support" className={cn("text-sm hover:text-brand-400 transition", isLight ? "text-gray-500" : "text-white/40")}>Open a Ticket</Link></li>
-              <li><span className={cn("text-sm", isLight ? "text-gray-500" : "text-white/40")}>Email: {config.compliance.supportEmail}</span></li>
+              <li><span className={cn("text-sm", isLight ? "text-gray-500" : "text-white/40")}>Email: {publicConfig.compliance.supportEmail}</span></li>
               <li>
                 <span className={cn("text-sm", isLight ? "text-gray-500" : "text-white/40")}>
                   Phone:{" "}
                   <a
-                    href={toTelHref(config.compliance.phone)}
+                    href={toTelHref(publicConfig.compliance.phone)}
                     className="hover:text-brand-400 transition"
                   >
-                    {config.compliance.phone}
+                    {publicConfig.compliance.phone}
                   </a>
                 </span>
               </li>

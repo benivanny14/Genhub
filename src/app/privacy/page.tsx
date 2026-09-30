@@ -5,7 +5,7 @@ import { Lock, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useTheme } from "@/lib/ThemeProvider";
 import { cn } from "@/lib/utils";
-import config from "@/lib/config";
+import publicConfig from "@/lib/public-config";
 
 export default function PrivacyPage() {
   const { theme } = useTheme();
@@ -56,7 +56,7 @@ export default function PrivacyPage() {
           <section>
             <h2 className="text-lg font-display font-bold mb-3">5. Your Rights</h2>
             <p className={cn("text-sm leading-relaxed", isLight ? "text-gray-600" : "text-white/60")}>
-              You may request access to, correction of, or deletion of your personal data at any time. Contact {config.compliance.supportEmail} for data-related requests. Account deletion will remove all personal data within 30 days.
+              You may request access to, correction of, or deletion of your personal data at any time. Contact {publicConfig.compliance.supportEmail} for data-related requests. Account deletion will remove all personal data within 30 days.
             </p>
           </section>
 

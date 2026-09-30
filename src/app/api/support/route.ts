@@ -27,6 +27,7 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
@@ -57,7 +58,7 @@ export async function POST(request: NextRequest) {
       return api.rateLimited("You have sent several tickets already — we will reply to those.");
     }
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const parsed = supportSchema.safeParse(body);
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
 

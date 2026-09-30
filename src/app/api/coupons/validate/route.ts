@@ -12,6 +12,7 @@
 
 import { NextRequest } from "next/server";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { validateCouponSchema } from "@/lib/validation";
 import { applyCoupon } from "@/lib/coupons";
 import { getCurrentUser } from "@/lib/auth";
@@ -28,7 +29,7 @@ export async function POST(request: NextRequest) {
     );
     if (!allowed) return api.rateLimited("Too many attempts — please wait a moment");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = validateCouponSchema.safeParse(body);
     if (!result.success) {
       return api.validation(result.error.errors[0].message);

@@ -393,18 +393,33 @@ describe("GET /api/videos/[id]/stream - what it will fetch", () => {
 });
 
 describe("GET /api/videos/[id]/stream - when the CDN says no", () => {
-  it("names the variable at fault when Bunny refuses the signature", async () => {
+  it("keeps the diagnosis in the log and shows the viewer a plain sentence", async () => {
+    // The answer used to name the pull-zone secret, the CDN hostname and the
+    // upstream status to whoever requested the manifest — and the player renders
+    // this body on screen, so a viewer read it. The diagnosis still exists; it is
+    // in the server log, keyed by the reference the response carries.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     vi.stubGlobal("fetch", vi.fn(async () => new Response("Forbidden", { status: 403 })));
 
     const res = await GET(request(), params());
 
     expect(res.status).toBe(502);
     const body = await res.json();
-    expect(body.error).toMatch(/BUNNY_TOKEN_SECRET/);
-    // The reader has to be able to tell "wrong key" from "unreachable host",
-    // so the answer names the host it asked and the status it got back.
-    expect(body.error).toContain(CDN);
-    expect(body.error).toContain("403");
+
+    // What the viewer may see: a sentence and a reference.
+    expect(body.error).not.toMatch(/BUNNY_|b-cdn|403/);
+    expect(body.code).toBe("UPSTREAM_REFUSED");
+    expect(String(body.reference)).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
+
+    // What the operator gets: the variable, the host, the status, and the same
+    // reference — so a screenshot and a log line are one search apart.
+    const logText = logged.mock.calls.flat().join(" ");
+    expect(logText).toContain("BUNNY_TOKEN_SECRET");
+    expect(logText).toContain(CDN);
+    expect(logText).toContain("403");
+    expect(logText).toContain(String(body.reference));
+
+    logged.mockRestore();
   });
 
   it("reports a video with no rendition yet as 404, not as a broken site", async () => {
@@ -412,13 +427,20 @@ describe("GET /api/videos/[id]/stream - when the CDN says no", () => {
     expect((await GET(request(), params())).status).toBe(404);
   });
 
-  it("refuses with a named reason when nothing can be signed", async () => {
+  it("refuses when nothing can be signed, without listing the environment", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     bunnyConfig.tokenSecret = "";
 
     const res = await GET(request(), params());
+    const body = await res.json();
 
     expect(res.status).toBe(503);
-    expect((await res.json()).code).toBe("NOT_CONFIGURED");
+    expect(body.code).toBe("NOT_CONFIGURED");
+    // The missing variables are named in the log, not in the response.
+    expect(body.error).not.toContain("BUNNY_");
+    expect(logged.mock.calls.flat().join(" ")).toContain("BUNNY_CDN_HOSTNAME");
     expect(urls).toEqual([]);
+
+    logged.mockRestore();
   });
 });

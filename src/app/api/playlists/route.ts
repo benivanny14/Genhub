@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { listPlaylists } from "@/lib/services/playlist.service";
 
 export async function GET() {
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const name = typeof body?.name === "string" ? body.name.trim() : "";
 
     if (name.length < 2) return api.validation("A playlist name must be at least 2 characters");

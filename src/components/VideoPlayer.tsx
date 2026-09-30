@@ -16,6 +16,7 @@ import {
   Loader2,
   Check,
   AlertTriangle,
+  PictureInPicture2,
 } from "lucide-react";
 import { formatDuration } from "@/lib/utils";
 import {
@@ -23,6 +24,17 @@ import {
   qualityLabelFor,
   type QualityOption,
 } from "@/lib/quality";
+import {
+  PLAYBACK_RATES,
+  VOLUME_STORAGE_KEY,
+  bufferedEndAt,
+  clampVolume,
+  isTypingTarget,
+  parseStoredVolume,
+  playerShortcutFor,
+  progressPercent,
+  rateLabel,
+} from "@/lib/player";
 
 /**
  * The brand mark: the platform's name over the picture for a moment at the START
@@ -137,6 +149,24 @@ export default function VideoPlayer({
   const [selectedLevel, setSelectedLevel] = useState(-1); // -1 = Auto
   const [activeLevel, setActiveLevel] = useState(-1);
   const [showQuality, setShowQuality] = useState(false);
+
+  // Speed. Offered by every player a viewer has used and absent here until now;
+  // `1` is the scene as it was shot, and anything else is a choice about how to
+  // watch it. Applied to the element directly, so it survives an HLS level switch
+  // (which replaces the buffer the player is reading from, not the rate).
+  const [rate, setRate] = useState(1);
+
+  // How far the picture is loaded, in seconds, for the buffered half of the
+  // progress bar. 0 means nothing ahead of the playhead — see bufferedEndAt,
+  // which reads the loaded RANGE the playhead is inside rather than the furthest
+  // one, because after a seek those are different numbers.
+  const [bufferedEnd, setBufferedEnd] = useState(0);
+
+  // Picture-in-picture. Detected after mount and hidden when the browser has no
+  // such API, because a control that does nothing when tapped is worse than a
+  // control that is not offered.
+  const [pipSupported, setPipSupported] = useState(false);
+  const [inPip, setInPip] = useState(false);
 
   // ===========================================================================
   // Failure is a state, not a spinner
@@ -391,6 +421,61 @@ export default function VideoPlayer({
     return playing ? `Auto (${playing})` : "Auto";
   })();
 
+  // ===========================================================================
+  // Volume, remembered between scenes
+  // ===========================================================================
+  // The element starts at full volume on every mount, so a viewer who turned one
+  // scene down is shouted at by the next one — worst on a phone at night, which
+  // is where most of this is watched. Best effort by design: a browser that
+  // refuses storage (private mode) keeps the default rather than going silent.
+  const rememberVolume = useCallback((value: number) => {
+    try {
+      window.localStorage.setItem(VOLUME_STORAGE_KEY, String(clampVolume(value)));
+    } catch {
+      // Storage is a convenience here; playback must not depend on it.
+    }
+  }, []);
+
+  useEffect(() => {
+    let stored: number | null = null;
+    try {
+      stored = parseStoredVolume(window.localStorage.getItem(VOLUME_STORAGE_KEY));
+    } catch {
+      stored = null;
+    }
+    if (stored === null) return;
+    const video = videoRef.current;
+    setVolume(stored);
+    setIsMuted(stored === 0);
+    if (video) {
+      video.volume = stored;
+      video.muted = stored === 0;
+    }
+  }, []);
+
+  // ===========================================================================
+  // Picture-in-picture
+  // ===========================================================================
+  // The browser's own floating player, which is what a viewer uses to keep a
+  // scene running while they read anything else. Support is checked rather than
+  // assumed: iOS Safari exposes no such API on the element, and the button is
+  // simply not drawn there instead of being drawn dead.
+  useEffect(() => {
+    setPipSupported(
+      typeof document !== "undefined" && Boolean(document.pictureInPictureEnabled)
+    );
+    const video = videoRef.current;
+    if (!video) return;
+    const onEnter = () => setInPip(true);
+    const onLeave = () => setInPip(false);
+    video.addEventListener("enterpictureinpicture", onEnter);
+    video.addEventListener("leavepictureinpicture", onLeave);
+    return () => {
+      video.removeEventListener("enterpictureinpicture", onEnter);
+      video.removeEventListener("leavepictureinpicture", onLeave);
+    };
+  }, []);
+
   // =============================================================================
   // Watch Progress — feeds Continue Watching / resume
   // =============================================================================
@@ -508,8 +593,13 @@ export default function VideoPlayer({
   const toggleMute = () => {
     const video = videoRef.current;
     if (!video) return;
+    // Read from the ELEMENT rather than from `isMuted`: the keyboard shortcut and
+    // the button can be pressed in either order, and the element is the truth
+    // both of them act on. Persisting the unmuted level is what makes M one tap
+    // back to where the viewer was, rather than to full volume.
     video.muted = !video.muted;
-    setIsMuted(!isMuted);
+    setIsMuted(video.muted);
+    if (!video.muted) rememberVolume(video.volume);
   };
 
   // The browser's own fullscreen (Esc, the OS control) changes the state behind
@@ -545,10 +635,12 @@ export default function VideoPlayer({
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const video = videoRef.current;
     if (!video) return;
-    const vol = parseFloat(e.target.value);
+    const vol = clampVolume(parseFloat(e.target.value));
     video.volume = vol;
+    video.muted = vol === 0;
     setVolume(vol);
     setIsMuted(vol === 0);
+    rememberVolume(vol);
   };
 
   /**
@@ -583,6 +675,97 @@ export default function VideoPlayer({
     const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
     setHoverTime(ratio * duration);
   };
+
+  /** Re-read how far ahead the picture is loaded, for the buffered half of the bar. */
+  const refreshBuffered = useCallback(() => {
+    const video = videoRef.current;
+    setBufferedEnd(video ? bufferedEndAt(video.buffered, video.currentTime) : 0);
+  }, []);
+
+  /** Change the speed, and keep it while the level or the buffer changes under it. */
+  const chooseRate = (next: number) => {
+    const video = videoRef.current;
+    setRate(next);
+    if (video) video.playbackRate = next;
+  };
+
+  /** Move the volume by one step — the arrow keys, and nothing else. */
+  const nudgeVolume = (delta: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const next = clampVolume(video.volume + delta);
+    video.volume = next;
+    video.muted = next === 0;
+    setVolume(next);
+    setIsMuted(next === 0);
+    rememberVolume(next);
+  };
+
+  /** Float the picture, or put it back inline. */
+  const togglePip = async () => {
+    const video = videoRef.current;
+    if (!video) return;
+    try {
+      if (document.pictureInPictureElement) await document.exitPictureInPicture();
+      else await video.requestPictureInPicture();
+    } catch {
+      // A refused request (no user gesture, or a source the browser will not
+      // float) leaves the inline player exactly as it was.
+    }
+  };
+
+  // =============================================================================
+  // Keyboard
+  // =============================================================================
+  // The keys a desktop viewer's hands already know from every other site. The
+  // handler is registered without a dependency array ON PURPOSE: it is re-made
+  // on every render, so the closures it calls are the ones from the render on
+  // screen — a shortcut cannot nudge a volume or a duration from two states ago.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      // Typing wins: space in a comment has to type a space.
+      if (isTypingTarget(target)) return;
+      // A focused control already answers space and Enter itself, so taking those
+      // keys here too would fire the same thing twice and cancel it out.
+      const tag = (target?.tagName || "").toUpperCase();
+      if (tag === "BUTTON" || tag === "A") return;
+
+      const action = playerShortcutFor(event.key, event);
+      if (!action) return;
+      // Handled keys must not also scroll the page: a space bar that scrolls the
+      // film out of view is the classic broken player.
+      event.preventDefault();
+
+      switch (action) {
+        case "toggle-play":
+          togglePlay();
+          break;
+        case "seek-back":
+          skip(-SKIP_SECONDS);
+          break;
+        case "seek-forward":
+          skip(SKIP_SECONDS);
+          break;
+        case "volume-up":
+          nudgeVolume(0.1);
+          break;
+        case "volume-down":
+          nudgeVolume(-0.1);
+          break;
+        case "toggle-mute":
+          toggleMute();
+          break;
+        case "toggle-fullscreen":
+          void toggleFullscreen();
+          break;
+      }
+      showControlsTemporarily();
+    };
+
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
 
   // One size for every control, so a tap lands the same way on each: 36px on a
   // phone and 40px from `sm` up. The old `p-1.5` around a 20px icon made a ~32px
@@ -628,7 +811,16 @@ export default function VideoPlayer({
           const v = e.currentTarget;
           if (v.videoWidth > 0 && v.videoHeight > 0) setAspect(v.videoWidth / v.videoHeight);
         }}
-        onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+        onTimeUpdate={(e) => {
+          setCurrentTime(e.currentTarget.currentTime);
+          refreshBuffered();
+        }}
+        // `progress` fires when the buffer grows, `seeked` when the playhead lands
+        // in a different loaded range — the two moments the buffered bar changes
+        // without the time moving.
+        onProgress={refreshBuffered}
+        onSeeked={refreshBuffered}
+        onWaiting={refreshBuffered}
         onDurationChange={(e) => setDuration(e.currentTarget.duration)}
         onPlay={(e) => {
           setIsPlaying(true);
@@ -721,7 +913,14 @@ export default function VideoPlayer({
 
           Both stop above the control bar (`bottom-16`), and the bar is z-30
           against their z-20, so the bottom strip still belongs to the buttons
-          the viewer can see. The middle third is deliberately inert. */}
+          the viewer can see.
+
+          The middle third shows and hides the controls, which is what a middle
+          tap does everywhere a viewer has met a video player. It used to be
+          inert, and on a phone that left the bar stuck on screen — there is no
+          hover to bring it back once it has faded, so a tap has to be able to
+          ask for it. (A tap on the sides still means ±10s; two meanings for one
+          tap is how a player feels broken.) */}
       {isPlaying && !fatalError && (
         <>
           <button
@@ -735,6 +934,14 @@ export default function VideoPlayer({
             aria-label={`Skip forward ${SKIP_SECONDS} seconds`}
             onClick={() => skip(SKIP_SECONDS)}
             className="absolute bottom-16 right-0 top-0 z-20 w-1/3 touch-manipulation sm:w-1/4"
+          />
+          <button
+            type="button"
+            aria-label={showControls ? "Hide controls" : "Show controls"}
+            onClick={() =>
+              showControls ? setShowControls(false) : showControlsTemporarily()
+            }
+            className="absolute bottom-16 left-1/3 right-1/3 top-0 z-20 touch-manipulation sm:left-1/4 sm:right-1/4"
           />
         </>
       )}
@@ -796,6 +1003,33 @@ export default function VideoPlayer({
                 {formatDuration(Math.floor(hoverTime))}
               </div>
             )}
+            {/* The bar is drawn in three parts, and the visible one is the middle:
+
+                  * buffered — how much of the scene is already in this browser,
+                    which is the only thing that tells a viewer on a slow
+                    connection whether waiting will help. It is the loaded range
+                    the playhead is INSIDE (see bufferedEndAt): after a seek
+                    there is a hole in the middle of `buffered`, and reading the
+                    furthest range would paint the bar as fully loaded — a lie
+                    that is worse than an empty bar;
+                  * played — how much has been watched;
+                  * the thumb, which is the part that is dragged.
+
+                The range input keeps the height, the hit area and the keyboard
+                behaviour a range input has, with its own track transparent so
+                the two fills underneath are what is seen. Drawing them in the
+                input itself is not possible: a progress fill is not a thing the
+                native track can render. */}
+            <div className="pointer-events-none relative h-1.5 sm:h-1 overflow-hidden rounded-full bg-white/15">
+              <div
+                className="absolute inset-y-0 left-0 bg-white/30"
+                style={{ width: `${progressPercent(bufferedEnd, duration)}%` }}
+              />
+              <div
+                className="absolute inset-y-0 left-0 bg-brand-500"
+                style={{ width: `${progressPercent(currentTime, duration)}%` }}
+              />
+            </div>
             <input
               type="range"
               min={0}
@@ -805,7 +1039,8 @@ export default function VideoPlayer({
               onMouseUp={() => setHoverTime(null)}
               onTouchEnd={() => setHoverTime(null)}
               aria-label="Seek"
-              className="w-full h-1.5 sm:h-1 bg-white/20 rounded-full appearance-none cursor-pointer touch-manipulation
+              aria-valuetext={`${formatDuration(Math.floor(currentTime))} of ${formatDuration(Math.floor(duration))}`}
+              className="absolute inset-0 h-full w-full appearance-none bg-transparent cursor-pointer touch-manipulation
                 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 sm:[&::-webkit-slider-thumb]:w-3 sm:[&::-webkit-slider-thumb]:h-3
                 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-brand-500
                 [&::-webkit-slider-thumb]:hover:scale-125 [&::-webkit-slider-thumb]:transition-transform"
@@ -882,47 +1117,91 @@ export default function VideoPlayer({
               </button>
             )}
 
-            {/* Quality selector — only when the stream offers more than one level */}
-            {levels.length > 1 && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowQuality((v) => !v)}
-                  aria-label="Quality"
-                  title="Quality"
-                  className={ctrlBtn}
-                >
-                  <Settings className="w-5 h-5" />
-                  {/* The label is the first thing to go on a narrow screen: the
-                      gear still opens the menu, and the menu names the level. */}
-                  <span className="text-[10px] text-white/70 font-medium hidden lg:inline">
-                    {activeLabel}
-                  </span>
-                </button>
+            {/* Playback settings — speed always, quality when the stream offers
+                more than one rendition.
 
-                {showQuality && (
-                  <div className="absolute bottom-12 right-0 bg-black/95 backdrop-blur border border-white/10 rounded-xl py-1 min-w-[140px] z-20 shadow-xl">
-                    <button
-                      onClick={() => chooseQuality(-1)}
-                      className="w-full flex items-center justify-between gap-3 px-3 py-2 text-xs hover:bg-white/10 transition"
-                    >
-                      <span>Auto</span>
-                      {selectedLevel === -1 && <Check className="w-3.5 h-3.5 text-brand-400" />}
-                    </button>
-                    {levels.map((level) => (
+                This button used to exist only when there WAS a choice of quality,
+                because a menu with one item is not a menu. Speed is what makes it
+                worth opening on its own: it is per-viewer, per-moment, and every
+                other player offers it. */}
+            <div className="relative">
+              <button
+                onClick={() => setShowQuality((v) => !v)}
+                aria-label="Playback settings"
+                aria-expanded={showQuality}
+                title="Speed and quality"
+                className={ctrlBtn}
+              >
+                <Settings className="w-5 h-5" />
+                {/* The label is the first thing to go on a narrow screen: the
+                    gear still opens the menu, and the menu names the level. */}
+                <span className="text-[10px] text-white/70 font-medium hidden lg:inline">
+                  {rate === 1 ? activeLabel : rateLabel(rate)}
+                </span>
+              </button>
+
+              {showQuality && (
+                <div className="absolute bottom-12 right-0 z-20 min-w-[196px] rounded-xl border border-white/10 bg-black/95 py-2 shadow-xl backdrop-blur">
+                  <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                    Speed
+                  </p>
+                  <div className="flex flex-wrap gap-1 px-3 pb-1">
+                    {PLAYBACK_RATES.map((option) => (
                       <button
-                        key={level.index}
-                        onClick={() => chooseQuality(level.index)}
-                        className="w-full flex items-center justify-between gap-3 px-3 py-2 text-xs hover:bg-white/10 transition"
+                        key={option}
+                        onClick={() => chooseRate(option)}
+                        aria-pressed={rate === option}
+                        className={`rounded-full px-2 py-1 text-[11px] transition ${
+                          rate === option
+                            ? "bg-brand-500 font-semibold text-white"
+                            : "bg-white/10 text-white/80 hover:bg-white/20"
+                        }`}
                       >
-                        <span>{level.label}</span>
-                        {selectedLevel === level.index && (
-                          <Check className="w-3.5 h-3.5 text-brand-400" />
-                        )}
+                        {rateLabel(option)}
                       </button>
                     ))}
                   </div>
-                )}
-              </div>
+
+                  {levels.length > 1 && (
+                    <div className="mt-1 border-t border-white/10 pt-1">
+                      <p className="px-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-white/40">
+                        Quality
+                      </p>
+                      <button
+                        onClick={() => chooseQuality(-1)}
+                        className="w-full flex items-center justify-between gap-3 px-3 py-2 text-xs hover:bg-white/10 transition"
+                      >
+                        <span>Auto</span>
+                        {selectedLevel === -1 && <Check className="w-3.5 h-3.5 text-brand-400" />}
+                      </button>
+                      {levels.map((level) => (
+                        <button
+                          key={level.index}
+                          onClick={() => chooseQuality(level.index)}
+                          className="w-full flex items-center justify-between gap-3 px-3 py-2 text-xs hover:bg-white/10 transition"
+                        >
+                          <span>{level.label}</span>
+                          {selectedLevel === level.index && (
+                            <Check className="w-3.5 h-3.5 text-brand-400" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Picture-in-picture — drawn only where the browser can do it. */}
+            {pipSupported && (
+              <button
+                onClick={() => void togglePip()}
+                aria-label={inPip ? "Exit picture-in-picture" : "Picture-in-picture"}
+                title={inPip ? "Exit picture-in-picture" : "Picture-in-picture"}
+                className={ctrlBtn}
+              >
+                <PictureInPicture2 className="w-5 h-5" />
+              </button>
             )}
 
             <button

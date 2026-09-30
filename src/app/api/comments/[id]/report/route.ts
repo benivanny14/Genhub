@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 
@@ -30,7 +31,7 @@ export async function POST(
     );
     if (!allowed) return api.rateLimited("Too many reports — please wait a moment");
 
-    const body = await request.json().catch(() => ({}));
+    const body = await readJsonBody(request, {});
     const reason = ["DMCA", "INAPPROPRIATE", "SPAM"].includes(body?.reason)
       ? body.reason
       : "SPAM";

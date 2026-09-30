@@ -16,6 +16,7 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import { sendPasswordResetLink } from "@/lib/services/password-reset.service";
@@ -29,7 +30,7 @@ export async function POST(request: NextRequest) {
     const { allowed } = await checkRateLimit(`forgot:${ip}`, 5, 60_000);
     if (!allowed) return api.rateLimited("Too many attempts. Please wait a minute.");
 
-    const { email } = await request.json().catch(() => ({}));
+    const { email } = (await readJsonBody(request, {})) as { email?: unknown };
 
     if (typeof email !== "string" || !EMAIL.test(email.trim())) {
       return api.validation("Enter the email address on your account");

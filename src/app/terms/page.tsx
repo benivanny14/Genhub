@@ -5,7 +5,7 @@ import { Shield, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useTheme } from "@/lib/ThemeProvider";
 import { cn } from "@/lib/utils";
-import config from "@/lib/config";
+import publicConfig from "@/lib/public-config";
 
 export default function TermsPage() {
   const { theme } = useTheme();
@@ -68,7 +68,7 @@ export default function TermsPage() {
           </section>
 
           <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/40")}>
-            Last updated: September 2026. For questions, contact {config.compliance.supportEmail}
+            Last updated: September 2026. For questions, contact {publicConfig.compliance.supportEmail}
           </p>
         </div>
       </main>

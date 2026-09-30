@@ -117,10 +117,19 @@ export function formatRelativeTime(date: Date): string {
   return date.toLocaleDateString("en-US");
 }
 
-// Format duration in seconds to mm:ss
+// Format duration in seconds: mm:ss, or h:mm:ss once it passes an hour.
+//
+// A feature-length scene used to read "75:30", which is not a number anybody
+// counts in — every other player writes "1:15:30", and this is the same figure on
+// the card, in the player's clock and in the trailer's ribbon. A length that
+// cannot be divided (a video whose metadata has not arrived) reads "0:00" rather
+// than "NaN:NaN".
 export function formatDuration(seconds: number): string {
-  const min = Math.floor(seconds / 60);
-  const sec = seconds % 60;
+  const total = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const hours = Math.floor(total / 3600);
+  const min = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (hours > 0) return `${hours}:${min.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
   return `${min}:${sec.toString().padStart(2, "0")}`;
 }
 

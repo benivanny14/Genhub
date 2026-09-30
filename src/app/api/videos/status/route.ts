@@ -27,6 +27,7 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { videoStatus } from "@/lib/video-status";
 
 /**
@@ -43,7 +44,7 @@ const MAX_ID_LENGTH = 64;
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json().catch(() => null);
+    const body = await readJsonBody(request);
     const raw = (body as { ids?: unknown } | null)?.ids;
 
     if (!Array.isArray(raw)) {

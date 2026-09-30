@@ -10,6 +10,7 @@ import { requireAuth, AuthError } from "@/lib/auth";
 import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
 import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 import { MAX_PAID_MESSAGE, MIN_PAID_MESSAGE } from "@/lib/pay-message";
@@ -59,7 +60,7 @@ export async function POST(request: NextRequest) {
     );
     if (!allowed) return api.rateLimited("Too many messages — please wait a moment");
 
-    const body = await request.json();
+    const body = await readJsonBody(request);
     const result = sendMessageSchema.safeParse(body);
     if (!result.success) return api.validation(result.error.errors[0].message);
 

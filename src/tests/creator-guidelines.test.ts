@@ -37,7 +37,7 @@ describe("creator guidelines", () => {
     }
   });
 
-  it("requires the creator's face, the 8-minute floor, a clean set and proper light", () => {
+  it("asks the creator for a visible face, a clean set and proper light", () => {
     const ids = CREATOR_GUIDELINES.map((rule) => rule.id);
     expect(ids).toContain("face");
     expect(ids).toContain("duration");
@@ -47,12 +47,25 @@ describe("creator guidelines", () => {
 
   it("marks the rules that carry a consequence as severe", () => {
     const severe = CREATOR_GUIDELINES.filter((rule) => rule.severe).map((rule) => rule.id);
-    // A video that hides the creator's face, runs short, or is visibly dirty is
-    // refused — and the creator is told that before uploading it.
-    expect(severe).toEqual(expect.arrayContaining(["face", "duration", "clean-set"]));
+    // A video that hides the creator's face or is visibly dirty is refused — and
+    // the creator is told that before uploading it.
+    expect(severe).toEqual(expect.arrayContaining(["face", "clean-set"]));
   });
 
-  it("spells out the numbers a creator is held to, from the constants the server enforces", () => {
+  it("keeps the length a recommendation rather than a refusal", () => {
+    // The length rule used to be enforced on the upload page AND in the encoding
+    // lifecycle, so a shorter scene was refused before it was sent and taken down
+    // after it was published. Both gates are gone; what must remain is the ADVICE,
+    // or creators lose the one place that explains what performs here.
+    const duration = CREATOR_GUIDELINES.find((rule) => rule.id === "duration");
+
+    expect(duration?.severe).toBeFalsy();
+    expect(duration?.en).toMatch(/recommended/i);
+    expect(duration?.en).toMatch(/allowed/i);
+    expect(duration?.sw).toMatch(/inashauriwa/i);
+  });
+
+  it("spells out the numbers a creator is held to, from the shared constants", () => {
     const duration = CREATOR_GUIDELINES.find((rule) => rule.id === "duration");
     const withdrawal = CREATOR_GUIDELINES.find((rule) => rule.id === "withdrawal");
 

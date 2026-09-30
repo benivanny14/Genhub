@@ -18,6 +18,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 
 export async function GET() {
   try {
@@ -39,7 +40,7 @@ export async function GET() {
 export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireAuth();
-    const body = await request.json();
+    const body = await readJsonBody(request);
 
     if (typeof body?.messagesEnabled !== "boolean") {
       return api.validation("messagesEnabled must be true or false");
