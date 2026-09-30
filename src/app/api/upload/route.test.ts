@@ -171,6 +171,54 @@ describe("images still behave", () => {
 
     expect(res.status).toBe(422);
   });
+
+  it("accepts a picture the browser did not type", async () => {
+    // The client already accepts these: lib/media's classifyFile reads the
+    // extension when the MIME says nothing, so a gallery photo reported as ""
+    // passes the picker's own gate and is handed to this route. The route used
+    // to answer 422 "Only JPEG, PNG, WebP, HEIC or HEIF images, or a .vtt
+    // captions file, are allowed" — the creator's own picture, refused by its
+    // own backend, after the picker had said it was fine. Measured, not
+    // theorised: this is the cover-photo report, reproduced end to end.
+    for (const type of ["", "application/octet-stream"]) {
+      fetchMock.mockClear();
+      const res = await POST(upload(new File(["x"], "cover.jpg", { type })));
+
+      expect(res.status).toBe(200);
+      expect(storedKey()).toMatch(/^public\/images\/\d{4}-\d{2}\/[0-9a-f]+\.jpg$/);
+    }
+  });
+
+  it("accepts a HEIC photo the browser did not type, at its own extension", async () => {
+    // An iPhone photo arriving from a photo library with no MIME type is a real
+    // HEIC, and the filename is the only declaration left. It must land as
+    // .heic (which canOptimizeImage then refuses to send to next/image) and it
+    // must not be mistaken for a HEIF wearing a JPEG name — that check is about
+    // the BYTES, and stays where it is.
+    const res = await POST(upload(new File(["x"], "IMG_0042.HEIC", { type: "" })));
+
+    expect(res.status).toBe(200);
+    expect(storedKey()).toMatch(/\.heic$/);
+  });
+
+  it("still refuses a HEIF container dressed as a JPEG, typed or not", async () => {
+    // The security property that must NOT move with the extension fallback.
+    const heif = new Uint8Array(16);
+    heif[4] = 0x66;
+    heif[5] = 0x74;
+    heif[6] = 0x79;
+    heif[7] = 0x70;
+    "avif".split("").forEach((c, i) => (heif[8 + i] = c.charCodeAt(0)));
+
+    for (const type of ["image/jpeg", ""]) {
+      const res = await POST(upload(new File([heif], "holiday.jpg", { type })));
+      const body = await res.json();
+
+      expect(res.status).toBe(422);
+      expect(body.error).toMatch(/could not be read/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+  });
 });
 
 describe("rate limit message", () => {

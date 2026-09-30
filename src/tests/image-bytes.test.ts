@@ -79,7 +79,22 @@ describe("the upload route", () => {
   });
 
   it("still accepts an honest HEIC or HEIF photo", () => {
-    expect(upload).toContain('file.type === "image/heic"');
-    expect(upload).toContain('file.type === "image/heif"');
+    // "Honest" is what the declaration says, and the declaration can now be the
+    // extension as well as the MIME type: a photo library hands a .HEIC over
+    // with no type at all, and reading the name there is what stops the route
+    // refusing a real iPhone photo. What did NOT move is the check below it —
+    // `isHeifContainer` reads the BYTES, so a HEIF wearing a .jpg is refused
+    // whichever way it declared itself.
+    expect(upload).toContain('ext === ".heic"');
+    expect(upload).toContain('ext === ".heif"');
+  });
+
+  it("refuses a HEIF name too, not only a mislabelled type", () => {
+    // The disguise this file exists to stop is a HEIF anyway; the MIME type was
+    // simply the easiest way to write it. The byte check must therefore run for
+    // a file that said nothing at all as well — which is the case that was
+    // unreachable while an untyped picture was rejected before it got there.
+    expect(upload).toContain("if (!declaredHeif && isHeifContainer(buffer))");
+    expect(upload).toMatch(/SAID_NOTHING\.test/);
   });
 });

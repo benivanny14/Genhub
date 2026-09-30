@@ -46,6 +46,43 @@ const REENCODABLE = new Set([
   "image/heif",
 ]);
 
+/** Picture formats whose filename still means something when the type is empty. */
+const IMAGE_TYPE_BY_EXTENSION: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  heic: "image/heic",
+  heif: "image/heif",
+};
+
+/**
+ * The picture type this file should be treated as, or "" if it is not one.
+ *
+ * `file.type.startsWith("image/")` alone was wrong in the same direction as the
+ * upload route's own check: a photo from an Android gallery, or one a chat app
+ * saved, can arrive with no type at all, and the answer to "is this a picture"
+ * came back no — so it skipped this file entirely and was sent to the server at
+ * full size. On a deployment whose function body is capped at 4.5 MB that photo
+ * never arrives, and the creator is told the upload failed on a file the picker
+ * had already accepted.
+ *
+ * The extension is the second signal, and it is the same one lib/media's
+ * `classifyFile` reads, so the picker, this step and the server cannot disagree
+ * about one file. Note what it is and is not: the value returned here is used to
+ * DECIDE and to re-encode, and everything this function hands back has been
+ * decoded and re-encoded by the canvas, which is a far better statement about
+ * the bytes than any name is. A file that cannot be decoded is returned
+ * untouched, below.
+ */
+function imageTypeOf(file: File): string {
+  const mime = (file.type || "").trim().toLowerCase();
+  if (mime.startsWith("image/")) return mime;
+  if (mime && mime !== "application/octet-stream") return "";
+  const ext = /\.([A-Za-z0-9]{1,8})$/.exec((file.name || "").trim())?.[1].toLowerCase() ?? "";
+  return IMAGE_TYPE_BY_EXTENSION[ext] ?? "";
+}
+
 /** Decode the file into an <img>, or null when the browser cannot read it. */
 function loadImage(file: File): Promise<HTMLImageElement | null> {
   return new Promise((resolve) => {
@@ -112,9 +149,10 @@ export async function downscaleImage(
 
   // Browser-only: an SSR pass or a unit test has no canvas.
   if (typeof document === "undefined" || typeof Image === "undefined") return file;
-  if (!file.type.startsWith("image/")) return file;
+  const type = imageTypeOf(file);
+  if (!type) return file;
   // An animated GIF or a vector is not a photo; re-encoding one destroys it.
-  if (!REENCODABLE.has(file.type)) return file;
+  if (!REENCODABLE.has(type)) return file;
 
   const img = await loadImage(file);
   if (!img || !img.naturalWidth || !img.naturalHeight) return file;
@@ -129,7 +167,7 @@ export async function downscaleImage(
 
   // PNG keeps PNG so transparency survives, falling back to JPEG only when the
   // re-encode still will not fit.
-  const types = file.type === "image/png" ? ["image/png", "image/jpeg"] : ["image/jpeg"];
+  const types = type === "image/png" ? ["image/png", "image/jpeg"] : ["image/jpeg"];
 
   let scale = Math.min(1, maxDimension / Math.max(w0, h0));
   let smallest: { blob: Blob; type: string } | null = null;

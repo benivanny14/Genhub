@@ -901,18 +901,37 @@ export default function UploadPage() {
               />
               <div className="p-5 space-y-5">
                 <div className="space-y-3">
+                  {/* The same three doors the video has, in the same order, for
+                      the same reason: this is where a creator's cover photo
+                      actually lives, and until now the cover had no door that
+                      named internal storage and none that opened the camera at
+                      all — so a cover could not be taken on the spot, and the
+                      folder the file was sitting in was not offered by name.
+
+                      The first door is deliberately untyped and carries the
+                      retry ref: a type filter is applied by the phone's own file
+                      index, so the picker that shows Photos can hide a picture
+                      sitting in Downloads, and a creator has no way to tell that
+                      from the picture not being there. */}
                   <div className="flex flex-wrap items-center gap-2">
                     <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
-                      <ImageIcon className="w-4 h-4" /> Choose cover image(s)
+                      <FolderOpen className="w-4 h-4" /> From Internal storage / Downloads
                       <input ref={coverFilesRef} type="file" accept={ANY_FILE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
                     </label>
                     <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
                       <Images className="w-4 h-4" /> From Gallery / Photos
                       <input type="file" accept={IMAGE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
                     </label>
+                    <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
+                      <Camera className="w-4 h-4" /> Take a photo
+                      {/* `capture` hands the camera straight over, and a photo
+                          taken here is local by construction — the one kind of
+                          file a phone can always read back. */}
+                      <input type="file" accept="image/*" capture="environment" className="hidden" disabled={thumbnailUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleCoverFiles([file]); e.currentTarget.value = ""; }} />
+                    </label>
                   </div>
                   <p className="text-xs text-amber-200/70 inline-flex items-center gap-1.5">
-                    <Info className="w-3.5 h-3.5" /> Choose from Downloads or internal storage — not Google Photos or Drive.
+                    <Info className="w-3.5 h-3.5" /> Chagua kutoka Internal storage au Downloads — usichague Google Photos au Drive.
                   </p>
 
                   {/* What was chosen, before one of them is used. Tap a picture to crop

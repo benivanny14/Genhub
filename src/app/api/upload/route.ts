@@ -39,6 +39,7 @@ const ALLOWED_TYPES: Record<string, string> = {
   "image/jpeg": ".jpg",
   "image/png": ".png",
   "image/webp": ".webp",
+  "image/gif": ".gif",
   "image/heic": ".heic",
   "image/heif": ".heif",
   // WebVTT captions. Same route, same key shape, different bucket folder — a
@@ -47,21 +48,71 @@ const ALLOWED_TYPES: Record<string, string> = {
 };
 
 /**
+ * A browser that has no opinion. These are the values a picker leaves behind
+ * when it hands over a file it could not classify — which on Android is the
+ * common case, not the edge one.
+ */
+const SAID_NOTHING = /^(|application\/octet-stream|binary\/octet-stream)$/;
+
+/**
+ * What a picture extension means, for a file the browser did not type.
+ *
+ * Deliberately the formats the pickers already OFFER (lib/media's
+ * IMAGE_EXTENSIONS) and nothing more: an extension is a weaker signal than a
+ * MIME type, so reading it buys back the files whose picker already promised
+ * them, rather than widening what this route accepts.
+ */
+const UNTYPED_IMAGE_EXTENSIONS: Record<string, string> = {
+  jpg: ".jpg",
+  jpeg: ".jpg",
+  png: ".png",
+  webp: ".webp",
+  gif: ".gif",
+  heic: ".heic",
+  heif: ".heif",
+};
+
+/**
  * The extension to store a file under, or null if it is not something we accept.
  *
- * `.vtt` is also accepted from the FILENAME when the browser sends no type. Some
- * browsers (and every drag-and-drop from a file manager) hand over an empty or
- * `application/octet-stream` type for a caption file, and refusing those would
- * make the feature work on one machine and not the next. Nothing else about the
- * rule moves: the stored extension is still the app's own, and the file still
- * has to be named .vtt.
+ * Two of these formats are reached by FILENAME when the browser sends no usable
+ * type, and both for the same reason: `file.type` is a claim the picker makes,
+ * and on a phone the picker often makes no claim at all. A gallery photo, a
+ * picture a chat app saved, anything the document provider has not indexed,
+ * arrives as `""` or `application/octet-stream`.
+ *
+ * For captions that was always handled. For pictures it was not, and the result
+ * was a creator's own cover refused by its own backend: lib/media's
+ * `classifyFile` reads the extension in exactly this case, so the picker
+ * accepted the photo, and this route answered "Only JPEG, PNG, WebP, HEIC or
+ * HEIF images ... are allowed" about the same file. The two halves disagreed
+ * about one picture, and the creator was told to choose an image while looking
+ * at the image they had chosen.
+ *
+ * Nothing else about the rule moves: the stored extension is still this app's
+ * own and never anything taken from the name, and what the BYTES are is checked
+ * separately below — a HEIF container is refused under any name, and now under a
+ * nameless type too.
  */
 function extensionFor(file: File): string | null {
   const byType = ALLOWED_TYPES[file.type];
   if (byType) return byType;
-  if (/\.vtt$/i.test(file.name) && /^(|application\/octet-stream|application\/x-subrip|text\/plain)$/.test(file.type)) {
+
+  // Captions, unchanged: some browsers and every drag-and-drop from a file
+  // manager hand a .vtt over with no type, or as plain text.
+  if (
+    /\.vtt$/i.test(file.name) &&
+    /^(|application\/octet-stream|application\/x-subrip|text\/plain)$/.test(file.type)
+  ) {
     return ".vtt";
   }
+
+  if (SAID_NOTHING.test(file.type || "")) {
+    const ext = /\.([A-Za-z0-9]{1,8})$/.exec(file.name.trim())?.[1].toLowerCase() ?? "";
+    const stored = UNTYPED_IMAGE_EXTENSIONS[ext];
+    if (stored) return stored;
+  }
+
   return null;
 }
 
@@ -105,7 +156,7 @@ export async function POST(request: NextRequest) {
     const ext = extensionFor(file);
     if (!ext) {
       return api.validation(
-        "Only JPEG, PNG, WebP, HEIC or HEIF images, or a .vtt captions file, are allowed"
+        "Only JPEG, PNG, WebP, GIF, HEIC or HEIF images, or a .vtt captions file, are allowed"
       );
     }
     const maxBytes = ext === ".vtt" ? MAX_CAPTION_BYTES : MAX_IMAGE_BYTES;
@@ -142,7 +193,11 @@ export async function POST(request: NextRequest) {
     //
     // An honest HEIC/HEIF photo is still accepted (phones produce them); it is
     // simply never optimised — see canOptimizeImage.
-    const declaredHeif = file.type === "image/heic" || file.type === "image/heif";
+    // Declared by the type OR by the extension the route just resolved, because
+    // those are now equally valid declarations — and a .HEIC from a photo
+    // library with no MIME type is an honest HEIC, not a disguise. The check
+    // below is about the BYTES either way.
+    const declaredHeif = ext === ".heic" || ext === ".heif";
     if (!declaredHeif && isHeifContainer(buffer)) {
       return api.validation(
         "That image could not be read — please upload a JPEG, PNG or WebP"

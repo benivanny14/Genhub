@@ -2023,10 +2023,29 @@ export default function CreatorDashboard() {
                       reading it, which is the only honest answer anyway.
                     */}
                     <label className="block text-xs text-white/45 underline underline-offset-2 cursor-pointer hover:text-white/75">
-                      Can&apos;t find the photo? Browse every folder and app
+                      Or take it from Internal storage — every folder and app
                       <input
                         type="file"
                         accept={ANY_FILE_ACCEPT}
+                        className="hidden"
+                        disabled={uploadingCover}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          e.target.value = "";
+                          if (file) void chooseCover(file);
+                        }}
+                      />
+                    </label>
+                    {/* The third door, and the same one the video has: a cover a
+                        creator photographs on the spot is local by
+                        construction, so it is the one picture no phone can fail
+                        to hand back. */}
+                    <label className="block text-xs text-white/45 underline underline-offset-2 cursor-pointer hover:text-white/75">
+                      Or use the camera
+                      <input
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
                         className="hidden"
                         disabled={uploadingCover}
                         onChange={(e) => {
