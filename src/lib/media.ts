@@ -117,8 +117,8 @@ const extensionsOf = (list: readonly string[]) => list.map((ext) => `.${ext}`).j
 export const VIDEO_ACCEPT = `video/*,${extensionsOf(VIDEO_EXTENSIONS)}`;
 
 /**
- * The same, for a picture. Used by the "choose from Gallery" door, where the
- * gallery is the right place to look and a filter helps rather than hides.
+ * The same, for a picture. For the rare caller that can afford a filter —
+ * every picker a creator meets in the studio is untyped instead.
  */
 export const IMAGE_ACCEPT = `image/*,${extensionsOf(IMAGE_EXTENSIONS)}`;
 

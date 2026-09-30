@@ -155,3 +155,29 @@ describe("a failure message says what to do, not how it works", () => {
     expect(mayNotWork).toMatch(/chagua faili lingine/i);
   });
 });
+
+describe("the main video has no gallery door", () => {
+  it("keeps the untyped Choose your video drop-zone", () => {
+    const main = between(UPLOAD, 'title="Main video"', "{/* ---- Step 2: the details ---- */}");
+    expect(main).toContain("Choose your video");
+    expect(main).toContain("ANY_FILE_ACCEPT");
+  });
+
+  it("no longer offers a Gallery / Photos button for the video", () => {
+    // The button was a typed door next to the untyped one, and its only job was
+    // to work around a filter the phone applies. It is gone for good: bringing
+    // it back means bringing back the second picker.
+    expect(UPLOAD).not.toContain("Choose from Gallery / Photos");
+    expect(UPLOAD).not.toContain("Gallery / Photos");
+    const main = between(UPLOAD, 'title="Main video"', "{/* ---- Step 2: the details ---- */}");
+    expect(main).not.toContain("VIDEO_ACCEPT");
+  });
+
+  it("keeps the Record now door and nothing else beside it", () => {
+    const main = between(UPLOAD, 'title="Main video"', "{/* ---- Step 2: the details ---- */}");
+    expect(main).toContain("Record now");
+    // One untyped picker and one camera. A third input is a third door.
+    const inputs = main.match(/type="file"/g) ?? [];
+    expect(inputs.length).toBe(2);
+  });
+});

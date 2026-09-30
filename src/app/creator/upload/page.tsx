@@ -15,7 +15,6 @@ import {
   Film,
   FolderOpen,
   Image as ImageIcon,
-  Images,
   Info,
   ListChecks,
   Loader2,
@@ -31,7 +30,7 @@ import ImageCropper from "@/components/ImageCropper";
 import { fetchCurrentUser } from "@/lib/current-user";
 import { useToast } from "@/components/Toast";
 import { uploadImage, UploadError } from "@/lib/upload-client";
-import { ANY_FILE_ACCEPT, VIDEO_ACCEPT, classifyFile, isLikelyCloudCopy } from "@/lib/media";
+import { ANY_FILE_ACCEPT, classifyFile, isLikelyCloudCopy } from "@/lib/media";
 import { CATEGORIES } from "@/lib/categories";
 import {
   CREATOR_GUIDELINES,
@@ -715,12 +714,6 @@ export default function UploadPage() {
                 </label>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  {/* The typed door, for the creators who keep their videos in the
-                      gallery — where a MIME filter is a help and not a hiding place. */}
-                  <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
-                    <Images className="w-4 h-4" /> Choose from Gallery / Photos
-                    <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
-                  </label>
                   <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
                     <Camera className="w-4 h-4" /> Record now
                     {/* `capture` hands the camera straight to the creator, and a
