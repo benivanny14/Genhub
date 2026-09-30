@@ -68,6 +68,7 @@ import { pickIntroMedium } from "@/lib/intro-trailer";
 import { serializeJsonLd } from "@/lib/json-ld";
 import IntroClipPlayer from "@/components/IntroClipPlayer";
 import { displayHandle } from "@/lib/usernames";
+import { categoryHref, getCategory } from "@/lib/categories";
 
 /**
  * How many times the animated intro is asked for again before the page gives up
@@ -181,6 +182,12 @@ interface RelatedVideo {
   viewsCount: number;
   category: string | null;
   createdAt: string;
+  /**
+   * Sent by /api/videos with the rest of the list payload. Optional because
+   * the demo fallback (`DEMO_VIDEOS`) predates the badge — a missing length
+   * renders no badge rather than a wrong one.
+   */
+  duration?: number | null;
   creator: { id: string; username?: string | null; displayName: string | null };
 }
 
@@ -642,7 +649,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       const data = await res.json();
       if (data.success && Array.isArray(data.data.videos) && data.data.videos.length > 0) {
         const pool = data.data.videos as RelatedVideo[];
-        setRelated(rankRelated(pool.filter((v) => v.id !== current.id), current).slice(0, 6));
+        setRelated(rankRelated(pool.filter((v) => v.id !== current.id), current).slice(0, 8));
         return;
       }
     } catch {}
@@ -652,7 +659,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     const pool = demoDataEnabled()
       ? (DEMO_VIDEOS.filter((v) => v.id !== current.id) as unknown as RelatedVideo[])
       : [];
-    setRelated(pool.length > 0 ? rankRelated(pool, current).slice(0, 6) : []);
+    setRelated(pool.length > 0 ? rankRelated(pool, current).slice(0, 8) : []);
   }
 
   async function fetchInteractions() {
@@ -1993,53 +2000,82 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             user={user ? { id: user.id, role: user.role } : null}
           />
           </div>
+        </div>
 
-          {/* Related Videos sidebar */}
+          {/* More scenes — the same card language as the browse grids (cover,
+              length badge, price chip, category tag), so a viewer coming from
+              a grid does not have to re-learn what a card is.
+
+              This closes the main column first, so the sidebar is a sibling of
+              it rather than a child: as a child it sat under the player at
+              every width and the `lg:flex-row` above never took effect, which
+              put a 320px column of scenes at the bottom-left of the page. */}
           <aside className="w-full lg:w-80 shrink-0">
             <h2 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
-              <Play className="w-4 h-4 text-brand-400" /> Related Videos
+              <Play className="w-4 h-4 text-brand-400" /> More scenes
             </h2>
-            <div className="space-y-4">
+            <div className="space-y-5">
               {related.length === 0 ? (
-                <p className="text-sm text-white/40">No related videos yet.</p>
+                <p className="text-sm text-white/40">No related scenes yet.</p>
               ) : (
-                related.map((r) => (
-                  <Link key={r.id} href={`/video/${r.slug || r.id}`} className="flex gap-3 group">
-                    <div className="relative w-28 aspect-video rounded-lg overflow-hidden shrink-0 bg-surface-300/60">
-                      {r.thumbnailUrl ? (
-                        <Image
-                          src={r.thumbnailUrl}
-                          alt={r.title}
-                          fill
-                          className="object-cover group-hover:scale-105 transition-transform duration-300"
-                          sizes="112px"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <Play className="w-5 h-5 text-white/30" />
+                related.map((r) => {
+                  // Ids are stored by lib/categories; an unknown id shows no tag
+                  // rather than a broken one.
+                  const tag = r.category ? getCategory(r.category) ?? null : null;
+                  return (
+                    <Link key={r.id} href={`/video/${r.slug || r.id}`} className="group block">
+                      <div className="relative aspect-video overflow-hidden rounded-xl bg-surface-300/60 ring-1 ring-white/10 transition group-hover:ring-brand-500/40">
+                        {r.thumbnailUrl ? (
+                          <Image
+                            src={r.thumbnailUrl}
+                            alt={r.title}
+                            fill
+                            className="object-cover transition-transform duration-500 group-hover:scale-105"
+                            sizes="(max-width: 1024px) 100vw, 320px"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center">
+                            <Play className="w-6 h-6 text-white/30" />
+                          </div>
+                        )}
+                        {/* Scrim keeps the length badge readable over a bright cover */}
+                        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/75 via-black/30 to-transparent" />
+                        {r.price > 0 && (
+                          <span className="absolute top-2 left-2 rounded-md bg-brand-500 px-2 py-0.5 text-[10px] font-bold tabular-nums text-white shadow-lg">
+                            {formatTZS(r.price)}
+                          </span>
+                        )}
+                        {!!r.duration && r.duration > 0 && (
+                          <span className="absolute bottom-2 right-2 rounded-md bg-black/75 px-2 py-0.5 text-xs font-semibold tabular-nums text-white ring-1 ring-white/15 backdrop-blur-sm">
+                            {formatDuration(r.duration)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-2 min-w-0">
+                        <p className="text-sm font-medium line-clamp-2 transition group-hover:text-brand-400">
+                          {r.title}
+                        </p>
+                        <div className="mt-1 flex items-center gap-2 text-xs text-white/50">
+                          <span className="truncate">{displayHandle(r.creator, "Creator")}</span>
+                          <span aria-hidden className="text-white/25">
+                            ·
+                          </span>
+                          <span className="shrink-0 tabular-nums">
+                            {formatCount(r.viewsCount)} views
+                          </span>
                         </div>
-                      )}
-                      {r.price > 0 && (
-                        <span className="absolute bottom-1 left-1 bg-black/70 text-[10px] px-1 rounded text-white">
-                          {formatTZS(r.price)}
-                        </span>
-                      )}
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium line-clamp-2 group-hover:text-brand-400 transition">
-                        {r.title}
-                      </p>
-                      <p className="text-xs text-white/50 mt-1 truncate">
-                        {displayHandle(r.creator, "Creator")}
-                      </p>
-                      <p className="text-xs text-white/30">{formatCount(r.viewsCount)} views</p>
-                    </div>
-                  </Link>
-                ))
+                        {tag && (
+                          <span className="mt-1.5 inline-flex items-center rounded-full border border-brand-500/30 bg-brand-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-300">
+                            {tag.label}
+                          </span>
+                        )}
+                      </div>
+                    </Link>
+                  );
+                })
               )}
             </div>
           </aside>
-          </div>
         </div>
       </main>
 

@@ -15,6 +15,7 @@ import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { cn } from "@/lib/utils";
 import { displayHandle } from "@/lib/usernames";
+import { categoryHref, getCategory } from "@/lib/categories";
 
 interface VideoCardProps {
   id: string;
@@ -36,6 +37,12 @@ interface VideoCardProps {
   teaserDuration: number;
   likesCount?: number;
   isPremium?: boolean;
+  /**
+   * Category id as stored on the scene (see lib/categories). Rendered as a tag
+   * under the title so a grid reads like a catalogue of scenes rather than a
+   * wall of covers. An id with no registry entry simply renders no tag.
+   */
+  category?: string | null;
   /**
    * Publication state from the API. `PROCESSING` means the post is real and
    * visible but the host is still transcoding it: the card shows the cover and
@@ -59,6 +66,9 @@ interface VideoCardProps {
 
 export default function VideoCard(video: VideoCardProps) {
   const displaySlug = video.slug || video.id;
+  // Resolved here rather than passed in: every grid already hands the whole
+  // video over, so the label cannot drift from the id it came with.
+  const tag = video.category ? getCategory(video.category) ?? null : null;
   const { theme } = useTheme();
   const { toast } = useToast();
   const isLight = theme === "light";
@@ -246,13 +256,33 @@ export default function VideoCard(video: VideoCardProps) {
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
           />
         ) : (
-          <div className={cn(
-            "w-full h-full flex items-center justify-center",
-            isLight ? "bg-gray-100" : "bg-gradient-to-br from-surface-300 to-surface-400"
-          )}>
-            <Play className={cn("w-12 h-12", isLight ? "text-gray-300" : "text-white/20")} />
+          /* No cover yet. A flat panel with a faint play glyph reads as a
+             broken image, and on a fresh catalogue most cards are in this
+             state — so it gets the scene's own initial over a brand-tinted
+             gradient: recognisable per card, and obviously deliberate. */
+          <div
+            className={cn(
+              "w-full h-full flex items-center justify-center",
+              isLight
+                ? "bg-gradient-to-br from-brand-500/10 to-gray-200"
+                : "bg-gradient-to-br from-brand-500/15 via-surface-300 to-surface-400"
+            )}
+          >
+            <span
+              aria-hidden
+              className={cn(
+                "font-display font-bold text-5xl select-none",
+                isLight ? "text-brand-500/20" : "text-white/10"
+              )}
+            >
+              {(video.title.trim()[0] || "G").toUpperCase()}
+            </span>
           </div>
         )}
+
+        {/* Bottom scrim — keeps the duration and like buttons readable over a
+            bright cover, the way a broadcast caption stays legible. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/75 via-black/30 to-transparent" />
 
         {/* Play Button Overlay — and out of the way of a running preview. Not
             rendered at all while processing: a play button over a video that
@@ -299,9 +329,11 @@ export default function VideoCard(video: VideoCardProps) {
           </div>
         )}
 
-        {/* Duration Badge */}
-        {video.duration && (
-          <div className="absolute bottom-2 right-2 bg-black/70 backdrop-blur-sm px-2 py-0.5 rounded text-xs font-medium text-white">
+        {/* Duration Badge — the one number a viewer looks for before deciding.
+            Tabular figures so a 1:02:05 scene does not jitter the badge wider
+            than the 9:41 one beside it. */}
+        {!!video.duration && video.duration > 0 && (
+          <div className="absolute bottom-2 right-2 rounded-md bg-black/75 px-2 py-0.5 text-xs font-semibold tabular-nums text-white ring-1 ring-white/15 backdrop-blur-sm">
             {formatDuration(video.duration)}
           </div>
         )}
@@ -377,12 +409,32 @@ export default function VideoCard(video: VideoCardProps) {
           </h3>
         </Link>
 
-        <div className="flex items-center justify-between">
+        {/* Category tag — links into the category's own browse page, so the tag
+            is a way in rather than decoration. */}
+        {tag && (
+          <Link
+            href={categoryHref(tag.id)}
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors",
+              isLight
+                ? "border-brand-500/25 bg-brand-500/10 text-brand-600 hover:border-brand-500/50"
+                : "border-brand-500/30 bg-brand-500/10 text-brand-300 hover:border-brand-400/60 hover:text-brand-200"
+            )}
+          >
+            {tag.label}
+          </Link>
+        )}
+
+        {/* `min-w-0` on the handle and `shrink-0` on the count: at two cards
+            across on a phone the two would otherwise fight for the same pixels,
+            so the handle truncates and the view count keeps its digits. */}
+        <div className="flex items-center justify-between gap-2">
           {/* Creator info with verification badge */}
           <Link
             href={`/creator/${video.creator.id}`}
             onClick={(e) => e.stopPropagation()}
-            className="flex items-center gap-2 hover:opacity-80 transition"
+            className="flex min-w-0 items-center gap-2 hover:opacity-80 transition"
           >
             <div className={cn(
               "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-medium",
@@ -391,7 +443,7 @@ export default function VideoCard(video: VideoCardProps) {
               {(video.creator.username?.[0] || video.creator.displayName?.[0] || "C").toUpperCase()}
             </div>
             <span className={cn(
-              "text-xs truncate max-w-[120px]",
+              "text-xs truncate",
               isLight ? "text-gray-500" : "text-white/60"
             )}>
               {displayHandle(video.creator, "Creator")}
@@ -402,7 +454,7 @@ export default function VideoCard(video: VideoCardProps) {
           </Link>
 
           <div className={cn(
-            "flex items-center gap-1 text-xs",
+            "flex shrink-0 items-center gap-1 text-xs tabular-nums",
             isLight ? "text-gray-400" : "text-white/40"
           )}>
             <Eye className="w-3 h-3" />
