@@ -66,7 +66,7 @@ export default function FavoritesPage() {
         </h1>
 
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-5">
             {Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="space-y-3">
                 <div className="skeleton aspect-video" />
@@ -81,7 +81,7 @@ export default function FavoritesPage() {
             <p className={cn("text-sm", isLight ? "text-gray-400" : "text-white/40")}>Tap the bookmark icon on any video to save it here.</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-5">
             {favorites.map((fav) => (
               <VideoCard
                 key={fav.video.id}

@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import VerifiedBadge from "@/components/VerifiedBadge";
 import { formatTZS } from "@/lib/utils";
 import {
   Shield,
@@ -3523,7 +3524,7 @@ export default function AdminDashboard() {
                           <div className="min-w-0">
                             <p className="font-medium flex items-center gap-1.5">
                               {c.displayName || "Creator"}
-                              {c.isVerified && <BadgeCheck className="w-4 h-4 text-sky-400" />}
+                              {c.isVerified && <VerifiedBadge className="h-4 w-4" />}
                             </p>
                             <p className="text-xs text-white/40 truncate">{c.email || c.creatorId}</p>
                           </div>

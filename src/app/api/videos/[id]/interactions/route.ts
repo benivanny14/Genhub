@@ -2,6 +2,15 @@
 // GENHUB - Video Interactions (Like / Dislike / Favorite)
 // POST /api/videos/[id]/interactions - Toggle like, dislike, or favorite
 // GET /api/videos/[id]/interactions - Get interaction status
+//
+// `[id]` is the segment the watch page was opened with, and the watch page is
+// opened with the creator's SLUG whenever there is one (/video/<slug>). This
+// route used to treat that segment as the video's primary key, so on every
+// slugged scene the like/dislike write targeted a videoId that does not exist,
+// the foreign key refused it, and the viewer saw an error toast — the buttons
+// looked broken on almost every real video while working on the ones with no
+// slug. It now resolves the segment the same way /api/videos/[id] does (id OR
+// slug) and writes against the resolved primary key.
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -12,6 +21,18 @@ import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
 
+/**
+ * Resolve the URL segment to a real video row, by primary key or by slug.
+ * Returns null when nothing matches, so the caller answers 404 instead of
+ * tripping a foreign-key error on a write.
+ */
+async function resolveVideo(idOrSlug: string) {
+  return prisma.video.findFirst({
+    where: { OR: [{ id: idOrSlug }, { slug: idOrSlug }], isDeleted: false },
+    select: { id: true, likesCount: true, dislikesCount: true },
+  });
+}
+
 // GET /api/videos/[id]/interactions
 export async function GET(
   request: NextRequest,
@@ -21,27 +42,26 @@ export async function GET(
     const { id } = await params;
     const user = await getCurrentUser();
 
-    const video = await prisma.video.findUnique({
-      where: { id },
-      select: { likesCount: true, dislikesCount: true },
-    });
+    const video = await resolveVideo(id);
+    if (!video) return api.notFound("Video not found");
+    const videoId = video.id;
 
     if (!user) {
       return api.success({
         liked: false,
         disliked: false,
         favorited: false,
-        likesCount: video?.likesCount || 0,
-        dislikesCount: video?.dislikesCount || 0,
+        likesCount: video.likesCount || 0,
+        dislikesCount: video.dislikesCount || 0,
       });
     }
 
     const [like, favorite] = await Promise.all([
       prisma.videoLike.findUnique({
-        where: { userId_videoId: { userId: user.userId, videoId: id } },
+        where: { userId_videoId: { userId: user.userId, videoId } },
       }),
       prisma.favorite.findUnique({
-        where: { userId_videoId: { userId: user.userId, videoId: id } },
+        where: { userId_videoId: { userId: user.userId, videoId } },
       }),
     ]);
 
@@ -49,8 +69,8 @@ export async function GET(
       liked: !!like && like.type === "LIKE",
       disliked: !!like && like.type === "DISLIKE",
       favorited: !!favorite,
-      likesCount: video?.likesCount || 0,
-      dislikesCount: video?.dislikesCount || 0,
+      likesCount: video.likesCount || 0,
+      dislikesCount: video.dislikesCount || 0,
     });
   } catch (error) {
     if (error instanceof AuthError) {
@@ -80,17 +100,23 @@ export async function POST(
     );
     if (!allowed) return api.rateLimited("Too many actions — please wait a moment");
 
-    const body = await readJsonBody(request);
-    const type = body.type as "like" | "dislike" | "favorite";
+    const body = await readJsonBody(request, {});
+    const type = body?.type as "like" | "dislike" | "favorite";
 
     if (!type || !["like", "dislike", "favorite"].includes(type)) {
       return api.validation("type must be 'like', 'dislike', or 'favorite'");
     }
 
+    // Resolve by id OR slug before any write: the watch page reaches this route
+    // with whatever segment it was opened with, which is usually the slug.
+    const video = await resolveVideo(id);
+    if (!video) return api.notFound("Video not found");
+    const videoId = video.id;
+
     if (type === "like" || type === "dislike") {
       const targetType = type === "like" ? "LIKE" : "DISLIKE";
       const existing = await prisma.videoLike.findUnique({
-        where: { userId_videoId: { userId: auth.userId, videoId: id } },
+        where: { userId_videoId: { userId: auth.userId, videoId } },
       });
 
       // Already in this state → remove (untoggle)
@@ -98,7 +124,7 @@ export async function POST(
         await prisma.$transaction(async (tx) => {
           await tx.videoLike.delete({ where: { id: existing.id } });
           await tx.video.update({
-            where: { id },
+            where: { id: videoId },
             data:
               targetType === "LIKE"
                 ? { likesCount: { decrement: 1 } }
@@ -119,7 +145,7 @@ export async function POST(
             data: { type: targetType },
           });
           await tx.video.update({
-            where: { id },
+            where: { id: videoId },
             data:
               targetType === "LIKE"
                 ? { likesCount: { increment: 1 }, dislikesCount: { decrement: 1 } }
@@ -127,10 +153,10 @@ export async function POST(
           });
         } else {
           await tx.videoLike.create({
-            data: { userId: auth.userId, videoId: id, type: targetType },
+            data: { userId: auth.userId, videoId, type: targetType },
           });
           await tx.video.update({
-            where: { id },
+            where: { id: videoId },
             data:
               targetType === "LIKE"
                 ? { likesCount: { increment: 1 } }
@@ -139,16 +165,16 @@ export async function POST(
         }
       });
 
-      const video = await prisma.video.findUnique({
-        where: { id },
+      const updated = await prisma.video.findUnique({
+        where: { id: videoId },
         select: { likesCount: true, dislikesCount: true },
       });
 
       return api.success(
         {
           [type]: true,
-          likesCount: video?.likesCount || 0,
-          dislikesCount: video?.dislikesCount || 0,
+          likesCount: updated?.likesCount || 0,
+          dislikesCount: updated?.dislikesCount || 0,
         },
         targetType === "LIKE" ? "Liked" : "Disliked"
       );
@@ -156,7 +182,7 @@ export async function POST(
 
     // Favorite toggle
     const existing = await prisma.favorite.findUnique({
-      where: { userId_videoId: { userId: auth.userId, videoId: id } },
+      where: { userId_videoId: { userId: auth.userId, videoId } },
     });
 
     if (existing) {
@@ -164,7 +190,7 @@ export async function POST(
       return api.success({ favorited: false }, "Removed from favorites");
     } else {
       await prisma.favorite.create({
-        data: { userId: auth.userId, videoId: id },
+        data: { userId: auth.userId, videoId },
       });
       return api.success({ favorited: true }, "Added to favorites");
     }

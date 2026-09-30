@@ -91,6 +91,11 @@ export const CREATOR_GUIDELINES: CreatorGuideline[] = [
     en: "Give the video a short, attractive story so viewers enjoy it, come back, and you build a bigger audience.",
   },
   {
+    id: "audience",
+    sw: "Jitangaze pia kwenye mitandao mingine (Instagram, TikTok, X, Facebook n.k.) ukijijenga kama creator wa Genhub. Kadri unavyojulikana huko, watazamaji wengi huja kuangalia video zako hapa — mauzo ya video zako yanaongezeka, na unapata watazamaji wengi na pesa nyingi kwa wakati mmoja.",
+    en: "Promote yourself on other platforms too (Instagram, TikTok, X, Facebook, and so on) as a Genhub creator. The more people know you there, the more viewers come here to watch your videos — your sales grow, and you gain many viewers and long money at the same time.",
+  },
+  {
     id: "other-person",
     sw: "Unaruhusiwa kumficha mtu unayerekodi naye (sura yake isionekane), lakini WEWE unatakiwa kuonekana.",
     en: "You may hide the other person you record with, but YOU must be visible.",
@@ -126,7 +131,7 @@ export const GUIDELINE_ACK_LABEL_EN =
  * acknowledgement, so a rule that changed is re-read before the next upload —
  * a creation-time receipt nobody re-checks is not consent.
  */
-export const CREATOR_GUIDELINES_VERSION = 3;
+export const CREATOR_GUIDELINES_VERSION = 4;
 
 /**
  * True when an account's accepted version is behind the rules as they stand

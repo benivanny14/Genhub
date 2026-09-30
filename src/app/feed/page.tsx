@@ -5,7 +5,8 @@ import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import Header from "@/components/Header";
 import VideoCard from "@/components/VideoCard";
-import { Users, UserPlus, Sparkles, Send, BadgeCheck } from "lucide-react";
+import { Users, UserPlus, Sparkles, Send } from "lucide-react";
+import VerifiedBadge from "@/components/VerifiedBadge";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { cn, formatRelativeTime } from "@/lib/utils";
@@ -146,7 +147,7 @@ export default function FeedPage() {
       <div className="min-h-screen">
         <Header />
         <div className="max-w-7xl mx-auto px-4 py-8">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
             {Array.from({ length: 8 }).map((_, i) => (
               <div key={i} className="skeleton h-48 rounded-2xl" />
             ))}
@@ -269,7 +270,7 @@ export default function FeedPage() {
                           )}>
                             <span className="truncate">{displayHandle(post.creator, "Creator")}</span>
                             {post.creator.isVerified && (
-                              <BadgeCheck className="w-4 h-4 text-brand-400 shrink-0" />
+                              <VerifiedBadge className="h-4 w-4" />
                             )}
                           </p>
                           <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/40")}>
@@ -320,7 +321,7 @@ export default function FeedPage() {
 
             {/* Video grid */}
             {videos.length > 0 && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                 {videos.map((video) => (
                   <VideoCard key={video.id} {...video} />
                 ))}

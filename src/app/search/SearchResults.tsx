@@ -18,8 +18,9 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Search, BadgeCheck, Loader2 } from "lucide-react";
+import { Search, Loader2 } from "lucide-react";
 import VideoCard from "@/components/VideoCard";
+import VerifiedBadge from "@/components/VerifiedBadge";
 import { displayHandle } from "@/lib/usernames";
 
 interface VideoResult {
@@ -201,9 +202,7 @@ export default function SearchResults({ query }: { query: string }) {
                 <div className="min-w-0">
                   <p className="flex items-center gap-1 truncate text-sm font-medium text-white">
                     {displayHandle(creator, "Unnamed creator")}
-                    {creator.isVerified && (
-                      <BadgeCheck className="h-4 w-4 shrink-0 text-sky-400" />
-                    )}
+                    {creator.isVerified && <VerifiedBadge className="h-4 w-4" />}
                   </p>
                   <p className="truncate text-xs text-gray-400">
                     {typeof creator.videoCount === "number"

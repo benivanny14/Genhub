@@ -9,7 +9,8 @@
 import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
 import VideoCard from "@/components/VideoCard";
-import { Play, Users, Eye, Heart, Star, ArrowLeft, Smartphone, Wallet, MessageCircle, BadgeCheck } from "lucide-react";
+import { Play, Users, Eye, Heart, Star, ArrowLeft, Smartphone, Wallet, MessageCircle } from "lucide-react";
+import VerifiedBadge from "@/components/VerifiedBadge";
 import { formatTZS, formatCount } from "@/lib/utils";
 import Link from "next/link";
 import Image from "next/image";
@@ -330,7 +331,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
                 title="Verified creator"
                 className="absolute -bottom-0.5 -right-0.5 w-8 h-8 rounded-full bg-surface-500 border-2 border-surface-500 flex items-center justify-center"
               >
-                <BadgeCheck className="w-6 h-6 text-sky-400" />
+                <VerifiedBadge className="h-6 w-6" />
               </span>
             )}
           </div>
@@ -339,8 +340,8 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
             <h1 className="text-2xl font-display font-bold flex items-center gap-2 flex-wrap">
               {displayHandle(creator, "Creator")}
               {creator.isVerified && (
-                <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border border-sky-500/40 bg-sky-500/10 text-sky-300">
-                  <BadgeCheck className="w-3.5 h-3.5" /> Verified
+                <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border border-amber-400/40 bg-amber-400/10 text-amber-300">
+                  <VerifiedBadge className="h-3.5 w-3.5" /> Verified
                 </span>
               )}
             </h1>
@@ -421,7 +422,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
             <p className="text-white/40">No videos yet</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 pb-12">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 pb-12">
             {videos.map((v) => (
               <VideoCard
                 key={v.id}

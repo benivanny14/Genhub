@@ -283,7 +283,7 @@ export default function PlaylistsPage() {
           {/* Videos */}
           <section className="lg:col-span-3">
             {loadingVideos ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-5">
                 {Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="space-y-3">
                     <div className="skeleton aspect-video" />
@@ -300,7 +300,7 @@ export default function PlaylistsPage() {
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-5">
                 {videos.map((video) => (
                   <div key={video.itemId} className="relative group/item">
                     <VideoCard

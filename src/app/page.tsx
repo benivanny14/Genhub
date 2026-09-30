@@ -7,7 +7,8 @@ import Image from "next/image";
 import Header from "@/components/Header";
 import BottomNav from "@/components/BottomNav";
 import VideoCard from "@/components/VideoCard";
-import { Search, Filter, Play, PlayCircle, TrendingUp, Clock, DollarSign, Zap, Crown, Flame, Star, Users, BadgeCheck, ArrowRight, LayoutGrid, Sparkles } from "lucide-react";
+import { Search, Filter, Play, PlayCircle, TrendingUp, Clock, DollarSign, Zap, Crown, Flame, Star, Users, ArrowRight, LayoutGrid, Sparkles } from "lucide-react";
+import VerifiedBadge from "@/components/VerifiedBadge";
 import { formatDuration } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
@@ -644,7 +645,7 @@ export default function HomePage() {
                   {displayHandle(feed.featured.creator, "Creator")}
                 </span>
                 {feed.featured.creator.isVerified && (
-                  <BadgeCheck className="w-3.5 h-3.5 text-sky-400" />
+                  <VerifiedBadge className="h-3.5 w-3.5" />
                 )}
                 <span>•</span>
                 <span>{feed.featured.viewsCount.toLocaleString()} views</span>
@@ -772,7 +773,7 @@ export default function HomePage() {
                   )}
                 >
                   {displayHandle(c, "Creator")}
-                  {c.isVerified && <BadgeCheck className="w-3 h-3 text-sky-400 shrink-0" />}
+                  {c.isVerified && <VerifiedBadge className="h-3 w-3" />}
                 </span>
                 <span className="text-[10px] text-gray-500">
                   {c.videoCount} videos
@@ -903,7 +904,7 @@ export default function HomePage() {
       {/* Video Grid */}
       <main id="video-grid" className="max-w-7xl mx-auto px-4 sm:px-6 pb-24 md:pb-20 scroll-mt-20">
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-5">
             {Array.from({ length: 8 }).map((_, i) => (
               <div key={i} className="space-y-3">
                 <div className="skeleton aspect-video" />
@@ -923,7 +924,7 @@ export default function HomePage() {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4 md:gap-5">
             {videos.map((video) => (
               <VideoCard key={video.id} {...video} createdAt={video.createdAt} />
             ))}

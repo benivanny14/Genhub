@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Play, Clock, Eye, Heart, Bookmark, BadgeCheck, Lock, Loader2 } from "lucide-react";
+import { Play, Clock, Eye, Heart, Bookmark, Lock, Loader2 } from "lucide-react";
+import VerifiedBadge from "@/components/VerifiedBadge";
 import { useVideoStatuses } from "@/hooks/useVideoStatuses";
 import {
   PROCESSING_BADGE_LABEL,
@@ -448,9 +449,7 @@ export default function VideoCard(video: VideoCardProps) {
             )}>
               {displayHandle(video.creator, "Creator")}
             </span>
-            {video.creator.isVerified && (
-              <BadgeCheck className="w-3.5 h-3.5 text-brand-400 shrink-0" />
-            )}
+            {video.creator.isVerified && <VerifiedBadge className="h-3.5 w-3.5" />}
           </Link>
 
           <div className={cn(

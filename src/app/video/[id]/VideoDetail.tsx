@@ -1991,7 +1991,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             <h2 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
               <Play className="w-4 h-4 text-brand-400" /> More scenes
             </h2>
-            <div className="space-y-5">
+            <div className="grid grid-cols-2 gap-x-3 gap-y-4">
               {related.length === 0 ? (
                 <p className="text-sm text-white/40">No related scenes yet.</p>
               ) : (
@@ -2029,10 +2029,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                         )}
                       </div>
                       <div className="mt-2 min-w-0">
-                        <p className="text-sm font-medium line-clamp-2 transition group-hover:text-brand-400">
+                        <p className="text-xs font-medium line-clamp-2 transition group-hover:text-brand-400">
                           {r.title}
                         </p>
-                        <div className="mt-1 flex items-center gap-2 text-xs text-white/50">
+                        <div className="mt-1 flex items-center gap-1.5 text-[10px] text-white/50">
                           <span className="truncate">{displayHandle(r.creator, "Creator")}</span>
                           <span aria-hidden className="text-white/25">
                             ·
