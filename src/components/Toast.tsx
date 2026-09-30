@@ -108,7 +108,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     <ToastContext.Provider value={contextValue}>
       {children}
       {/* Toast container */}
-      <div className="fixed bottom-4 right-4 z-[9999] flex flex-col gap-2 max-w-sm w-full pointer-events-none">
+      <div className="fixed bottom-4 right-4 z-[9999] flex w-[calc(100vw-2rem)] max-w-sm flex-col gap-2.5 pointer-events-none">
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onRemove={removeToast} />
         ))}
@@ -121,25 +121,96 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
 // Toast Item
 // =============================================================================
 
-const ICONS = {
-  success: CheckCircle,
-  error: XCircle,
-  warning: AlertTriangle,
-  info: Info,
-};
+/**
+ * One entry per kind of message, and every field in here differs per kind.
+ *
+ * A toast that only changes colour is read as one message with four tints, so
+ * these four deliberately disagree about more than hue: a success arrives with
+ * a spring upward and a round icon, a refusal lands with a shake and squared
+ * corners, a warning slides in from the side, and a notice fades up quietly.
+ * A reader who cannot separate the colours still cannot confuse the four.
+ *
+ * The words in here are the ONLY thing that changes: the provider's API, the
+ * sticky/progress behaviour and the dismissal timer all stay as they were, so
+ * the ~260 existing `toast(...)` call sites are untouched by this file.
+ */
+interface ToastVariant {
+  Icon: typeof Info;
+  /** The short label above the message — the fastest read on the card. */
+  title: string;
+  /** Card surface, including its corner radius. */
+  shell: string;
+  /** The tinted wash inside the card. */
+  wash: string;
+  /** The colour bar down the left edge. */
+  rail: string;
+  /** The tile the icon sits in, including its shape. */
+  tile: string;
+  /** The title's colour. */
+  heading: string;
+  /** The bar under a progress toast. */
+  bar: string;
+  /** The dismiss button's hover colour. */
+  close: string;
+  /** How this kind arrives. Four different motions, not one. */
+  motion: string;
+  /** Errors interrupt a screen reader; the rest wait their turn. */
+  role: "status" | "alert";
+}
 
-const STYLES = {
-  success: "border-emerald-500/30 bg-emerald-500/10",
-  error: "border-red-500/30 bg-red-500/10",
-  warning: "border-amber-500/30 bg-amber-500/10",
-  info: "border-blue-500/30 bg-blue-500/10",
-};
-
-const ICON_COLORS = {
-  success: "text-emerald-400",
-  error: "text-red-400",
-  warning: "text-amber-400",
-  info: "text-blue-400",
+const VARIANTS: Record<Toast["type"], ToastVariant> = {
+  success: {
+    Icon: CheckCircle,
+    title: "Success",
+    shell: "rounded-2xl border-emerald-400/35 bg-surface-400/95 shadow-xl shadow-emerald-500/25",
+    wash: "bg-gradient-to-br from-emerald-500/25 via-transparent to-transparent",
+    rail: "w-1.5 bg-gradient-to-b from-emerald-300 via-emerald-400 to-emerald-600",
+    tile: "rounded-full bg-emerald-400/15 text-emerald-300 ring-emerald-400/30",
+    heading: "text-emerald-300",
+    bar: "bg-gradient-to-r from-emerald-300 to-emerald-500",
+    close: "hover:text-emerald-200",
+    motion: "animate-toast-success",
+    role: "status",
+  },
+  error: {
+    Icon: XCircle,
+    title: "Error",
+    shell: "rounded-lg border-red-400/40 bg-surface-400/95 shadow-xl shadow-red-500/25",
+    wash: "bg-gradient-to-tr from-red-600/30 via-transparent to-transparent",
+    rail: "w-1.5 bg-gradient-to-b from-red-300 via-red-500 to-red-700",
+    tile: "rounded-md bg-red-500/20 text-red-300 ring-red-400/40",
+    heading: "text-red-300",
+    bar: "bg-gradient-to-r from-red-300 to-red-600",
+    close: "hover:text-red-200",
+    motion: "animate-toast-error",
+    role: "alert",
+  },
+  warning: {
+    Icon: AlertTriangle,
+    title: "Warning",
+    shell: "rounded-2xl border-amber-400/45 bg-surface-400/95 shadow-xl shadow-amber-500/25",
+    wash: "bg-gradient-to-b from-amber-500/25 via-transparent to-transparent",
+    rail: "w-2 bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600",
+    tile: "rounded-lg bg-amber-400/15 text-amber-300 ring-amber-400/30",
+    heading: "text-amber-300",
+    bar: "bg-gradient-to-r from-amber-300 to-amber-500",
+    close: "hover:text-amber-200",
+    motion: "animate-toast-warning",
+    role: "status",
+  },
+  info: {
+    Icon: Info,
+    title: "Info",
+    shell: "rounded-xl border-sky-400/30 bg-surface-400/95 shadow-xl shadow-sky-500/20",
+    wash: "bg-gradient-to-bl from-sky-500/20 via-brand-500/10 to-transparent",
+    rail: "w-1.5 bg-gradient-to-b from-sky-300 via-sky-400 to-brand-500",
+    tile: "rounded-full bg-sky-400/15 text-sky-300 ring-sky-400/30",
+    heading: "text-sky-300",
+    bar: "bg-gradient-to-r from-sky-300 to-brand-400",
+    close: "hover:text-sky-200",
+    motion: "animate-toast-info",
+    role: "status",
+  },
 };
 
 function ToastItem({
@@ -157,40 +228,57 @@ function ToastItem({
     return () => clearTimeout(timer);
   }, [toast, onRemove]);
 
-  const Icon = ICONS[toast.type];
+  const variant = VARIANTS[toast.type];
+  const Icon = variant.Icon;
 
   return (
     <div
+      role={variant.role}
       className={cn(
-        "pointer-events-auto flex items-start gap-3 px-4 py-3 rounded-xl border backdrop-blur-xl animate-slide-up shadow-xl",
-        STYLES[toast.type]
+        "pointer-events-auto relative overflow-hidden border px-4 py-3.5 pl-5 backdrop-blur-xl",
+        variant.shell,
+        variant.motion
       )}
     >
-      <Icon className={cn("w-5 h-5 mt-0.5 shrink-0", ICON_COLORS[toast.type])} />
-      <div className="flex-1 min-w-0">
-        <p className="text-sm">{toast.message}</p>
-        {toast.progress !== undefined && (
-          <div className="mt-2 h-1 rounded-full bg-white/15 overflow-hidden">
-            <div
-              className={cn(
-                "h-full rounded-full transition-all duration-200",
-                toast.type === "error" ? "bg-red-400" : "bg-brand-400"
-              )}
-              style={{ width: `${Math.min(100, Math.max(0, toast.progress))}%` }}
-              role="progressbar"
-              aria-valuenow={Math.round(toast.progress)}
-              aria-valuemin={0}
-              aria-valuemax={100}
-            />
-          </div>
-        )}
+      {/* The colour bar and the wash are what make a glance enough. */}
+      <span aria-hidden className={cn("absolute inset-y-0 left-0", variant.rail)} />
+      <span aria-hidden className={cn("absolute inset-0", variant.wash)} />
+
+      <div className="relative flex items-start gap-3">
+        <span
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center ring-1",
+            variant.tile
+          )}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className={cn("text-[11px] font-semibold uppercase tracking-[0.14em]", variant.heading)}>
+            {variant.title}
+          </p>
+          <p className="mt-0.5 text-sm leading-snug break-words text-white/90">{toast.message}</p>
+          {toast.progress !== undefined && (
+            <div className="mt-2 h-1.5 rounded-full bg-white/10 overflow-hidden">
+              <div
+                className={cn("h-full rounded-full transition-all duration-200", variant.bar)}
+                style={{ width: `${Math.min(100, Math.max(0, toast.progress))}%` }}
+                role="progressbar"
+                aria-valuenow={Math.round(toast.progress)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              />
+            </div>
+          )}
+        </div>
+        <button
+          onClick={() => onRemove(toast.id)}
+          aria-label="Dismiss"
+          className={cn("-mr-1 -mt-1 shrink-0 rounded-lg p-1 text-white/35 transition", variant.close)}
+        >
+          <X className="w-4 h-4" />
+        </button>
       </div>
-      <button
-        onClick={() => onRemove(toast.id)}
-        className="text-white/40 hover:text-white shrink-0"
-      >
-        <X className="w-4 h-4" />
-      </button>
     </div>
   );
 }

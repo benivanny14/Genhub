@@ -40,7 +40,7 @@ import {
   Check,
   Share2,
 } from "lucide-react";
-import { ANY_FILE_ACCEPT, IMAGE_ACCEPT, VIDEO_ACCEPT, canOptimizeImage, classifyFile } from "@/lib/media";
+import { ANY_FILE_ACCEPT, VIDEO_ACCEPT, canOptimizeImage, classifyFile } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
 import {
   abortVideoUpload,
@@ -1984,6 +1984,12 @@ export default function CreatorDashboard() {
                     )}
                   </div>
                   <div className="space-y-2">
+                    {/*
+                      One door, untyped. A type filter is applied by the phone's
+                      own file index, and a photo a chat app saved or a card
+                      holds can be missing from a filtered list it is actually
+                      sitting in; what the file IS gets decided by reading it.
+                    */}
                     <label className="btn-ghost inline-flex items-center gap-1.5 text-xs cursor-pointer">
                       {uploadingCover ? (
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -1991,20 +1997,9 @@ export default function CreatorDashboard() {
                         <Upload className="w-3.5 h-3.5" />
                       )}
                       {uploadingCover ? "Uploading…" : editCoverUrl ? "Replace cover" : "Add cover"}
-                      {/*
-                        A picture filter, because a gallery is where the photo is.
-
-                        `accept` used to be a hand-written JPEG/PNG/WebP list,
-                        which is an offer the phone's own file index has to keep:
-                        an iPhone photo is HEIC, and a HEIC file does not match
-                        `image/jpeg`, so the creator opened this picker and their
-                        cover photo was not in it. IMAGE_ACCEPT is `image/*` plus
-                        every extension the app accepts, kept beside the
-                        classifier so the picker and the code cannot disagree.
-                      */}
                       <input
                         type="file"
-                        accept={IMAGE_ACCEPT}
+                        accept={ANY_FILE_ACCEPT}
                         className="hidden"
                         disabled={uploadingCover}
                         onChange={(e) => {
@@ -2015,50 +2010,9 @@ export default function CreatorDashboard() {
                         }}
                       />
                     </label>
-                    {/*
-                      The second door, untyped, exactly as the upload page has
-                      it: a type filter is applied by the phone's file index, and
-                      a photo a chat app saved or a card holds can be missing from
-                      the picker on the left. What the file IS gets decided by
-                      reading it, which is the only honest answer anyway.
-                    */}
-                    <label className="block text-xs text-white/45 underline underline-offset-2 cursor-pointer hover:text-white/75">
-                      Or take it from Internal storage — every folder and app
-                      <input
-                        type="file"
-                        accept={ANY_FILE_ACCEPT}
-                        className="hidden"
-                        disabled={uploadingCover}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          e.target.value = "";
-                          if (file) void chooseCover(file);
-                        }}
-                      />
-                    </label>
-                    {/* The third door, and the same one the video has: a cover a
-                        creator photographs on the spot is local by
-                        construction, so it is the one picture no phone can fail
-                        to hand back. */}
-                    <label className="block text-xs text-white/45 underline underline-offset-2 cursor-pointer hover:text-white/75">
-                      Or use the camera
-                      <input
-                        type="file"
-                        accept="image/*"
-                        capture="environment"
-                        className="hidden"
-                        disabled={uploadingCover}
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          e.target.value = "";
-                          if (file) void chooseCover(file);
-                        }}
-                      />
-                    </label>
                     <p className="text-xs text-white/40">
-                      Any picture format — JPEG, PNG, WebP, HEIC, AVIF, GIF — up to 10 MB; a big photo is shrunk to fit
-                      automatically. This is the picture on the feed —
-                      you can move and zoom it before it is saved.
+                      From Internal storage / Downloads. Any picture format, up to 10 MB — you can
+                      move and zoom it before it is saved.
                     </p>
                   </div>
                 </div>

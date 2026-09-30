@@ -30,8 +30,8 @@ import Header from "@/components/Header";
 import ImageCropper from "@/components/ImageCropper";
 import { fetchCurrentUser } from "@/lib/current-user";
 import { useToast } from "@/components/Toast";
-import { uploadImage } from "@/lib/upload-client";
-import { ANY_FILE_ACCEPT, IMAGE_ACCEPT, VIDEO_ACCEPT, classifyFile, isLikelyCloudCopy } from "@/lib/media";
+import { uploadImage, UploadError } from "@/lib/upload-client";
+import { ANY_FILE_ACCEPT, VIDEO_ACCEPT, classifyFile, isLikelyCloudCopy } from "@/lib/media";
 import { CATEGORIES } from "@/lib/categories";
 import {
   CREATOR_GUIDELINES,
@@ -55,35 +55,22 @@ import {
 import { reportUploadFailure } from "@/lib/upload-failure-report";
 import { cn } from "@/lib/utils";
 
-type UploadKind = "main" | "teaser";
-
 /** Which picker a refused file came from, so the retry can reopen the right one. */
-type PickerTarget = "main" | "teaser" | "cover";
+type PickerTarget = "main" | "cover";
 
 /**
- * Said before an upload whose file name gives it away, not after it fails.
+ * Said before an upload that may not go through, never after a refusal.
  *
- * A ten-digit name with an ordinary extension is the shape Google Photos and
- * Drive downloads take on Android, and those are the files a phone most often
- * cannot hand over — the live case this was written from was a 192 MB video with
- * exactly that name, unreadable on two different networks. It is a warning and
- * never a refusal: a file that really is a local copy uploads normally, and
- * nothing is lost by mentioning it.
+ * Kept short deliberately. A sentence that explains what is happening underneath
+ * tells the creator nothing they can act on and tells anyone else how uploads
+ * work — what they need is one instruction, not a mechanism.
  */
-const CLOUD_COPY_WARNING =
-  "Faili hii inaweza kuwa ya cloud. Ikishindwa, ihamishe kwenye Downloads.";
+const UPLOAD_MAY_NOT_WORK =
+  "Faili hii huenda isipakiwe. Ikishindwa, chagua faili lingine. / This file may not upload; if it fails, choose another.";
 
-/**
- * What a creator is told when a PICTURE cannot be read.
- *
- * The transport's own sentence is written for a video ("could not read the video
- * file"), and a creator standing on the cover picker being told about a video
- * file would be reading about the wrong thing. The admin record keeps the
- * transport's words — only the sentence on screen changes.
- */
+/** What a creator is told when a PICTURE cannot be read. Plain, and no more. */
 const COVER_UNREADABLE =
-  "This device could not read that picture, so nothing was sent. Move it into the " +
-  "phone's own storage (Downloads) and choose it again.";
+  "Picha hii haikusomwa. Chagua picha nyingine. / That picture could not be read. Choose another one.";
 
 interface UserData {
   role: string;
@@ -134,12 +121,6 @@ export default function UploadPage() {
   const [mainReady, setMainReady] = useState(false);
   const [bunnyVideoId, setBunnyVideoId] = useState("");
 
-  const [teaserFile, setTeaserFile] = useState<File | null>(null);
-  const [teaserSession, setTeaserSession] = useState<OpenedVideoUpload | null>(null);
-  const [teaserProgress, setTeaserProgress] = useState<VideoUploadProgress | null>(null);
-  const [teaserUploading, setTeaserUploading] = useState(false);
-  const [teaserVideoId, setTeaserVideoId] = useState("");
-
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [cropFile, setCropFile] = useState<File | null>(null);
   const [thumbnailUploading, setThumbnailUploading] = useState(false);
@@ -164,9 +145,8 @@ export default function UploadPage() {
    */
   const [blocked, setBlocked] = useState<{ target: PickerTarget; message: string } | null>(null);
 
-  /** The three unfiltered pickers, so a refusal can reopen the right one. */
+  /** The unfiltered pickers, so a refusal can reopen the right one. */
   const mainFilesRef = useRef<HTMLInputElement>(null);
-  const teaserFilesRef = useRef<HTMLInputElement>(null);
   const coverFilesRef = useRef<HTMLInputElement>(null);
 
   const allGuidelinesChecked = CREATOR_GUIDELINES.every((item) => checks[item.id]);
@@ -244,13 +224,13 @@ export default function UploadPage() {
    * uploads at a few percent while the server that opened them saw a healthy
    * resource. See `openVideoUpload`.
    */
-  async function createSession(file: File, kind: UploadKind): Promise<OpenedVideoUpload | null> {
+  async function createSession(file: File): Promise<OpenedVideoUpload | null> {
     try {
       const response = await fetch("/api/videos/upload-signature", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: `${title.trim() || file.name.replace(/\.[^.]+$/, "") || "Video"}${kind === "teaser" ? " (teaser)" : ""}`,
+          title: title.trim() || file.name.replace(/\.[^.]+$/, "") || "Video",
           size: file.size,
           mimeType: file.type || "video/mp4",
         }),
@@ -272,7 +252,6 @@ export default function UploadPage() {
 
   async function uploadOne(
     file: File,
-    kind: UploadKind,
     existing: OpenedVideoUpload | null
   ): Promise<{
     session: OpenedVideoUpload | null;
@@ -289,8 +268,8 @@ export default function UploadPage() {
      */
     discardSession: boolean;
   } | null> {
-    const setProgress = kind === "main" ? setMainProgress : setTeaserProgress;
-    let session = existing ?? (await createSession(file, kind));
+    const setProgress = setMainProgress;
+    let session = existing ?? (await createSession(file));
     if (!session) return null;
 
     /**
@@ -339,9 +318,9 @@ export default function UploadPage() {
         // and a bar that resets with no explanation reads as data lost.
         toast(
           "warning",
-          "The video host closed that upload, so it is being sent again from the start."
+          "Muunganisho ulikatika — inaanza upya. / The connection dropped, so the upload is starting again."
         );
-        session = await createSession(file, kind);
+        session = await createSession(file);
         if (!session) return null;
         await send(session, 0);
       }
@@ -353,7 +332,7 @@ export default function UploadPage() {
       // straight to Bunny and no video row exists yet, so without this the
       // failure lives and dies in the creator's toast — which is exactly how a
       // library accumulated orphaned slots that nobody could explain.
-      reportUploadFailure(error, { session, file, kind });
+      reportUploadFailure(error, { session, file, kind: "main" });
       const message = failureMessageFor(error);
       toast("error", message);
       // A session the host has closed holds no bytes worth resuming, and keeping
@@ -385,7 +364,7 @@ export default function UploadPage() {
   async function readableOrBlock(
     file: File,
     target: PickerTarget,
-    reportKind?: UploadKind
+    reportKind?: "main"
   ): Promise<boolean> {
     try {
       await assertFileReadable(file);
@@ -407,10 +386,9 @@ export default function UploadPage() {
     }
   }
 
-  /** Reopen one of the three pickers — the retry a refusal offers. */
+  /** Reopen one of the pickers — the retry a refusal offers. */
   function openPicker(target: PickerTarget) {
-    const ref =
-      target === "main" ? mainFilesRef : target === "teaser" ? teaserFilesRef : coverFilesRef;
+    const ref = target === "main" ? mainFilesRef : coverFilesRef;
     ref.current?.click();
   }
 
@@ -442,7 +420,7 @@ export default function UploadPage() {
         toast("error", `"${file.name}" is not a picture. Chagua picha ya aina yoyote.`);
         continue;
       }
-      if (isLikelyCloudCopy(file.name)) toast("warning", CLOUD_COPY_WARNING);
+      if (isLikelyCloudCopy(file.name)) toast("warning", UPLOAD_MAY_NOT_WORK);
       if (!(await readableOrBlock(file, "cover"))) continue;
       accepted.push({ file, url: URL.createObjectURL(file) });
     }
@@ -470,7 +448,7 @@ export default function UploadPage() {
         );
         return;
       }
-      if (isLikelyCloudCopy(file.name)) toast("warning", CLOUD_COPY_WARNING);
+      if (isLikelyCloudCopy(file.name)) toast("warning", UPLOAD_MAY_NOT_WORK);
       if (!(await readableOrBlock(file, "main", "main"))) return;
       setBlocked(null);
     }
@@ -508,7 +486,7 @@ export default function UploadPage() {
       // still what the guidelines RECOMMEND (see lib/creator-guidelines), and a
       // recommendation belongs on the guidelines screen — not as a wall in front
       // of the file they just chose on a phone.
-      const result = await uploadOne(file, "main", reuse);
+      const result = await uploadOne(file, reuse);
       if (!result) {
         // Do not leave a dead session behind when the replacement reservation
         // itself fails; Resume would otherwise repeat the same Bunny 404.
@@ -522,61 +500,6 @@ export default function UploadPage() {
       toast("success", "Video uploaded successfully");
     } finally {
       setMainUploading(false);
-    }
-  }
-
-  async function handleTeaserFile(file: File, resumeExisting = false) {
-    if (!mainReady) {
-      toast("error", "Upload the main video first");
-      return;
-    }
-    if (!resumeExisting) {
-      const kind = classifyFile(file);
-      if (kind !== "video") {
-        toast(
-          "error",
-          kind === "image"
-            ? "That is a picture, not a clip. Choose a short video for the trailer."
-            : `"${file.name}" is not a video. Choose an MP4, MOV, MKV or WebM file.`
-        );
-        return;
-      }
-      if (isLikelyCloudCopy(file.name)) toast("warning", CLOUD_COPY_WARNING);
-      if (!(await readableOrBlock(file, "teaser", "teaser"))) return;
-      setBlocked(null);
-    }
-
-    const sizeError = videoFileSizeError(file);
-    if (sizeError) {
-      toast("error", sizeError);
-      return;
-    }
-    const reuse =
-      resumeExisting &&
-      teaserSession &&
-      teaserFile?.name === file.name &&
-      teaserFile?.size === file.size
-        ? teaserSession
-        : null;
-    if (teaserSession && !reuse) {
-      await cancelSession(teaserSession);
-      setTeaserSession(null);
-    }
-    setTeaserFile(file);
-    setTeaserVideoId("");
-    setTeaserUploading(true);
-    try {
-      const result = await uploadOne(file, "teaser", reuse);
-      if (!result) {
-        if (reuse) setTeaserSession(null);
-        return;
-      }
-      setTeaserSession(result.discardSession ? null : result.session);
-      if (!result.videoId) return;
-      setTeaserVideoId(result.videoId);
-      toast("success", "Teaser uploaded successfully");
-    } finally {
-      setTeaserUploading(false);
     }
   }
 
@@ -608,11 +531,9 @@ export default function UploadPage() {
           category: category || undefined,
           tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
           bunnyVideoId,
-          teaserBunnyVideoId: teaserVideoId || undefined,
           thumbnailUrl: thumbnailUrl || undefined,
           fileSize: mainFile?.size,
           uploadSessionToken: mainSession.sessionToken,
-          teaserUploadSessionToken: teaserVideoId ? teaserSession?.sessionToken : undefined,
           complianceAttested,
         }),
       });
@@ -635,7 +556,13 @@ export default function UploadPage() {
       setThumbnailUrl(await uploadImage(file, { kind: "public" }));
       toast("success", "Cover image uploaded");
     } catch (error) {
-      toast("error", error instanceof Error ? error.message : "Cover image upload failed");
+      // Only our own sentences reach the screen. Anything else is a fault whose
+      // shape is for the admin feed, not for the creator — and not for whoever
+      // is watching the network tab over their shoulder.
+      toast(
+        "error",
+        error instanceof UploadError ? error.message : "Cover image upload failed. Try again."
+      );
     } finally {
       setThumbnailUploading(false);
     }
@@ -707,7 +634,6 @@ export default function UploadPage() {
   }
 
   const mainPercent = percent(mainProgress);
-  const teaserPercent = percent(teaserProgress);
 
   /**
    * Which studio step the creator is standing on. Derived from the form
@@ -730,8 +656,7 @@ export default function UploadPage() {
           <div className="min-w-0">
             <h1 className="text-3xl font-display font-bold text-gradient">Studio</h1>
             <p className="text-white/50 mt-1">
-              Publish a scene to your storefront. The transfer goes straight to the video host and
-              resumes from the last saved chunk if the connection drops.
+              Publish a scene to your storefront. You can edit the details after it is live.
             </p>
           </div>
           <span className="badge-info inline-flex items-center gap-1.5 shrink-0 py-1.5 px-3">
@@ -755,7 +680,10 @@ export default function UploadPage() {
               <div className="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-4 space-y-3">
                 <p className="text-sm text-amber-100">{blocked.message}</p>
                 <button type="button" className="btn-ghost text-sm inline-flex items-center gap-2 border border-white/10" onClick={() => openPicker(blocked.target)}>
-                  <FolderOpen className="w-4 h-4" /> Open the Files picker / Fungua Files picker
+                  <FolderOpen className="w-4 h-4" />
+                  {blocked.target === "cover"
+                    ? "Chagua picha nyingine / Choose another picture"
+                    : "Chagua faili lingine / Choose another file"}
                 </button>
               </div>
             )}
@@ -775,8 +703,8 @@ export default function UploadPage() {
                   </div>
                   <span className="block text-lg font-semibold">Choose your video</span>
                   <span className="block text-sm text-white/50 mt-1">MP4 · MOV · MKV · WebM — up to 2 GB</span>
-                  <span className="mt-3 inline-flex items-center gap-1.5 text-xs text-amber-200/80">
-                    <Info className="w-3.5 h-3.5" /> Chagua kutoka Downloads au Internal storage — usichague Google Photos au Drive.
+                  <span className="mt-3 inline-flex items-center gap-1.5 text-xs text-white/40">
+                    <Info className="w-3.5 h-3.5" /> Chagua video kutoka kwenye simu yako.
                   </span>
                   {/* Untyped on purpose, and it is the FIRST door rather than the
                       last resort: a type filter is applied by the phone's own file
@@ -891,48 +819,32 @@ export default function UploadPage() {
               </div>
             </section>
 
-            {/* ---- Step 3: cover and teaser ---- */}
+            {/* ---- Step 3: the cover photo ---- */}
             <section className="glass-card overflow-hidden">
               <SectionHeader
                 icon={<ImageIcon className="w-5 h-5" />}
                 step={3}
-                title="Cover & teaser"
-                subtitle="Optional, and the difference between a scroll-past and a click."
+                title="Cover photo"
+                subtitle="Optional. The picture viewers see first."
               />
               <div className="p-5 space-y-5">
                 <div className="space-y-3">
-                  {/* The same three doors the video has, in the same order, for
-                      the same reason: this is where a creator's cover photo
-                      actually lives, and until now the cover had no door that
-                      named internal storage and none that opened the camera at
-                      all — so a cover could not be taken on the spot, and the
-                      folder the file was sitting in was not offered by name.
-
-                      The first door is deliberately untyped and carries the
-                      retry ref: a type filter is applied by the phone's own file
-                      index, so the picker that shows Photos can hide a picture
-                      sitting in Downloads, and a creator has no way to tell that
-                      from the picture not being there. */}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
-                      <FolderOpen className="w-4 h-4" /> From Internal storage / Downloads
-                      <input ref={coverFilesRef} type="file" accept={ANY_FILE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
-                    </label>
-                    <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
-                      <Images className="w-4 h-4" /> From Gallery / Photos
-                      <input type="file" accept={IMAGE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
-                    </label>
-                    <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
-                      <Camera className="w-4 h-4" /> Take a photo
-                      {/* `capture` hands the camera straight over, and a photo
-                          taken here is local by construction — the one kind of
-                          file a phone can always read back. */}
-                      <input type="file" accept="image/*" capture="environment" className="hidden" disabled={thumbnailUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleCoverFiles([file]); e.currentTarget.value = ""; }} />
-                    </label>
-                  </div>
-                  <p className="text-xs text-amber-200/70 inline-flex items-center gap-1.5">
-                    <Info className="w-3.5 h-3.5" /> Chagua kutoka Internal storage au Downloads — usichague Google Photos au Drive.
-                  </p>
+                  {/* One door, untyped, and it is the picker that can see every
+                      folder on the device: a filter is applied by the phone's own
+                      file index, which is one more way for a picture to be
+                      invisible in a list it is actually sitting in. */}
+                  <label className="group flex cursor-pointer items-center gap-3 rounded-2xl border-2 border-dashed border-white/15 bg-white/[0.02] px-5 py-5 transition hover:border-brand-400/60 hover:bg-brand-500/5">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-brand-500/15 ring-1 ring-brand-400/20 transition group-hover:scale-105">
+                      <FolderOpen className="w-6 h-6 text-brand-400" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block font-semibold">From Internal storage / Downloads</span>
+                      <span className="block text-xs text-white/45 mt-0.5">
+                        Chagua picha kutoka kwenye simu yako. / Choose a picture from this phone.
+                      </span>
+                    </span>
+                    <input ref={coverFilesRef} type="file" accept={ANY_FILE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
+                  </label>
 
                   {/* What was chosen, before one of them is used. Tap a picture to crop
                       and upload THAT one as the cover; the rest are candidates and are
@@ -959,23 +871,6 @@ export default function UploadPage() {
                     </p>
                   )}
                 </div>
-
-                <div className="border-t border-white/10 pt-5 space-y-3">
-                  <h3 className="text-sm font-semibold flex items-center gap-2"><FileVideo className="w-4 h-4 text-brand-400" /> Teaser clip</h3>
-                  <label className="block">
-                    <input ref={teaserFilesRef} type="file" accept={ANY_FILE_ACCEPT} className="input-field file:mr-3 file:rounded-lg file:border-0 file:bg-brand-500/20 file:px-3 file:py-1.5 file:text-brand-200" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
-                  </label>
-                  {!mainReady && <p className="text-xs text-white/35">Upload the main video first.</p>}
-                  <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
-                    <Images className="w-4 h-4" /> From Gallery / Photos
-                    <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
-                  </label>
-                  {teaserFile && <p className="text-xs text-white/60">{teaserFile.name} · {formatBytes(teaserFile.size)}</p>}
-                  {(teaserUploading || teaserProgress) && !teaserVideoId && <ProgressBar percent={teaserPercent} label="Teaser" />}
-                  {teaserSession && !teaserVideoId && !teaserUploading && (
-                    <button type="button" className="btn-ghost text-sm border border-white/10" onClick={() => teaserFile && void handleTeaserFile(teaserFile, true)}>Resume teaser upload</button>
-                  )}
-                </div>
               </div>
             </section>
           </div>
@@ -991,7 +886,6 @@ export default function UploadPage() {
                 <ReadinessRow done={title.trim().length >= 3} label="Title (3+ characters)" />
                 <ReadinessRow done={Boolean(category)} label="Category" optional />
                 <ReadinessRow done={Boolean(thumbnailUrl)} label="Cover image" optional />
-                <ReadinessRow done={Boolean(teaserVideoId)} label="Teaser clip" optional />
                 <ReadinessRow done={complianceAttested} label="18+ records confirmed" />
               </ul>
 
@@ -1018,7 +912,7 @@ export default function UploadPage() {
               <p className="flex items-center gap-2 text-white/70 font-medium"><Sparkles className="w-3.5 h-3.5 text-brand-400" /> Creator tips</p>
               <p>• Urefu: dakika 8 au zaidi unashauriwa — lakini hakuna kikomo. Video ya urefu wowote inakubaliwa.</p>
               <p>• Cover inayovutia ndiyo tofauti kati ya kupita na kubofya.</p>
-              <p>• Teaser fupi (sekunde 15–30) huongeza uwezekano wa mnunuzi.</p>
+              <p>• Preview fupi (sekunde 15–30) huongeza uwezekano wa mnunuzi.</p>
             </div>
           </aside>
         </form>
@@ -1057,7 +951,7 @@ function UploadStepper({ current }: { current: number }) {
   const steps = [
     { n: 1, label: "Media", icon: <Film className="w-3.5 h-3.5" /> },
     { n: 2, label: "Details", icon: <Type className="w-3.5 h-3.5" /> },
-    { n: 3, label: "Cover & teaser", icon: <ImageIcon className="w-3.5 h-3.5" /> },
+    { n: 3, label: "Cover", icon: <ImageIcon className="w-3.5 h-3.5" /> },
     { n: 4, label: "Publish", icon: <Rocket className="w-3.5 h-3.5" /> },
   ];
 
