@@ -605,6 +605,9 @@ async function readChunkSlice(file: File, start: number, end: number): Promise<A
   // later rejection — or its eventual bytes — cannot surface as an unhandled
   // rejection somewhere else.
   const expired = Symbol("read-timeout");
+  /** The browser's own words. Carried, never swallowed — see below. */
+  let why: string | null = null;
+
   try {
     let timer: number | undefined;
     const deadline = new Promise<typeof expired>((resolve) => {
@@ -612,15 +615,31 @@ async function readChunkSlice(file: File, start: number, end: number): Promise<A
     });
     const outcome = await Promise.race([file.slice(start, end).arrayBuffer(), deadline]);
     window.clearTimeout(timer);
-    bytes = outcome === expired ? null : (outcome as ArrayBuffer);
-  } catch {
-    bytes = null;
+    if (outcome === expired) {
+      why = `read timed out after ${Math.round(VIDEO_UPLOAD_READ_TIMEOUT_MS / 1000)}s`;
+    } else {
+      bytes = outcome as ArrayBuffer;
+    }
+  } catch (error) {
+    // KEPT, not discarded. `NotReadableError` (the provider will not open it),
+    // `NotFoundError` (it is gone), a security error, or a bare TypeError are
+    // four different faults with four different answers, and this string is the
+    // only place any of that survives — the message the creator sees has to be
+    // one sentence they can act on, which is exactly why it cannot also be the
+    // diagnosis. Measured against the live panel, this is the field that turns
+    // "unreadable" into a fact somebody can go and check.
+    why =
+      error instanceof Error
+        ? `${error.name}: ${error.message}`.slice(0, 300)
+        : String(error).slice(0, 300);
   }
 
   if (!bytes || bytes.byteLength !== wanted) {
     throw new VideoUploadError("INVALID_FILE", UNREADABLE_FILE_MESSAGE, undefined, {
       reason: "unreadable",
       stage: "chunk",
+      providerBody:
+        why ?? `short read: ${bytes?.byteLength ?? 0} of ${wanted} bytes came back`,
     });
   }
   return bytes;
@@ -725,7 +744,22 @@ export async function uploadVideoFile(
       // this device cannot produce is a fact about the file, not a fault worth
       // retrying, so it must not spend the retry budget or be reported as one.
       if (!slice || slice.start !== offset || slice.end !== end) {
-        slice = { start: offset, end, bytes: await readChunkSlice(file, offset, end) };
+        try {
+          slice = { start: offset, end, bytes: await readChunkSlice(file, offset, end) };
+        } catch (error) {
+          // WHERE it died matters as much as why. Offset 0 is a file the device
+          // never opened at all; an offset past zero is a read that worked and
+          // then stopped working — a provider that answers in part, or a card
+          // that was pulled out mid-transfer. Those want different advice, and
+          // without these fields the row cannot tell them apart.
+          if (error instanceof VideoUploadError) {
+            error.offset = offset;
+            error.bytesSent = offset;
+            error.bytesTotal = total;
+            error.chunkIndex = chunkIndex;
+          }
+          throw error;
+        }
       }
       const body = slice.bytes;
 

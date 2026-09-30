@@ -318,9 +318,52 @@ describe("uploadVideoFile", () => {
     expect(error.reason).toBe("unreadable");
     expect(error.stage).toBe("chunk");
     expect(error.message).toMatch(/could not read the video file/);
+    // WHERE it died, so a row can tell "the device never opened the file" apart
+    // from "it stopped being readable partway through".
+    expect(error.offset).toBe(0);
+    expect(error.bytesSent).toBe(0);
+    expect(error.chunkIndex).toBe(1);
+    // And the browser's own words, kept rather than swallowed: this is the one
+    // field that says WHICH fault it was, since the sentence above cannot.
+    expect(error.providerBody).toBe("TypeError: Failed to fetch");
     // Nothing was offered to the network: this is a fact about the file, and no
     // rung of the retry ladder can change it.
     expect(patches(fetchMock)).toHaveLength(0);
+  });
+
+  it("says which slice a read died on when the file stops being readable", async () => {
+    // A provider that answers in part: the first slice arrives, the bytes go up,
+    // and the next read refuses. That is a different fault from a file the
+    // device never opened, and the record has to be able to tell them apart.
+    const file = fileOf(2_000_000);
+    const tracked = {
+      name: file.name,
+      size: file.size,
+      type: file.type,
+      slice: (start: number, end: number) =>
+        start >= 1_152_000
+          ? {
+              arrayBuffer: () =>
+                Promise.reject(new DOMException("could not be read", "NotReadableError")),
+            }
+          : file.slice(start, end),
+    } as unknown as File;
+
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => acknowledged(1_152_000));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await rejection(uploadVideoFile(tracked, sessionFor(2_000_000), { offset: 0 }));
+
+    expect(error).toMatchObject({
+      code: "INVALID_FILE",
+      reason: "unreadable",
+      offset: 1_152_000,
+      bytesSent: 1_152_000,
+      chunkIndex: 2,
+    });
+    expect(error.providerBody).toBe("NotReadableError: could not be read");
+    // The first slice was sent and acknowledged, so only one PATCH exists.
+    expect(patches(fetchMock)).toHaveLength(1);
   });
 
   it("gives up on a slice that never arrives instead of hanging the upload", async () => {
@@ -361,6 +404,7 @@ describe("uploadVideoFile", () => {
 
     expect(error.code).toBe("INVALID_FILE");
     expect(error.reason).toBe("unreadable");
+    expect(error.providerBody).toMatch(/short read: 10 of 100 bytes/);
     expect(patches(fetchMock)).toHaveLength(0);
   });
 

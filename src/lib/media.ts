@@ -51,8 +51,45 @@ import { isHeifExtension } from "./image-bytes";
  * list is how one of them ends up accepting less than the others — which is
  * exactly the "only works from Downloads" report this was written for.
  */
-export const VIDEO_ACCEPT =
-  "video/*,.mp4,.m4v,.mov,.3gp,.3g2,.mkv,.webm,.avi,.wmv,.flv,.mts,.m2ts,.mpg,.mpeg,.ts";
+/**
+ * The extensions that mean "video", and the ones that mean "image".
+ *
+ * The lists above and the classifier below are the same knowledge written twice
+ * — once for a picker, which decides what to OFFER, and once for the code, which
+ * decides what was CHOSEN. They have to agree, and on Android they are each
+ * other's safety net: the picker filters by MIME, and the MIME is exactly what a
+ * document provider is worst at. One list, so a format cannot be accepted by one
+ * half and refused by the other.
+ */
+export const VIDEO_EXTENSIONS = [
+  "mp4",
+  "m4v",
+  "mov",
+  "3gp",
+  "3g2",
+  "mkv",
+  "webm",
+  "avi",
+  "wmv",
+  "flv",
+  "mts",
+  "m2ts",
+  "mpg",
+  "mpeg",
+  "ts",
+] as const;
+
+export const IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp", "heic", "heif", "gif"] as const;
+
+const extensionsOf = (list: readonly string[]) => list.map((ext) => `.${ext}`).join(",");
+
+export const VIDEO_ACCEPT = `video/*,${extensionsOf(VIDEO_EXTENSIONS)}`;
+
+/**
+ * The same, for a picture. Used by the "choose from Gallery" door, where the
+ * gallery is the right place to look and a filter helps rather than hides.
+ */
+export const IMAGE_ACCEPT = `image/*,${extensionsOf(IMAGE_EXTENSIONS)}`;
 
 /**
  * A picker that hides NOTHING.
@@ -72,6 +109,59 @@ export const VIDEO_ACCEPT =
  * honest answer anyway.
  */
 export const ANY_FILE_ACCEPT = "*/*";
+
+export type FileKind = "video" | "image" | "other";
+
+/** The lower-case extension of a name, or "" when it has none. */
+function extensionOf(name: string): string {
+  const match = /\.([A-Za-z0-9]{1,8})$/.exec(name.trim());
+  return match ? match[1].toLowerCase() : "";
+}
+
+/**
+ * What did the creator just choose?
+ *
+ * This exists because a picker that hides nothing cannot promise anything: the
+ * untyped input that gets past Android's file index hands back whatever was
+ * tapped, so the type has to be READ rather than assumed. Two signals, and the
+ * order they are trusted in is the whole point:
+ *
+ *   1. A MIME the browser is sure about (`video/…`, `image/…`) wins. When it is
+ *      there, it is right.
+ *   2. Otherwise the EXTENSION decides — and on Android that is the common case,
+ *      not the edge one. A chat app's download, a card's recording, anything the
+ *      document provider has not indexed arrives as `""`, as
+ *      `application/octet-stream`, or as a MIME from a completely different
+ *      family. Trusting the MIME first here would reject real videos by the
+ *      hundred, which is the fault this whole change is about.
+ *
+ * A name with neither — an untyped file with no extension — is `"other"`, which
+ * the caller refuses out loud rather than sending to Bunny to fail encoding.
+ */
+export function classifyFile(file: { name?: string | null; type?: string | null }): FileKind {
+  const mime = (file.type || "").trim().toLowerCase();
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("image/")) return "image";
+
+  const ext = extensionOf(file.name || "");
+  if ((VIDEO_EXTENSIONS as readonly string[]).includes(ext)) return "video";
+  if ((IMAGE_EXTENSIONS as readonly string[]).includes(ext)) return "image";
+  return "other";
+}
+
+/**
+ * Does this name look like a copy Google Photos or Drive handed to a file
+ * manager? `1000369346.mp4` — ten digits, then an ordinary extension.
+ *
+ * It is a HEURISTIC and only ever used to warn: the measured case is a live
+ * creator whose 192 MB video the phone would not read on two different networks,
+ * and files named exactly like this are the shape those downloads take. A false
+ * positive costs one sentence of advice; a false negative costs what it cost
+ * them — a file that cannot be read, discovered after the attempt.
+ */
+export function isLikelyCloudCopy(name: string | null | undefined): boolean {
+  return /^\d{8,}\.(mp4|mov|jpg|jpeg|png)$/i.test((name || "").trim());
+}
 
 export const MEDIA_ROUTE_PREFIX = "/api/media/";
 

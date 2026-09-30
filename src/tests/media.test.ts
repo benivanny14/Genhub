@@ -22,10 +22,16 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  IMAGE_ACCEPT,
+  IMAGE_EXTENSIONS,
   MEDIA_ROUTE_PREFIX,
+  VIDEO_ACCEPT,
+  VIDEO_EXTENSIONS,
   cacheControlFor,
   canOptimizeImage,
+  classifyFile,
   contentTypeForKey,
+  isLikelyCloudCopy,
   isMediaPrivate,
   isSafeMediaKey,
   mediaKeyFromUrl,
@@ -87,6 +93,70 @@ describe("mediaKindOf / ownerOfPrivateKey", () => {
     // "" is falsy, so a truncated key can never be read as "owned by nobody" and
     // slip past the proxy's `owner != null` check.
     expect(ownerOfPrivateKey("private/")).toBeNull();
+  });
+});
+
+describe("classifyFile", () => {
+  it("trusts a MIME the browser is sure about", () => {
+    expect(classifyFile({ name: "whatever.bin", type: "video/mp4" })).toBe("video");
+    expect(classifyFile({ name: "whatever.bin", type: "image/png" })).toBe("image");
+  });
+
+  it("falls back to the extension, which on Android is the common case", () => {
+    // A chat app's download, a card's recording, anything the document provider
+    // has not indexed: `""` or `application/octet-stream`, and a real video.
+    expect(classifyFile({ name: "1000369346.mp4", type: "" })).toBe("video");
+    expect(classifyFile({ name: "clip.mov", type: "application/octet-stream" })).toBe("video");
+    expect(classifyFile({ name: "holiday.HEIC", type: "" })).toBe("image");
+    expect(classifyFile({ name: "shot.JPEG", type: "application/octet-stream" })).toBe("image");
+  });
+
+  it("is case-insensitive about the extension", () => {
+    expect(classifyFile({ name: "SCENE.MP4", type: "" })).toBe("video");
+    expect(classifyFile({ name: "Photo.PnG", type: "" })).toBe("image");
+  });
+
+  it("refuses what is neither, including a name with no extension at all", () => {
+    expect(classifyFile({ name: "document.pdf", type: "application/pdf" })).toBe("other");
+    expect(classifyFile({ name: "notes.txt", type: "" })).toBe("other");
+    expect(classifyFile({ name: "clip", type: "" })).toBe("other");
+    expect(classifyFile({ name: "", type: "" })).toBe("other");
+    expect(classifyFile({})).toBe("other");
+  });
+
+  it("covers every extension the two accept lists offer", () => {
+    // The lists decide what a picker OFFERS and this decides what was CHOSEN.
+    // They have to agree; a format offered by one and refused by the other is a
+    // creator watching a file they were just allowed to pick be rejected.
+    for (const ext of VIDEO_EXTENSIONS) {
+      expect(classifyFile({ name: `a.${ext}`, type: "" })).toBe("video");
+      expect(VIDEO_ACCEPT).toContain(`.${ext}`);
+    }
+    for (const ext of IMAGE_EXTENSIONS) {
+      expect(classifyFile({ name: `a.${ext}`, type: "" })).toBe("image");
+      expect(IMAGE_ACCEPT).toContain(`.${ext}`);
+    }
+  });
+});
+
+describe("isLikelyCloudCopy", () => {
+  it("recognises the name a Photos or Drive download arrives with", () => {
+    expect(isLikelyCloudCopy("1000369346.mp4")).toBe(true);
+    expect(isLikelyCloudCopy("1000371423.mov")).toBe(true);
+    expect(isLikelyCloudCopy("1000369346.jpg")).toBe(true);
+    expect(isLikelyCloudCopy("12345678.png")).toBe(true);
+    expect(isLikelyCloudCopy("  1000369346.MP4  ")).toBe(true);
+  });
+
+  it("leaves an ordinary name alone", () => {
+    expect(isLikelyCloudCopy("scene.mp4")).toBe(false);
+    expect(isLikelyCloudCopy("1234567.mp4")).toBe(false);
+    expect(isLikelyCloudCopy("file.1000369346.mp4")).toBe(false);
+    expect(isLikelyCloudCopy("1000369346.webm")).toBe(false);
+    expect(isLikelyCloudCopy("VID-20260101-WA0001.mp4")).toBe(false);
+    expect(isLikelyCloudCopy("")).toBe(false);
+    expect(isLikelyCloudCopy(null)).toBe(false);
+    expect(isLikelyCloudCopy(undefined)).toBe(false);
   });
 });
 

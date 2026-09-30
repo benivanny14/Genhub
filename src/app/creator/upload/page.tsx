@@ -1,15 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Camera,
   Check,
   CheckCircle,
   FileVideo,
   FolderOpen,
   Image as ImageIcon,
+  Images,
   Loader2,
   ShieldAlert,
   Upload,
@@ -20,7 +22,7 @@ import ImageCropper from "@/components/ImageCropper";
 import { fetchCurrentUser } from "@/lib/current-user";
 import { useToast } from "@/components/Toast";
 import { uploadImage } from "@/lib/upload-client";
-import { ANY_FILE_ACCEPT, VIDEO_ACCEPT } from "@/lib/media";
+import { ANY_FILE_ACCEPT, IMAGE_ACCEPT, VIDEO_ACCEPT, classifyFile, isLikelyCloudCopy } from "@/lib/media";
 import { CATEGORIES } from "@/lib/categories";
 import {
   CREATOR_GUIDELINES,
@@ -46,6 +48,34 @@ import {
 import { reportUploadFailure } from "@/lib/upload-failure-report";
 
 type UploadKind = "main" | "teaser";
+
+/** Which picker a refused file came from, so the retry can reopen the right one. */
+type PickerTarget = "main" | "teaser" | "cover";
+
+/**
+ * Said before an upload whose file name gives it away, not after it fails.
+ *
+ * A ten-digit name with an ordinary extension is the shape Google Photos and
+ * Drive downloads take on Android, and those are the files a phone most often
+ * cannot hand over — the live case this was written from was a 192 MB video with
+ * exactly that name, unreadable on two different networks. It is a warning and
+ * never a refusal: a file that really is a local copy uploads normally, and
+ * nothing is lost by mentioning it.
+ */
+const CLOUD_COPY_WARNING =
+  "Faili hii inaweza kuwa ya cloud. Ikishindwa, ihamishe kwenye Downloads.";
+
+/**
+ * What a creator is told when a PICTURE cannot be read.
+ *
+ * The transport's own sentence is written for a video ("could not read the video
+ * file"), and a creator standing on the cover picker being told about a video
+ * file would be reading about the wrong thing. The admin record keeps the
+ * transport's words — only the sentence on screen changes.
+ */
+const COVER_UNREADABLE =
+  "This device could not read that picture, so nothing was sent. Move it into the " +
+  "phone's own storage (Downloads) and choose it again.";
 
 interface UserData {
   role: string;
@@ -108,7 +138,50 @@ export default function UploadPage() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState<{ slug: string; processing: boolean } | null>(null);
 
+  /**
+   * The pictures the creator picked for the cover, before one of them is used.
+   *
+   * Candidates, not uploads: only the picture that becomes the cover is sent to
+   * storage, so choosing ten photos from the gallery leaves one object in the
+   * zone rather than ten. Their object URLs are held so the strip can show what
+   * was chosen.
+   */
+  const [coverCandidates, setCoverCandidates] = useState<{ file: File; url: string }[]>([]);
+  /**
+   * The file that was refused because the device could not read it.
+   *
+   * Shown with a button that reopens the untitled picker, because "move it into
+   * Downloads and choose it again" is advice the creator can only act on if the
+   * picker that sees Downloads is one tap away.
+   */
+  const [blocked, setBlocked] = useState<{ target: PickerTarget; message: string } | null>(null);
+
+  /** The three unfiltered pickers, so a refusal can reopen the right one. */
+  const mainFilesRef = useRef<HTMLInputElement>(null);
+  const teaserFilesRef = useRef<HTMLInputElement>(null);
+  const coverFilesRef = useRef<HTMLInputElement>(null);
+
   const allGuidelinesChecked = CREATOR_GUIDELINES.every((item) => checks[item.id]);
+
+  /**
+   * Revoke the previews when the page goes away.
+   *
+   * Read through a ref rather than from the state the effect closed over: an
+   * effect that only cleans up on unmount would capture the empty array it was
+   * created with and revoke nothing, and an object URL that outlives its element
+   * holds the WHOLE file in memory for the life of the page — which on a 192 MB
+   * video cover is not a small leak.
+   */
+  const coverCandidatesRef = useRef(coverCandidates);
+  useEffect(() => {
+    coverCandidatesRef.current = coverCandidates;
+  }, [coverCandidates]);
+  useEffect(
+    () => () => {
+      for (const candidate of coverCandidatesRef.current) URL.revokeObjectURL(candidate.url);
+    },
+    []
+  );
 
   const checkAccess = useCallback(async () => {
     try {
@@ -280,7 +353,15 @@ export default function UploadPage() {
       // keeps it, because that is the whole point of a resumable upload: the
       // bytes already at Bunny are still there and the retry continues from them.
       const dead = error instanceof VideoUploadError && error.code === "EXPIRED";
-      return { session, videoId: "", discardSession: dead };
+      // A file this device cannot read fails identically on every attempt, and
+      // the slot it reserved holds nothing, so the session is CLOSED rather than
+      // kept. Closing it deletes the empty Bunny object (see
+      // abortVideoUploadSession) and leaves the creator one instruction on
+      // screen instead of a Resume button that cannot work — which is how this
+      // creator came to hold a slot per attempt.
+      const unreadable = error instanceof VideoUploadError && error.reason === "unreadable";
+      if (unreadable) await cancelSession(session);
+      return { session, videoId: "", discardSession: dead || unreadable };
     }
   }
 
@@ -293,27 +374,104 @@ export default function UploadPage() {
    * — and every attempt at a cloud-backed file leaves another orphan behind.
    * Asked here, the answer arrives while they are still looking at the picker.
    */
-  async function readableOrReport(file: File, kind: UploadKind): Promise<boolean> {
+  async function readableOrBlock(
+    file: File,
+    target: PickerTarget,
+    reportKind?: UploadKind
+  ): Promise<boolean> {
     try {
       await assertFileReadable(file);
       return true;
     } catch (error) {
-      toast("error", error instanceof Error ? error.message : "That file could not be read");
-      reportUploadFailure(error, { file, kind });
+      // A picture is not a video and the transport's sentence says it is.
+      const message =
+        target === "cover"
+          ? COVER_UNREADABLE
+          : error instanceof Error
+            ? error.message
+            : "That file could not be read";
+      setBlocked({ target, message });
+      toast("error", message);
+      // Reported for the two video doors only: the admin failure feed is about
+      // video uploads, and a cover picture never reserves a slot.
+      if (reportKind) reportUploadFailure(error, { file, kind: reportKind });
       return false;
     }
   }
 
+  /** Reopen one of the three pickers — the retry a refusal offers. */
+  function openPicker(target: PickerTarget) {
+    const ref =
+      target === "main" ? mainFilesRef : target === "teaser" ? teaserFilesRef : coverFilesRef;
+    ref.current?.click();
+  }
+
+  /** Drop one candidate, and its preview with it. */
+  function removeCoverCandidate(index: number) {
+    setCoverCandidates((current) => {
+      const removed = current[index];
+      if (removed) URL.revokeObjectURL(removed.url);
+      return current.filter((_, position) => position !== index);
+    });
+  }
+
+  /**
+   * Cover pictures, however many the creator chose at once.
+   *
+   * Every one is classified — a video picked here is refused out loud rather
+   * than sent to be cropped — and probed with `assertFileReadable` before
+   * anything else, because the picker that can see the whole device can also see
+   * the cloud. Only the first is opened in the cropper straight away, since the
+   * first picture is nearly always the intended cover; the rest wait as
+   * thumbnails and tapping one makes it the cover instead.
+   */
+  async function handleCoverFiles(files: File[]) {
+    if (!files.length) return;
+    const accepted: { file: File; url: string }[] = [];
+
+    for (const file of files) {
+      if (classifyFile(file) !== "image") {
+        toast("error", `"${file.name}" is not a picture. Choose a JPG, PNG, WebP or HEIC image.`);
+        continue;
+      }
+      if (isLikelyCloudCopy(file.name)) toast("warning", CLOUD_COPY_WARNING);
+      if (!(await readableOrBlock(file, "cover"))) continue;
+      accepted.push({ file, url: URL.createObjectURL(file) });
+    }
+
+    if (!accepted.length) return;
+    setBlocked(null);
+    setCoverCandidates((current) => [...current, ...accepted]);
+    setCropFile(accepted[0].file);
+  }
+
   async function handleMainFile(file: File, resumeExisting = false) {
+    // Everything the picker handed over, in the order that fails cheapest: what
+    // the file IS, whether this device can read it, and only then whether it is
+    // the right size. A RESUMED upload skips all three — its bytes are already
+    // at Bunny, and a re-read refusing a file whose first half is stored would
+    // be the worst outcome available here.
+    if (!resumeExisting) {
+      const kind = classifyFile(file);
+      if (kind !== "video") {
+        toast(
+          "error",
+          kind === "image"
+            ? "That is a picture, not a video. Use the cover picker for pictures."
+            : `"${file.name}" is not a video. Choose an MP4, MOV, MKV or WebM file.`
+        );
+        return;
+      }
+      if (isLikelyCloudCopy(file.name)) toast("warning", CLOUD_COPY_WARNING);
+      if (!(await readableOrBlock(file, "main", "main"))) return;
+      setBlocked(null);
+    }
+
     const sizeError = videoFileSizeError(file);
     if (sizeError) {
       toast("error", sizeError);
       return;
     }
-    // A RESUMED upload has already proved it: the bytes are at Bunny, and the
-    // one thing that must not happen here is a re-read refusing a file whose
-    // first half is already stored.
-    if (!resumeExisting && !(await readableOrReport(file, "main"))) return;
 
     // Choosing a file is always a new upload. Reusing a session is reserved for
     // the explicit Resume button: a file picker retry must never accidentally
@@ -367,12 +525,27 @@ export default function UploadPage() {
       toast("error", "Upload the main video first");
       return;
     }
+    if (!resumeExisting) {
+      const kind = classifyFile(file);
+      if (kind !== "video") {
+        toast(
+          "error",
+          kind === "image"
+            ? "That is a picture, not a clip. Choose a short video for the trailer."
+            : `"${file.name}" is not a video. Choose an MP4, MOV, MKV or WebM file.`
+        );
+        return;
+      }
+      if (isLikelyCloudCopy(file.name)) toast("warning", CLOUD_COPY_WARNING);
+      if (!(await readableOrBlock(file, "teaser", "teaser"))) return;
+      setBlocked(null);
+    }
+
     const sizeError = videoFileSizeError(file);
     if (sizeError) {
       toast("error", sizeError);
       return;
     }
-    if (!resumeExisting && !(await readableOrReport(file, "teaser"))) return;
     const reuse =
       resumeExisting &&
       teaserSession &&
@@ -521,21 +694,47 @@ export default function UploadPage() {
         <form onSubmit={(e) => void submit(e)} className="space-y-6">
           <div><h1 className="text-2xl font-bold">Upload video</h1><p className="text-white/50 mt-1">Upload direct to Bunny. The page resumes from the last saved chunk after a connection reset.</p></div>
 
+          {/* The refusal, where the creator is already looking. The sentence is
+              the transport's own; the button is the part that makes it
+              actionable, because "move it to Downloads" needs the picker that
+              can see Downloads to be one tap away. */}
+          {blocked && (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-4 space-y-3">
+              <p className="text-sm text-amber-100">{blocked.message}</p>
+              <button type="button" className="btn-ghost text-sm inline-flex items-center gap-2" onClick={() => openPicker(blocked.target)}>
+                <FolderOpen className="w-4 h-4" /> Open the Files picker / Fungua Files picker
+              </button>
+            </div>
+          )}
+
           <section className="glass-card p-5 space-y-4">
             <h2 className="font-semibold flex items-center gap-2"><FileVideo className="w-5 h-5 text-brand-400" /> Main video</h2>
             <label className="block border-2 border-dashed border-white/15 rounded-2xl p-8 text-center cursor-pointer hover:border-brand-400/60 transition">
               <Upload className="w-8 h-8 mx-auto text-brand-400 mb-3" />
               <span className="block font-medium">Choose a video</span>
-              <span className="block text-xs text-white/40 mt-1">MP4, MOV, MKV, WebM and other video formats · any folder on this device · maximum 2 GB</span>
-              <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
+              <span className="block text-xs text-white/40 mt-1">MP4, MOV, MKV, WebM and other video formats · maximum 2 GB</span>
+              <span className="block text-xs text-amber-200/80 mt-2">Chagua kutoka Downloads au Internal storage. Usichague kutoka Google Photos au Drive.</span>
+              {/* Untyped on purpose, and it is the FIRST door rather than the
+                  last resort: a type filter is applied by the phone's own file
+                  index, so the picker that shows Photos can hide a video that
+                  is sitting in Downloads — and the creator has no way to tell
+                  that from the file not being there. */}
+              <input ref={mainFilesRef} type="file" accept={ANY_FILE_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
             </label>
-            {/* The second door. A type filter is kept by the phone's own file
-                index, so a video a chat app saved or one sitting on a card can
-                be missing from the picker above while being perfectly readable. */}
-            <label className="flex items-center justify-center gap-2 text-xs text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
-              <FolderOpen className="w-4 h-4" /> Can&apos;t find it? Browse every folder and app on this device
-              <input type="file" accept={ANY_FILE_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
-            </label>
+            <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs">
+              {/* The typed door, for the creators who keep their videos in the
+                  gallery — where a MIME filter is a help and not a hiding place. */}
+              <label className="flex items-center gap-2 text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
+                <Images className="w-4 h-4" /> Choose from Gallery / Photos
+                <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
+              </label>
+              <label className="flex items-center gap-2 text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
+                <Camera className="w-4 h-4" /> Record now
+                {/* `capture` hands the camera straight to the creator, and a
+                    recording is the one file that is local by construction. */}
+                <input type="file" accept="video/*" capture="environment" className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
+              </label>
+            </div>
             {mainFile && <div className="flex items-center justify-between text-sm"><span className="truncate">{mainFile.name} · {formatBytes(mainFile.size)}</span>{mainReady ? <span className="text-emerald-400 flex items-center gap-1"><Check className="w-4 h-4" /> Ready</span> : null}</div>}
             {(mainUploading || mainProgress) && !mainReady && <ProgressBar percent={mainPercent} label={mainUploading ? `Uploading ${mainPercent}%` : "Upload incomplete — press Resume upload to continue"} />}
             {mainSession && !mainReady && !mainUploading && <button type="button" className="btn-ghost text-sm" onClick={() => mainFile && void handleMainFile(mainFile, true)}>Resume upload</button>}
@@ -556,13 +755,40 @@ export default function UploadPage() {
 
           <section className="glass-card p-5 space-y-4">
             <h2 className="font-semibold">Optional cover and teaser</h2>
-            <label className="flex items-center gap-3 text-sm text-white/70 cursor-pointer"><ImageIcon className="w-5 h-5 text-brand-400" /> Choose cover image<input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) setCropFile(file); e.currentTarget.value = ""; }} /></label>
+            <label className="flex items-center gap-3 text-sm text-white/70 cursor-pointer"><ImageIcon className="w-5 h-5 text-brand-400" /> Choose cover image(s)
+              <input ref={coverFilesRef} type="file" accept={ANY_FILE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
+            </label>
+            <p className="text-xs text-amber-200/70">Choose from Downloads or internal storage — not Google Photos or Drive.</p>
+            <label className="flex items-center gap-2 text-xs text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
+              <Images className="w-4 h-4" /> Choose from Gallery / Photos
+              <input type="file" accept={IMAGE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
+            </label>
+            {/* What was chosen, before one of them is used. Tap a picture to crop
+                and upload THAT one as the cover; the rest are candidates and are
+                never sent anywhere. */}
+            {coverCandidates.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {coverCandidates.map((candidate, index) => (
+                  <div key={candidate.url} className="relative">
+                    <button type="button" onClick={() => setCropFile(candidate.file)} title="Use this picture as the cover">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={candidate.url} alt="" className="h-16 w-16 rounded-lg object-cover border border-white/10" />
+                    </button>
+                    <button type="button" aria-label="Remove this picture" onClick={() => removeCoverCandidate(index)} className="absolute -top-1 -right-1 rounded-full bg-black/80 p-0.5 border border-white/20">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
             {thumbnailUploading && <ProgressBar percent={100} label="Uploading cover…" />}
             {thumbnailUrl && <p className="text-xs text-emerald-400">Cover ready</p>}
-            <label className="block text-sm text-white/70">Optional teaser clip<input type="file" accept={VIDEO_ACCEPT} className="input w-full mt-2" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} /></label>
+            <label className="block text-sm text-white/70">Optional teaser clip
+              <input ref={teaserFilesRef} type="file" accept={ANY_FILE_ACCEPT} className="input w-full mt-2" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
+            </label>
             <label className="flex items-center gap-2 text-xs text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
-              <FolderOpen className="w-4 h-4" /> Can&apos;t find the clip? Browse every folder and app on this device
-              <input type="file" accept={ANY_FILE_ACCEPT} className="hidden" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
+              <Images className="w-4 h-4" /> Choose the clip from Gallery / Photos
+              <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
             </label>
             {teaserFile && <p className="text-xs text-white/60">{teaserFile.name} · {formatBytes(teaserFile.size)}</p>}
             {(teaserUploading || teaserProgress) && !teaserVideoId && <ProgressBar percent={teaserPercent} label={`Teaser ${teaserPercent}%`} />}
