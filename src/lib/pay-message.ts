@@ -8,9 +8,10 @@
 // enforces, and two copies of it is how a UI ends up offering an amount the API
 // refuses.
 //
-// There is no free chat and no exemption list on the buyer's side. A subscription
-// buys a creator's videos for a month, not their inbox, so a subscriber pays to
-// write like everybody else.
+// A subscription is the DOOR to a creator's inbox, not a discount on it: a
+// viewer can only write to a creator they follow, and once inside they still pay
+// the amount they chose (see the subscription check in /api/messages). There is
+// still no free chat and no exemption list on the buyer's side.
 //
 // A CREATOR (or an ADMIN) answering their own inbox is the one exception, and it
 // is the rule that makes an inbox a conversation: charging the reply too left a

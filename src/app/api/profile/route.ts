@@ -154,7 +154,7 @@ export async function PATCH(request: NextRequest) {
 
     await cacheDel(`user:${auth.userId}:*`);
 
-    return api.success(updated, "Wasifu umesasishwa");
+    return api.success(updated, "Profile updated");
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);

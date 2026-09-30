@@ -65,11 +65,11 @@ type PickerTarget = "main" | "cover";
  * work — what they need is one instruction, not a mechanism.
  */
 const UPLOAD_MAY_NOT_WORK =
-  "Faili hii huenda isipakiwe. Ikishindwa, chagua faili lingine. / This file may not upload; if it fails, choose another.";
+  "This file may not upload. If it fails, choose another one.";
 
 /** What a creator is told when a PICTURE cannot be read. Plain, and no more. */
 const COVER_UNREADABLE =
-  "Picha hii haikusomwa. Chagua picha nyingine. / That picture could not be read. Choose another one.";
+  "That picture could not be read. Choose another one.";
 
 interface UserData {
   role: string;
@@ -317,7 +317,7 @@ export default function UploadPage() {
         // and a bar that resets with no explanation reads as data lost.
         toast(
           "warning",
-          "Muunganisho ulikatika — inaanza upya. / The connection dropped, so the upload is starting again."
+          "The connection dropped, so the upload is starting again."
         );
         session = await createSession(file);
         if (!session) return null;
@@ -416,7 +416,7 @@ export default function UploadPage() {
 
     for (const file of files) {
       if (classifyFile(file) !== "image") {
-        toast("error", `"${file.name}" is not a picture. Chagua picha ya aina yoyote.`);
+        toast("error", `"${file.name}" is not a picture. Choose any image file.`);
         continue;
       }
       if (isLikelyCloudCopy(file.name)) toast("warning", UPLOAD_MAY_NOT_WORK);

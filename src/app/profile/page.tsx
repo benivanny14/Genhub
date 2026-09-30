@@ -137,11 +137,9 @@ export default function ProfilePage() {
 
   async function copyReferralLink() {
     if (!referral?.link) return;
-    const copied = await copyToClipboard(referral.link);
-    if (!copied) {
-      toast("warning", "Could not copy it — select the link and copy it by hand.");
-      return;
-    }
+    // The helper falls back to the selection copy, so a "could not copy" warning
+    // only fired when the link reached the clipboard anyway.
+    await copyToClipboard(referral.link);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }

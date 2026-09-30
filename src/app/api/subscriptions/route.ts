@@ -264,7 +264,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return api.success(subscription, "Umejiandikisha kikamilifu!", 201);
+    return api.success(subscription, "Subscription active — welcome!", 201);
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);

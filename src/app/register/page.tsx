@@ -152,7 +152,7 @@ export default function RegisterPage() {
           "success",
           role === "CREATOR"
             ? "Account created — let's verify you next."
-            : `Karibu Genhub${displayName ? `, ${displayName}` : ""}!`
+            : `Welcome to Genhub${displayName ? `, ${displayName}` : ""}!`
         );
         redirectTimer.current = setTimeout(() => {
           if (role === "CREATOR") router.push("/creator/kyc");

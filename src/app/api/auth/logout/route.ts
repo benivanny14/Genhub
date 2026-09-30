@@ -9,7 +9,7 @@ import { api } from "@/lib/api-response";
 export async function POST() {
   try {
     await removeAuthCookie();
-    return api.success(null, "Umetoka kikamilifu");
+    return api.success(null, "Signed out");
   } catch (error) {
     console.error("[Logout Error]", error);
     return api.internal();

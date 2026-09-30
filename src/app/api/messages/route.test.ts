@@ -1,20 +1,24 @@
 // =============================================================================
 // GENHUB - Who pays for a message
 //
-// The rule is simple and it is one-directional: a VIEWER pays to reach somebody,
-// and a CREATOR (or an admin) answering their own inbox does not. The route used
-// to ask the database three questions before naming a price — does the sender
-// subscribe to the receiver, does the receiver subscribe to the sender, did the
-// receiver write first — and a yes on any of them made the message free. That
-// was wrong twice over: a subscription buys a creator's *videos* for a month,
-// not their inbox, and the exemption made a reply cost money for the one person
-// the product exists for, whose balance sits in earnings and not in a wallet.
+// Two rules, and they are separate:
 //
-// So: the free-reply rule is keyed on the SENDER'S ROLE, read from the database
-// (a role can change long before a session is reissued) and on nothing else. No
-// subscription is read, no thread history is read, and no viewer ever gets a
-// free message. The amount is required, floored and capped by the same constants
-// the composer renders.
+//   1. A viewer can only write to a CREATOR they are subscribed to. The
+//      subscription is the door.
+//   2. Once inside, the viewer still pays the amount they chose — a
+//      subscription does not make the message free. A CREATOR (or an admin)
+//      answering their own inbox pays nothing at all.
+//
+// The route used to ask three questions before naming a price — does the sender
+// subscribe, does the receiver subscribe, did the receiver write first — and a
+// yes on any of them made the message free. That is not this: here the
+// subscription is required and the price is still the request's. No viewer ever
+// gets a free message, and no thread history is read.
+//
+// The free-reply rule is keyed on the SENDER'S ROLE, read from the database (a
+// role can change long before a session is reissued) and on nothing else. The
+// amount is required, floored and capped by the same constants the composer
+// renders.
 //
 // Prisma, auth and the wallet service are mocked; no database, no money.
 // =============================================================================
@@ -28,10 +32,9 @@ const mocks = vi.hoisted(() => ({
   debitWallet: vi.fn(),
   findUser: vi.fn(),
   updateUser: vi.fn(),
-  // Not called by the route any more. Kept as spies so that re-introducing a
-  // subscription-or-thread based exemption has to delete an assertion rather
-  // than slip in silently.
+  // The subscription gate: a viewer may only write to a creator they follow.
   findSubscription: vi.fn(),
+  // Never called — a thread's history must not turn a message free.
   findMessage: vi.fn(),
   createMessage: vi.fn(),
   upsertBalance: vi.fn(),
@@ -152,6 +155,9 @@ beforeEach(() => {
     overBy: 0,
   });
   mocks.debitWallet.mockResolvedValue({ ok: true, balance: 4000 });
+  // Default: the viewer follows the creator, so the send path is reachable. Tests
+  // that care about the gate override this with null.
+  mocks.findSubscription.mockResolvedValue({ id: "sub-1" });
   mocks.createNotification.mockResolvedValue({ id: "note-1" });
   mocks.createMessage.mockImplementation((args: { data: Record<string, unknown> }) =>
     Promise.resolve({ id: "msg-1", ...args.data })
@@ -251,17 +257,70 @@ describe("the split", () => {
   });
 });
 
-describe("a viewer never gets a free message", () => {
-  it("never reads a subscription to decide the price", async () => {
-    // A live membership row, if the route asked for one. It must not: the price
-    // comes from the request, not from a relationship between the two accounts.
+describe("a creator's inbox is for their subscribers", () => {
+  it("refuses a viewer who does not follow the creator", async () => {
     asViewer();
-    mocks.findSubscription.mockResolvedValue({ expiresAt: new Date("2026-10-25T00:00:00Z") });
+    mocks.findSubscription.mockResolvedValue(null);
+
+    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const body = await res.json();
+
+    expect(res.status).toBe(403);
+    expect(body.code).toBe("SUBSCRIPTION_REQUIRED");
+    expect(mocks.debitWallet).not.toHaveBeenCalled();
+    expect(mocks.createMessage).not.toHaveBeenCalled();
+  });
+
+  it("asks for a live subscription to THIS creator", async () => {
+    asViewer();
+
+    await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+
+    const where = mocks.findSubscription.mock.calls[0][0].where;
+    expect(where).toMatchObject({
+      viewerId: VIEWER,
+      creatorId: CREATOR,
+      isActive: true,
+    });
+    // A cancelled membership keeps its row until the period ends, so the expiry
+    // is what decides, not the flag alone.
+    expect(where.expiresAt.gt).toBeInstanceOf(Date);
+  });
+
+  it("does not gate a message to a plain account", async () => {
+    const OTHER = "viewer-3";
+    account(OTHER, "VIEWER");
+    asViewer();
+
+    const res = await POST(send({ receiverId: OTHER, amount: 500, content: "hi" }));
+
+    expect(res.status).toBe(201);
+    expect(mocks.findSubscription).not.toHaveBeenCalled();
+  });
+
+  it("leaves a creator's free reply ungated", async () => {
+    const OTHER_CREATOR = "creator-2";
+    account(OTHER_CREATOR, "CREATOR");
+    asCreator();
+    mocks.findSubscription.mockResolvedValue(null);
+
+    const res = await POST(send({ receiverId: OTHER_CREATOR, content: "thanks" }));
+
+    expect(res.status).toBe(201);
+    expect(mocks.findSubscription).not.toHaveBeenCalled();
+  });
+});
+
+describe("a viewer never gets a free message", () => {
+  it("still pays the amount they chose, even while subscribed", async () => {
+    // The subscription is the door, not the price: the amount comes from the
+    // request, not from a relationship between the two accounts.
+    asViewer();
+    mocks.findSubscription.mockResolvedValue({ id: "sub-1" });
 
     const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
 
     expect(res.status).toBe(201);
-    expect(mocks.findSubscription).not.toHaveBeenCalled();
     expect(mocks.debitWallet).toHaveBeenCalledWith(tx, { userId: VIEWER, amount: 500 });
   });
 

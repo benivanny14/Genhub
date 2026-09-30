@@ -186,10 +186,14 @@ describe("a failure message says what to do, not how it works", () => {
   });
 
   it("tells a creator whose picture could not be read what to do next", () => {
+    // English only: a toast must never mix languages (or lead with one the
+    // viewer may not read).
     const [mayNotWork, unreadable] = constantLiterals(UPLOAD);
     expect(unreadable).toMatch(/choose another/i);
-    expect(unreadable).toMatch(/chagua picha nyingine/i);
-    expect(mayNotWork).toMatch(/chagua faili lingine/i);
+    expect(mayNotWork).toMatch(/choose another/i);
+    for (const sentence of [mayNotWork, unreadable]) {
+      expect(sentence).not.toMatch(/chagua|faili|picha|haikusomwa|isipakiwe/i);
+    }
   });
 });
 

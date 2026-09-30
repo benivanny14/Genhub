@@ -93,7 +93,16 @@ export default function InboxPage() {
   // server is the source of truth and this is refreshed on load.
   const [messagesEnabled, setMessagesEnabled] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
+  // Whether the signed-in viewer is subscribed to the creator they have open.
+  // `null` means "not asked yet" (or a non-creator partner), which the composer
+  // treats as allowed — the server still enforces the real rule on send.
+  const [partnerSubscribed, setPartnerSubscribed] = useState<boolean | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
+  // The account's own role, from the loaded session. A ref because the first
+  // conversation can open inside init(), before React has re-rendered with the
+  // user state — reading it from state there would see `null` and wrongly ask a
+  // creator to subscribe to themselves in order to reply.
+  const selfRoleRef = useRef<string | undefined>(undefined);
   const router = useRouter();
   const { theme } = useTheme();
   const { toast } = useToast();
@@ -104,6 +113,9 @@ export default function InboxPage() {
   // one-way for anyone whose wallet was empty. Same rule the API applies, read
   // from the same source of truth (the account's role).
   const freeReply = user?.role === "CREATOR" || user?.role === "ADMIN";
+  // The creator on screen is one this viewer cannot write to yet.
+  const partnerNeedsSubscription =
+    activePartner?.role === "CREATOR" && !freeReply && partnerSubscribed === false;
 
   useEffect(() => {
     init();
@@ -133,6 +145,7 @@ export default function InboxPage() {
       const data = await res.json().catch(() => null);
       if (data?.success) {
         setUser(data.data);
+        selfRoleRef.current = data.data.role;
       } else {
         setUser({ id: "" });
       }
@@ -240,6 +253,25 @@ export default function InboxPage() {
   async function openConversation(partner: Partner) {
     setActivePartner(partner);
 
+    // A creator's inbox is for their subscribers — ask so the composer can say
+    // so instead of letting the send button fail. Creators and admins replying
+    // are exempt (they are not writing TO a creator, they ARE one).
+    const selfRole = selfRoleRef.current;
+    const exempt = selfRole === "CREATOR" || selfRole === "ADMIN";
+    if (!demoMode && partner.role === "CREATOR" && !exempt) {
+      setPartnerSubscribed(null);
+      try {
+        const res = await fetch(`/api/subscriptions?creatorId=${partner.id}`);
+        const data = await res.json();
+        setPartnerSubscribed(Boolean(data?.success && data.data?.subscribed));
+      } catch {
+        // Leave it unknown; the API refuses the send if the answer is really no.
+        setPartnerSubscribed(null);
+      }
+    } else {
+      setPartnerSubscribed(null);
+    }
+
     if (demoMode) {
       setMessages(DEMO_MESSAGES);
       return;
@@ -262,6 +294,12 @@ export default function InboxPage() {
   async function handleSend() {
     if (!activePartner || !content.trim() || sending) return;
     const amt = Math.max(0, parseInt(amount) || 0);
+    // Only subscribers may write to a creator. The API enforces this too; the
+    // check here is so the refusal is a sentence rather than a failed request.
+    if (partnerNeedsSubscription) {
+      toast("warning", "Subscribe to this creator before sending them a message.");
+      return;
+    }
     // The floor only applies to somebody who is paying. A reply carries no
     // amount at all, so there is nothing for the API to charge.
     if (!freeReply && amt < MIN_PAID_MESSAGE) {
@@ -285,6 +323,9 @@ export default function InboxPage() {
         setContent("");
         await openConversation(activePartner);
         await fetchConversations();
+      } else if (data.code === "SUBSCRIPTION_REQUIRED") {
+        setPartnerSubscribed(false);
+        toast("warning", data.error || "Subscribe to this creator before sending them a message.");
       } else if (res.status === 402 || /balance is too low/i.test(data.error || "")) {
         // Paying for a message comes out of the wallet, and a first-time sender
         // has no reason to know that. Name the fix instead of the failure.
@@ -323,7 +364,7 @@ export default function InboxPage() {
           <div>
             <h1 className="text-2xl font-display font-bold">Inbox</h1>
             <p className={cn("text-sm", isLight ? "text-gray-500" : "text-white/50")}>
-              Direct messages — every message is a paid message, and the person you write to keeps 70% of it
+              Direct messages — subscribe to a creator to write to them, and every message is a paid message; the person you write to keeps 70% of it
             </p>
           </div>
         </div>
@@ -536,6 +577,28 @@ export default function InboxPage() {
                         <p className={cn("text-xs text-center py-2", isLight ? "text-amber-600" : "text-amber-400")}>
                           Demo mode — connect a database to send real messages.
                         </p>
+                      ) : partnerNeedsSubscription ? (
+                        /* The composer is replaced, not merely disabled: an
+                           input a viewer cannot use with no reason given is a
+                           dead end, and the fix is one tap away. */
+                        <div
+                          className={cn(
+                            "flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border px-3 py-2.5",
+                            isLight
+                              ? "border-brand-200 bg-brand-50"
+                              : "border-brand-500/30 bg-brand-500/10"
+                          )}
+                        >
+                          <p className={cn("text-xs", isLight ? "text-gray-700" : "text-brand-200")}>
+                            Subscribe to {displayHandle(activePartner, "this creator")} to send them a message.
+                          </p>
+                          <Link
+                            href={`/creator/${activePartner.id}`}
+                            className="btn-brand py-2 px-4 text-sm shrink-0 text-center"
+                          >
+                            Subscribe
+                          </Link>
+                        </div>
                       ) : (
                         <div className="flex flex-col sm:flex-row gap-2">
                           {/* The price of the message. A creator answering does
@@ -572,19 +635,11 @@ export default function InboxPage() {
                           </button>
                         </div>
                       )}
-                      {!demoMode && (
+                      {!demoMode && !partnerNeedsSubscription && (
                         <p className={cn("text-[10px] mt-2", isLight ? "text-gray-400" : "text-white/30")}>
                           {freeReply
                             ? "Replying is free for you — the viewer is the one who pays for messages."
-                            : `Every message is a paid message — the creator keeps 70% of the amount above (min TZS ${MIN_PAID_MESSAGE}).`}{" "}
-                          {activePartner?.role === "CREATOR" && (
-                            <Link
-                              href={`/creator/${activePartner.id}`}
-                              className="text-brand-400 hover:underline"
-                            >
-                              Subscribe to {displayHandle(activePartner, "this creator")} to watch their videos
-                            </Link>
-                          )}
+                            : `Every message is a paid message — the creator keeps 70% of the amount above (min TZS ${MIN_PAID_MESSAGE}).`}
                         </p>
                       )}
                     </div>

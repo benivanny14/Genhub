@@ -103,6 +103,30 @@ export async function POST(request: NextRequest) {
     });
     const freeReply = sender?.role === "CREATOR" || sender?.role === "ADMIN";
 
+    // A creator's inbox is for their subscribers. A viewer can only write to a
+    // creator they are subscribed to; the subscription is the door, and the
+    // per-message amount below is still the price of the message once inside.
+    // Checked server-side so hiding the composer is not the whole control — an
+    // unsubscribed viewer posting straight to this route is refused here.
+    if (!freeReply && receiver.role === "CREATOR") {
+      const subscription = await prisma.creatorSubscription.findFirst({
+        where: {
+          viewerId: auth.userId,
+          creatorId: receiverId,
+          isActive: true,
+          expiresAt: { gt: new Date() },
+        },
+        select: { id: true },
+      });
+      if (!subscription) {
+        return api.error(
+          "Subscribe to this creator before sending them a message.",
+          403,
+          "SUBSCRIPTION_REQUIRED"
+        );
+      }
+    }
+
     if (!freeReply && amount === undefined) {
       return api.validation(`The minimum amount is TZS ${MIN_PAID_MESSAGE}`);
     }

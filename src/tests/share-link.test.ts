@@ -114,21 +114,20 @@ describe("watch page share button", () => {
     expect(handler).toMatch(/\/video\/\$\{video\.slug \|\| video\.id\}/);
   });
 
-  it("confirms a copy and names a way out when even that fails", () => {
+  it("confirms the copy and warns about nothing else", () => {
     const success = handler.match(/toast\(\s*"success"\s*,\s*"([^"]*)"/);
     expect(success, "the copy is not confirmed").not.toBeNull();
-    expect(success![1]).toMatch(/kopiwa|copied/i);
+    expect(success![1]).toMatch(/copied/i);
 
     // A failure is the clipboard's problem, not sharing's — the old wording
     // blamed sharing for a dismissed sheet that was never an error.
     expect(handler).not.toMatch(/Could not share/);
 
-    const failure = handler.match(/toast\(\s*"(?:error|warning)"\s*,\s*"([^"]*)"/);
-    expect(failure, "a failed copy says nothing").not.toBeNull();
-    expect(failure![1]).toMatch(/copy it by hand|nakili/i);
-
-    // The failure path must return, so the success toast cannot follow it.
-    expect(handler).toMatch(/if\s*\(!copied\)\s*\{[\s\S]*?return;[\s\S]*?\}/);
+    // The "could not copy" warning is deliberately gone: the helper falls back
+    // to the selection copy, so it only ever fired in the case where the link
+    // was on the clipboard anyway. No failure branch means no failure toast.
+    expect(handler).not.toMatch(/copy it by hand|nakili/i);
+    expect(handler).not.toMatch(/if\s*\(!copied\)/);
   });
 
   it("shows the viewer that the link is on their clipboard", () => {

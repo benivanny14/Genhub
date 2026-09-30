@@ -88,7 +88,7 @@ export async function POST(request: NextRequest) {
 
     // Return user data (no password hash)
     const { passwordHash: _, ...safeUser } = user;
-    return api.success(safeUser, "Umeingia kikamilifu");
+    return api.success(safeUser, "Signed in successfully");
   } catch (error) {
     console.error("[Login Error]", error);
     return api.internal("Something went wrong while signing in");

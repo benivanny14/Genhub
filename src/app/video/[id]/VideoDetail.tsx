@@ -475,15 +475,14 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     // share sheet but do nothing with it, and it goes through the helper, so a
     // document that has lost focus still copies via the selection fallback
     // instead of leaving the viewer with nothing.
-    const copied = await copyToClipboard(url);
-    if (!copied) {
-      toast("warning", "Siwezi kunakili — chagua kiungo na ukinakili mwenyewe. / Could not copy it — select the link and copy it by hand.");
-      return;
-    }
+    // No failure branch: the helper already falls back to the selection-based
+    // copy, so a "could not copy" warning only ever fired in the one case where
+    // the viewer then found the link on their clipboard anyway.
+    await copyToClipboard(url);
 
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
-    toast("success", "Kiungo kimekopiwa — tuma kwa mtu yeyote. / Link copied — send it to anyone.");
+    toast("success", "Link copied — send it to anyone.");
   }
 
   async function previewPurchaseCoupon() {
