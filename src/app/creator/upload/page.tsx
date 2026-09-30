@@ -8,12 +8,21 @@ import {
   Camera,
   Check,
   CheckCircle,
+  Clock,
+  Coins,
+  Eye,
   FileVideo,
+  Film,
   FolderOpen,
   Image as ImageIcon,
   Images,
+  Info,
+  ListChecks,
   Loader2,
+  Rocket,
   ShieldAlert,
+  Sparkles,
+  Type,
   Upload,
   X,
 } from "lucide-react";
@@ -44,6 +53,7 @@ import {
   type VideoUploadSession,
 } from "@/lib/video-upload";
 import { reportUploadFailure } from "@/lib/upload-failure-report";
+import { cn } from "@/lib/utils";
 
 type UploadKind = "main" | "teaser";
 
@@ -669,130 +679,329 @@ export default function UploadPage() {
 
   if (success) {
     return (
-      <div className="min-h-screen"><Header /><main className="max-w-xl mx-auto px-4 py-24 text-center">
-        <CheckCircle className="w-16 h-16 text-emerald-400 mx-auto mb-5" />
-        <h1 className="text-2xl font-bold">Video published</h1>
-        <p className="text-white/60 mt-3">{success.processing ? "It is now processing and will become playable automatically." : "Your video is live."}</p>
-        <div className="flex justify-center gap-3 mt-8"><Link href={`/video/${success.slug}`} className="btn-brand">View video</Link><Link href="/creator" className="btn-ghost">Dashboard</Link></div>
-      </main></div>
+      <div className="min-h-screen">
+        <Header />
+        <main className="max-w-xl mx-auto px-4 py-20 text-center">
+          <div className="glass-card p-10">
+            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/15 ring-1 ring-emerald-400/30">
+              <CheckCircle className="w-9 h-9 text-emerald-400" />
+            </div>
+            <h1 className="text-2xl font-display font-bold text-gradient">Video published</h1>
+            <p className="text-white/60 mt-3">
+              {success.processing
+                ? "It is processing now and will become playable automatically."
+                : "Your video is live on your storefront."}
+            </p>
+            <div className="flex flex-wrap justify-center gap-3 mt-8">
+              <Link href={`/video/${success.slug}`} className="btn-brand inline-flex items-center gap-2">
+                <Eye className="w-4 h-4" /> View video
+              </Link>
+              <Link href="/creator" className="btn-ghost border border-white/10 inline-flex items-center gap-2">
+                Back to dashboard
+              </Link>
+            </div>
+          </div>
+        </main>
+      </div>
     );
   }
 
   const mainPercent = percent(mainProgress);
   const teaserPercent = percent(teaserProgress);
 
+  /**
+   * Which studio step the creator is standing on. Derived from the form
+   * itself rather than from a click, so the rail never lies: it advances the
+   * moment the fact behind a step becomes true and never moves backwards.
+   */
+  const currentStep = !mainReady ? 1 : title.trim().length < 3 ? 2 : !complianceAttested ? 3 : 4;
+  const canPublish = Boolean(mainReady && title.trim() && complianceAttested);
+
   return (
     <div className="min-h-screen">
       <Header />
-      <main className="max-w-3xl mx-auto px-4 py-8">
-        <Link href="/creator" className="inline-flex items-center gap-2 text-white/60 mb-6"><ArrowLeft className="w-4 h-4" /> Back to dashboard</Link>
-        <form onSubmit={(e) => void submit(e)} className="space-y-6">
-          <div><h1 className="text-2xl font-bold">Upload video</h1><p className="text-white/50 mt-1">Upload direct to Bunny. The page resumes from the last saved chunk after a connection reset.</p></div>
+      <main className="max-w-6xl mx-auto px-4 py-8">
+        <Link href="/creator" className="inline-flex items-center gap-2 text-white/60 hover:text-white mb-6 transition">
+          <ArrowLeft className="w-4 h-4" /> Back to dashboard
+        </Link>
 
-          {/* The refusal, where the creator is already looking. The sentence is
-              the transport's own; the button is the part that makes it
-              actionable, because "move it to Downloads" needs the picker that
-              can see Downloads to be one tap away. */}
-          {blocked && (
-            <div className="rounded-xl border border-amber-400/30 bg-amber-400/5 p-4 space-y-3">
-              <p className="text-sm text-amber-100">{blocked.message}</p>
-              <button type="button" className="btn-ghost text-sm inline-flex items-center gap-2" onClick={() => openPicker(blocked.target)}>
-                <FolderOpen className="w-4 h-4" /> Open the Files picker / Fungua Files picker
-              </button>
-            </div>
-          )}
+        {/* Title block — the studio header a creator lands on. */}
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-3xl font-display font-bold text-gradient">Studio</h1>
+            <p className="text-white/50 mt-1">
+              Publish a scene to your storefront. The transfer goes straight to the video host and
+              resumes from the last saved chunk if the connection drops.
+            </p>
+          </div>
+          <span className="badge-info inline-flex items-center gap-1.5 shrink-0 py-1.5 px-3">
+            <Clock className="w-3.5 h-3.5" /> Hakuna kikomo cha urefu · No length limit
+          </span>
+        </div>
 
-          <section className="glass-card p-5 space-y-4">
-            <h2 className="font-semibold flex items-center gap-2"><FileVideo className="w-5 h-5 text-brand-400" /> Main video</h2>
-            <label className="block border-2 border-dashed border-white/15 rounded-2xl p-8 text-center cursor-pointer hover:border-brand-400/60 transition">
-              <Upload className="w-8 h-8 mx-auto text-brand-400 mb-3" />
-              <span className="block font-medium">Choose a video</span>
-              <span className="block text-xs text-white/40 mt-1">MP4, MOV, MKV, WebM and other video formats · maximum 2 GB</span>
-              <span className="block text-xs text-amber-200/80 mt-2">Chagua kutoka Downloads au Internal storage. Usichague kutoka Google Photos au Drive.</span>
-              {/* Untyped on purpose, and it is the FIRST door rather than the
-                  last resort: a type filter is applied by the phone's own file
-                  index, so the picker that shows Photos can hide a video that
-                  is sitting in Downloads — and the creator has no way to tell
-                  that from the file not being there. */}
-              <input ref={mainFilesRef} type="file" accept={ANY_FILE_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
-            </label>
-            <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-xs">
-              {/* The typed door, for the creators who keep their videos in the
-                  gallery — where a MIME filter is a help and not a hiding place. */}
-              <label className="flex items-center gap-2 text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
-                <Images className="w-4 h-4" /> Choose from Gallery / Photos
-                <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
-              </label>
-              <label className="flex items-center gap-2 text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
-                <Camera className="w-4 h-4" /> Record now
-                {/* `capture` hands the camera straight to the creator, and a
-                    recording is the one file that is local by construction. */}
-                <input type="file" accept="video/*" capture="environment" className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
-              </label>
-            </div>
-            {mainFile && <div className="flex items-center justify-between text-sm"><span className="truncate">{mainFile.name} · {formatBytes(mainFile.size)}</span>{mainReady ? <span className="text-emerald-400 flex items-center gap-1"><Check className="w-4 h-4" /> Ready</span> : null}</div>}
-            {(mainUploading || mainProgress) && !mainReady && <ProgressBar percent={mainPercent} label={mainUploading ? `Uploading ${mainPercent}%` : "Upload incomplete — press Resume upload to continue"} />}
-            {mainSession && !mainReady && !mainUploading && <button type="button" className="btn-ghost text-sm" onClick={() => mainFile && void handleMainFile(mainFile, true)}>Resume upload</button>}
-            {mainSession && !mainReady && <button type="button" className="text-xs text-red-300" onClick={() => { void cancelSession(mainSession); setMainSession(null); setMainFile(null); setMainProgress(null); }}>Cancel this upload</button>}
-          </section>
+        <UploadStepper current={currentStep} />
 
-          <section className="glass-card p-5 space-y-4">
-            <h2 className="font-semibold">Video details</h2>
-            <input className="input w-full" placeholder="Title" value={title} onChange={(e) => setTitle(e.target.value)} required minLength={3} maxLength={200} />
-            <textarea className="input w-full min-h-28" placeholder="Description" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={5000} />
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <label className="text-sm text-white/60">Price (TZS)<input className="input w-full mt-1" type="number" min={500} max={1000000} value={price} onChange={(e) => setPrice(Number(e.target.value))} /></label>
-              <label className="text-sm text-white/60">Preview seconds<input className="input w-full mt-1" type="number" min={15} max={30} value={teaserDuration} onChange={(e) => setTeaserDuration(Number(e.target.value))} /></label>
-              <label className="text-sm text-white/60">Category<select className="input w-full mt-1" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">Choose</option>{CATEGORIES.filter((item) => item.id !== "all").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
-            </div>
-            <input className="input w-full" placeholder="Tags separated by commas" value={tags} onChange={(e) => setTags(e.target.value)} />
-          </section>
-
-          <section className="glass-card p-5 space-y-4">
-            <h2 className="font-semibold">Optional cover and teaser</h2>
-            <label className="flex items-center gap-3 text-sm text-white/70 cursor-pointer"><ImageIcon className="w-5 h-5 text-brand-400" /> Choose cover image(s)
-              <input ref={coverFilesRef} type="file" accept={ANY_FILE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
-            </label>
-            <p className="text-xs text-amber-200/70">Choose from Downloads or internal storage — not Google Photos or Drive.</p>
-            <label className="flex items-center gap-2 text-xs text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
-              <Images className="w-4 h-4" /> Choose from Gallery / Photos
-              <input type="file" accept={IMAGE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
-            </label>
-            {/* What was chosen, before one of them is used. Tap a picture to crop
-                and upload THAT one as the cover; the rest are candidates and are
-                never sent anywhere. */}
-            {coverCandidates.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {coverCandidates.map((candidate, index) => (
-                  <div key={candidate.url} className="relative">
-                    <button type="button" onClick={() => setCropFile(candidate.file)} title="Use this picture as the cover">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={candidate.url} alt="" className="h-16 w-16 rounded-lg object-cover border border-white/10" />
-                    </button>
-                    <button type="button" aria-label="Remove this picture" onClick={() => removeCoverCandidate(index)} className="absolute -top-1 -right-1 rounded-full bg-black/80 p-0.5 border border-white/20">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-                ))}
+        <form
+          onSubmit={(e) => void submit(e)}
+          className="mt-6 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px] gap-6 items-start"
+        >
+          {/* ---- Left column: the work itself, in the order it happens ---- */}
+          <div className="space-y-6 min-w-0">
+            {/* The refusal, where the creator is already looking. The sentence is
+                the transport's own; the button is the part that makes it
+                actionable, because "move it to Downloads" needs the picker that
+                can see Downloads to be one tap away. */}
+            {blocked && (
+              <div className="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-4 space-y-3">
+                <p className="text-sm text-amber-100">{blocked.message}</p>
+                <button type="button" className="btn-ghost text-sm inline-flex items-center gap-2 border border-white/10" onClick={() => openPicker(blocked.target)}>
+                  <FolderOpen className="w-4 h-4" /> Open the Files picker / Fungua Files picker
+                </button>
               </div>
             )}
-            {thumbnailUploading && <ProgressBar percent={100} label="Uploading cover…" />}
-            {thumbnailUrl && <p className="text-xs text-emerald-400">Cover ready</p>}
-            <label className="block text-sm text-white/70">Optional teaser clip
-              <input ref={teaserFilesRef} type="file" accept={ANY_FILE_ACCEPT} className="input w-full mt-2" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
-            </label>
-            <label className="flex items-center gap-2 text-xs text-white/50 underline underline-offset-2 cursor-pointer hover:text-white/80">
-              <Images className="w-4 h-4" /> Choose the clip from Gallery / Photos
-              <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
-            </label>
-            {teaserFile && <p className="text-xs text-white/60">{teaserFile.name} · {formatBytes(teaserFile.size)}</p>}
-            {(teaserUploading || teaserProgress) && !teaserVideoId && <ProgressBar percent={teaserPercent} label={`Teaser ${teaserPercent}%`} />}
-            {teaserSession && !teaserVideoId && !teaserUploading && <button type="button" className="btn-ghost text-sm" onClick={() => teaserFile && void handleTeaserFile(teaserFile, true)}>Resume teaser upload</button>}
-          </section>
 
-          <label className="flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-sm"><input type="checkbox" checked={complianceAttested} onChange={(e) => setComplianceAttested(e.target.checked)} className="mt-1" /><span><ShieldAlert className="inline w-4 h-4 text-amber-300 mr-1" /> I confirm all performers are 18+ and required age/consent records are kept.</span></label>
+            {/* ---- Step 1: the main video ---- */}
+            <section className="glass-card overflow-hidden">
+              <SectionHeader
+                icon={<Film className="w-5 h-5" />}
+                step={1}
+                title="Main video"
+                subtitle="The full scene your viewers unlock. Any length, any format we can play."
+              />
+              <div className="p-5 space-y-4">
+                <label className="group block cursor-pointer rounded-2xl border-2 border-dashed border-white/15 bg-white/[0.02] p-8 text-center transition hover:border-brand-400/60 hover:bg-brand-500/5">
+                  <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-brand-500/15 ring-1 ring-brand-400/20 transition group-hover:scale-105">
+                    <Upload className="w-7 h-7 text-brand-400" />
+                  </div>
+                  <span className="block text-lg font-semibold">Choose your video</span>
+                  <span className="block text-sm text-white/50 mt-1">MP4 · MOV · MKV · WebM — up to 2 GB</span>
+                  <span className="mt-3 inline-flex items-center gap-1.5 text-xs text-amber-200/80">
+                    <Info className="w-3.5 h-3.5" /> Chagua kutoka Downloads au Internal storage — usichague Google Photos au Drive.
+                  </span>
+                  {/* Untyped on purpose, and it is the FIRST door rather than the
+                      last resort: a type filter is applied by the phone's own file
+                      index, so the picker that shows Photos can hide a video that
+                      is sitting in Downloads — and the creator has no way to tell
+                      that from the file not being there. */}
+                  <input ref={mainFilesRef} type="file" accept={ANY_FILE_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
+                </label>
 
-          <button type="submit" disabled={submitting || !mainReady || !title.trim() || !complianceAttested} className="btn-brand w-full disabled:opacity-50">{submitting ? <><Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Publishing…</> : "Publish video"}</button>
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* The typed door, for the creators who keep their videos in the
+                      gallery — where a MIME filter is a help and not a hiding place. */}
+                  <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
+                    <Images className="w-4 h-4" /> Choose from Gallery / Photos
+                    <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
+                  </label>
+                  <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
+                    <Camera className="w-4 h-4" /> Record now
+                    {/* `capture` hands the camera straight to the creator, and a
+                        recording is the one file that is local by construction. */}
+                    <input type="file" accept="video/*" capture="environment" className="hidden" disabled={mainUploading} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleMainFile(file); e.currentTarget.value = ""; }} />
+                  </label>
+                </div>
+
+                {mainFile && (
+                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm">
+                    <span className="flex items-center gap-2 min-w-0">
+                      <FileVideo className="w-4 h-4 text-brand-400 shrink-0" />
+                      <span className="truncate">{mainFile.name}</span>
+                      <span className="text-white/40 shrink-0">{formatBytes(mainFile.size)}</span>
+                    </span>
+                    {mainReady ? (
+                      <span className="text-emerald-400 flex items-center gap-1 shrink-0 font-medium">
+                        <Check className="w-4 h-4" /> Ready
+                      </span>
+                    ) : null}
+                  </div>
+                )}
+
+                {(mainUploading || mainProgress) && !mainReady && (
+                  <ProgressBar percent={mainPercent} label={mainUploading ? "Uploading" : "Upload incomplete — press Resume to continue"} />
+                )}
+                {mainSession && !mainReady && !mainUploading && (
+                  <button type="button" className="btn-ghost text-sm border border-white/10 inline-flex items-center gap-2" onClick={() => mainFile && void handleMainFile(mainFile, true)}>
+                    <Upload className="w-4 h-4" /> Resume upload
+                  </button>
+                )}
+                {mainSession && !mainReady && (
+                  <button type="button" className="block text-xs text-red-300 hover:text-red-200 transition" onClick={() => { void cancelSession(mainSession); setMainSession(null); setMainFile(null); setMainProgress(null); }}>
+                    Cancel this upload
+                  </button>
+                )}
+              </div>
+            </section>
+
+            {/* ---- Step 2: the details ---- */}
+            <section className="glass-card overflow-hidden">
+              <SectionHeader
+                icon={<Type className="w-5 h-5" />}
+                step={2}
+                title="Video details"
+                subtitle="How the scene is listed, searched and priced."
+              />
+              <div className="p-5 space-y-4">
+                <label className="block">
+                  <span className="flex items-center justify-between text-sm text-white/60 mb-1.5">
+                    <span>Title</span>
+                    <span className="text-xs text-white/35">{title.length}/200</span>
+                  </span>
+                  <input className="input-field" placeholder="Give the scene a name that sells it" value={title} onChange={(e) => setTitle(e.target.value)} required minLength={3} maxLength={200} />
+                </label>
+                <label className="block">
+                  <span className="flex items-center justify-between text-sm text-white/60 mb-1.5">
+                    <span>Description</span>
+                    <span className="text-xs text-white/35">{description.length}/5000</span>
+                  </span>
+                  <textarea className="input-field min-h-28 resize-y" placeholder="What happens in the scene, who is in it, and why a viewer should buy it." value={description} onChange={(e) => setDescription(e.target.value)} maxLength={5000} />
+                </label>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <label className="block sm:col-span-2">
+                    <span className="flex items-center gap-2 text-sm text-white/60 mb-1.5"><Coins className="w-4 h-4 text-brand-400" /> Price (TZS)</span>
+                    <input className="input-field" type="number" min={500} max={1000000} value={price} onChange={(e) => setPrice(Number(e.target.value))} />
+                    <span className="mt-2 flex flex-wrap gap-2">
+                      {[1000, 2000, 5000, 10000].map((preset) => (
+                        <button key={preset} type="button" onClick={() => setPrice(preset)}
+                          className={cn("rounded-full border px-3 py-1 text-xs transition",
+                            price === preset ? "border-brand-400/60 bg-brand-500/20 text-brand-200" : "border-white/10 text-white/50 hover:text-white")}>
+                          {preset.toLocaleString()}
+                        </button>
+                      ))}
+                    </span>
+                  </label>
+                  <label className="block">
+                    <span className="flex items-center gap-2 text-sm text-white/60 mb-1.5"><Eye className="w-4 h-4 text-brand-400" /> Preview seconds</span>
+                    <input className="input-field" type="number" min={15} max={30} value={teaserDuration} onChange={(e) => setTeaserDuration(Number(e.target.value))} />
+                  </label>
+                  <label className="block">
+                    <span className="flex items-center gap-2 text-sm text-white/60 mb-1.5"><Sparkles className="w-4 h-4 text-brand-400" /> Category</span>
+                    <select className="input-field" value={category} onChange={(e) => setCategory(e.target.value)}>
+                      <option value="">Choose</option>
+                      {CATEGORIES.filter((item) => item.id !== "all").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                    </select>
+                  </label>
+                </div>
+
+                <label className="block">
+                  <span className="flex items-center gap-2 text-sm text-white/60 mb-1.5"><Info className="w-4 h-4 text-brand-400" /> Tags</span>
+                  <input className="input-field" placeholder="tall, outdoor, couple — separated by commas" value={tags} onChange={(e) => setTags(e.target.value)} />
+                  <span className="block text-xs text-white/35 mt-1.5">Tags power search and related videos. Comma-separated.</span>
+                </label>
+              </div>
+            </section>
+
+            {/* ---- Step 3: cover and teaser ---- */}
+            <section className="glass-card overflow-hidden">
+              <SectionHeader
+                icon={<ImageIcon className="w-5 h-5" />}
+                step={3}
+                title="Cover & teaser"
+                subtitle="Optional, and the difference between a scroll-past and a click."
+              />
+              <div className="p-5 space-y-5">
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
+                      <ImageIcon className="w-4 h-4" /> Choose cover image(s)
+                      <input ref={coverFilesRef} type="file" accept={ANY_FILE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
+                    </label>
+                    <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
+                      <Images className="w-4 h-4" /> From Gallery / Photos
+                      <input type="file" accept={IMAGE_ACCEPT} multiple className="hidden" disabled={thumbnailUploading} onChange={(e) => { void handleCoverFiles([...(e.target.files || [])]); e.currentTarget.value = ""; }} />
+                    </label>
+                  </div>
+                  <p className="text-xs text-amber-200/70 inline-flex items-center gap-1.5">
+                    <Info className="w-3.5 h-3.5" /> Choose from Downloads or internal storage — not Google Photos or Drive.
+                  </p>
+
+                  {/* What was chosen, before one of them is used. Tap a picture to crop
+                      and upload THAT one as the cover; the rest are candidates and are
+                      never sent anywhere. */}
+                  {coverCandidates.length > 0 && (
+                    <div className="flex flex-wrap gap-3 pt-1">
+                      {coverCandidates.map((candidate, index) => (
+                        <div key={candidate.url} className="relative group">
+                          <button type="button" onClick={() => setCropFile(candidate.file)} title="Use this picture as the cover">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={candidate.url} alt="" className="h-20 w-20 rounded-xl object-cover border border-white/10 transition group-hover:border-brand-400/50" />
+                          </button>
+                          <button type="button" aria-label="Remove this picture" onClick={() => removeCoverCandidate(index)} className="absolute -top-1.5 -right-1.5 rounded-full bg-black/85 p-0.5 border border-white/20 hover:border-red-400/60">
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {thumbnailUploading && <ProgressBar percent={100} label="Uploading cover" />}
+                  {thumbnailUrl && (
+                    <p className="text-xs text-emerald-400 inline-flex items-center gap-1">
+                      <Check className="w-4 h-4" /> Cover ready
+                    </p>
+                  )}
+                </div>
+
+                <div className="border-t border-white/10 pt-5 space-y-3">
+                  <h3 className="text-sm font-semibold flex items-center gap-2"><FileVideo className="w-4 h-4 text-brand-400" /> Teaser clip</h3>
+                  <label className="block">
+                    <input ref={teaserFilesRef} type="file" accept={ANY_FILE_ACCEPT} className="input-field file:mr-3 file:rounded-lg file:border-0 file:bg-brand-500/20 file:px-3 file:py-1.5 file:text-brand-200" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
+                  </label>
+                  {!mainReady && <p className="text-xs text-white/35">Upload the main video first.</p>}
+                  <label className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-white/60 cursor-pointer transition hover:border-brand-400/40 hover:text-white">
+                    <Images className="w-4 h-4" /> From Gallery / Photos
+                    <input type="file" accept={VIDEO_ACCEPT} className="hidden" disabled={teaserUploading || !mainReady} onChange={(e) => { const file = e.target.files?.[0]; if (file) void handleTeaserFile(file); e.currentTarget.value = ""; }} />
+                  </label>
+                  {teaserFile && <p className="text-xs text-white/60">{teaserFile.name} · {formatBytes(teaserFile.size)}</p>}
+                  {(teaserUploading || teaserProgress) && !teaserVideoId && <ProgressBar percent={teaserPercent} label="Teaser" />}
+                  {teaserSession && !teaserVideoId && !teaserUploading && (
+                    <button type="button" className="btn-ghost text-sm border border-white/10" onClick={() => teaserFile && void handleTeaserFile(teaserFile, true)}>Resume teaser upload</button>
+                  )}
+                </div>
+              </div>
+            </section>
+          </div>
+
+          {/* ---- Right column: the publish rail, sticky on desktop ---- */}
+          <aside className="lg:sticky lg:top-24 space-y-4">
+            <div className="glass-card p-5 space-y-4">
+              <h2 className="font-semibold flex items-center gap-2">
+                <ListChecks className="w-4 h-4 text-brand-400" /> Publish checklist
+              </h2>
+              <ul className="space-y-2.5 text-sm">
+                <ReadinessRow done={mainReady} label="Main video uploaded" />
+                <ReadinessRow done={title.trim().length >= 3} label="Title (3+ characters)" />
+                <ReadinessRow done={Boolean(category)} label="Category" optional />
+                <ReadinessRow done={Boolean(thumbnailUrl)} label="Cover image" optional />
+                <ReadinessRow done={Boolean(teaserVideoId)} label="Teaser clip" optional />
+                <ReadinessRow done={complianceAttested} label="18+ records confirmed" />
+              </ul>
+
+              <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm">
+                <span className="text-white/50">Price</span>
+                <span className="font-semibold">TZS {price.toLocaleString()}</span>
+              </div>
+
+              <label className="flex items-start gap-3 rounded-xl border border-amber-400/20 bg-amber-400/5 p-3.5 text-xs cursor-pointer">
+                <input type="checkbox" checked={complianceAttested} onChange={(e) => setComplianceAttested(e.target.checked)} className="mt-0.5" />
+                <span>
+                  <ShieldAlert className="inline w-4 h-4 text-amber-300 mr-1" />
+                  I confirm all performers are 18+ and required age/consent records are kept.
+                </span>
+              </label>
+
+              <button type="submit" disabled={submitting || !canPublish} className="btn-brand w-full inline-flex items-center justify-center gap-2 disabled:opacity-50">
+                {submitting ? (<><Loader2 className="w-4 h-4 animate-spin" /> Publishing…</>) : (<><Rocket className="w-4 h-4" /> Publish video</>)}
+              </button>
+              <p className="text-[11px] text-white/35 text-center">You can edit the details after publishing.</p>
+            </div>
+
+            <div className="glass-card p-4 text-xs text-white/45 space-y-2">
+              <p className="flex items-center gap-2 text-white/70 font-medium"><Sparkles className="w-3.5 h-3.5 text-brand-400" /> Creator tips</p>
+              <p>• Urefu: dakika 8 au zaidi unashauriwa — lakini hakuna kikomo. Video ya urefu wowote inakubaliwa.</p>
+              <p>• Cover inayovutia ndiyo tofauti kati ya kupita na kubofya.</p>
+              <p>• Teaser fupi (sekunde 15–30) huongeza uwezekano wa mnunuzi.</p>
+            </div>
+          </aside>
         </form>
       </main>
 
@@ -802,5 +1011,119 @@ export default function UploadPage() {
 }
 
 function ProgressBar({ percent: value, label }: { percent: number; label: string }) {
-  return <div className="space-y-1"><div className="flex justify-between text-xs text-white/60"><span>{label}</span><span>{value}%</span></div><div className="h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-brand-500 transition-all" style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div></div>;
+  const clamped = Math.max(0, Math.min(100, value));
+  return (
+    <div className="space-y-1.5">
+      <div className="flex justify-between text-xs text-white/60">
+        <span>{label}</span>
+        <span className="tabular-nums">{clamped}%</span>
+      </div>
+      <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-brand-400 to-brand-600 transition-all duration-300"
+          style={{ width: `${clamped}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The studio rail: four steps, greyed until reached, ticked once passed.
+ *
+ * It reads the form's own state rather than tracking clicks, so it can never
+ * claim a step is done while the thing it describes is missing.
+ */
+function UploadStepper({ current }: { current: number }) {
+  const steps = [
+    { n: 1, label: "Media", icon: <Film className="w-3.5 h-3.5" /> },
+    { n: 2, label: "Details", icon: <Type className="w-3.5 h-3.5" /> },
+    { n: 3, label: "Cover & teaser", icon: <ImageIcon className="w-3.5 h-3.5" /> },
+    { n: 4, label: "Publish", icon: <Rocket className="w-3.5 h-3.5" /> },
+  ];
+
+  return (
+    <ol className="flex items-center gap-2 overflow-x-auto pb-1">
+      {steps.map((step, index) => {
+        const done = step.n < current;
+        const active = step.n === current;
+        return (
+          <li key={step.n} className="flex items-center gap-2 shrink-0">
+            <span
+              className={cn(
+                "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium transition",
+                active
+                  ? "border-brand-400/50 bg-brand-500/15 text-brand-200"
+                  : done
+                    ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-300"
+                    : "border-white/10 bg-white/[0.02] text-white/40"
+              )}
+            >
+              {done ? <Check className="w-3.5 h-3.5" /> : step.icon}
+              {step.label}
+            </span>
+            {index < steps.length - 1 && <span className="h-px w-6 bg-white/10" />}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/** A titled band at the top of a studio card, with its step number. */
+function SectionHeader({
+  icon,
+  step,
+  title,
+  subtitle,
+}: {
+  icon: React.ReactNode;
+  step: number;
+  title: string;
+  subtitle?: string;
+}) {
+  return (
+    <div className="flex items-center gap-3 border-b border-white/10 px-5 py-4">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-500/15 text-brand-300 ring-1 ring-brand-400/20">
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <h2 className="font-semibold flex items-center gap-2">
+          {title}
+          <span className="text-[10px] font-normal uppercase tracking-wider text-white/35">Step {step}</span>
+        </h2>
+        {subtitle && <p className="text-xs text-white/45 mt-0.5">{subtitle}</p>}
+      </div>
+    </div>
+  );
+}
+
+/** One line of the publish checklist. */
+function ReadinessRow({
+  done,
+  label,
+  optional,
+}: {
+  done: boolean;
+  label: string;
+  optional?: boolean;
+}) {
+  return (
+    <li className="flex items-center gap-2.5">
+      <span
+        className={cn(
+          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+          done
+            ? "border-emerald-400/40 bg-emerald-500/15 text-emerald-400"
+            : "border-white/15 text-white/30"
+        )}
+      >
+        {done ? <Check className="w-3 h-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+      </span>
+      <span className={done ? "text-white/85" : "text-white/50"}>{label}</span>
+      {optional && !done && (
+        <span className="ml-auto text-[10px] uppercase tracking-wide text-white/25">Optional</span>
+      )}
+    </li>
+  );
 }
