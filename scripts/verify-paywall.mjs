@@ -37,7 +37,6 @@
 //                                     leaks the video.
 //   GET /api/videos/<id>/stream       must refuse (401/403/404). A 200 is the
 //                                     full HLS manifest, anonymously.
-//   GET /api/videos/<id>/download     must refuse. A 200 is the MP4 file.
 //
 // It also asserts that a teaser URL for a paid video is never that video's own
 // stream endpoint: the teaser door serves without an entitlement check on
@@ -230,15 +229,6 @@ async function main() {
       ok(`GET /api/videos/<id>/stream refuses an anonymous request (HTTP ${stream.status})`);
     }
 
-    const download = await get(`/api/videos/${video.id}/download`);
-    if (download.status === 200) {
-      bad(
-        "GET /api/videos/<id>/download refuses an anonymous request",
-        "HTTP 200 — a file URL was handed out"
-      );
-    } else {
-      ok(`GET /api/videos/<id>/download refuses an anonymous request (HTTP ${download.status})`);
-    }
   }
 
   console.log(`\n${checks} check(s) · ${paid} paid video(s) · ${free} free video(s)`);

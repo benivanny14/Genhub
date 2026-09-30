@@ -40,10 +40,8 @@ import config from "@/lib/config";
 
 import {
   generateSignedVideoUrl,
-  generateDownloadUrl,
   safeTeaserUrl,
   safeSignedVideoUrl,
-  safeDownloadUrl,
   isBunnyConfigured,
   isBunnyPlaybackConfigured,
   createVideoUpload,
@@ -51,7 +49,6 @@ import {
   deleteBunnyVideo,
   probeSignedPlayback,
   signedCdnQuery,
-  pickAvailableQuality,
   BunnyNotConfiguredError,
 } from "@/lib/bunny";
 
@@ -279,15 +276,6 @@ describe("Bunny signing", () => {
     expect(expires).toBeLessThanOrEqual(before + 10 * 60 + 2);
   });
 
-  it("signs each download rendition for its own file path", () => {
-    const url = new URL(generateDownloadUrl("abc-123", "720p", 10));
-    const signed = readSignedUrl(url);
-    expect(signed.path).toBe("/abc-123/play_720p.mp4");
-    expect(signed.token).toBe(
-      expectedToken("/abc-123/play_720p.mp4", signed.expires, "test-token-secret")
-    );
-  });
-
   // The HLS proxy signs the video's FOLDER, because a folder token is honoured
   // for every child request (manifest, renditions, segments) — measured against
   // the live zone, and the whole reason a rewritten manifest is playable.
@@ -301,7 +289,6 @@ describe("Bunny signing", () => {
   it("refuses to build a signed URL without a token secret", () => {
     bunny.tokenSecret = "";
     expect(() => generateSignedVideoUrl("abc-123")).toThrow(BunnyNotConfiguredError);
-    expect(() => generateDownloadUrl("abc-123")).toThrow(BunnyNotConfiguredError);
   });
 
   it("refuses to build a playback URL without a CDN hostname", () => {
@@ -409,40 +396,6 @@ describe("Bunny signing", () => {
     });
   });
 
-  // The download menu offers 1080p / 720p / 480p to every video, but Bunny only
-  // keeps MP4 fallbacks for the resolutions an upload actually has
-  // (`availableResolutions` on a 360x640 upload reads "240p,360p"). Signing
-  // `play_1080p.mp4` for it is a 404, which is what made the Download button
-  // fail on every video in the library.
-  describe("pickAvailableQuality", () => {
-    it("serves the requested quality when the video has it", () => {
-      expect(pickAvailableQuality("240p,360p,480p,720p", "480p")).toBe("480p");
-    });
-
-    it("steps down to the best resolution at or below the request", () => {
-      expect(pickAvailableQuality("240p,360p", "1080p")).toBe("360p");
-      expect(pickAvailableQuality("480p,720p", "720p")).toBe("720p");
-    });
-
-    it("never invents a resolution Bunny did not list", () => {
-      expect(pickAvailableQuality("240p,360p,480p", "480p")).toBe("480p");
-      expect(pickAvailableQuality("360p", "1080p")).toBe("360p");
-    });
-
-    it("ignores values that are not downloadable renditions", () => {
-      // 361p and `original` are not renditions; 240p is, and it is the best one
-      // on offer here, so it is what gets served.
-      expect(pickAvailableQuality("240p, 361p, original", "720p")).toBe("240p");
-    });
-
-    // Better to ask for the requested file than to guess: Bunny is silent about
-    // a video it has not finished encoding, and that is not a downgrade.
-    it("keeps the requested quality when Bunny says nothing", () => {
-      expect(pickAvailableQuality(null, "1080p")).toBe("1080p");
-      expect(pickAvailableQuality("", "720p")).toBe("720p");
-    });
-  });
-
   it("reports configuration completeness", () => {
     expect(isBunnyConfigured()).toBe(true);
     expect(isBunnyPlaybackConfigured()).toBe(true);
@@ -458,7 +411,6 @@ describe("Bunny signing", () => {
 
     expect(safeTeaserUrl("abc-123")).toBeNull();
     expect(safeSignedVideoUrl("abc-123")).toBeNull();
-    expect(safeDownloadUrl("abc-123")).toBeNull();
     // A video with no Bunny id at all is not an error either
     expect(safeTeaserUrl(null)).toBeNull();
     expect(safeSignedVideoUrl(null)).toBeNull();
@@ -467,6 +419,5 @@ describe("Bunny signing", () => {
   it("safe variants return the URL when configured", () => {
     expect(safeTeaserUrl("abc-123")).toContain("/abc-123/playlist.m3u8");
     expect(safeSignedVideoUrl("abc-123")).toContain("token=");
-    expect(safeDownloadUrl("abc-123", "480p")).toContain("/abc-123/play_480p.mp4");
   });
 });

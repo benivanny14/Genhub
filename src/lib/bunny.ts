@@ -134,7 +134,7 @@ export class BunnyNotConfiguredError extends Error {
  */
 function signBunnyPath(path: string, expiresAt: number): string {
   if (!config.bunny.tokenSecret) {
-    throw new BunnyNotConfiguredError("Signed playback / download");
+    throw new BunnyNotConfiguredError("Signed playback");
   }
   return createHash("sha256")
     .update(`${config.bunny.tokenSecret}${path}${expiresAt}`)
@@ -296,68 +296,6 @@ export function generateTeaserUrl(bunnyVideoId: string): string {
 }
 
 // =============================================================================
-// Generate Signed MP4 Download URL (members only)
-// =============================================================================
-// Bunny Stream keeps MP4 renditions of every video (play_1080p.mp4, play_720p.mp4,
-// ...). They use the same token authentication as the HLS manifest, so a member
-// who already has access can download the file instead of only streaming it.
-
-// Ordered best-first, and 240p is included on purpose: Bunny produces an MP4
-// fallback for every resolution a video has (verified against the live CDN — a
-// 360x640 upload has play_240p.mp4 and play_360p.mp4), and a phone-only audience
-// on metered data is exactly who wants the smallest file.
-export const DOWNLOAD_QUALITIES = ["1080p", "720p", "480p", "360p", "240p"] as const;
-export type DownloadQuality = (typeof DOWNLOAD_QUALITIES)[number];
-
-/**
- * The rendition to actually serve, when the requested one does not exist.
- *
- * Bunny only produces an MP4 fallback for the resolutions a video really has:
- * `availableResolutions` on a 360x640 upload reads `240p,360p`, and
- * `play_1080p.mp4` for it is a guaranteed 404. The download menu offers
- * 1080p/720p/480p regardless, so every download in the library failed with
- * "Video not found" — a dead button that looks like a broken video.
- *
- * So: the requested quality when it exists, otherwise the best one below it,
- * otherwise the best one there is. Never nothing, because the viewer asked for a
- * file and a smaller file is a better answer than an error.
- */
-export function pickAvailableQuality(
-  availableResolutions: string | null | undefined,
-  requested: DownloadQuality
-): DownloadQuality {
-  const available = (availableResolutions || "")
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter((entry): entry is DownloadQuality =>
-      (DOWNLOAD_QUALITIES as readonly string[]).includes(entry)
-    );
-
-  // Bunny said nothing useful — do not invent a downgrade.
-  if (available.length === 0) return requested;
-  if (available.includes(requested)) return requested;
-
-  // Best-first order, so "below the request" is a larger index.
-  const rank = (quality: DownloadQuality) => DOWNLOAD_QUALITIES.indexOf(quality);
-  const below = available.filter((quality) => rank(quality) > rank(requested));
-  const pool = below.length > 0 ? below : available;
-
-  return pool.sort((a, b) => rank(a) - rank(b))[0];
-}
-
-export function generateDownloadUrl(
-  bunnyVideoId: string,
-  quality: DownloadQuality = "1080p",
-  expirationMinutes: number = 10,
-  _viewerId?: string
-): string {
-  const expiresAt = Math.floor(Date.now() / 1000) + expirationMinutes * 60;
-  // Same folder token as playback: one shape, one thing to reason about, and the
-  // file is inside the folder the token already authorises. A download is a
-  // single request, so nothing needs rewriting for it — the query string is
-  // enough (verified: HTTP 206).
-  return signedBunnyUrl(`/${bunnyVideoId}/play_${quality}.mp4`, expiresAt);
-}// =============================================================================
 // Non-throwing variants
 // =============================================================================
 // Feed and detail routes map over many videos at once. One video with a Bunny
@@ -381,20 +319,6 @@ export function safeSignedVideoUrl(
   if (!bunnyVideoId) return null;
   try {
     return generateSignedVideoUrl(bunnyVideoId, expirationMinutes, viewerId);
-  } catch {
-    return null;
-  }
-}
-
-export function safeDownloadUrl(
-  bunnyVideoId: string | null | undefined,
-  quality: DownloadQuality = "1080p",
-  expirationMinutes = 10,
-  viewerId?: string
-): string | null {
-  if (!bunnyVideoId) return null;
-  try {
-    return generateDownloadUrl(bunnyVideoId, quality, expirationMinutes, viewerId);
   } catch {
     return null;
   }
@@ -518,7 +442,7 @@ export function resolvePlaybackUrl(
   if (proxied) return proxied;
 
   // No row id, or an unconfigured library: the direct signed URL is still the
-  // right answer for a single-file source (and the only one for downloads).
+  // right answer for a single-file source.
   return (
     safeSignedVideoUrl(video.bunnyVideoId, expirationMinutes, viewerId) ??
     video.previewUrl ??
@@ -735,32 +659,6 @@ export function signedBunnyFileUrl(
   } catch {
     return null;
   }
-}
-
-/**
- * Members-only download source.
-
- * `unavailableReason` lets the route answer 503 with a precise cause instead of
- * quietly serving the wrong file.
- */
-export function resolveDownloadUrl(
-  video: VideoSourceLocation,
-  quality: DownloadQuality = "1080p",
-  expirationMinutes = 10,
-  viewerId?: string
-): { url: string | null; unavailableReason: "BUNNY_NOT_CONFIGURED" | null } {
-  const signed = safeDownloadUrl(video.bunnyVideoId, quality, expirationMinutes, viewerId);
-  if (signed) return { url: signed, unavailableReason: null };
-
-  if (video.previewUrl) return { url: video.previewUrl, unavailableReason: null };
-
-  return {
-    url: null,
-    // Distinguish "this row is Bunny-hosted but the library cannot sign" from
-    // "this row has no media at all" — the first is a deployment fault worth a
-    // 503 and a loud message, the second is a plain 404.
-    unavailableReason: video.bunnyVideoId ? "BUNNY_NOT_CONFIGURED" : null,
-  };
 }
 
 

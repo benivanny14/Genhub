@@ -12,8 +12,6 @@ import {
   SkipBack,
   SkipForward,
   Settings,
-  Download,
-  Loader2,
   Check,
   AlertTriangle,
   PictureInPicture2,
@@ -77,9 +75,6 @@ interface VideoPlayerProps {
   isTeaser?: boolean;
   startAt?: number;
   onEnded?: () => void;
-  /** Members only: resolves a signed download URL and saves the file */
-  onDownload?: () => void;
-  downloading?: boolean;
   /**
    * WebVTT captions for this scene, when the creator attached them.
    *
@@ -100,8 +95,6 @@ export default function VideoPlayer({
   isTeaser = false,
   startAt = 0,
   onEnded,
-  onDownload,
-  downloading = false,
   captionsUrl,
 }: VideoPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1100,23 +1093,6 @@ export default function VideoPlayer({
           </div>
 
           <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
-            {/* Members-only download */}
-            {onDownload && (
-              <button
-                onClick={onDownload}
-                disabled={downloading}
-                aria-label="Download (members)"
-                title="Download (members)"
-                className={`${ctrlBtn} disabled:opacity-50`}
-              >
-                {downloading ? (
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                ) : (
-                  <Download className="w-5 h-5" />
-                )}
-              </button>
-            )}
-
             {/* Playback settings — speed always, quality when the stream offers
                 more than one rendition.
 

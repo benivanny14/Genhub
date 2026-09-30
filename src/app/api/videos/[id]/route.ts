@@ -172,8 +172,8 @@ export async function GET(
 
     // Where access comes from — lets the UI say "Purchased", "Included in your
     // subscription" or "Full access" instead of guessing. Resolved by the one
-    // shared service so this route cannot disagree with the stream and download
-    // routes about who is entitled to what.
+    // shared service so this route cannot disagree with the stream route about
+    // who is entitled to what.
     let accessSource: EntitlementSource | null = null;
 
     // A charge for this video that is neither confirmed nor denied: the customer
@@ -233,8 +233,8 @@ export async function GET(
 
     // `include:` (not `select:`) means the entire row is in hand, so anything
     // internal would be published here — and any column added to Video later
-    // would leak by default. Playback, the teaser and downloads are all resolved
-    // server-side now, so the client has no use for the raw Bunny id, and
+    // would leak by default. Playback and the teaser are resolved server-side
+    // now, so the client has no use for the raw Bunny id, and
     // moderation state must never be public: isFlagged tells the world which
     // reports landed, and complianceAttestedAt is an internal legal record.
     //

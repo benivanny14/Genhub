@@ -454,13 +454,12 @@ inferred, and `preflight:prod` blocks a localhost URL outright. Check it with
 
 ### 2.2 Bunny.net video — Token Authentication, and the key you must COPY
 
-The player, the teaser and the members-only download all use signed Bunny URLs.
-The signature is `base64url(SHA256(BUNNY_TOKEN_SECRET + path + expires))`, sent in
-the **query string**:
+The player and the teaser both use signed Bunny URLs. The signature is
+`base64url(SHA256(BUNNY_TOKEN_SECRET + path + expires))`, sent in the **query
+string**:
 
 ```
 https://<cdn>/<videoId>/playlist.m3u8?token=<token>&expires=<ts>
-https://<cdn>/<videoId>/play_360p.mp4?token=<token>&expires=<ts>   (downloads)
 ```
 
 Three things about that shape are not cosmetic, and all three were wrong in
@@ -2258,7 +2257,7 @@ only question that matters: is anything playable handed out to a visitor who has
 not paid? For each row it checks that `GET /api/videos/<id>` answers
 `hasAccess: false` with no `playbackUrl`, that neither the feed nor the front
 page carries `previewUrl` / `bunnyVideoId` / `teaserBunnyVideoId` /
-`teaserClipUrl`, and that `GET /api/videos/<id>/stream` and `/download` refuse.
+`teaserClipUrl`, and that `GET /api/videos/<id>/stream` refuses.
 Exit code 1 means a genuine leak; a PASS means the paywall holds.
 
 **The three ways this report is usually wrong, in order of how often they happen:**
@@ -2324,7 +2323,7 @@ Redis-backed, in one of four buckets from `config.rateLimit`:
 |---|---|---|
 | `auth` | 10/min | login, register, forgot/reset password, demo login, **coupon validation** |
 | `payment` | 20/min | purchase, top-up, subscriptions, tips |
-| `upload` | 5 / 5min | image upload, **video slot reservation** (`/api/videos/upload-signature`), **download link minting** |
+| `upload` | 5 / 5min | image upload, **video slot reservation** (`/api/videos/upload-signature`) |
 | `general` | 100/min | comments, reports (video + comment), messages, search suggestions |
 
 Keying is deliberate and differs by route:

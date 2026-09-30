@@ -3,9 +3,9 @@
 //
 // This service exists because three routes answered this question three ways,
 // and the difference was not a design decision — it was drift. The download
-// route honoured a monthly subscription and the watch page did not, so a
-// subscriber could download a creator's file but was shown a Buy button to
-// stream it.
+// route (since removed) honoured a monthly subscription and the watch page did
+// not, so a subscriber could take a creator's file but was shown a Buy button
+// to stream it.
 //
 // The rules, asserted here:
 //   free          anyone, signed in or not
@@ -223,7 +223,7 @@ describe("a purchase", () => {
 
 describe("a subscription", () => {
   // The behaviour that was missing: paying the creator monthly is a way to
-  // WATCH, not only a way to download.
+  // WATCH, under one rule rather than three.
   it("entitles the viewer to the creator's paid scenes", async () => {
     mocks.subscriptionFindFirst.mockResolvedValue({ id: "sub-1" });
 

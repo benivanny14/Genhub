@@ -150,8 +150,7 @@ export async function GET(
     // their playback URL is the stored stream, never this route.
     if (!isBunnyVideoId(bunnyVideoId)) {
       // A viewer learns nothing from being told where the file is NOT stored.
-      // The public answer to "there is nothing to play here" is a plain 404,
-      // which is also what the download route says for the same row.
+      // The public answer to "there is nothing to play here" is a plain 404.
       return api.notFound("Video not found");
     }
 

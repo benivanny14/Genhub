@@ -31,11 +31,9 @@ import {
   BookmarkCheck,
   ListPlus,
   Images,
-  Download,
   X,
   ChevronLeft,
   ChevronRight,
-  ChevronDown,
   Plus,
   Loader2,
   Hourglass,
@@ -319,8 +317,6 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [playlistBusy, setPlaylistBusy] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const [downloading, setDownloading] = useState(false);
-  const [showDownloadMenu, setShowDownloadMenu] = useState(false);
   const { toast } = useToast();
   const { format } = useCurrency();
 
@@ -443,34 +439,6 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [lightboxIndex]);
-
-  // ===========================================================================
-  // Members-only download
-  // ===========================================================================
-
-  async function handleDownload(quality: string = "1080p") {
-    if (!video) return;
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-
-    setDownloading(true);
-    try {
-      const res = await fetch(`/api/videos/${video.id}/download?quality=${quality}`);
-      const data = await res.json();
-      if (!data.success) {
-        toast("error", data.error || "Could not download");
-        return;
-      }
-      window.open(data.data.url, "_blank", "noopener,noreferrer");
-      toast("success", `Inapakua ${data.data.fileName}`);
-    } catch {
-      toast("error", "Could not download");
-    } finally {
-      setDownloading(false);
-    }
-  }
 
   async function handleShare() {
     if (!video) return;
@@ -1247,8 +1215,6 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               viewerId={user?.id}
               isTeaser={!canPlayFull}
               startAt={canPlayFull ? startAt : 0}
-              onDownload={canPlayFull ? () => handleDownload() : undefined}
-              downloading={downloading}
               onEnded={showIntroTrailer ? handleIntroEnded : handleSceneEnded}
               // Captions belong to the scene, so a viewer previewing the teaser
               // does not get the full scene's captions over a clip they may not be
@@ -1806,47 +1772,6 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             >
               <ListPlus className="w-4 h-4" /> Add to playlist
             </button>
-
-            {/* Members download — pick the rendition (mirrors the player button).
-                Hidden while the video is not playable: the renditions do not
-                exist yet, so the button would only produce a failed request. */}
-            {canPlayFull && !notPlayable && video.accessSource !== null && (
-              <div className="relative">
-                <button
-                  onClick={() => setShowDownloadMenu((v) => !v)}
-                  disabled={downloading}
-                  className="btn-ghost flex items-center gap-2 text-sm disabled:opacity-50"
-                >
-                  {downloading ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4" />
-                  )}
-                  Download
-                  <ChevronDown className="w-3.5 h-3.5 opacity-70" />
-                </button>
-
-                {showDownloadMenu && !downloading && (
-                  <div className="absolute bottom-full mb-2 left-0 z-30 w-40 glass-card p-1.5 animate-slide-up">
-                    <p className="px-2 py-1 text-[10px] uppercase tracking-wide text-white/40">
-                      Quality
-                    </p>
-                    {["1080p", "720p", "480p"].map((q) => (
-                      <button
-                        key={q}
-                        onClick={() => {
-                          setShowDownloadMenu(false);
-                          handleDownload(q);
-                        }}
-                        className="w-full text-left px-2 py-1.5 rounded-lg text-sm text-white/80 hover:bg-white/10 transition"
-                      >
-                        {q}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
 
             {/* Straight into this creator's thread: the inbox opens on the
                 conversation list otherwise, and a creator the viewer has never

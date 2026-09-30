@@ -5,14 +5,15 @@
 // different ways by three routes that all touch the same money:
 //
 //   GET  /api/videos/[id]            free, purchase, admin
-//   GET  /api/videos/[id]/download   free, purchase, SUBSCRIPTION, admin
 //   GET  /api/videos/[id]/stream     free, purchase, admin
 //
-// So a viewer who paid a monthly subscription to a creator was entitled to
-// DOWNLOAD the file and not entitled to WATCH it: the feed that a subscription
-// fills with videos led to a paywall, and the only way past it was to buy each
-// scene separately — which is not what a subscription is. Nobody wrote that
-// rule; it is what three copies of "check access" drifted into.
+// So a viewer who paid a monthly subscription to a creator could DOWNLOAD the
+// file from a route that honoured a subscription and was then shown a paywall
+// by the two that did not: the feed that a subscription fills with videos led
+// to a Buy button, and the only way past it was to buy each scene separately —
+// which is not what a subscription is. Nobody wrote that rule; it is what three
+// copies of "check access" drifted into. (The download route itself is gone;
+// the drift it exposed is what this service was written to end.)
 //
 // SUBSCRIPTION IS AN ENTITLEMENT TO WATCH. A viewer with an active subscription
 // to the creator sees the creator's scenes, including ones with a price on
@@ -20,8 +21,8 @@
 // words ("Included in your subscription") instead of showing them a Buy button
 // for something they are already paying for.
 //
-// `owner` is the creator of the row: they can always watch and download their
-// own upload, most often from "View as viewer" before publishing.
+// `owner` is the creator of the row: they can always watch their own upload,
+// most often from "View as viewer" before publishing.
 //
 // The self-heal is here too, for the same reason it existed in the video route:
 // a SUCCESS charge with no access row (legacy rows, an interrupted credit) must

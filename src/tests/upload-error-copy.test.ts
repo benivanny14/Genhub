@@ -30,7 +30,6 @@ const SURFACES = [
   "src/app/api/videos/upload-abort/route.ts",
   "src/app/api/videos/route.ts",
   "src/app/api/videos/[id]/route.ts",
-  "src/app/api/videos/[id]/download/route.ts",
   "src/app/api/videos/[id]/stream/route.ts",
   "src/app/creator/upload/page.tsx",
   "src/app/creator/page.tsx",
@@ -153,13 +152,13 @@ describe("the detail is moved, not deleted", () => {
   });
 
   it("keeps the environment variables in the log behind a reference", () => {
-    for (const file of [
-      "src/app/api/videos/[id]/stream/route.ts",
-      "src/app/api/videos/[id]/download/route.ts",
-    ]) {
-      const source = readFileSync(file, "utf8");
-      expect(source).toContain("api.upstream(");
-      expect(source).toContain("BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET are not both set");
-    }
+    const stream = readFileSync("src/app/api/videos/[id]/stream/route.ts", "utf8");
+    expect(stream).toContain("api.upstream(");
+    expect(stream).toContain("BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET are not both set");
+    // ...and the sentence the viewer reads from that call is not the one that
+    // names them.
+    const message = stream.match(/code: "NOT_CONFIGURED",\s*\n\s*message: "([^"]+)"/);
+    expect(message?.[1]).toBeTruthy();
+    expect(message?.[1]).not.toMatch(/BUNNY_|\bHTTP\b/);
   });
 });

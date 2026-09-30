@@ -9,8 +9,7 @@ HarakaPay USSD pushes, not cards.
 
 **Viewers** — browse by category, trending, top rated and most viewed; watch free
 teasers on hover; buy a video, subscribe to a creator, tip, add to watch-later
-playlists and favourites; download a purchased video in a chosen quality; keep a
-wallet and a billing history.
+playlists and favourites; keep a wallet and a billing history.
 
 **Creators** — onboard and verify (KYC), upload through a signed direct upload to
 Bunny Stream (resumable, so a dropped mobile connection resumes), set prices and

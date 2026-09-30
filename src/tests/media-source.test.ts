@@ -16,13 +16,12 @@
 // `previewUrl` is not a teaser — it is used as the buyer's playback URL, so it is
 // the same media by another transport. The rule is therefore "the signed Bunny
 // URL wins whenever it can be produced, and the stored stream is the fallback",
-// expressed once in resolvePlaybackUrl / resolveTeaserUrl / resolveDownloadUrl
-// instead of five times inline in route handlers where it drifted.
+// expressed once in resolvePlaybackUrl / resolveTeaserUrl instead of five times
+// inline in route handlers where it drifted.
 //
 // Asserted here:
 //   1. playback with both fields -> the SIGNED Bunny URL (never previewUrl)
 //   2. teaser with both fields   -> the signed Bunny teaser (never previewUrl)
-//   3. download with both fields -> the signed Bunny MP4 (never previewUrl)
 //   4. with Bunny unconfigured, previewUrl is the fallback (demo content keeps
 //      playing) and a row with no media reports a named reason
 //   5. the Bunny URL is actually signed (token + expires) and uses playlist.m3u8
@@ -287,47 +286,6 @@ describe("resolveTeaserUrl", () => {
   });
 });
 
-describe("resolveDownloadUrl", () => {
-  it("returns a signed MP4 rendition when a row has both sources", async () => {
-    const bunny = await loadBunny(CONFIGURED);
-    const { url, unavailableReason } = bunny.resolveDownloadUrl(BOTH, "1080p", 10, "viewer-1");
-
-    expect(unavailableReason).toBeNull();
-    expect(url).toContain(`/${BUNNY_ID}/play_1080p.mp4`);
-    expect(url).not.toContain("example.test");
-  });
-
-  it("honours the requested quality", async () => {
-    const bunny = await loadBunny(CONFIGURED);
-    expect(bunny.resolveDownloadUrl(BOTH, "720p").url).toContain("play_720p.mp4");
-  });
-
-  it("reports a named reason when a Bunny-hosted row cannot sign and has no fallback", async () => {
-    const bunny = await loadBunny({ BUNNY_CDN_HOSTNAME: undefined, BUNNY_TOKEN_SECRET: undefined });
-    const result = bunny.resolveDownloadUrl(
-      { bunnyVideoId: BUNNY_ID, previewUrl: null },
-      "1080p",
-      10,
-      "viewer-1"
-    );
-
-    expect(result.url).toBeNull();
-    expect(result.unavailableReason).toBe("BUNNY_NOT_CONFIGURED");
-  });
-
-  it("does not claim a deployment fault when the row simply has no media", async () => {
-    const bunny = await loadBunny(CONFIGURED);
-    const result = bunny.resolveDownloadUrl({ bunnyVideoId: null, previewUrl: null });
-    expect(result).toEqual({ url: null, unavailableReason: null });
-  });
-
-  it("falls back to previewUrl for side-loaded content", async () => {
-    const bunny = await loadBunny(CONFIGURED);
-    const result = bunny.resolveDownloadUrl({ bunnyVideoId: null, previewUrl: PREVIEW });
-    expect(result).toEqual({ url: PREVIEW, unavailableReason: null });
-  });
-});
-
 describe("signed URLs are actually signed", () => {
   it("includes token + expires, and refuses to sign at all without a token secret", async () => {
     const bunny = await loadBunny(CONFIGURED);
@@ -408,10 +366,4 @@ describe("signed URLs are actually signed", () => {
     expect(bunny.resolveTeaserUrl(BOTH)).toBeNull();
   });
 
-  it("returns no download URL when a Bunny row has neither a signer nor a fallback", async () => {
-    const bunny = await loadBunny({ BUNNY_CDN_HOSTNAME: CDN, BUNNY_TOKEN_SECRET: undefined });
-    const result = bunny.resolveDownloadUrl({ bunnyVideoId: BUNNY_ID, previewUrl: null });
-    expect(result.url).toBeNull();
-    expect(result.unavailableReason).toBe("BUNNY_NOT_CONFIGURED");
-  });
 });
