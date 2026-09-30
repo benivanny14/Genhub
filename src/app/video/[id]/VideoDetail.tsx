@@ -444,17 +444,30 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
   async function handleShare() {
     if (!video) return;
-    // Copy the canonical watch URL rather than window.location.href, which can
+    // Share the canonical watch URL rather than window.location.href, which can
     // carry query strings and hash fragments that mean nothing to a recipient.
     const url =
       typeof window !== "undefined"
         ? `${window.location.origin}/video/${video.slug || video.id}`
         : "";
 
-    // This button is the copy-link control: it copies, always. Offering the OS
-    // share sheet instead made a click do nothing on the desktop browsers that
-    // expose navigator.share, and hanging the copy off that sheet's failure put
-    // it at the mercy of a document that had already lost focus.
+    // The OS share sheet first, when the device has one: on a phone this is how
+    // a link reaches WhatsApp or a message in two taps, and a viewer who wanted
+    // to send the scene elsewhere expects that sheet. Dismissing it is not an
+    // error, so it falls through to the copy instead of returning early.
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        await navigator.share({ title: video.title, url });
+        return;
+      } catch {
+        // Dismissed, or sharing is not actually available — neither is an error.
+      }
+    }
+
+    // The copy is the floor: it works on the desktop browsers that expose a
+    // share sheet but do nothing with it, and it goes through the helper, so a
+    // document that has lost focus still copies via the selection fallback
+    // instead of leaving the viewer with nothing.
     const copied = await copyToClipboard(url);
     if (!copied) {
       toast("warning", "Siwezi kunakili — chagua kiungo na ukinakili mwenyewe. / Could not copy it — select the link and copy it by hand.");
@@ -1795,11 +1808,11 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             <button
               onClick={handleShare}
               className="btn-ghost flex items-center gap-2 text-sm"
-              aria-label={linkCopied ? "Link copied" : "Copy link"}
-              title="Copy link"
+              aria-label={linkCopied ? "Link copied" : "Share or copy link"}
+              title="Share or copy link"
             >
               {linkCopied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
-              {linkCopied ? "Copied" : "Copy link"}
+              {linkCopied ? "Copied" : "Share"}
             </button>
             <button
               onClick={() => setShowReportModal(true)}

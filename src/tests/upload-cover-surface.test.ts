@@ -8,9 +8,9 @@
 //      picker, and the camera), and the extra two only ever existed to work
 //      around a filter the phone applies — a workaround that is also one more
 //      way for a picture to be invisible in a list it is actually sitting in.
-//   2. The teaser clip is gone from the upload form. The server still tolerates
-//      the fields for scenes that already carry a trailer, but the form no
-//      longer asks for one and no longer sends one.
+//   2. The teaser clip is gone from BOTH forms. The server still tolerates the
+//      fields for scenes that already carry a trailer, but neither the upload
+//      form nor the dashboard's edit form asks for one or sends one.
 //   3. Nothing the creator is told about a cover explains how any of it works
 //      underneath. A failed transfer needs one instruction, not a mechanism —
 //      and a mechanism is free reconnaissance for whoever is reading the screen.
@@ -127,6 +127,43 @@ describe("the teaser clip is gone from the upload form", () => {
   it("no longer asks the publish API for a trailer", () => {
     const payload = between(UPLOAD, "await fetch(\"/api/videos\"", "const body = await response.json()");
     expect(payload).toContain("bunnyVideoId");
+    expect(payload).not.toContain("teaserBunnyVideoId");
+    expect(payload).not.toContain("teaserUploadSessionToken");
+  });
+});
+
+describe("the edit form has no intro trailer door either", () => {
+  it("removes the trailer clip button, its state and its handler", () => {
+    // The clip door was a second upload flow inside the edit form. It is gone
+    // entirely: the button, the fields it wrote, and the transport underneath.
+    for (const dead of [
+      "Intro trailer clip",
+      "Choose a trailer clip",
+      "Replace trailer clip",
+      "Replace the new trailer",
+      "Trailer attached",
+      "uploadEditTeaser",
+      "newTeaserBunnyVideoId",
+      "newTeaserUploadSession",
+      "editTeaserAttached",
+      "editTeaserProgress",
+      "uploadingEditTeaser",
+      "Clapperboard",
+      "teaserBunnyVideoId",
+      "teaserUploadSessionToken",
+    ]) {
+      expect(DASHBOARD, `"${dead}" is still in the dashboard`).not.toContain(dead);
+    }
+  });
+
+  it("keeps the free-preview length, which is still a real setting", () => {
+    expect(DASHBOARD).toContain("Free preview (seconds)");
+    expect(DASHBOARD).toContain("editTeaserDuration");
+  });
+
+  it("no longer sends a trailer field when saving an edit", () => {
+    const payload = between(DASHBOARD, "await fetch(`/api/videos/${editing.id}`", "captionsUrl,");
+    expect(payload).toContain("teaserDuration");
     expect(payload).not.toContain("teaserBunnyVideoId");
     expect(payload).not.toContain("teaserUploadSessionToken");
   });

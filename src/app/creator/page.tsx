@@ -35,26 +35,14 @@ import {
   Tag,
   Captions,
   MessageSquare,
-  Clapperboard,
   BadgeCheck,
   Copy,
   Check,
   Share2,
 } from "lucide-react";
-import { ANY_FILE_ACCEPT, VIDEO_ACCEPT, canOptimizeImage, classifyFile } from "@/lib/media";
+import { ANY_FILE_ACCEPT, canOptimizeImage, classifyFile } from "@/lib/media";
 import { PROCESSING_BADGE_LABEL } from "@/lib/video-status";
-import {
-  abortVideoUpload,
-  openVideoUpload,
-  uploadVideoFile,
-  completeVideoUpload,
-  videoFileSizeError,
-  VideoUploadError,
-  assertFileReadable,
-  type OpenedVideoUpload,
-  type VideoUploadSession,
-} from "@/lib/video-upload";
-import { reportUploadFailure } from "@/lib/upload-failure-report";
+import { assertFileReadable } from "@/lib/video-upload";
 import {
   PAYOUT_METHODS,
   PAYOUT_METHOD_LABEL,
@@ -271,8 +259,6 @@ interface CreatorVideo {
   category: string | null;
   tags: string[];
   captionsUrl: string | null;
-  /** Whether a separate trailer clip (the intro) is attached. */
-  hasTeaser: boolean;
   createdAt: string;
   encoding: EncodingState;
   /**
@@ -439,14 +425,6 @@ export default function CreatorDashboard() {
   const [editCategory, setEditCategory] = useState("");
   const [editTags, setEditTags] = useState("");
   const [editTeaserDuration, setEditTeaserDuration] = useState(15);
-  // Whether a trailer clip is already attached, and the id of one uploaded in
-  // this edit session (sent on save). Kept apart because the schema can set a
-  // teaser but not clear one, so an untouched field must send nothing.
-  const [editTeaserAttached, setEditTeaserAttached] = useState(false);
-  const [newTeaserBunnyVideoId, setNewTeaserBunnyVideoId] = useState("");
-  const [newTeaserUploadSession, setNewTeaserUploadSession] = useState<OpenedVideoUpload | null>(null);
-  const [editTeaserProgress, setEditTeaserProgress] = useState(0);
-  const [uploadingEditTeaser, setUploadingEditTeaser] = useState(false);
   const [editCoverUrl, setEditCoverUrl] = useState<string | null>(null);
   const [editCaptionsUrl, setEditCaptionsUrl] = useState("");
   const [uploadingCaptions, setUploadingCaptions] = useState(false);
@@ -609,10 +587,6 @@ export default function CreatorDashboard() {
     setEditCategory(video.category || "");
     setEditTags((video.tags || []).join(", "));
     setEditTeaserDuration(video.teaserDuration || 15);
-    setEditTeaserAttached(video.hasTeaser);
-    setNewTeaserBunnyVideoId("");
-    setNewTeaserUploadSession(null);
-    setEditTeaserProgress(0);
     setEditCoverUrl(video.thumbnailUrl);
     setEditCaptionsUrl(video.captionsUrl || "");
     setOpenMenuId(null);
@@ -675,89 +649,6 @@ export default function CreatorDashboard() {
       );
     } finally {
       setUploadingCover(false);
-    }
-  }
-
-  /**
-   * Attach or replace the trailer clip a non-buyer gets to watch.
-   *
-   * Same flow as the upload page: reserve a Bunny slot and send the file through
-   * the resumable direct Bunny transport. The result is held in state and only
-   * written to the video row on
-   * Save, so a cancelled edit changes nothing — and this is the door that finally
-   * lets an existing scene grow an intro trailer.
-   */
-  async function uploadEditTeaser(file: File) {
-    // Same guard as the upload form: no slot is reserved for a file that can
-    // never be sent.
-    const sizeError = videoFileSizeError(file);
-    if (sizeError) {
-      toast("error", sizeError);
-      return;
-    }
-    // The second half of that guard, and the one that catches the files a
-    // picker can see but a phone cannot read: asked here, it arrives while the
-    // creator is still looking at the picker, instead of after a slot has been
-    // reserved and a first chunk has failed looking like a dropped connection.
-    try {
-      await assertFileReadable(file);
-    } catch (error) {
-      toast("error", error instanceof Error ? error.message : "That file could not be read");
-      reportUploadFailure(error, { file, kind: "teaser" });
-      return;
-    }
-    setUploadingEditTeaser(true);
-    setEditTeaserProgress(0);
-    // Declared out here so the catch below can name the slot that was reserved
-    // and abandoned — it is the only handle on the orphan left in the library.
-    let session: OpenedVideoUpload | null = null;
-    try {
-      const res = await fetch("/api/videos/upload-signature", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: `${editTitle || "trailer"} (teaser)`,
-          size: file.size,
-          mimeType: file.type || "video/mp4",
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) {
-        toast("error", data.error || "Could not start the trailer upload");
-        return;
-      }
-
-      // The slot is reserved server-side; the upload resource is opened here,
-      // because Bunny only serves it to the network that opened it.
-      session = await openVideoUpload(data.data as VideoUploadSession);
-      await uploadVideoFile(file, session, {
-        onProgress: ({ percent }) => setEditTeaserProgress(percent),
-        // This browser has just opened the TUS resource. Its offset is zero by
-        // construction, so send the first chunk directly. A HEAD here can
-        // return Bunny's 404 before the first byte is sent and makes a
-        // brand-new teaser look like an expired upload.
-        offset: 0,
-      });
-
-      const videoId = await completeVideoUpload(session.sessionToken);
-
-      setNewTeaserUploadSession(session);
-      setNewTeaserBunnyVideoId(videoId);
-      toast("success", "Trailer uploaded — press Save to attach it");
-    } catch (error) {
-      // The server never saw these bytes — they go straight to Bunny — so this
-      // report is the only record the failure will ever have. Sent before the
-      // toast, because the creator's next move is to close the tab.
-      reportUploadFailure(error, { session, file, kind: "teaser" });
-      toast(
-        "error",
-        error instanceof VideoUploadError
-          ? error.message
-          : "Network error while uploading the trailer"
-      );
-      if (session) void abortVideoUpload(session.sessionToken);
-    } finally {
-      setUploadingEditTeaser(false);
     }
   }
 
@@ -853,13 +744,6 @@ export default function CreatorDashboard() {
           category: editCategory,
           tags,
           teaserDuration: editTeaserDuration,
-          // Only when a new clip was uploaded in this session. Sending the saved
-          // value every time would be a no-op, and the schema has no way to clear
-          // it, so "unchanged" must mean "not sent".
-          ...(newTeaserBunnyVideoId ? { teaserBunnyVideoId: newTeaserBunnyVideoId } : {}),
-          ...(newTeaserUploadSession
-            ? { teaserUploadSessionToken: newTeaserUploadSession.sessionToken }
-            : {}),
           ...(editCoverUrl ? { thumbnailUrl: editCoverUrl } : {}),
           // Always sent, empty included: clearing the field is how a creator
           // removes captions, and an omitted field could not mean that.
@@ -2086,76 +1970,10 @@ export default function CreatorDashboard() {
                     className="input-field"
                   />
                   <p className="text-xs text-white/40 mt-1">
-                    How much a viewer sees before paying. 15-30 seconds. This is the
-                    duration badge; it does not unlock part of the video — a paid scene
-                    with no trailer clip shows no preview at all.
+                    How much a viewer sees before paying, 15-30 seconds. This is the
+                    duration badge and the length shown on the card; it does not unlock
+                    part of the video.
                   </p>
-                </div>
-              </div>
-
-              {/* Intro trailer — the clip a non-buyer watches before the paywall */}
-              <div className="rounded-xl border border-white/10 p-4">
-                <label className="text-sm text-white/60 mb-2 flex items-center gap-2">
-                  <Clapperboard className="w-4 h-4" /> Intro trailer clip
-                </label>
-                <p className="text-xs text-white/45 mb-3 leading-relaxed">
-                  A short clip (10–30s) that people who have not paid can watch, with an
-                  unlock offer under it. Without one, a paid scene shows only a poster —
-                  we will not sign a non-buyer into the whole video to give them a preview.
-                </p>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className="btn-ghost cursor-pointer inline-flex items-center gap-2 text-sm">
-                    <span aria-hidden>🎬</span>
-                    <span>
-                      {uploadingEditTeaser
-                        ? `Uploading… ${editTeaserProgress}%`
-                        : newTeaserBunnyVideoId
-                          ? "Replace the new trailer"
-                          : editTeaserAttached
-                            ? "Replace trailer clip"
-                            : "Choose a trailer clip"}
-                    </span>
-                    <input
-                      type="file"
-                      accept={VIDEO_ACCEPT}
-                      className="hidden"
-                      disabled={uploadingEditTeaser}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) uploadEditTeaser(file);
-                      }}
-                    />
-                  </label>
-                  {/* The same second door as the upload page: a type filter is
-                      applied by the phone's own file index, so a clip saved by
-                      a chat app can be missing from the picker on the left. */}
-                  <label className="text-xs text-white/45 underline underline-offset-2 cursor-pointer hover:text-white/75">
-                    Can&apos;t find the clip? Browse every folder and app
-                    <input
-                      type="file"
-                      accept={ANY_FILE_ACCEPT}
-                      className="hidden"
-                      disabled={uploadingEditTeaser}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) uploadEditTeaser(file);
-                      }}
-                    />
-                  </label>
-
-                  {(newTeaserBunnyVideoId || editTeaserAttached) && (
-                    <span
-                      className={cn(
-                        "text-xs",
-                        newTeaserBunnyVideoId ? "text-amber-400/80" : "text-emerald-400/80"
-                      )}
-                    >
-                      {newTeaserBunnyVideoId
-                        ? "New trailer ready — press Save to attach it"
-                        : "Trailer attached — non-buyers see this instead of the full video"}
-                    </span>
-                  )}
                 </div>
               </div>
 

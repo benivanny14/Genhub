@@ -13,8 +13,9 @@
 //      so the fallback cannot be forgotten at one call site.
 //   2. The fallback exists and is selection-based — the only copy that works
 //      without a secure context or a focused document.
-//   3. The watch page's control is a copy-link button. It copies; it does not
-//      hand the click to an OS share sheet and leave the clipboard untouched.
+//   3. The watch page's share control offers the OS share sheet when there is
+//      one, and always leaves a usable link behind when there is not: dismissing
+//      the sheet falls through to the helper rather than ending the click.
 //
 // The first two are source-level checks because the deliverable is the
 // arrangement of a few lines; a wording or ordering change is the thing guarded.
@@ -91,14 +92,20 @@ describe("every copy control", () => {
   });
 });
 
-describe("watch page copy-link button", () => {
+describe("watch page share button", () => {
   const handler = body(DETAIL, "async function handleShare()");
 
-  it("copies the link instead of handing the click to a share sheet", () => {
-    expect(handler, "the copy control must not open a share sheet").not.toMatch(
-      /navigator\.share/
-    );
+  it("offers the OS share sheet first, then falls through to the copy", () => {
+    expect(handler, "the share sheet was dropped").toMatch(/navigator\.share/);
+    expect(handler).toMatch(/await navigator\.share\(/);
     expect(handler).toMatch(/await copyToClipboard\(url\)/);
+
+    // Dismissing the sheet is not an error: the copy must come AFTER it, so a
+    // cancelled share still lands the link on the clipboard.
+    const shareAt = handler.indexOf("navigator.share");
+    const copyAt = handler.indexOf("copyToClipboard(url)");
+    expect(shareAt).toBeGreaterThan(-1);
+    expect(copyAt).toBeGreaterThan(shareAt);
   });
 
   it("copies the canonical watch URL instead of the address bar", () => {
