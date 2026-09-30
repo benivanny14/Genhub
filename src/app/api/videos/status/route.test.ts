@@ -19,10 +19,21 @@ import { NextRequest } from "next/server";
 const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
   bunnyDetails: vi.fn(),
+  currentUser: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
   default: { video: { findMany: mocks.findMany } },
+}));
+
+// The shared rate limiter, stubbed so the suite never dials Redis, and the
+// session, stubbed so the privacy branch is exercised without a cookie jar.
+vi.mock("@/lib/redis", () => ({
+  checkRateLimit: async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false }),
+}));
+
+vi.mock("@/lib/auth", () => ({
+  getCurrentUser: () => mocks.currentUser(),
 }));
 
 vi.mock("@/lib/bunny", async (importOriginal) => {
@@ -48,6 +59,7 @@ function where() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.findMany.mockResolvedValue([]);
+  mocks.currentUser.mockResolvedValue(null);
 });
 
 describe("POST /api/videos/status", () => {
@@ -75,12 +87,12 @@ describe("POST /api/videos/status", () => {
 
   it("reports the three states, and calls an untracked row READY", async () => {
     mocks.findMany.mockResolvedValue([
-      { id: "processing", encodingStatus: 1, encodeProgress: 30 },
-      { id: "ready", encodingStatus: 4, encodeProgress: 100 },
-      { id: "failed", encodingStatus: 5, encodeProgress: 0 },
+      { id: "processing", encodingStatus: 1, encodeProgress: 30, isPublished: true, creatorId: "c1" },
+      { id: "ready", encodingStatus: 4, encodeProgress: 100, isPublished: true, creatorId: "c1" },
+      { id: "failed", encodingStatus: 5, encodeProgress: 0, isPublished: true, creatorId: "c1" },
       // Side-loaded/demo rows: Bunny never transcodes them, and a badge here
       // would be permanent.
-      { id: "untracked", encodingStatus: null, encodeProgress: 0 },
+      { id: "untracked", encodingStatus: null, encodeProgress: 0, isPublished: true, creatorId: "c1" },
     ]);
 
     const response = await POST(request({ ids: ["processing", "ready", "failed", "untracked"] }));
@@ -114,5 +126,38 @@ describe("POST /api/videos/status", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.findMany).not.toHaveBeenCalled();
+  });
+
+  it("never reveals an unpublished video's status to an anonymous caller", async () => {
+    // The leak this closes: an unpublished row (pulled from the feed, or still
+    // uploading) must not have its existence or its encode progress confirmed to
+    // a stranger, or the endpoint becomes an oracle for hidden videos.
+    mocks.findMany.mockResolvedValue([
+      { id: "hidden", encodingStatus: 1, encodeProgress: 42, isPublished: false, creatorId: "c1" },
+    ]);
+
+    const response = await POST(request({ ids: ["hidden"] }));
+    const body = await response.json();
+
+    expect(body.data.statuses).toEqual({});
+    expect(body.data.processing).toBe(0);
+  });
+
+  it("lets the owner see their own unpublished video's status", async () => {
+    mocks.currentUser.mockResolvedValue({ userId: "c1", role: "CREATOR" });
+    mocks.findMany.mockResolvedValue([
+      { id: "draft", encodingStatus: 1, encodeProgress: 12, isPublished: false, creatorId: "c1" },
+    ]);
+
+    const response = await POST(request({ ids: ["draft"] }));
+    const body = await response.json();
+
+    expect(body.data.statuses.draft).toEqual({ status: "PROCESSING", progress: 12 });
+  });
+
+  it("drops ids that cannot name a row before they reach the query", async () => {
+    await POST(request({ ids: ["ok-1", "bad id!", "../../etc", "x".repeat(200)] }));
+
+    expect(where().id).toEqual({ in: ["ok-1"] });
   });
 });

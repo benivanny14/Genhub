@@ -35,6 +35,7 @@ vi.mock("@/lib/db", () => ({
 vi.mock("@/lib/redis", () => ({
   cacheGet: mocks.cacheGet,
   cacheSet: mocks.cacheSet,
+  checkRateLimit: async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false }),
 }));
 
 import { GET } from "./route";

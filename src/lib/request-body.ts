@@ -31,6 +31,38 @@ export const MAX_JSON_BODY_BYTES = 256 * 1024;
 export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
 /**
+ * The Bunny Stream callback is a handful of fields — a strict, small ceiling.
+ *
+ * The signature is computed over the RAW bytes, so this route cannot parse first
+ * and cap second: it has to hold the whole body to verify it. That makes an
+ * unbounded body an unbounded allocation, which is why this cap is enforced
+ * before a single byte is buffered.
+ */
+export const MAX_BUNNY_WEBHOOK_BODY_BYTES = 64 * 1024;
+
+/**
+ * Read a request body as RAW TEXT, refusing anything larger than `maxBytes`.
+ *
+ * The HMAC-verified webhook is the reason this exists: it needs the exact bytes
+ * the provider signed, but it must not buffer an attacker's idea of "exact".
+ * Returns a discriminated result rather than a string so the caller can answer
+ * `413` and, importantly, distinguish "too large" from "empty".
+ */
+export async function readRawBodyCapped(
+  request: Request,
+  maxBytes: number
+): Promise<{ ok: true; text: string } | { ok: false }> {
+  const declared = Number(request.headers.get("content-length") || "");
+  if (Number.isFinite(declared) && declared > maxBytes) return { ok: false };
+
+  try {
+    return { ok: true, text: await readTextCapped(request, maxBytes) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
  * Read and parse a JSON request body, refusing anything larger than `maxBytes`.
  *
  * Never throws: a body that is too large, malformed, or unreadable yields the

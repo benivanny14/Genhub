@@ -9,6 +9,7 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
+import { checkRateLimit } from "@/lib/redis";
 
 export async function GET(request: NextRequest) {
   try {
@@ -45,6 +46,11 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
+
+    // Per account: a save is a small write, but a script toggling it is a steady
+    // stream of them, and the favourite count is shared state.
+    const { allowed } = await checkRateLimit(`favorite:${auth.userId}`, 120, 60_000);
+    if (!allowed) return api.rateLimited("Too many actions — please wait a moment");
 
     const body = await readJsonBody(request, {});
     const videoId = (body?.videoId || "").toString();

@@ -28,7 +28,10 @@ vi.mock("@/lib/db", () => ({
   default: { user: { update: mocks.userUpdate, findUnique: mocks.userFindUnique } },
 }));
 
-vi.mock("@/lib/redis", () => ({ cacheDel: vi.fn(async () => {}) }));
+vi.mock("@/lib/redis", () => ({
+  cacheDel: vi.fn(async () => {}),
+  checkRateLimit: async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false }),
+}));
 
 vi.mock("@/lib/auth", () => ({
   requireAuth: async () => ({ userId: "u1", role: "VIEWER" }),

@@ -51,7 +51,8 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/redis", () => ({
-  checkRateLimit: vi.fn(async () => ({ allowed: true, remaining: 99, resetAt: 0 })),
+  checkRateLimit: vi.fn(async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false })),
+  checkRateLimitStrict: vi.fn(async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false, unavailable: false })),
 }));
 
 vi.mock("@/lib/config", () => ({

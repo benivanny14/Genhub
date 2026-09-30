@@ -17,7 +17,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
-import { checkRateLimit } from "@/lib/redis";
+import { checkRateLimitStrict } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import { sendPasswordResetLink } from "@/lib/services/password-reset.service";
 import { emailMatch } from "@/lib/validation";
@@ -27,8 +27,17 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export async function POST(request: NextRequest) {
   try {
     const ip = clientIp(request.headers);
-    const { allowed } = await checkRateLimit(`forgot:${ip}`, 5, 60_000);
-    if (!allowed) return api.rateLimited("Too many attempts. Please wait a minute.");
+    // Each accepted request mints a token row and sends mail, so this is both an
+    // abuse and a cost surface — it fails closed when the shared store is down.
+    const rl = await checkRateLimitStrict(`forgot:${ip}`, 5, 60_000);
+    if (rl.unavailable) {
+      return api.error(
+        "Password reset is temporarily unavailable. Please try again in a moment.",
+        503,
+        "TEMPORARILY_UNAVAILABLE"
+      );
+    }
+    if (!rl.allowed) return api.rateLimited("Too many attempts. Please wait a minute.");
 
     const { email } = (await readJsonBody(request, {})) as { email?: unknown };
 

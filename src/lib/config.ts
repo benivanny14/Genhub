@@ -282,6 +282,18 @@ export function productionConfigWarnings(): string[] {
   }
   if (!config.email.host) {
     warnings.push("SMTP_HOST is not set — password-reset and welcome emails are only logged, users cannot recover accounts");
+  } else {
+    // A host without a routable From is the classic silent mail failure: the
+    // transport connects, the provider accepts the request, and every message is
+    // then refused (or filed as spam) because the sending domain was never
+    // verified. `genhub.local` is the shipped default and can never be a real
+    // sender, so it is called out rather than left to look configured.
+    const from = config.email.from;
+    if (/\.local\b/i.test(from) || !/@[^\s<>]+\.[a-z]{2,}/i.test(from)) {
+      warnings.push(
+        `EMAIL_FROM is not a deliverable address ("${from}") — set it to an address on your verified sending domain or mail will be refused`
+      );
+    }
   }
   // AT_API_KEY is deliberately NOT warned about. Password reset is email-only
   // and sign-up requires an email, so no flow sends SMS any more — a warning

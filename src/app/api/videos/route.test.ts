@@ -60,6 +60,7 @@ vi.mock("@/lib/redis", () => ({
   cacheGet: (...args: unknown[]) => mocks.cacheGet(...args),
   cacheSet: (...args: unknown[]) => mocks.cacheSet(...args),
   cacheDel: (...args: unknown[]) => mocks.cacheDel(...args),
+  checkRateLimit: async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false }),
 }));
 
 // The upload path only marks a video as needing transcoding when Bunny is

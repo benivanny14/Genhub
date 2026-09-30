@@ -7,6 +7,7 @@ import { z } from "zod";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
+import { checkRateLimit } from "@/lib/redis";
 import prisma from "@/lib/db";
 import {
   abortVideoUploadSession,
@@ -21,6 +22,10 @@ const schema = z.object({ sessionToken: z.string().min(80).max(20_000) });
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("CREATOR");
+
+    const { allowed } = await checkRateLimit(`upload:${auth.userId}`, 60, 60_000);
+    if (!allowed) return api.rateLimited("Too many upload actions — please wait a moment");
+
     const parsed = schema.safeParse(await readJsonBody(request));
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
 

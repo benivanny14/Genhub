@@ -61,6 +61,15 @@ const SKIP_SECONDS = 10;
 /** How long the `+10s` / `-10s` confirmation stays on screen after a jump. */
 const SKIP_FLASH_MS = 600;
 
+/**
+ * How long a side tap waits to see whether a second tap turns it into a seek.
+ *
+ * Long enough that a deliberate double tap registers, short enough that a
+ * single tap still feels immediate. It matches the interval mobile platforms
+ * themselves use to tell a tap from a double tap.
+ */
+const DOUBLE_TAP_MS = 280;
+
 /** How long it stays fully visible. */
 const BRAND_MARK_HOLD_MS = 2800;
 /** How long the fade-out lasts; the element unmounts after it. */
@@ -179,6 +188,19 @@ export default function VideoPlayer({
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const resumedRef = useRef(false);
 
+  // Tap-to-toggle, double-tap-to-seek.
+  //
+  // A single tap on the picture shows or hides the controls, exactly as it does
+  // in every player a viewer has met — which is what was asked for: tap to get
+  // the bar out of the way, tap again to bring it back to use it. The side
+  // thirds additionally seek ±10s on a DOUBLE tap, so the fast-skip gesture
+  // survives without a single tap ever meaning two things at once.
+  //
+  // `surfaceTapTimer` holds the pending single-tap action open for the
+  // double-tap window; a second tap cancels it before it fires.
+  const surfaceTapTimer = useRef<NodeJS.Timeout | null>(null);
+  const lastSurfaceTap = useRef<{ at: number; side: "left" | "mid" | "right" } | null>(null);
+
   // `hidden` -> `on` -> `off` (fading out) -> `hidden`. Three states rather than
   // a boolean so the fade has somewhere to happen: a component that unmounts the
   // instant it is dismissed disappears rather than fades.
@@ -191,6 +213,7 @@ export default function VideoPlayer({
     () => () => {
       brandMarkTimers.current.forEach(clearTimeout);
       if (skipFlashTimer.current) clearTimeout(skipFlashTimer.current);
+      if (surfaceTapTimer.current) clearTimeout(surfaceTapTimer.current);
     },
     []
   );
@@ -583,6 +606,74 @@ export default function VideoPlayer({
     }
   };
 
+  /**
+   * Show the controls if hidden, hide them if shown.
+   *
+   * Showing goes through showControlsTemporarily so the bar keeps its own
+   * auto-hide timer — a tap that reveals the controls must not leave them up
+   * forever. Hiding cancels any pending timer and lowers the flag directly, so
+   * the tap takes effect at once rather than at the next tick of a clock the
+   * viewer cannot see.
+   */
+  const toggleControls = () => {
+    if (controlsTimeoutRef.current) {
+      clearTimeout(controlsTimeoutRef.current);
+      controlsTimeoutRef.current = null;
+    }
+    if (showControls) setShowControls(false);
+    else showControlsTemporarily();
+  };
+
+  /**
+   * A tap on the picture.
+   *
+   * Single tap toggles the controls. A double tap in the left or right third
+   * seeks ±10s. The single-tap action is deferred by DOUBLE_TAP_MS when it lands
+   * on a side, so a following second tap can claim it as a seek instead; a tap in
+   * the middle toggles immediately, because nothing else can follow it there.
+   */
+  const handleSurfaceTap = (event: React.MouseEvent<HTMLButtonElement>) => {
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const ratio = rect.width > 0 ? (event.clientX - rect.left) / rect.width : 0.5;
+    const side: "left" | "mid" | "right" = ratio < 1 / 3 ? "left" : ratio > 2 / 3 ? "right" : "mid";
+
+    const now = Date.now();
+    const previous = lastSurfaceTap.current;
+
+    // A second tap on the same side inside the window is a seek.
+    if (
+      previous &&
+      side !== "mid" &&
+      previous.side === side &&
+      now - previous.at < DOUBLE_TAP_MS
+    ) {
+      if (surfaceTapTimer.current) {
+        clearTimeout(surfaceTapTimer.current);
+        surfaceTapTimer.current = null;
+      }
+      lastSurfaceTap.current = null;
+      skip(side === "left" ? -SKIP_SECONDS : SKIP_SECONDS);
+      return;
+    }
+
+    lastSurfaceTap.current = { at: now, side };
+
+    if (side === "mid") {
+      toggleControls();
+      return;
+    }
+
+    // A side tap might still become a double tap — wait out the window, then
+    // treat it as a plain toggle.
+    if (surfaceTapTimer.current) clearTimeout(surfaceTapTimer.current);
+    surfaceTapTimer.current = setTimeout(() => {
+      surfaceTapTimer.current = null;
+      toggleControls();
+    }, DOUBLE_TAP_MS);
+  };
+
   const toggleMute = () => {
     const video = videoRef.current;
     if (!video) return;
@@ -896,47 +987,31 @@ export default function VideoPlayer({
         </div>
       )}
 
-      {/* Rewind / skip ahead by tapping the picture.
+      {/* Tap the picture.
 
-          The left third of the frame jumps back and the right third jumps
-          forward, so the viewer does not have to find a 36px button in the dark
-          to go back ten seconds. Only while PLAYING: paused, the whole frame
-          belongs to the big play button, and a tap there has to mean "start" —
-          two meanings for one tap is how a player feels broken.
+          A single tap anywhere shows or hides the controls — tap to clear the
+          bar so it stops covering the scene, tap again to bring it back to use
+          it. That is the gesture every viewer expects, and on a phone it is the
+          only way to bring the bar back at all, since there is no hover to wake
+          it once it has faded.
 
-          Both stop above the control bar (`bottom-16`), and the bar is z-30
-          against their z-20, so the bottom strip still belongs to the buttons
-          the viewer can see.
+          A DOUBLE tap in the left or right third still jumps ∓10s, so the
+          fast-skip gesture survives without a single tap ever meaning two
+          things. The decision is made by handleSurfaceTap above; the seek
+          buttons in the bar remain for anyone who would rather use those.
 
-          The middle third shows and hides the controls, which is what a middle
-          tap does everywhere a viewer has met a video player. It used to be
-          inert, and on a phone that left the bar stuck on screen — there is no
-          hover to bring it back once it has faded, so a tap has to be able to
-          ask for it. (A tap on the sides still means ±10s; two meanings for one
-          tap is how a player feels broken.) */}
+          Only while PLAYING: paused, the whole frame belongs to the big play
+          button, and a tap there has to mean "start". It stops above the
+          control bar (`bottom-16`), and the bar is z-30 against this button's
+          z-20, so the bottom strip still belongs to the buttons the viewer can
+          see. */}
       {isPlaying && !fatalError && (
-        <>
-          <button
-            type="button"
-            aria-label={`Rewind ${SKIP_SECONDS} seconds`}
-            onClick={() => skip(-SKIP_SECONDS)}
-            className="absolute bottom-16 left-0 top-0 z-20 w-1/3 touch-manipulation sm:w-1/4"
-          />
-          <button
-            type="button"
-            aria-label={`Skip forward ${SKIP_SECONDS} seconds`}
-            onClick={() => skip(SKIP_SECONDS)}
-            className="absolute bottom-16 right-0 top-0 z-20 w-1/3 touch-manipulation sm:w-1/4"
-          />
-          <button
-            type="button"
-            aria-label={showControls ? "Hide controls" : "Show controls"}
-            onClick={() =>
-              showControls ? setShowControls(false) : showControlsTemporarily()
-            }
-            className="absolute bottom-16 left-1/3 right-1/3 top-0 z-20 touch-manipulation sm:left-1/4 sm:right-1/4"
-          />
-        </>
+        <button
+          type="button"
+          aria-label={showControls ? "Hide controls" : "Show controls"}
+          onClick={handleSurfaceTap}
+          className="absolute bottom-16 left-0 right-0 top-0 z-20 touch-manipulation"
+        />
       )}
 
       {/* The jump, confirmed on the side it went to. A ten-second move inside a

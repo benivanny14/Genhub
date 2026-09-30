@@ -46,6 +46,14 @@ const bunnyConfig = vi.hoisted(() => ({
   tokenSecret: "pull-zone-key",
 }));
 
+// The shared rate limiter is stubbed: it is exercised in its own tests, and
+// leaving it real would make the limiter's own Upstash REST call the first
+// `fetch` this suite's global stub records — pushing the upstream manifest out
+// of urls[0] and making a signed-URL assertion fail for an unrelated reason.
+vi.mock("@/lib/redis", () => ({
+  checkRateLimit: async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false }),
+}));
+
 vi.mock("@/lib/db", () => ({
   default: {
     video: { findFirst: mocks.videoFindFirst },

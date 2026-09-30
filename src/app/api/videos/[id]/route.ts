@@ -29,7 +29,7 @@ import {
   ENCODING_RECHECK_FLOOR_MS,
 } from "@/lib/services/video-encoding.service";
 import { videoStatus } from "@/lib/video-status";
-import { cacheDel, claimOnce } from "@/lib/redis";
+import { cacheDel, claimOnce, checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 
 // =============================================================================
@@ -41,6 +41,17 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // This route builds signed playback URLs and can trigger an encoding refresh
+    // (a provider call), so it is bounded per IP. A watch page calls it once, and
+    // resume/preview poll it a few times, so the ceiling is well clear of real
+    // use while stopping a flood from becoming repeated upstream work.
+    const { allowed } = await checkRateLimit(
+      `video:${clientIp(request.headers)}`,
+      120,
+      60_000
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
     const { id } = await params;
     const authUser = await getCurrentUser();
 

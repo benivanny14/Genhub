@@ -6,18 +6,27 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
-import { cacheGet, cacheSet } from "@/lib/redis";
-import { intParam } from "@/lib/utils";
+import { cacheGet, cacheSet, checkRateLimit } from "@/lib/redis";
+import { clientIp, intParam } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
-    const search = request.nextUrl.searchParams.get("q")?.trim() || "";
+    const { allowed } = await checkRateLimit(
+      `creators:${clientIp(request.headers)}`,
+      120,
+      60_000
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
+    // Bounded like the feed's `q`: the search term feeds a `contains` scan and
+    // the cache key, and neither may be driven by an unbounded string.
+    const search = (request.nextUrl.searchParams.get("q") || "").trim().slice(0, 100);
     // Same guard as the feed: `Math.max(1, NaN)` is NaN, and Prisma refuses a
     // NaN `skip`/`take` with a 500.
     const page = intParam(request.nextUrl.searchParams.get("page"), 1);
     const limit = intParam(request.nextUrl.searchParams.get("limit"), 24, 60);
 
-    const cacheKey = `creators:dir:${search}:${page}:${limit}`;
+    const cacheKey = `creators:dir:${search.toLowerCase()}:${page}:${limit}`;
     const cached = await cacheGet(cacheKey);
     if (cached) return api.success(cached);
 

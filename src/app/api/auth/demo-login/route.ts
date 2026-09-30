@@ -15,7 +15,7 @@ import prisma from "@/lib/db";
 import { generateToken, setAuthCookie } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
-import { checkRateLimit } from "@/lib/redis";
+import { checkRateLimitStrict } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
 import { developmentOnlyEnabled } from "@/lib/dev-only";
@@ -34,12 +34,15 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { allowed } = await checkRateLimit(
+    const rl = await checkRateLimitStrict(
       `demo-login:${clientIp(request.headers)}`,
       config.rateLimit.auth.max,
       config.rateLimit.auth.windowMs
     );
-    if (!allowed) return api.rateLimited("Too many attempts — please wait a moment");
+    if (rl.unavailable) {
+      return api.error("Temporarily unavailable", 503, "TEMPORARILY_UNAVAILABLE");
+    }
+    if (!rl.allowed) return api.rateLimited("Too many attempts — please wait a moment");
 
     const body = await readJsonBody(request, {});
     const account = body?.account as keyof typeof ACCOUNTS;

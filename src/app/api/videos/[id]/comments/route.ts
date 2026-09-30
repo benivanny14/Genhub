@@ -10,6 +10,7 @@ import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
+import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
 
 const userSelect = {
@@ -25,6 +26,15 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Public and comparatively heavy (a threaded page plus a total count), so it
+    // is bounded per IP rather than left open to a flood.
+    const { allowed } = await checkRateLimit(
+      `comments:${clientIp(request.headers)}`,
+      120,
+      60_000
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
     // Next 15 hands route params over as a promise.
     const { id } = await params;
 

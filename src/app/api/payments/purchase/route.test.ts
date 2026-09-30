@@ -47,6 +47,10 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 
 vi.mock("@/lib/redis", () => ({
   checkRateLimit: (...args: unknown[]) => mocks.checkRateLimit(...args),
+  checkRateLimitStrict: async (...args: unknown[]) => ({
+    ...(await mocks.checkRateLimit(...args)),
+    unavailable: false,
+  }),
 }));
 
 vi.mock("@/lib/payments/harakapay", () => ({

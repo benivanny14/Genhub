@@ -21,7 +21,7 @@ import { notifyPaymentResult } from "@/lib/services/payment-notify.service";
 import { assertSupportedGateway } from "@/lib/payments/gateway";
 import { generateOrderId } from "@/lib/utils";
 import config from "@/lib/config";
-import { checkRateLimit } from "@/lib/redis";
+import { checkRateLimitStrict } from "@/lib/redis";
 import { applyCoupon, consumeCoupon } from "@/lib/coupons";
 import { videoStatus } from "@/lib/video-status";
 
@@ -44,13 +44,22 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
-    // Rate limit payment attempts
-    const { allowed } = await checkRateLimit(
+    // Rate limit payment attempts. Money routes fail CLOSED on a shared-store
+    // outage: a degraded limiter here is one that lets a script create charges
+    // far faster than a person could, and the cost of that is real.
+    const rl = await checkRateLimitStrict(
       `payment:${auth.userId}`,
       config.rateLimit.payment.max,
       config.rateLimit.payment.windowMs
     );
-    if (!allowed) return api.rateLimited("Wait for the prompt before trying again");
+    if (rl.unavailable) {
+      return api.error(
+        "Payments are temporarily unavailable. Nothing was charged — please try again in a moment.",
+        503,
+        "TEMPORARILY_UNAVAILABLE"
+      );
+    }
+    if (!rl.allowed) return api.rateLimited("Wait for the prompt before trying again");
 
     const body = await readJsonBody(request);
     const result = initiatePaymentSchema.safeParse(body);

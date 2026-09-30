@@ -58,6 +58,7 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 vi.mock("@/lib/redis", () => ({
   claimOnce: (...args: unknown[]) => mocks.claimOnce(...args),
   cacheDel: vi.fn(),
+  checkRateLimit: async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false }),
 }));
 
 vi.mock("@/lib/video-upload-session", () => ({

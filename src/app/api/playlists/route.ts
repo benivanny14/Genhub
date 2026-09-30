@@ -9,6 +9,7 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
+import { checkRateLimit } from "@/lib/redis";
 import { listPlaylists } from "@/lib/services/playlist.service";
 
 export async function GET() {
@@ -27,6 +28,9 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
+
+    const { allowed } = await checkRateLimit(`playlist:${auth.userId}`, 60, 60_000);
+    if (!allowed) return api.rateLimited("Too many actions — please wait a moment");
 
     const body = await readJsonBody(request, {});
     const name = typeof body?.name === "string" ? body.name.trim() : "";

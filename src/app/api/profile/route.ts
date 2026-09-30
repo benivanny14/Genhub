@@ -9,7 +9,7 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
-import { cacheDel } from "@/lib/redis";
+import { cacheDel, checkRateLimit } from "@/lib/redis";
 import { mediaOrExternalUrl } from "@/lib/validation";
 import { normalizeMediaUrl } from "@/lib/media";
 import { normalizeUsername, usernameFormatError, usernameFromDisplayName } from "@/lib/usernames";
@@ -19,6 +19,14 @@ import config from "@/lib/config";
 export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireAuth();
+
+    // Profile edits and password changes are per account. The password path in
+    // particular runs a deliberate bcrypt compare, so a loop here is CPU the
+    // whole deployment pays for — 30 a minute is far above a person editing a
+    // profile and well below a script.
+    const { allowed } = await checkRateLimit(`profile:${auth.userId}`, 30, 60_000);
+    if (!allowed) return api.rateLimited("Too many updates — please wait a moment");
+
     const body = await readJsonBody(request);
 
     // Password change flow

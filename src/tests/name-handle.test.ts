@@ -44,7 +44,8 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/redis", () => ({
-  checkRateLimit: async () => ({ allowed: true, remaining: 9, resetAt: 0 }),
+  checkRateLimit: async () => ({ allowed: true, remaining: 9, resetAt: 0, degraded: false }),
+  checkRateLimitStrict: async () => ({ allowed: true, remaining: 9, resetAt: 0, degraded: false, unavailable: false }),
   cacheDel: async () => {},
 }));
 

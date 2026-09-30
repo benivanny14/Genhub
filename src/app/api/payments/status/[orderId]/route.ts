@@ -13,6 +13,7 @@ import { api } from "@/lib/api-response";
 import config from "@/lib/config";
 import { harakaStatus, harakaStatusToInternal } from "@/lib/payments/harakapay";
 import { processPaymentWebhook } from "@/lib/services/webhook.service";
+import { checkRateLimitStrict } from "@/lib/redis";
 
 export async function GET(
   _request: NextRequest,
@@ -20,6 +21,20 @@ export async function GET(
 ) {
   try {
     const auth = await requireAuth();
+
+    // This path can call the gateway to reconcile a stuck row, so it is an
+    // upstream-amplification surface as well as a read. Bounded per account,
+    // and — like the rest of the payment routes — fail-closed on an outage: a
+    // client polling in a loop must not be able to drive gateway traffic.
+    const rl = await checkRateLimitStrict(`paystatus:${auth.userId}`, 60, 60_000);
+    if (rl.unavailable) {
+      return api.error(
+        "Payment status is temporarily unavailable. Please try again in a moment.",
+        503,
+        "TEMPORARILY_UNAVAILABLE"
+      );
+    }
+    if (!rl.allowed) return api.rateLimited("Too many status checks — please wait a moment");
     // Next 15 hands route params over as a promise.
     const { orderId } = await params;
 

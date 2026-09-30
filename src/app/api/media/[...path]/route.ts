@@ -29,6 +29,8 @@ import { Readable } from "node:stream";
 import prisma from "@/lib/db";
 import config from "@/lib/config";
 import { getCurrentUser } from "@/lib/auth";
+import { checkRateLimit } from "@/lib/redis";
+import { clientIp } from "@/lib/utils";
 import {
   BUNNY_STORAGE_ORIGIN,
   cacheControlFor,
@@ -113,6 +115,24 @@ export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ) {
+  // A page can legitimately request dozens of images at once (a feed grid of
+  // covers), so this ceiling is far above a real visitor's gallery and still
+  // bounds how fast one IP can drive Bunny Storage fetches through us — the
+  // "one client, unlimited upstream requests" amplification this route would
+  // otherwise offer. Generous on purpose: too tight a number here breaks the
+  // site's own images for everyone behind a shared NAT.
+  const { allowed } = await checkRateLimit(
+    `media:${clientIp(request.headers)}`,
+    600,
+    60_000
+  );
+  if (!allowed) {
+    return NextResponse.json(
+      { success: false, error: "Too many requests" },
+      { status: 429, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
   const { path } = await params;
   const key = (path || []).map((segment) => decodeURIComponent(segment)).join("/");
 

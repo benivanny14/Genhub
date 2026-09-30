@@ -78,6 +78,18 @@ export async function sendMail(options: SendMailOptions): Promise<MailResult> {
     console.log(
       `[Email:console] -> ${options.to} | ${options.subject}\n${options.text}`
     );
+    // In production a missing host means no email leaves the server at all: an
+    // account cannot be recovered, and the welcome mail never arrives. That is a
+    // configured-service fault the operator must hear about, not a line in a log
+    // nobody reads. Dev keeps the console transport silently on purpose.
+    if (config.nodeEnv === "production") {
+      void reportCredentialFault({
+        service: "SMTP",
+        detail:
+          "SMTP_HOST is not set, so NO email is being delivered — password reset and " +
+          "welcome mail are only reaching the server log",
+      });
+    }
     return { sent: true, transport: "console" };
   }
 

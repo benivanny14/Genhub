@@ -39,6 +39,8 @@ import { getCurrentUser, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import config from "@/lib/config";
 import { isBunnyPlaybackConfigured, isBunnyVideoId, signedBunnyFileUrl } from "@/lib/bunny";
+import { checkRateLimit } from "@/lib/redis";
+import { clientIp } from "@/lib/utils";
 import {
   buildClipManifest,
   parseMasterVariants,
@@ -81,10 +83,20 @@ async function fetchWithToken(
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Each call performs several upstream playlist fetches to plan the clip, so
+    // it is bounded per IP: without this, one client could turn a free teaser
+    // into an unbounded number of Bunny requests through the app.
+    const { allowed } = await checkRateLimit(
+      `introclip:${clientIp(request.headers)}`,
+      120,
+      60_000
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
     const { id } = await params;
 
     if (!isBunnyPlaybackConfigured()) {

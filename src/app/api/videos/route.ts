@@ -11,7 +11,7 @@ import { requireAuth, requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { createVideoSchema } from "@/lib/validation";
-import { generateSlug, intParam } from "@/lib/utils";
+import { clientIp, generateSlug, intParam } from "@/lib/utils";
 import {
   getBunnyVideoDetails,
   introClipPath,
@@ -19,7 +19,7 @@ import {
   isBunnyVideoId,
   resolveTeaserUrl,
 } from "@/lib/bunny";
-import { cacheGet, cacheSet, cacheDel } from "@/lib/redis";
+import { cacheGet, cacheSet, cacheDel, checkRateLimit } from "@/lib/redis";
 import { rankTrending, type TrendingItem } from "@/lib/trending";
 import { normalizeMediaUrl } from "@/lib/media";
 import { BUNNY_FAILED, videoStatus } from "@/lib/video-status";
@@ -32,14 +32,27 @@ import { confirmVideoUpload, verifyVideoUploadSession } from "@/lib/video-upload
 
 export async function GET(request: NextRequest) {
   try {
+    const { allowed } = await checkRateLimit(
+      `videos:${clientIp(request.headers)}`,
+      120,
+      60_000
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
     const searchParams = request.nextUrl.searchParams;
     // intParam, not `parseInt`: a letter in the page number is NaN, and a NaN
     // `skip`/`take` is refused by Prisma — `/api/videos?page=abc` used to answer
     // 500 instead of the first page of the feed.
     const page = intParam(searchParams.get("page"), 1);
     const limit = intParam(searchParams.get("limit"), 20, 50);
-    const search = searchParams.get("q") || "";
-    const category = searchParams.get("category") || "";
+    // Capped and folded before it reaches either the WHERE clause or the cache
+    // key. An unbounded `q` made two problems: a 10,000-character `contains`
+    // scan per request, and one distinct Redis key per distinct string — the
+    // cheapest way to evict every legitimate entry with junk. `toLowerCase`
+    // folds "Java" and "java" onto the same key, so the cache is not defeated
+    // by capitalisation either.
+    const search = (searchParams.get("q") || "").trim().slice(0, 100);
+    const category = (searchParams.get("category") || "").trim().slice(0, 60);
     // A creator's own page asks for their videos with this. It used to be read
     // and ignored — the parameter was never put in the WHERE clause, so
     // /creator/<id> rendered the entire site feed under "Videos by <name>", and
@@ -51,7 +64,9 @@ export async function GET(request: NextRequest) {
 
     // creatorId belongs in the key: without it one creator's page would be
     // served the cached general feed, and the bug above would survive the fix.
-    const cacheKey = `videos:list:${page}:${limit}:${search}:${category}:${sortBy}:${durationFilter}:${dateFilter}:${creatorId}`;
+    // Every attacker-controlled part is bounded above, so the number of distinct
+    // keys is finite.
+    const cacheKey = `videos:list:${page}:${limit}:${search.toLowerCase()}:${category}:${sortBy}:${durationFilter}:${dateFilter}:${creatorId}`;
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return api.success(cached);
@@ -83,7 +98,10 @@ export async function GET(request: NextRequest) {
           }
         : {}),
       ...(category ? { category } : {}),
-      ...(creatorId ? { creatorId } : {}),
+      // A creator id is a cuid; anything outside that shape cannot match a row
+      // and only serves to widen the cache-key space, so it is dropped rather
+      // than queried.
+      ...(creatorId && /^[A-Za-z0-9_-]{1,64}$/.test(creatorId) ? { creatorId } : {}),
       ...(durationFilter
         ? {
             duration:

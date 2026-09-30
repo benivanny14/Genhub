@@ -36,6 +36,8 @@ import {
 } from "@/lib/bunny";
 import { rewriteHlsManifest } from "@/lib/hls";
 import { resolveVideoEntitlement } from "@/lib/services/video-entitlement.service";
+import { checkRateLimit } from "@/lib/redis";
+import { clientIp } from "@/lib/utils";
 
 /** How long the CDN gets to answer before this route gives up on it. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
@@ -64,6 +66,18 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // A player fetches a handful of manifests and nested playlists per scene, so
+    // this is far above real playback and bounds how fast one IP can drive
+    // signed Bunny manifest fetches (and the DB lookups behind them). Segments
+    // never pass through here — they go to the CDN directly — so this ceiling is
+    // about the app's own requests, not the video bandwidth.
+    const { allowed } = await checkRateLimit(
+      `stream:${clientIp(request.headers)}`,
+      300,
+      60_000
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
     const { id } = await params;
     const search = request.nextUrl.searchParams;
     const source: StreamSource = search.get("source") === "teaser" ? "teaser" : "playback";

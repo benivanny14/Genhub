@@ -43,12 +43,23 @@ import {
 } from "@/lib/bunny-webhook";
 import { applyBunnyEncodingEvent } from "@/lib/services/video-encoding.service";
 import { recordBunnyWebhookDelivery } from "@/lib/services/bunny-webhook.service";
+import {
+  readRawBodyCapped,
+  MAX_BUNNY_WEBHOOK_BODY_BYTES,
+} from "@/lib/request-body";
 
 export async function POST(request: NextRequest) {
   try {
     // The RAW body is required for the signature, so it is read as text and
-    // parsed afterwards — never re-serialised.
-    const rawBody = await request.text();
+    // parsed afterwards — never re-serialised. It is read through a strict size
+    // cap FIRST: a webhook that buffers whatever it is sent is a one-request way
+    // to exhaust the function's memory, and the signature cannot be checked
+    // without holding the body, so the ceiling has to come before the read.
+    const raw = await readRawBodyCapped(request, MAX_BUNNY_WEBHOOK_BODY_BYTES);
+    if (!raw.ok) {
+      return NextResponse.json({ error: "Payload too large" }, { status: 413 });
+    }
+    const rawBody = raw.text;
 
     const check = verifyBunnySignature({
       rawBody,

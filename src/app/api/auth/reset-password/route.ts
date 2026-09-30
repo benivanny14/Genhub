@@ -8,7 +8,7 @@ import bcrypt from "bcryptjs";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
-import { checkRateLimit } from "@/lib/redis";
+import { checkRateLimitStrict } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import { hashResetToken } from "@/lib/token-hash";
 import { z } from "zod";
@@ -21,8 +21,16 @@ const resetSchema = z.object({
 export async function POST(request: NextRequest) {
   try {
     const ip = clientIp(request.headers);
-    const { allowed } = await checkRateLimit(`reset:${ip}`, 5, 60_000);
-    if (!allowed) return api.rateLimited("Too many attempts");
+    // Token guessing must never fall back to per-instance counting: fail closed.
+    const rl = await checkRateLimitStrict(`reset:${ip}`, 5, 60_000);
+    if (rl.unavailable) {
+      return api.error(
+        "Password reset is temporarily unavailable. Please try again in a moment.",
+        503,
+        "TEMPORARILY_UNAVAILABLE"
+      );
+    }
+    if (!rl.allowed) return api.rateLimited("Too many attempts");
 
     const body = await readJsonBody(request);
     const result = resetSchema.safeParse(body);

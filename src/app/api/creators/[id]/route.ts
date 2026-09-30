@@ -6,6 +6,8 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
+import { checkRateLimit } from "@/lib/redis";
+import { clientIp } from "@/lib/utils";
 import {
   blueTickIsLive,
   reconcileUserBlueTick,
@@ -16,6 +18,13 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { allowed } = await checkRateLimit(
+      `creator:${clientIp(request.headers)}`,
+      120,
+      60_000
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
     const { id } = await params;
 
     const creator = await prisma.user.findUnique({

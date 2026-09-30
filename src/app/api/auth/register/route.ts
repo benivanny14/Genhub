@@ -15,7 +15,7 @@ import { generateToken, setAuthCookie } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { registerSchema, emailMatch } from "@/lib/validation";
-import { checkRateLimit } from "@/lib/redis";
+import { checkRateLimitStrict } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
 import { CREATOR_GUIDELINES_VERSION } from "@/lib/creator-guidelines";
@@ -39,13 +39,21 @@ export async function POST(request: NextRequest) {
   try {
     // Rate limiting
     const ip = clientIp(request.headers);
-    const { allowed } = await checkRateLimit(
+    // Registration creates rows and sends mail; on a shared-store outage it
+    // fails closed rather than letting one instance's memory be the only bound.
+    const rl = await checkRateLimitStrict(
       `register:${ip}`,
       config.rateLimit.auth.max,
       config.rateLimit.auth.windowMs
     );
-
-    if (!allowed) {
+    if (rl.unavailable) {
+      return api.error(
+        "Sign-up is temporarily unavailable. Please try again in a moment.",
+        503,
+        "TEMPORARILY_UNAVAILABLE"
+      );
+    }
+    if (!rl.allowed) {
       return api.rateLimited("Too many attempts. Please wait a few minutes.");
     }
 

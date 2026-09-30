@@ -10,7 +10,7 @@ import { generateToken, setAuthCookie } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { loginSchema, emailMatch } from "@/lib/validation";
-import { checkRateLimit } from "@/lib/redis";
+import { checkRateLimitStrict } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
 
@@ -18,13 +18,22 @@ export async function POST(request: NextRequest) {
   try {
     // Rate limiting
     const ip = clientIp(request.headers);
-    const { allowed } = await checkRateLimit(
+    // Fail CLOSED on a shared-store outage: a sign-in limiter that degrades to
+    // per-instance memory gives an attacker one bucket per serverless instance,
+    // which is how a slow brute force becomes a viable one.
+    const rl = await checkRateLimitStrict(
       `login:${ip}`,
       config.rateLimit.auth.max,
       config.rateLimit.auth.windowMs
     );
-
-    if (!allowed) {
+    if (rl.unavailable) {
+      return api.error(
+        "Sign-in is temporarily unavailable. Please try again in a moment.",
+        503,
+        "TEMPORARILY_UNAVAILABLE"
+      );
+    }
+    if (!rl.allowed) {
       return api.rateLimited("Too many attempts. Please wait a few minutes.");
     }
 

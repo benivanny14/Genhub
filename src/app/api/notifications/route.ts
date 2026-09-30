@@ -9,6 +9,7 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
+import { checkRateLimit } from "@/lib/redis";
 
 export async function GET(request: NextRequest) {
   try {
@@ -37,6 +38,9 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const auth = await requireAuth();
+
+    const { allowed } = await checkRateLimit(`notif:${auth.userId}`, 120, 60_000);
+    if (!allowed) return api.rateLimited("Too many actions — please wait a moment");
 
     // One notification, or all of them. Opening one from the bell marks that one
     // — it is the difference between "I have read this" and "I have read

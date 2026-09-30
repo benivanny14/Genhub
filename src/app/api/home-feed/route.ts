@@ -9,13 +9,25 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
-import { cacheGet, cacheSet } from "@/lib/redis";
+import { cacheGet, cacheSet, checkRateLimit } from "@/lib/redis";
+import { clientIp } from "@/lib/utils";
 import { introClipPath, resolveTeaserUrl } from "@/lib/bunny";
 import { rankTrending, buildCategoryCounts, activeCreators } from "@/lib/trending";
 import { firstVideoCoverByCategory } from "@/lib/services/category-cover.service";
 
 const ROW_SIZE = 10;
 const CREATOR_SIZE = 16;
+
+/**
+ * A page loads this once and caches it for a minute, so a real visitor makes
+ * one call per minute. Even the busiest CDN-less deployment staying well under
+ * this is the point; the limit exists so a single IP cannot drive the eleven
+ * queries below on every hit *and* defeat the cache by hammering before it fills
+ * (a stampede). Keyed on the IP, and generous: too tight a number on a public
+ * page turns a shared NAT into an outage for everyone behind it.
+ */
+const FEED_MAX = 120;
+const FEED_WINDOW_MS = 60_000;
 
 const videoSelect = {
   id: true,
@@ -95,8 +107,15 @@ function mapVideos(raw: RawVideo[]) {
   );
 }
 
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
+    const { allowed } = await checkRateLimit(
+      `home:${clientIp(request.headers)}`,
+      FEED_MAX,
+      FEED_WINDOW_MS
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
     // Bumped to v2 when the category covers were added: a shopper holding the
     // v1 payload would keep seeing the old placeholder tiles for a minute.
     const cacheKey = "home:feed:v2";

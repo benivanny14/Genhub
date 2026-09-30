@@ -35,7 +35,15 @@ export function cn(...inputs: ClassValue[]) {
 // these headers, a client can pick its own key. That is why every AUTHENTICATED
 // limit keys on the user id instead — see the routes that pass `auth.userId`.
 // =============================================================================
-export function clientIp(headers: { get(name: string): string | null }): string {
+export function clientIp(
+  headers: { get(name: string): string | null } | undefined | null
+): string {
+  // A missing header bag is a shared "unknown" bucket, not a crash: a route
+  // handler must answer a malformed request, and a test harness that calls the
+  // handler directly has no headers at all. Every caller is rate-limited under
+  // this one documented shared key rather than an exception.
+  if (!headers || typeof headers.get !== "function") return "unknown";
+
   // A single-value header is unambiguous when the platform sets it.
   const real = headers.get("x-real-ip")?.trim();
   if (real) return real;

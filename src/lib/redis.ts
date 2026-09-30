@@ -330,11 +330,30 @@ function memoryRateLimit(
 // Rate limiting
 // -----------------------------------------------------------------------------
 
+/**
+ * The answer every rate-limit caller receives.
+ *
+ * `degraded` is the important addition: it is true when the shared backend was
+ * unreachable and this verdict came from per-instance memory instead. A public
+ * cached read can live with that (one instance still enforces its own share);
+ * an auth, payment, upload, admin or webhook route must NOT, because an attacker
+ * who can make Redis flap, or simply time a request during an outage, would get
+ * `N` attempts per instance instead of `N` in total. Those callers use
+ * `checkRateLimitStrict`, which fails closed on `degraded`.
+ */
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  resetAt: number;
+  /** True when the answer came from this process's memory, not the shared store. */
+  degraded: boolean;
+}
+
 export async function checkRateLimit(
   key: string,
   maxRequests: number,
   windowMs: number
-): Promise<{ allowed: boolean; remaining: number; resetAt: number }> {
+): Promise<RateLimitResult> {
   const now = Date.now();
   const windowKey = `rl:${key}:${Math.floor(now / windowMs)}`;
   const resetAt = Math.ceil((now + windowMs) / 1000);
@@ -350,7 +369,7 @@ export async function checkRateLimit(
       );
     }
     const fallback = memoryRateLimit(windowKey, maxRequests, windowMs, now);
-    return { ...fallback, resetAt };
+    return { ...fallback, resetAt, degraded: true };
   }
 
   if (outcome.value === 1) {
@@ -362,7 +381,48 @@ export async function checkRateLimit(
     allowed: outcome.value <= maxRequests,
     remaining: Math.max(0, maxRequests - outcome.value),
     resetAt,
+    degraded: false,
   };
+}
+
+/**
+ * A rate limit that fails CLOSED when the shared store cannot be reached.
+ *
+ * For the routes where an attacker having `instances × maxRequests` attempts —
+ * or no bound at all once a cache is wedged — is the whole threat model: sign-in,
+ * registration, password reset, OTP, payment, upload, admin and webhook. When
+ * Redis is down these callers refuse the request with a safe temporary error
+ * rather than silently degrading to per-instance counters, which is the failure
+ * the deployment notes call out by name.
+ *
+ * `unavailable` tells the caller to answer 503 ("try again shortly") rather than
+ * 429 ("you are being limited"), so a genuine outage is not reported to a user
+ * as their own fault — and is logged, once, on the server.
+ */
+export interface StrictRateLimitResult extends RateLimitResult {
+  /** True when the shared store was unreachable and this route must fail closed. */
+  unavailable: boolean;
+}
+
+let warnedStrictFailClosed = false;
+
+export async function checkRateLimitStrict(
+  key: string,
+  maxRequests: number,
+  windowMs: number
+): Promise<StrictRateLimitResult> {
+  const result = await checkRateLimit(key, maxRequests, windowMs);
+  if (!result.degraded) return { ...result, unavailable: false };
+
+  if (!warnedStrictFailClosed) {
+    warnedStrictFailClosed = true;
+    console.warn(
+      `[Redis] shared rate-limit store unreachable — failing CLOSED on security-critical ` +
+        `route bucket "${key.split(":")[0]}" until it recovers (no per-instance downgrade)`
+    );
+  }
+
+  return { allowed: false, remaining: 0, resetAt: result.resetAt, degraded: true, unavailable: true };
 }
 
 // -----------------------------------------------------------------------------

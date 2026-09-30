@@ -12,7 +12,7 @@ import { topUpWalletSchema } from "@/lib/validation";
 import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
 import { assertSupportedGateway } from "@/lib/payments/gateway";
 import { generateOrderId } from "@/lib/utils";
-import { checkRateLimit } from "@/lib/redis";
+import { checkRateLimitStrict } from "@/lib/redis";
 import config from "@/lib/config";
 import { applyCoupon } from "@/lib/coupons";
 
@@ -25,12 +25,19 @@ export async function POST(request: NextRequest) {
     // one script away from filling a phone with payment prompts — and the
     // purchase route has had this guard all along, which made the top-up route
     // the cheapest way to do it.
-    const { allowed } = await checkRateLimit(
+    const rl = await checkRateLimitStrict(
       `topup:${auth.userId}`,
       config.rateLimit.payment.max,
       config.rateLimit.payment.windowMs
     );
-    if (!allowed) return api.rateLimited("Wait for the prompt before trying again");
+    if (rl.unavailable) {
+      return api.error(
+        "Top-ups are temporarily unavailable. Nothing was charged — please try again in a moment.",
+        503,
+        "TEMPORARILY_UNAVAILABLE"
+      );
+    }
+    if (!rl.allowed) return api.rateLimited("Wait for the prompt before trying again");
 
     const body = await readJsonBody(request);
     const result = topUpWalletSchema.safeParse(body);

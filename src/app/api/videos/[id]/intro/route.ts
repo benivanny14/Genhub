@@ -26,6 +26,8 @@ import prisma from "@/lib/db";
 import { getCurrentUser, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { resolveIntroPreviewUrl } from "@/lib/bunny";
+import { checkRateLimit } from "@/lib/redis";
+import { clientIp } from "@/lib/utils";
 
 /** How long the CDN gets to answer before this route gives up on it. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
@@ -38,6 +40,16 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // One upstream image fetch per call, and one call per page load — but an
+    // anonymous caller can make it without a session, so it is bounded per IP to
+    // stop one client turning the app into an amplifier against Bunny.
+    const { allowed } = await checkRateLimit(
+      `intro:${clientIp(request.headers)}`,
+      120,
+      60_000
+    );
+    if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
     const { id } = await params;
     const authUser = await getCurrentUser();
 
