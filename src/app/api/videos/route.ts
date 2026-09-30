@@ -478,11 +478,11 @@ export async function POST(request: NextRequest) {
           }
         }
       } catch (error) {
-        console.error("[Create Video] Bunny asset verification failed", error);
+        console.error("[Create Video] asset verification against the video host failed", error);
         return api.error(
-          "The video host could not verify this upload yet. Please submit again shortly.",
+          "This upload could not be verified yet. Please submit again shortly.",
           503,
-          "BUNNY_VERIFY_FAILED"
+          "UPLOAD_VERIFY_FAILED"
         );
       }
     }

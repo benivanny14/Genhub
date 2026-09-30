@@ -149,7 +149,10 @@ export async function GET(
     // so they hold an empty string) — there is nothing at the CDN for them and
     // their playback URL is the stored stream, never this route.
     if (!isBunnyVideoId(bunnyVideoId)) {
-      return api.notFound("This video is not hosted on the video CDN");
+      // A viewer learns nothing from being told where the file is NOT stored.
+      // The public answer to "there is nothing to play here" is a plain 404,
+      // which is also what the download route says for the same row.
+      return api.notFound("Video not found");
     }
 
     // One folder token for everything under it: Bunny honours a signature for

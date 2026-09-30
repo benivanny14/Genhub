@@ -122,10 +122,18 @@ export async function GET(
 
     if (!source.url) {
       if (source.unavailableReason === "BUNNY_NOT_CONFIGURED") {
-        return api.error(
-          "Bunny Stream is not configured (BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET)",
-          503,
-          "NOT_CONFIGURED"
+        // Same split the stream route makes: the variables that are missing go
+        // to the log behind a reference, and the viewer gets one sentence they
+        // can act on. A download failure is not the place to publish which
+        // environment variables this deployment runs on.
+        return api.upstream(
+          "download is not configured: BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET are not both set",
+          {
+            context: "DownloadProxy",
+            status: 503,
+            code: "NOT_CONFIGURED",
+            message: "This download is not available right now. Please try again in a moment.",
+          }
         );
       }
       return api.notFound("Video not found");

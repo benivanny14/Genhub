@@ -78,23 +78,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Two independent settings, named separately. The session token is a JWT
-    // and the library key is Bunny's, so either one missing makes every upload
-    // fail — and "could not start this upload" sends an operator to the wrong
-    // console half the time.
+    // Two independent settings, and which one is missing is a fact for the log
+    // and for support — not for the response. A creator cannot act on either
+    // name, and naming the deployment's own configuration to whoever asked is
+    // free reconnaissance, so the response carries one sentence and the two
+    // causes are written where an operator will actually read them.
     if (!isBunnyConfigured()) {
-      return api.error(
-        "Video uploads are not configured on this deployment: the Bunny Stream library key is missing. Tell support.",
-        503,
-        "NOT_CONFIGURED"
-      );
+      console.error("[Video Upload] not configured: the video host library key is missing");
+      return api.error("Video uploads are temporarily unavailable. Tell support.", 503, "NOT_CONFIGURED");
     }
     if (!isUploadSessionConfigured()) {
-      return api.error(
-        "Video uploads are not configured on this deployment: JWT_SECRET is missing or still the development default, so no upload session can be signed. Tell support.",
-        503,
-        "NOT_CONFIGURED"
+      console.error(
+        "[Video Upload] not configured: JWT_SECRET is missing or still the development default, so no upload session can be signed"
       );
+      return api.error("Video uploads are temporarily unavailable. Tell support.", 503, "NOT_CONFIGURED");
     }
 
     const parsed = schema.safeParse(await readJsonBody(request));
@@ -114,7 +111,7 @@ export async function POST(request: NextRequest) {
     }
     console.error("[Video Upload Session Error]", error);
     return api.error(
-      "The video service could not start this upload. Please try again in a moment.",
+      "The upload could not be started. Please try again in a moment.",
       502,
       "UPLOAD_SESSION_FAILED"
     );

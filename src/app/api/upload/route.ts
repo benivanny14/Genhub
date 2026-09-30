@@ -253,11 +253,11 @@ export async function POST(request: NextRequest) {
 
     // 2) Local disk (dev / self-hosted). Refuse where it cannot persist.
     if (config.nodeEnv === "production") {
-      return api.error(
-        "Image storage is not configured — set BUNNY_STORAGE_* credentials",
-        503,
-        "STORAGE_NOT_CONFIGURED"
-      );
+      // Which credentials are missing is for the log, not for the response: the
+      // creator can only wait or ask support, and the setting's name is a map of
+      // the deployment for anyone else who asks.
+      console.error("[Upload] image storage is not configured on this deployment");
+      return api.error("Image uploads are temporarily unavailable. Tell support.", 503, "STORAGE_NOT_CONFIGURED");
     }
 
     // Local dev keeps the same key shape (public/... vs private/...) so a

@@ -185,7 +185,7 @@ export async function openVideoUpload(session: VideoUploadSession): Promise<Open
     const detail = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 200) : null;
     throw new VideoUploadError(
       "NETWORK",
-      "The video service could not be reached to start this upload. Press Resume upload to try again.",
+      "The upload could not be started. Check your connection, then press Resume upload.",
       undefined,
       { reason: "reset", stage: "reserve", providerBody: detail }
     );
@@ -193,9 +193,12 @@ export async function openVideoUpload(session: VideoUploadSession): Promise<Open
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
+    // The number and the provider's own body are for the failure record, not for
+    // the creator: `status` and `providerBody` carry both, and the sentence says
+    // only what they can act on.
     throw new VideoUploadError(
       "HTTP",
-      `The video service would not open this upload (HTTP ${response.status}). Press Resume upload to try again.`,
+      "This upload could not be started. Press Resume upload to try again.",
       response.status,
       { reason: "provider", stage: "reserve", providerBody: body.slice(0, 300) || response.statusText || null }
     );
@@ -211,7 +214,7 @@ export async function openVideoUpload(session: VideoUploadSession): Promise<Open
   if (!url || url.protocol !== "https:" || url.hostname !== VIDEO_UPLOAD_TUS_HOST) {
     throw new VideoUploadError(
       "HTTP",
-      "The video service opened this upload somewhere unexpected, so nothing was sent. Press Resume upload to try again.",
+      "This upload was opened somewhere unexpected, so nothing was sent. Press Resume upload to try again.",
       502,
       { reason: "provider", stage: "reserve", providerBody: location ? location.slice(0, 200) : null }
     );
@@ -496,35 +499,35 @@ async function readOffset(
     const failure =
       error instanceof VideoUploadError
         ? error
-        : new VideoUploadError("NETWORK", "Could not check the saved upload position");
-    failure.message = "Could not check the saved upload position";
+        : new VideoUploadError("NETWORK", "Could not check where this upload stopped");
+    failure.message = "Could not check where this upload stopped";
     throw failure;
   }
 
   if (response.status === 401 || response.status === 403) {
     throw new VideoUploadError(
       "EXPIRED",
-      "The upload session expired. Please choose the video again.",
+      "This upload has expired. Please choose the video again.",
       response.status
     );
   }
   if (response.status === 404) {
-    // Bunny answers 404 — not 401 — both for an upload it no longer has and for
-    // a request that reached it without the signed headers, so the sentence says
-    // what is known and carries the number for whoever reads it next.
+    // 404 arrives both for an upload the host no longer has and for a request
+    // that reached it without the signed headers. The status is carried on the
+    // error for the failure record; the sentence stays a sentence.
     throw new VideoUploadError(
       "EXPIRED",
-      `The video service has closed this upload (HTTP ${response.status}). Please choose the video again.`,
+      "This upload is no longer open. Please choose the video again.",
       response.status
     );
   }
   if (!response.ok) {
-    throw new VideoUploadError("HTTP", "The video service could not resume this upload", response.status);
+    throw new VideoUploadError("HTTP", "This upload could not be resumed. Press Resume upload to try again.", response.status);
   }
 
   const offset = Number(response.headers.get("upload-offset") || "0");
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > session.totalBytes) {
-    throw new VideoUploadError("HTTP", "The video service returned an invalid upload position");
+    throw new VideoUploadError("HTTP", "The saved position of this upload could not be read. Press Resume upload to try again.");
   }
   return offset;
 }
@@ -533,7 +536,7 @@ function nextOffset(response: Response, current: number, sent: number, total: nu
   const header = Number(response.headers.get("upload-offset") || "");
   const offset = Number.isSafeInteger(header) ? header : current + sent;
   if (offset <= current || offset > total) {
-    throw new VideoUploadError("HTTP", "The video service returned an invalid upload position");
+    throw new VideoUploadError("HTTP", "The saved position of this upload could not be read. Press Resume upload to try again.");
   }
   return offset;
 }
@@ -557,8 +560,7 @@ function offsetFromConflict(body: string): number | null {
  */
 const UNREADABLE_FILE_MESSAGE =
   "This device could not read the video file, so nothing was sent. Move the video into the " +
-  "phone's own storage (Downloads) and choose it again — a file that lives in the cloud can only " +
-  "be read in part, and a file on a removed card not at all.";
+  "phone's own storage (Downloads) and choose it again.";
 
 /**
  * How long one local slice may take before it is called unreadable.
@@ -698,7 +700,7 @@ export async function uploadVideoFile(
   if (file.size !== session.totalBytes) {
     throw new VideoUploadError(
       "INVALID_FILE",
-      "The selected file is different from the upload session. Choose it again."
+      "That is a different file from the one being uploaded. Choose it again."
     );
   }
 
@@ -818,7 +820,7 @@ export async function uploadVideoFile(
         if (response.status === 401 || response.status === 403) {
           throw new VideoUploadError(
             "EXPIRED",
-            "The upload session expired. Please choose the video again.",
+            "This upload has expired. Please choose the video again.",
             response.status
           );
         }
@@ -827,7 +829,7 @@ export async function uploadVideoFile(
           const body = await response.text().catch(() => "");
           throw new VideoUploadError(
             "HTTP",
-            `The video service refused a chunk (HTTP ${response.status})`,
+            "The video could not be sent. Press Resume upload to try again.",
             response.status,
             {
               reason: "provider",
@@ -911,7 +913,7 @@ export async function uploadVideoFile(
     if (!advanced) {
       const failure =
         lastError ??
-        new VideoUploadError("NETWORK", "The video chunk could not be saved", undefined, {
+        new VideoUploadError("NETWORK", "The video could not be sent", undefined, {
           reason: "reset",
         });
       failure.stage = "chunk";

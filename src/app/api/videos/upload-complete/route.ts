@@ -31,11 +31,11 @@ export async function POST(request: NextRequest) {
 
     const confirmed = await confirmVideoUpload(session);
     if (!confirmed.ok) {
-      return api.error(
-        `Upload is not complete yet (${confirmed.detail}). Continue uploading and try again.`,
-        409,
-        "UPLOAD_INCOMPLETE"
-      );
+      // `confirmed.detail` names what the host said and how far it says the file
+      // got. That sentence is a diagnosis, so it goes to the log; what comes back
+      // to the browser is the one thing the creator can act on.
+      console.warn("[Video Upload] not complete:", confirmed.status, confirmed.detail);
+      return api.error("The upload is not finished yet. Continue uploading and try again.", 409, "UPLOAD_INCOMPLETE");
     }
 
     return api.success(
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     }
     console.error("[Video Upload Complete Error]", error);
     return api.error(
-      "The video service could not confirm this upload. Please try again.",
+      "The upload could not be confirmed. Please try again.",
       502,
       "UPLOAD_CONFIRM_FAILED"
     );

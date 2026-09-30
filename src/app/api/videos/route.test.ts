@@ -400,7 +400,7 @@ describe("POST /api/videos — finalization is idempotent", () => {
     const data = await response.json();
 
     expect(response.status).toBe(503);
-    expect(data.code).toBe("BUNNY_VERIFY_FAILED");
+    expect(data.code).toBe("UPLOAD_VERIFY_FAILED");
     expect(mocks.create).not.toHaveBeenCalled();
   });
 

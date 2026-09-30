@@ -511,8 +511,11 @@ describe("uploadVideoFile", () => {
 
     const error = await settleFailure(uploadVideoFile(fileOf(100), sessionFor(100)));
 
+    // The status stays on the error — it is what the failure record stores —
+    // but it does not travel into the sentence the creator reads.
     expect(error).toMatchObject({ code: "EXPIRED", status: 404 });
-    expect(error.message).toMatch(/404/);
+    expect(error.message).toMatch(/choose the video again/i);
+    expect(error.message).not.toMatch(/404|HTTP/);
     expect(patches(fetchMock)).toHaveLength(0);
   });
 
@@ -744,7 +747,10 @@ describe("completeVideoUpload", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
-        Response.json({ success: false, error: "Upload is not complete yet (Bunny has 40 of 100 bytes)" }, { status: 409 })
+        Response.json(
+          { success: false, error: "The upload is not finished yet. Continue uploading and try again." },
+          { status: 409 }
+        )
       )
     );
 
