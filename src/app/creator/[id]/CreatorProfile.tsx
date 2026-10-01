@@ -331,7 +331,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
                 title="Verified creator"
                 className="absolute -bottom-0.5 -right-0.5 w-8 h-8 rounded-full bg-surface-500 border-2 border-surface-500 flex items-center justify-center"
               >
-                <VerifiedBadge className="h-6 w-6" />
+                <VerifiedBadge className="h-7 w-7" />
               </span>
             )}
           </div>
@@ -341,7 +341,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
               {displayHandle(creator, "Creator")}
               {creator.isVerified && (
                 <span className="inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border border-amber-400/40 bg-amber-400/10 text-amber-300">
-                  <VerifiedBadge className="h-3.5 w-3.5" /> Verified
+                  <VerifiedBadge className="h-4 w-4" /> Verified
                 </span>
               )}
             </h1>

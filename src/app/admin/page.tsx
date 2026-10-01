@@ -3524,7 +3524,7 @@ export default function AdminDashboard() {
                           <div className="min-w-0">
                             <p className="font-medium flex items-center gap-1.5">
                               {c.displayName || "Creator"}
-                              {c.isVerified && <VerifiedBadge className="h-4 w-4" />}
+                              {c.isVerified && <VerifiedBadge className="h-5 w-5" />}
                             </p>
                             <p className="text-xs text-white/40 truncate">{c.email || c.creatorId}</p>
                           </div>

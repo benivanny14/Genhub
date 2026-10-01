@@ -645,7 +645,7 @@ export default function HomePage() {
                   {displayHandle(feed.featured.creator, "Creator")}
                 </span>
                 {feed.featured.creator.isVerified && (
-                  <VerifiedBadge className="h-3.5 w-3.5" />
+                  <VerifiedBadge className="h-4 w-4" />
                 )}
                 <span>•</span>
                 <span>{feed.featured.viewsCount.toLocaleString()} views</span>
@@ -773,7 +773,7 @@ export default function HomePage() {
                   )}
                 >
                   {displayHandle(c, "Creator")}
-                  {c.isVerified && <VerifiedBadge className="h-3 w-3" />}
+                  {c.isVerified && <VerifiedBadge className="h-4 w-4" />}
                 </span>
                 <span className="text-[10px] text-gray-500">
                   {c.videoCount} videos

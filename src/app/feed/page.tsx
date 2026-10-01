@@ -270,7 +270,7 @@ export default function FeedPage() {
                           )}>
                             <span className="truncate">{displayHandle(post.creator, "Creator")}</span>
                             {post.creator.isVerified && (
-                              <VerifiedBadge className="h-4 w-4" />
+                              <VerifiedBadge className="h-5 w-5" />
                             )}
                           </p>
                           <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/40")}>

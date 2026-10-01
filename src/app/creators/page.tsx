@@ -171,7 +171,7 @@ export default function CreatorDirectoryPage() {
                   <div className="min-w-0">
                     <p className={cn("font-medium flex items-center gap-1.5", isLight ? "text-gray-900" : "text-white")}>
                       <span className="truncate">{displayHandle(c, "Creator")}</span>
-                      {c.isVerified && <VerifiedBadge className="h-4 w-4" />}
+                      {c.isVerified && <VerifiedBadge className="h-5 w-5" />}
                     </p>
                     <p className={cn("text-xs flex items-center gap-1", isLight ? "text-gray-400" : "text-white/40")}>
                       <Film className="w-3 h-3" /> {c._count.videos} video{c._count.videos === 1 ? "" : "s"}

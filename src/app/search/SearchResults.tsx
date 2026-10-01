@@ -202,7 +202,7 @@ export default function SearchResults({ query }: { query: string }) {
                 <div className="min-w-0">
                   <p className="flex items-center gap-1 truncate text-sm font-medium text-white">
                     {displayHandle(creator, "Unnamed creator")}
-                    {creator.isVerified && <VerifiedBadge className="h-4 w-4" />}
+                    {creator.isVerified && <VerifiedBadge className="h-5 w-5" />}
                   </p>
                   <p className="truncate text-xs text-gray-400">
                     {typeof creator.videoCount === "number"
