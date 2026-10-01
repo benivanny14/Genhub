@@ -13,7 +13,7 @@ import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import config from "@/lib/config";
-import { MAX_PAID_MESSAGE, MIN_PAID_MESSAGE } from "@/lib/pay-message";
+import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 import { z } from "zod";
 
 /**
@@ -31,17 +31,10 @@ const MESSAGE_TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
 
 const sendMessageSchema = z.object({
   receiverId: z.string().min(1),
-  // The amount is what a VIEWER pays to reach somebody, and it is required of
-  // them. A creator (or admin) answering their own inbox sends no amount at all
-  // - see the freeReply check in POST, which is the rule that makes a creator's
-  // inbox a conversation instead of a one-way channel. 0 is therefore a missing
-  // amount for a viewer, not a meaningful one.
-  amount: z
-    .number()
-    .int()
-    .min(MIN_PAID_MESSAGE, `The minimum amount is TZS ${MIN_PAID_MESSAGE}`)
-    .max(MAX_PAID_MESSAGE)
-    .optional(),
+  // Deliberately no `amount`. What a message costs is the platform's price, not
+  // the caller's choice — see PAID_MESSAGE_PRICE. A field here would be a field
+  // a scripted client could set, which is how a "100 per message" rule becomes a
+  // rule only the UI follows; a stale tab's amount is simply ignored.
   content: z.string().min(1).max(2000),
 });
 
@@ -64,7 +57,7 @@ export async function POST(request: NextRequest) {
     const result = sendMessageSchema.safeParse(body);
     if (!result.success) return api.validation(result.error.errors[0].message);
 
-    const { receiverId, amount, content } = result.data;
+    const { receiverId, content } = result.data;
 
     if (receiverId === auth.userId) {
       return api.error("You cannot message yourself");
@@ -105,8 +98,8 @@ export async function POST(request: NextRequest) {
 
     // A creator's inbox is for their subscribers. A viewer can only write to a
     // creator they are subscribed to; the subscription is the door, and the
-    // per-message amount below is still the price of the message once inside.
-    // Checked server-side so hiding the composer is not the whole control — an
+    // fixed price below is still the price of the message once inside. Checked
+    // server-side so hiding the composer is not the whole control — an
     // unsubscribed viewer posting straight to this route is refused here.
     if (!freeReply && receiver.role === "CREATOR") {
       const subscription = await prisma.creatorSubscription.findFirst({
@@ -127,12 +120,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (!freeReply && amount === undefined) {
-      return api.validation(`The minimum amount is TZS ${MIN_PAID_MESSAGE}`);
-    }
-
-    /** What is actually taken. Zero for a reply, which is the point. */
-    const charged = freeReply ? 0 : (amount as number);
+    /**
+     * What is actually taken: the fixed price for a viewer, nothing for a reply
+     * from a creator or an admin.
+     *
+     * Always the constant, never the request, so the shillings a fan is charged
+     * are the same ones the composer told them about before they wrote — and a
+     * client cannot decide its own price either way.
+     */
+    const charged = freeReply ? 0 : PAID_MESSAGE_PRICE;
 
     // The daily spend cap, checked before the transaction so a refusal costs
     // nothing and leaves no half-written charge. A free reply (charged 0) is

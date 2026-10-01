@@ -97,7 +97,7 @@ vi.mock("@/lib/services/spend-cap.service", () => ({
   spendCapMessage: () => "Daily spend limit reached (test)",
 }));
 
-import { MAX_PAID_MESSAGE, MIN_PAID_MESSAGE } from "@/lib/pay-message";
+import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 import { GET, POST } from "./route";
 
 const VIEWER = "viewer-1";
@@ -165,53 +165,33 @@ beforeEach(() => {
 });
 
 describe("what a message costs a viewer", () => {
-  it("refuses a message with no amount at all", async () => {
+  it("charges the fixed price, with nothing in the request to choose it", async () => {
     asViewer();
 
     const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
-    expect(res.status).toBe(422);
-    expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
+      userId: VIEWER,
+      amount: PAID_MESSAGE_PRICE,
+    });
+    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(PAID_MESSAGE_PRICE);
   });
 
-  it("refuses zero — the amount a free composer used to send", async () => {
+  it("charges that price even when a client sends an amount of its own", async () => {
+    // An old composer, a stale tab or a scripted client used to set the price —
+    // a message for a shilling, or one that drained a wallet. The amount is the
+    // server's now, so an amount in the body changes nothing either way.
     asViewer();
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 0, content: "hi" }));
-    const body = await res.json();
-
-    expect(res.status).toBe(422);
-    expect(body.error).toContain(String(MIN_PAID_MESSAGE));
-    expect(mocks.createMessage).not.toHaveBeenCalled();
-  });
-
-  it("refuses an amount below the floor", async () => {
-    asViewer();
-
-    const res = await POST(send({ receiverId: CREATOR, amount: MIN_PAID_MESSAGE - 1, content: "hi" }));
-
-    expect(res.status).toBe(422);
-    expect(mocks.createMessage).not.toHaveBeenCalled();
-  });
-
-  it("refuses an amount above the ceiling, so a typo cannot drain a wallet", async () => {
-    asViewer();
-
-    const res = await POST(send({ receiverId: CREATOR, amount: MAX_PAID_MESSAGE + 1, content: "hi" }));
-
-    expect(res.status).toBe(422);
-    expect(mocks.debitWallet).not.toHaveBeenCalled();
-    expect(mocks.createMessage).not.toHaveBeenCalled();
-  });
-
-  it("charges the full amount the composer offers by default", async () => {
-    asViewer();
-
-    const res = await POST(send({ receiverId: CREATOR, amount: MIN_PAID_MESSAGE, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, amount: 50_000, content: "hi" }));
 
     expect(res.status).toBe(201);
-    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, { userId: VIEWER, amount: MIN_PAID_MESSAGE });
-    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(MIN_PAID_MESSAGE);
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
+      userId: VIEWER,
+      amount: PAID_MESSAGE_PRICE,
+    });
+    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(PAID_MESSAGE_PRICE);
   });
 });
 
@@ -219,41 +199,37 @@ describe("the split", () => {
   it("pays the creator 70% and records the platform's 30%", async () => {
     asViewer();
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     expect(res.status).toBe(201);
     // A message is not an exception to the promise /about makes.
     expect(mocks.createTransaction.mock.calls[0][0].data).toMatchObject({
-      amount: 500,
-      platformFee: 150,
-      creatorCut: 350,
+      amount: PAID_MESSAGE_PRICE,
+      platformFee: 30,
+      creatorCut: 70,
     });
     expect(mocks.upsertBalance.mock.calls[0][0].update.pendingBalance).toEqual({
-      increment: 350,
+      increment: 70,
     });
   });
 
-  it("gives the two halves back to the amount the fan paid", async () => {
+  it("gives the two halves back to exactly what the fan paid", async () => {
     asViewer();
 
-    // 333 is the case that would drift: 30% of it is not a whole shilling, so the
-    // rounding has to leave the creator with the remainder rather than a share
-    // that no longer adds up to what was charged.
-    await POST(send({ receiverId: CREATOR, amount: 333, content: "hi" }));
+    await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     const recorded = mocks.createTransaction.mock.calls[0][0].data;
-    expect(recorded.platformFee).toBe(Math.round(333 * 0.3));
-    expect(recorded.platformFee + recorded.creatorCut).toBe(333);
+    expect(recorded.platformFee + recorded.creatorCut).toBe(PAID_MESSAGE_PRICE);
   });
 
   it("tells the receiver what the sender paid and what their share is", async () => {
     asViewer();
 
-    await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     const note = mocks.createNotification.mock.calls[0][0].data;
-    expect(note.message).toContain("500");
-    expect(note.message).toContain("350");
+    expect(note.message).toContain(String(PAID_MESSAGE_PRICE));
+    expect(note.message).toContain("70");
   });
 });
 
@@ -262,7 +238,7 @@ describe("a creator's inbox is for their subscribers", () => {
     asViewer();
     mocks.findSubscription.mockResolvedValue(null);
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
     const body = await res.json();
 
     expect(res.status).toBe(403);
@@ -274,7 +250,7 @@ describe("a creator's inbox is for their subscribers", () => {
   it("asks for a live subscription to THIS creator", async () => {
     asViewer();
 
-    await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     const where = mocks.findSubscription.mock.calls[0][0].where;
     expect(where).toMatchObject({
@@ -292,7 +268,7 @@ describe("a creator's inbox is for their subscribers", () => {
     account(OTHER, "VIEWER");
     asViewer();
 
-    const res = await POST(send({ receiverId: OTHER, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: OTHER, content: "hi" }));
 
     expect(res.status).toBe(201);
     expect(mocks.findSubscription).not.toHaveBeenCalled();
@@ -312,16 +288,19 @@ describe("a creator's inbox is for their subscribers", () => {
 });
 
 describe("a viewer never gets a free message", () => {
-  it("still pays the amount they chose, even while subscribed", async () => {
-    // The subscription is the door, not the price: the amount comes from the
-    // request, not from a relationship between the two accounts.
+  it("still pays the price, even while subscribed", async () => {
+    // The subscription is the door, not the price: being subscribed to the
+    // creator does not make a message cheaper, and it never makes it free.
     asViewer();
     mocks.findSubscription.mockResolvedValue({ id: "sub-1" });
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     expect(res.status).toBe(201);
-    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, { userId: VIEWER, amount: 500 });
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
+      userId: VIEWER,
+      amount: PAID_MESSAGE_PRICE,
+    });
   });
 
   it("never turns an existing thread into a free reply", async () => {
@@ -330,11 +309,11 @@ describe("a viewer never gets a free message", () => {
     asViewer();
     mocks.findMessage.mockResolvedValue({ id: "msg-from-receiver" });
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     expect(res.status).toBe(201);
     expect(mocks.findMessage).not.toHaveBeenCalled();
-    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(500);
+    expect(mocks.createMessage.mock.calls[0][0].data.amount).toBe(PAID_MESSAGE_PRICE);
   });
 
   it("charges a viewer writing back to a creator who answered", async () => {
@@ -342,10 +321,13 @@ describe("a viewer never gets a free message", () => {
     // side of it — a reply from the creator does not make the next message free.
     asViewer();
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 900, content: "thanks!" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "thanks!" }));
 
     expect(res.status).toBe(201);
-    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, { userId: VIEWER, amount: 900 });
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
+      userId: VIEWER,
+      amount: PAID_MESSAGE_PRICE,
+    });
   });
 });
 
@@ -390,14 +372,18 @@ describe("a creator answering is free", () => {
   });
 
   it("reads the sender's role from the database, not from the token", async () => {
-    // A session issued before the role changed still says CREATOR. The database
-    // is what decides who pays.
+    // A session issued before the role changed still says CREATOR, which would
+    // have made the message free. The database is what decides who pays, and it
+    // says VIEWER — so the price applies.
     mocks.requireAuth.mockResolvedValue({ userId: VIEWER, role: "CREATOR" });
 
     const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
-    expect(res.status).toBe(422);
-    expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
+      userId: VIEWER,
+      amount: PAID_MESSAGE_PRICE,
+    });
   });
 });
 
@@ -405,27 +391,28 @@ describe("the ledger a paid message writes", () => {
   it("credits a creator's holding balance, not their wallet", async () => {
     asViewer();
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     expect(res.status).toBe(201);
     expect(mocks.updateUser).not.toHaveBeenCalled();
-    // 70% of 500: the holding gets the creator's share, not what the fan paid.
+    // The creator's 70% of the price: the holding gets their share, not what
+    // the fan paid.
     expect(mocks.upsertBalance.mock.calls[0][0]).toMatchObject({
       where: { creatorId: CREATOR },
-      create: { creatorId: CREATOR, pendingBalance: 350, availableBalance: 0, totalEarned: 350 },
+      create: { creatorId: CREATOR, pendingBalance: 70, availableBalance: 0, totalEarned: 70 },
       update: {
-        pendingBalance: { increment: 350 },
-        totalEarned: { increment: 350 },
+        pendingBalance: { increment: 70 },
+        totalEarned: { increment: 70 },
       },
     });
     expect(mocks.createTransaction.mock.calls[0][0].data).toMatchObject({
       userId: VIEWER,
       creatorId: CREATOR,
-      amount: 500,
+      amount: PAID_MESSAGE_PRICE,
       type: "TIP",
       status: "SUCCESS",
-      platformFee: 150,
-      creatorCut: 350,
+      platformFee: 30,
+      creatorCut: 70,
       metadata: { method: "pay_message", recipientId: CREATOR },
     });
   });
@@ -438,18 +425,18 @@ describe("the ledger a paid message writes", () => {
     account(OTHER, "VIEWER");
     asViewer();
 
-    const res = await POST(send({ receiverId: OTHER, amount: 900, content: "cold dm" }));
+    const res = await POST(send({ receiverId: OTHER, content: "cold dm" }));
 
     expect(res.status).toBe(201);
     expect(mocks.upsertBalance).not.toHaveBeenCalled();
-    // Their 70% of 900, into the wallet: the platform takes its 30% from an
-    // ordinary account exactly as it does from a creator's message.
-    expect(mocks.updateUser.mock.calls[0][0].data.walletBalance).toEqual({ increment: 630 });
+    // Their 70% of the price, into the wallet: the platform takes its 30% from
+    // an ordinary account exactly as it does from a creator's message.
+    expect(mocks.updateUser.mock.calls[0][0].data.walletBalance).toEqual({ increment: 70 });
     expect(mocks.createTransaction.mock.calls[0][0].data).toMatchObject({
       creatorId: null,
-      amount: 900,
-      platformFee: 270,
-      creatorCut: 630,
+      amount: PAID_MESSAGE_PRICE,
+      platformFee: 30,
+      creatorCut: 70,
       metadata: { method: "pay_message", recipientId: OTHER },
     });
   });
@@ -458,7 +445,7 @@ describe("the ledger a paid message writes", () => {
     asViewer();
     mocks.debitWallet.mockResolvedValue({ ok: false, balance: 120 });
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
     const body = await res.json();
 
     expect(res.status).toBe(400);
@@ -471,7 +458,7 @@ describe("the ledger a paid message writes", () => {
   it("tells the receiver what the message was worth", async () => {
     asViewer();
 
-    await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     const note = mocks.createNotification.mock.calls[0][0].data;
     expect(note.userId).toBe(CREATOR);
@@ -500,7 +487,7 @@ describe("guards", () => {
       overBy: 500,
     });
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     expect(res.status).toBe(429);
     expect(mocks.debitWallet).not.toHaveBeenCalled();
@@ -528,7 +515,7 @@ describe("guards", () => {
     asViewer();
     account(CREATOR, "CREATOR", true);
 
-    const res = await POST(send({ receiverId: CREATOR, amount: 500, content: "hi" }));
+    const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     expect(res.status).toBe(404);
     expect(mocks.debitWallet).not.toHaveBeenCalled();
@@ -550,7 +537,7 @@ describe("both sides of the conversation can read it", () => {
     id: "msg-paid",
     senderId: VIEWER,
     receiverId: CREATOR,
-    amount: 500,
+    amount: PAID_MESSAGE_PRICE,
     content: "hello from the fan",
     isRead: false,
     createdAt: new Date("2026-09-26T10:00:00Z"),

@@ -387,8 +387,9 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
               </button>
             )}
 
-            {/* Messages are paid per message, and the composer in /inbox is where
-                the price is set — so this is the way in. */}
+            {/* Messages are paid per message at a fixed price (see
+                lib/pay-message.ts), and the composer in /inbox is where a
+                subscriber sends one — so this is the way in. */}
             <Link
               href={`/inbox?userId=${creator.id}`}
               className="btn-ghost flex items-center justify-center gap-2 text-sm"

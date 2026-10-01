@@ -1729,7 +1729,7 @@ export default function CreatorDashboard() {
                 </div>
               ) : (
                 <p className="text-sm text-white/40 mt-4">
-                  No paid messages yet. A fan picks the amount when they write to you, and it
+                  No paid messages yet. Every message a fan sends costs them TZS 100, and it
                   shows up here — the one part of this dashboard that comes from your inbox.
                 </p>
               )}

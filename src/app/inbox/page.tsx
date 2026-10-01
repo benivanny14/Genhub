@@ -9,12 +9,11 @@ import { Mail, Send, Inbox, MessageSquare } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { formatRelativeTime, cn, formatTZS } from "@/lib/utils";
-// The server enforces this floor; the composer renders it. One number, so the
-// form cannot offer an amount the API will refuse. The amount box is on screen
-// for anyone who pays to send — there is no subscriber exemption to hide it
-// behind. A creator answering their own inbox does not pay, so the box is
-// replaced by a line saying so; see `freeReply` below.
-import { MIN_PAID_MESSAGE } from "@/lib/pay-message";
+// The price of one message, in one place: the composer shows this number and the
+// server charges it, so the screen and the wallet can never disagree. It is
+// deliberately NOT an input — while the sender chose the amount, "100 per
+// message" was a rule the API never actually enforced. See lib/pay-message.ts.
+import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 import { displayHandle } from "@/lib/usernames";
 
 interface Partner {
@@ -56,7 +55,7 @@ const DEMO_MESSAGES: Message[] = [
     id: "demo-m1",
     senderId: "demo-user-9",
     receiverId: "me",
-    amount: 1000,
+    amount: 100,
     content: "Hey! Loved the Midnight Sessions video. Any behind-the-scenes coming?",
     isRead: true,
     createdAt: new Date(Date.now() - 26 * 60 * 60 * 1000).toISOString(),
@@ -83,7 +82,6 @@ export default function InboxPage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [threadLoading, setThreadLoading] = useState(false);
   const [content, setContent] = useState("");
-  const [amount, setAmount] = useState(String(MIN_PAID_MESSAGE));
   const [sending, setSending] = useState(false);
   // Where to send a signed-out visitor so the conversation survives the sign-in
   // round trip. Set after mount (it is read from the URL), never during render,
@@ -293,17 +291,10 @@ export default function InboxPage() {
 
   async function handleSend() {
     if (!activePartner || !content.trim() || sending) return;
-    const amt = Math.max(0, parseInt(amount) || 0);
     // Only subscribers may write to a creator. The API enforces this too; the
     // check here is so the refusal is a sentence rather than a failed request.
     if (partnerNeedsSubscription) {
       toast("warning", "Subscribe to this creator before sending them a message.");
-      return;
-    }
-    // The floor only applies to somebody who is paying. A reply carries no
-    // amount at all, so there is nothing for the API to charge.
-    if (!freeReply && amt < MIN_PAID_MESSAGE) {
-      toast("error", `Minimum paid message is TZS ${MIN_PAID_MESSAGE}`);
       return;
     }
     setSending(true);
@@ -311,11 +302,9 @@ export default function InboxPage() {
       const res = await fetch("/api/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          freeReply
-            ? { receiverId: activePartner.id, content: content.trim() }
-            : { receiverId: activePartner.id, amount: amt, content: content.trim() }
-        ),
+        // No amount: the server charges its own fixed price (PAID_MESSAGE_PRICE)
+        // and a creator's reply is free. Sending one here would only be ignored.
+        body: JSON.stringify({ receiverId: activePartner.id, content: content.trim() }),
       });
       const data = await res.json();
       if (data.success) {
@@ -601,18 +590,18 @@ export default function InboxPage() {
                         </div>
                       ) : (
                         <div className="flex flex-col sm:flex-row gap-2">
-                          {/* The price of the message. A creator answering does
-                              not see it, because they are not paying. */}
+                          {/* The price, stated rather than chosen. A creator
+                              answering does not see it: they are not paying. */}
                           {!freeReply && (
-                            <input
-                              type="number"
-                              value={amount}
-                              onChange={(e) => setAmount(e.target.value)}
-                              min={MIN_PAID_MESSAGE}
-                              max={50000}
-                              className={cn("input-field sm:w-28 py-2.5 text-sm")}
-                              title="Amount (TZS)"
-                            />
+                            <span
+                              className={cn(
+                                "inline-flex items-center justify-center gap-1.5 rounded-xl px-3 py-2.5 text-sm font-bold tabular-nums sm:w-28",
+                                isLight ? "bg-amber-50 text-amber-700" : "bg-amber-500/15 text-amber-300"
+                              )}
+                              title={`Every message costs TZS ${PAID_MESSAGE_PRICE}`}
+                            >
+                              💰 {formatTZS(PAID_MESSAGE_PRICE)}
+                            </span>
                           )}
                           <input
                             type="text"
@@ -639,7 +628,7 @@ export default function InboxPage() {
                         <p className={cn("text-[10px] mt-2", isLight ? "text-gray-400" : "text-white/30")}>
                           {freeReply
                             ? "Replying is free for you — the viewer is the one who pays for messages."
-                            : `Every message is a paid message — the creator keeps 70% of the amount above (min TZS ${MIN_PAID_MESSAGE}).`}
+                            : `Every message costs TZS ${PAID_MESSAGE_PRICE} — the creator keeps 70% of it.`}
                         </p>
                       )}
                     </div>
