@@ -8,9 +8,10 @@
 //
 //   * WHICH origins it asks about. The failure this command exists for is a
 //     launch domain missing from the Allowed Referrers list, so a default list
-//     that omits `www.<domain>` — or that pads itself with entries nobody can be
-//     served from, such as `www.localhost` — is a check that reports the wrong
-//     thing about the domain customers actually type.
+//     that omits the OTHER form of the host (`www.<domain>`, or the bare name
+//     when the app URL is the `www.` one) — or that pads itself with entries
+//     nobody can be served from, such as `www.localhost` — is a check that
+//     reports the wrong thing about the domain customers actually type.
 //   * HOW an answer is classified. 403 is the referrer gate, but Bunny answers
 //     403 to a wrong token as well, and the two need opposite fixes. The caller
 //     distinguishes them with a bare baseline request; this only has to keep
@@ -31,6 +32,21 @@ describe("resolveReferrerOrigins", () => {
     expect(origins).toEqual([
       "https://genhub.co.tz",
       "https://www.genhub.co.tz",
+      "http://localhost:3000",
+    ]);
+  });
+
+  it("asks about the bare name too when the app URL is the www form", () => {
+    // The launch domain is served as `www.` and Bunny matches referrers as
+    // strings: a viewer who types `genhub-two.site` sends `https://genhub-two.site/`
+    // and is refused unless the bare name is on the list as well.
+    const { origins } = resolveReferrerOrigins({
+      appUrl: "https://www.genhub-two.site",
+    });
+
+    expect(origins).toEqual([
+      "https://www.genhub-two.site",
+      "https://genhub-two.site",
       "http://localhost:3000",
     ]);
   });

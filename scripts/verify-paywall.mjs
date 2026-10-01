@@ -3,7 +3,7 @@
 // GENHUB - Can a visitor who has not paid watch the video?
 //
 // Run:  npm run verify:paywall
-//       npm run verify:paywall -- --url https://genhub-two.vercel.app
+//       npm run verify:paywall -- --url https://www.genhub-two.site
 //       npm run verify:paywall -- --url http://localhost:3000 --limit 5
 //
 // -----------------------------------------------------------------------------
@@ -61,7 +61,7 @@ function flag(name, fallback) {
   return (args[index + 1] || "").trim() || fallback;
 }
 
-const BASE = flag("--url", process.env.APP_URL || "https://genhub-two.vercel.app").replace(
+const BASE = flag("--url", process.env.APP_URL || "https://www.genhub-two.site").replace(
   /\/+$/,
   ""
 );

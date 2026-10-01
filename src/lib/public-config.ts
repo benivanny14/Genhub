@@ -46,7 +46,7 @@ const publicConfig = {
   compliance: {
     legalName: process.env.NEXT_PUBLIC_COMPANY_LEGAL_NAME || "Genhub",
     address: process.env.NEXT_PUBLIC_COMPANY_ADDRESS || "",
-    supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@genhub.co.tz",
+    supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@genhub-two.site",
     phone: process.env.NEXT_PUBLIC_SUPPORT_PHONE || "0682642219",
   },
 } as const;

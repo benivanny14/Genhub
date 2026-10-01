@@ -3,7 +3,7 @@
 // GENHUB - Can the intro clip be widened into the scene?
 //
 // Run:  npm run verify:intro-clip
-//       npm run verify:intro-clip -- --url https://genhub-two.vercel.app
+//       npm run verify:intro-clip -- --url https://www.genhub-two.site
 //       npm run verify:intro-clip -- --url http://localhost:3100
 //
 // -----------------------------------------------------------------------------

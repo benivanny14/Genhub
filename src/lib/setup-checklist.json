@@ -246,7 +246,7 @@
             "Without it, a finished encode still goes live — the creator dashboard and the poll worker catch it — but only on the next check, not in seconds",
             "The URL must be the public https:// domain: Bunny cannot reach localhost"
           ],
-          "example": "Webhook URL: https://genhub.co.tz/api/webhooks/bunny"
+          "example": "Webhook URL: https://www.genhub-two.site/api/webhooks/bunny"
         },
         {
           "id": "bunny_referrers",
@@ -254,11 +254,12 @@
           "site": "https://bunny.net",
           "steps": [
             "Pull Zone -> Security -> Allowed Referrers (referrer / hotlink protection)",
-            "Add your live domain, e.g. https://genhub.co.tz",
+            "Add your live domain, e.g. https://www.genhub-two.site",
+            "Add BOTH forms — https://genhub-two.site and https://www.genhub-two.site — or a visitor who types the bare name is served a 403",
             "Add http://localhost:3000 as well, or video cannot be tested locally",
             "Any host NOT on this list gets a 403 for the manifest and for every segment, so the player only spins"
           ],
-          "example": "Allowed Referrers: https://genhub.co.tz, https://genhub-two.vercel.app, http://localhost:3000"
+          "example": "Allowed Referrers: https://www.genhub-two.site, https://genhub-two.site, http://localhost:3000"
         },
         {
           "id": "bunny_storage_zone",

@@ -46,8 +46,8 @@ inaonyesha kilichobaki, kinachopungua.
 2. **Comments ni `#`** — unaweza kuandika maelezo kwenye mstari huo huo, na
    ukifanya hivyo kwa thamani isiyo na quotes, comment inatupwa. Kwa hivyo
    `.env.example` inaweza kunakiliwa kama ilivyo.
-3. **URL hazina `/` ya mwisho.** `https://genhub.co.tz` ✅ ·
-   `https://genhub.co.tz/` ✗ (inavunja webhook na links).
+3. **URL hazina `/` ya mwisho.** `https://www.genhub-two.site` ✅ ·
+   `https://www.genhub-two.site/` ✗ (inavunja webhook na links).
 4. **Ukibadilisha faili hili, restart server.** Next.js inasoma `.env.local`
    mara moja tu inapoanza: `Ctrl+C` kisha `npm run dev`.
 
@@ -115,7 +115,7 @@ Mfano:
 ```env
 NEXT_PUBLIC_COMPANY_LEGAL_NAME=Genhub Media Ltd
 NEXT_PUBLIC_COMPANY_ADDRESS=Plot 42, Nyerere Road, Dar es Salaam, Tanzania
-NEXT_PUBLIC_SUPPORT_EMAIL=compliance@genhub.co.tz
+NEXT_PUBLIC_SUPPORT_EMAIL=compliance@genhub-two.site
 ```
 
 Thibitisha: `npm run verify:live` → `✓ 2257 records`.
@@ -260,7 +260,7 @@ Kwa nini: bila hii **watumiaji hawawezi kurejesha password**. Barua zinaenda
 kwenye log tu, na mtu aliyesahau password yake amepotea milele.
 
 1. **https://resend.com** → *Sign up*.
-2. **Domains** → **Add Domain** → weka domain yako (k.m. `genhub.co.tz`).
+2. **Domains** → **Add Domain** → weka domain yako (k.m. `genhub-two.site`).
 3. Resend itatoa rekodi za DNS (SPF/DKIM). Ziweke kwenye registrar yako.
    Subiri hadi status iwe **Verified** (dakika chache hadi saa).
 4. **API Keys** → **Create API Key** (permission: *Sending access*) → nakili
@@ -272,7 +272,7 @@ SMTP_HOST=smtp.resend.com
 SMTP_PORT=465
 SMTP_USER=resend
 SMTP_PASS=re_XXXXXXXXXXXX
-EMAIL_FROM=Genhub <no-reply@genhub.co.tz>
+EMAIL_FROM=Genhub <no-reply@genhub-two.site>
 ```
 
 **Mambo ya kuepuka:**
@@ -392,11 +392,11 @@ wanaruhusu.
 2. Framework preset itagundua **Next.js** yenyewe. **Usibadilishe build command.**
 3. Fungua **Environment Variables**. Kwa **kila** variable kwenye `.env.local`
    yako, weka jina lile lile na thamani ile ile. Ongeza hizi:
-   - `NEXT_PUBLIC_APP_URL=https://genhub.co.tz` (domain halisi, bila `/` mwishoni)
+   - `NEXT_PUBLIC_APP_URL=https://www.genhub-two.site` (domain halisi, bila `/` mwishoni)
    - `NODE_ENV=production`
 4. Bofya **Deploy**.
-5. Baada ya deploy → **Settings → Domains** → ongeza `genhub.co.tz` na
-   `www.genhub.co.tz` → Vercel itakuambia rekodi za DNS. Ziweke kwenye registrar.
+5. Baada ya deploy → **Settings → Domains** → ongeza `genhub-two.site` na
+   `www.genhub-two.site` → Vercel itakuambia rekodi za DNS. Ziweke kwenye registrar.
 6. Vercel inatoa TLS **kiotomatiki** — hakuna unachofanya.
 
 ### 8c. Ushindi wa mwisho: admin wako mwenyewe

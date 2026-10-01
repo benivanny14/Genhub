@@ -376,7 +376,7 @@ Set these in your hosting provider (Vercel → Project → Settings → Env vars
 
 | Variable | Production value |
 |---|---|
-| `NEXT_PUBLIC_APP_URL` | Real domain, no trailing slash (`https://genhub.co.tz`) |
+| `NEXT_PUBLIC_APP_URL` | Real domain, no trailing slash (`https://www.genhub-two.site`) |
 | `NEXT_PUBLIC_APP_NAME` | `Genhub` |
 | `DATABASE_URL` | Managed Postgres (SSL, daily backups) |
 | `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` | Managed Redis over HTTPS (preferred) |
@@ -2088,7 +2088,7 @@ has already spent.
 ## 7. Final verification (post-deploy smoke test)
 
 ```bash
-DOMAIN=https://genhub.co.tz
+DOMAIN=https://www.genhub-two.site
 
 APP_URL=$DOMAIN npm run launch:check    # preflight + verify:live, one verdict (§0.1)
 npm run preflight -- --url $DOMAIN      # one-shot audit: blockers + health + warnings
@@ -2203,7 +2203,7 @@ leaked stream remains traceable to the account that requested it.
 The second one is invisible to a probe that fetches without a `Referer`, which is
 how it went unnoticed: measured against the live zone, one correctly-signed
 manifest answers **206** with no `Referer`, **200** for `*.vercel.app`, and
-**403** for `genhub.co.tz`, `www.genhub.co.tz` and `http://localhost:3000`.
+**403** for `genhub-two.site`, `www.genhub-two.site` and `http://localhost:3000`.
 `probeSignedPlayback()` therefore asks twice — once bare, once with the app's own
 origin as `Origin`/`Referer` — and fails loudly when the two disagree. Whatever
 domain the site is launched on, plus `http://localhost:3000`, must be listed or
@@ -2219,7 +2219,7 @@ nobody types:
 
 ```bash
 npm run verify:referrers                                   # the app URL, its www form, localhost
-npm run verify:referrers -- --origin https://genhub.co.tz   # one host, before its DNS exists
+npm run verify:referrers -- --origin https://www.genhub-two.site   # one host at a time
 ```
 
 It signs a real manifest and requests it with no Referer (which proves the
@@ -2249,7 +2249,7 @@ Settle it with one command instead of an argument about the code:
 ```bash
 npm run verify:paywall                                        # the live domain
 npm run verify:paywall -- --url http://localhost:3000          # a local build
-npm run verify:paywall -- --url https://genhub-two.vercel.app --limit 5
+npm run verify:paywall -- --url https://www.genhub-two.site --limit 5
 ```
 
 It makes **no request with a cookie at all** and asks, per published video, the
@@ -2289,7 +2289,7 @@ key in both, so the rule is one secret per environment, and it is measurable:
 
 ```bash
 npm run verify:jwt-separation                                        # the app URL
-npm run verify:jwt-separation -- --url https://genhub-two.vercel.app
+npm run verify:jwt-separation -- --url https://www.genhub-two.site
 npm run verify:jwt-separation -- --url http://localhost:3000          # its own copy
 ```
 

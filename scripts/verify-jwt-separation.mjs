@@ -3,7 +3,7 @@
 // GENHUB - Can this checkout's JWT_SECRET sign a session on the live site?
 //
 // Run:  npm run verify:jwt-separation
-//       npm run verify:jwt-separation -- --url https://genhub-two.vercel.app
+//       npm run verify:jwt-separation -- --url https://www.genhub-two.site
 //       npm run verify:jwt-separation -- --url http://localhost:3000
 //
 // -----------------------------------------------------------------------------

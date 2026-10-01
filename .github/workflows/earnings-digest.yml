@@ -6,7 +6,7 @@
 # over — it does not mean an email every hour.
 #
 # Setup required (the same two values every other worker workflow reads):
-#   * Repository variable  APP_URL      — e.g. https://genhub.co.tz
+#   * Repository variable  APP_URL      — e.g. https://www.genhub-two.site
 #   * Repository secret    CRON_SECRET  — must match the server's CRON_SECRET
 # The job skips cleanly (green) until both are configured.
 #

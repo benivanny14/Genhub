@@ -2,8 +2,8 @@
 // =============================================================================
 // GENHUB - Does Bunny actually let THIS domain play video?
 // Run:  npm run verify:referrers
-//       npm run verify:referrers -- --origin https://genhub.co.tz
-//       npm run verify:referrers -- --origin https://genhub.co.tz --origin http://localhost:3000
+//       npm run verify:referrers -- --origin https://www.genhub-two.site
+//       npm run verify:referrers -- --origin https://www.genhub-two.site --origin http://localhost:3000
 //       npm run verify:referrers -- --video <bunny-guid>
 //
 // -----------------------------------------------------------------------------
@@ -115,29 +115,37 @@ export function resolveReferrerOrigins({ explicit, envList, appUrl } = {}) {
   }
 
   const app = clean(appUrl);
-  const derived = [app, wwwSibling(app), "http://localhost:3000"];
+  const derived = [app, hostSibling(app), "http://localhost:3000"];
   return { origins: unique(derived), source: "derived" };
 }
 
 /**
- * The `www.` form of an origin, or "" when there is nothing sensible to add.
+ * The OTHER form of an origin's host, or "" when there is nothing sensible to add.
  *
- * Only for a name that really is a domain: adding `www.` to localhost, to an IP
- * or to a Vercel preview host produces an entry nobody can ever be served from,
- * and a list padded with entries that cannot match is a list that stops being
- * read.
+ * `example.com` and `www.example.com` are one site to every visitor and two
+ * different strings to Bunny's Allowed Referrers list, which matches literally.
+ * A site launched on the `www.` form is refused on the bare name (and the other
+ * way round), and the only symptom is a player that spins — so whichever form the
+ * app URL names, the probe asks about both.
+ *
+ * Only for a name that really is a domain: `www.localhost:3000` and
+ * `www.genhub-two.vercel.app` are entries nobody can ever be served from, and a
+ * list padded with them is a list that stops being read.
  */
-function wwwSibling(origin) {
+function hostSibling(origin) {
   if (!origin) return "";
   try {
     const url = new URL(origin);
     const host = url.hostname;
+    const hasWww = host.startsWith("www.");
+    const bare = hasWww ? host.slice(4) : host;
     const isDomain =
-      /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host) &&
-      !host.startsWith("www.") &&
-      !/^\d+\.\d+\.\d+\.\d+$/.test(host);
-    if (!isDomain || host.endsWith(".vercel.app") || host.endsWith(".b-cdn.net")) return "";
-    return `${url.protocol}//www.${url.host}`;
+      /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(bare) &&
+      !/^\d+\.\d+\.\d+\.\d+$/.test(bare) &&
+      !bare.endsWith(".vercel.app") &&
+      !bare.endsWith(".b-cdn.net");
+    if (!isDomain) return "";
+    return `${url.protocol}//${hasWww ? bare : `www.${host}`}`;
   } catch {
     return "";
   }

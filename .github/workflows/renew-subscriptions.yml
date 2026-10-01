@@ -1,7 +1,7 @@
 # =============================================================================
 # GENHUB - Renew subscriptions before they lapse
 # Calls POST /api/cron/renew-subscriptions hourly (at :15). Setup required:
-#   * Repository variable  APP_URL      — e.g. https://genhub.co.tz
+#   * Repository variable  APP_URL      — e.g. https://www.genhub-two.site
 #   * Repository secret    CRON_SECRET  — must match the server's CRON_SECRET
 # (The same two values feed release-earnings.yml — configure them once.)
 # The job skips cleanly (green) until both are configured.

@@ -68,7 +68,7 @@ export default function PrivacyPage() {
           </section>
 
           <p className={cn("text-xs", isLight ? "text-gray-400" : "text-white/40")}>
-            Last updated: September 2026. For privacy-related inquiries, contact privacy@genhub.co.tz
+            Last updated: September 2026. For privacy-related inquiries, contact privacy@genhub-two.site
           </p>
         </div>
       </main>
