@@ -9,26 +9,16 @@ import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { initiatePaymentSchema } from "@/lib/validation";
-import {
-  harakaCollect,
-  harakaErrorReason,
-  harakaStatus,
-  harakaStatusToInternal,
-} from "@/lib/payments/harakapay";
-import { processPaymentWebhook } from "@/lib/services/webhook.service";
+import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
 import { purchaseVideoWithWallet } from "@/lib/services/balance.service";
 import { notifyPaymentResult } from "@/lib/services/payment-notify.service";
+import { resolvePendingCheckout } from "@/lib/services/checkout-lock.service";
 import { assertSupportedGateway } from "@/lib/payments/gateway";
 import { generateOrderId } from "@/lib/utils";
 import config from "@/lib/config";
 import { checkRateLimitStrict } from "@/lib/redis";
 import { applyCoupon, consumeCoupon } from "@/lib/coupons";
 import { videoStatus } from "@/lib/video-status";
-
-// How long an unpaid checkout keeps the video locked for that customer. A USSD
-// prompt is usually answered in a minute or two; after this window we reconcile
-// with the gateway, then release the lock so they can try again.
-const PENDING_PAYMENT_TTL_MS = 10 * 60 * 1000;
 
 /**
  * The smallest amount the gateway will collect.
@@ -177,73 +167,28 @@ export async function POST(request: NextRequest) {
     });
 
     if (pendingTx) {
-      const ageMs = Date.now() - pendingTx.createdAt.getTime();
+      // One shared rule for when a checkout lock lifts (see
+      // services/checkout-lock.service.ts): a fresh prompt keeps the lock, a stale
+      // one is reconciled with the gateway and then released.
+      const resolution = await resolvePendingCheckout(pendingTx);
 
-      if (ageMs < PENDING_PAYMENT_TTL_MS) {
-        const minutesLeft = Math.ceil(
-          (PENDING_PAYMENT_TTL_MS - ageMs) / 60_000
-        );
+      if (resolution.state === "fresh") {
         return api.error(
-          `A payment for this video is still pending. Complete it on your phone, or try again in ${minutesLeft} minutes.`,
+          `A payment for this video is still pending. Complete it on your phone, or try again in ${resolution.minutesLeft} minutes.`,
           409,
           "PENDING_PAYMENT"
         );
       }
 
-      // The attempt is stale: usually a USSD prompt the customer never approved.
-      // Ask the gateway before releasing the lock, because the money may have
-      // moved while the webhook was lost.
-      let alreadyPaid = false;
-      if (
-        pendingTx.providerRef &&
-        config.harakaPay.apiKey &&
-        !config.harakaPay.sandbox
-      ) {
-        try {
-          const remote = await harakaStatus(pendingTx.providerRef);
-          const internal = remote.payment
-            ? harakaStatusToInternal(remote.payment.status)
-            : null;
-
-          if (internal) {
-            // Finalises the row either way (SUCCESS grants access, FAILED clears it)
-            await processPaymentWebhook({
-              orderId: pendingTx.id,
-              transactionId: pendingTx.providerRef,
-              amount: pendingTx.amount,
-              status: internal,
-              provider: "HARAKAPAY",
-              metadata: { reconciled: "stale-pending" },
-            });
-            alreadyPaid = internal === "SUCCESS";
-          }
-        } catch (reconcileError: any) {
-          console.warn(
-            "[Purchase] Stale-pending reconcile failed:",
-            reconcileError?.message || reconcileError
-          );
-        }
-      }
-
-      if (alreadyPaid) {
+      if (resolution.state === "paid") {
         return api.error(
           "Your payment already completed — refresh the page.",
           409,
           "ALREADY_PAID"
         );
       }
-
-      // Release the lock so the customer can pay again, and tell them the
-      // earlier prompt expired rather than letting it fail silently.
-      await prisma.transaction.update({
-        where: { id: pendingTx.id },
-        data: { status: "FAILED", metadata: { expired: true } },
-      });
-      await notifyPaymentResult({
-        transactionId: pendingTx.id,
-        outcome: "FAILED",
-        reason: "expired",
-      });
+      // "released": the earlier prompt expired and the lock is gone — fall
+      // through and start a fresh checkout.
     }
 
     // Apply coupon discount (if any)

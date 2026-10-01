@@ -22,6 +22,7 @@ import {
 } from "@/lib/services/subscription.service";
 import { debitWallet } from "@/lib/services/balance.service";
 import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
+import { resolvePendingCheckout } from "@/lib/services/checkout-lock.service";
 import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
 
 const subscribeSchema = z.object({
@@ -82,7 +83,9 @@ export async function POST(request: NextRequest) {
       if (!allowed) return api.rateLimited("Wait for the prompt before trying again");
 
       // One live checkout per viewer+creator — otherwise two PENDING rows could
-      // both be fulfilled later.
+      // both be fulfilled later. Like a video purchase, the lock is released once
+      // the prompt is stale (services/checkout-lock.service.ts), so a single
+      // prompt nobody approved cannot block this viewer from subscribing forever.
       const pendingTx = await prisma.transaction.findFirst({
         where: {
           userId: auth.userId,
@@ -90,14 +93,28 @@ export async function POST(request: NextRequest) {
           type: "SUBSCRIPTION",
           status: "PENDING",
         },
-        select: { id: true },
+        select: { id: true, createdAt: true, providerRef: true, amount: true },
       });
       if (pendingTx) {
-        return api.error(
-          "A payment for this subscription is still pending. Earlier attempts were cancelled.",
-          409,
-          "PENDING_PAYMENT"
-        );
+        const resolution = await resolvePendingCheckout(pendingTx);
+
+        if (resolution.state === "fresh") {
+          return api.error(
+            `A payment for this subscription is still pending. Complete it on your phone, or try again in ${resolution.minutesLeft} minutes.`,
+            409,
+            "PENDING_PAYMENT"
+          );
+        }
+
+        if (resolution.state === "paid") {
+          return api.error(
+            "Your subscription payment already completed — refresh the page.",
+            409,
+            "ALREADY_PAID"
+          );
+        }
+        // "released": the earlier prompt expired and the lock is gone — fall
+        // through and start a fresh checkout.
       }
 
       const orderId = generateOrderId("SUB");
