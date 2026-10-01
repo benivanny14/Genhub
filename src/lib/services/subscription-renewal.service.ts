@@ -474,6 +474,19 @@ export function summarizeRenewalPreview(preview: RenewalPreview): string {
 // 1. Wallet renewal — one atomic transaction
 // =============================================================================
 
+/**
+ * The budget for the wallet-renewal transaction.
+ *
+ * Prisma's default is 5 seconds, and that clock measures the DATABASE, not the
+ * work: this transaction debits the wallet, writes the ledger row, splits
+ * 70/30, resyncs the creator's subscriber count and writes two notifications —
+ * eight round trips, which behind a connection pooler on a networked Postgres
+ * is already past five seconds. The rollback is correct and useless: a fan with
+ * the money already in their wallet simply cannot renew, and is told nothing.
+ * Same reasoning (and the same numbers) as blue-tick.service.ts.
+ */
+const TX_OPTIONS = { maxWait: 10_000, timeout: 20_000 } as const;
+
 async function renewFromWallet(params: {
   subscriptionId: string;
   viewerId: string;
@@ -547,7 +560,7 @@ async function renewFromWallet(params: {
     });
 
     return granted;
-  });
+  }, TX_OPTIONS);
 
   return outcome !== null;
 }
