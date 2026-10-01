@@ -8,17 +8,18 @@
 //   2. Once inside, the viewer still pays — one fixed price per message
 //      (PAID_MESSAGE_PRICE). A subscription does not make a message cheaper, and
 //      a viewer never gets a free message.
-//   3. A CREATOR (or an admin) answering their own inbox pays nothing at all.
+//   3. A CREATOR (or an admin) ANSWERING a fan who wrote first pays nothing at
+//      all. The exemption is the thread, not the role: a creator writing to
+//      someone who never wrote to them is making first contact, and pays.
 //
 // The route used to ask three questions before naming a price — does the sender
 // subscribe, does the receiver subscribe, did the receiver write first — and a
 // yes on any of them made the message free. It then took the amount from the
-// request, so "100 per message" was a rule only the composer followed. Neither
-// is true now: the door is the subscription, the price is a server-side
-// constant, and no thread history is read to decide either.
-//
-// The free-reply rule is keyed on the SENDER'S ROLE, read from the database (a
-// role can change long before a session is reissued) and on nothing else.
+// request, so "100 per message" was a rule only the composer followed. The door
+// is the subscription now and the price is a server-side constant — but the
+// free-reply rule is what these tests pin hardest, because a role-only check
+// let any viewer who tapped "Become a creator" write to every creator for
+// nothing.
 //
 // Prisma, auth and the wallet service are mocked; no database, no money.
 // =============================================================================
@@ -34,7 +35,8 @@ const mocks = vi.hoisted(() => ({
   updateUser: vi.fn(),
   // The subscription gate: a viewer may only write to a creator they follow.
   findSubscription: vi.fn(),
-  // Never called — a thread's history must not turn a message free.
+  // Read only to decide whether a creator is ANSWERING a fan — the one free
+  // case. A viewer's send never consults it (the rule short-circuits on role).
   findMessage: vi.fn(),
   createMessage: vi.fn(),
   upsertBalance: vi.fn(),
@@ -276,16 +278,23 @@ describe("a creator's inbox is for their subscribers", () => {
     expect(mocks.findSubscription).not.toHaveBeenCalled();
   });
 
-  it("leaves a creator's free reply ungated", async () => {
+  it("does not gate a creator writing to a peer — it charges them", async () => {
+    // A subscription is a fan's door to an inbox, not a toll between creators.
+    // With no inbound thread this creator is not answering anyone, so it is a
+    // first contact and it costs the price like anyone else's.
     const OTHER_CREATOR = "creator-2";
     account(OTHER_CREATOR, "CREATOR");
     asCreator();
     mocks.findSubscription.mockResolvedValue(null);
 
-    const res = await POST(send({ receiverId: OTHER_CREATOR, content: "thanks" }));
+    const res = await POST(send({ receiverId: OTHER_CREATOR, content: "hey" }));
 
     expect(res.status).toBe(201);
     expect(mocks.findSubscription).not.toHaveBeenCalled();
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
+      userId: CREATOR,
+      amount: PAID_MESSAGE_PRICE,
+    });
   });
 });
 
@@ -334,6 +343,12 @@ describe("a viewer never gets a free message", () => {
 });
 
 describe("a creator answering is free", () => {
+  beforeEach(() => {
+    // The fan wrote first — which is what makes this an answer rather than a
+    // cold message. Without it the same send is charged (see below).
+    mocks.findMessage.mockResolvedValue({ id: "inbound-from-fan" });
+  });
+
   it("charges nothing, moves no balance and writes no ledger row", async () => {
     asCreator();
 
@@ -384,6 +399,41 @@ describe("a creator answering is free", () => {
     expect(res.status).toBe(201);
     expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
       userId: VIEWER,
+      amount: PAID_MESSAGE_PRICE,
+    });
+  });
+});
+
+describe("only a reply is free", () => {
+  it("charges a creator who writes to a fan who never wrote first", async () => {
+    // The fan never wrote, so there is nothing to answer: this is first
+    // contact, and the role-only rule used to let the caller in for nothing.
+    asCreator();
+    mocks.findMessage.mockResolvedValue(null);
+
+    const res = await POST(send({ receiverId: VIEWER, content: "hello there" }));
+
+    expect(res.status).toBe(201);
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
+      userId: CREATOR,
+      amount: PAID_MESSAGE_PRICE,
+    });
+  });
+
+  it("does not extend the exception to another creator, even with a thread", async () => {
+    // An inbox's free reply is an answer to a FAN. A creator writing to a peer
+    // is not answering a fan, so every such message is paid — which is what
+    // closes the "become a creator, then message creators for free" hole.
+    const OTHER_CREATOR = "creator-2";
+    account(OTHER_CREATOR, "CREATOR");
+    asCreator();
+    mocks.findMessage.mockResolvedValue({ id: "inbound" });
+
+    const res = await POST(send({ receiverId: OTHER_CREATOR, content: "hey" }));
+
+    expect(res.status).toBe(201);
+    expect(mocks.debitWallet).toHaveBeenCalledWith(tx, {
+      userId: CREATOR,
       amount: PAID_MESSAGE_PRICE,
     });
   });
@@ -498,6 +548,9 @@ describe("guards", () => {
 
   it("never caps a creator's free reply — a reply is not spending", async () => {
     asCreator();
+    // The fan wrote first: this is the reply that is free, so the cap that only
+    // governs spending must not touch it.
+    mocks.findMessage.mockResolvedValue({ id: "inbound-from-fan" });
     mocks.checkSpendCap.mockResolvedValue({
       allowed: false,
       cap: 500_000,

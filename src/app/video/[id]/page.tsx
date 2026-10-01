@@ -92,6 +92,16 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return {
     title,
     description,
+    // The player fetches its media straight from the Bunny pull zone, and this
+    // zone refuses any request that carries a Referer — including our own
+    // domain (measured: no Referer 200, `https://www.genhub-two.site/` 403).
+    // A browser's default is strict-origin-when-cross-origin, so every segment
+    // went out with a Referer and came back 403: the poster, then a spinner,
+    // then "refused by the video host". Asking for no referrer on this page
+    // makes the browser send the request the CDN actually accepts. The token in
+    // the URL still authorises every byte; the referrer check was a second lock
+    // that was bolted shut against the only door it was meant to open.
+    referrer: "no-referrer",
     alternates: { canonical: url },
     openGraph: {
       title,

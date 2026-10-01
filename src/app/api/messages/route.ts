@@ -79,14 +79,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Who is allowed to answer without paying.
+    // Who is allowed to answer without paying — and it has to be an ANSWER.
     //
-    // A viewer pays to start and to continue a conversation — that is the
-    // product, and it is unchanged. A creator answering their own inbox does
-    // NOT: charging them made a reply impossible for anyone whose wallet was
-    // empty (every creator's money sits in earnings, not in the wallet), and it
-    // turned the inbox into a one-way channel in which a fan could pay to be
-    // heard and hear nothing back.
+    // The exemption used to be a property of the SENDER'S ROLE: any CREATOR (or
+    // ADMIN) sent for nothing, to anybody. That is not what an inbox gives a
+    // creator; it is permission to write to someone who has never written to
+    // them, and it was a door any viewer could open for themselves — POST
+    // /api/account/become-creator upgrades an account for free, and the very
+    // next message that account sent cost nothing, to any creator, with no
+    // subscription. "Every message is paid" was true only until someone tapped
+    // "Become a creator" once.
+    //
+    // A REPLY is free, and that is the whole exemption: a creator answering a
+    // fan who already wrote (and paid) is the rule that makes an inbox a
+    // conversation rather than a payphone. So it is decided by the THREAD —
+    // there is a message from this receiver to this sender — and not by the
+    // role alone, and only for a message to an ordinary account (a creator
+    // writing to another creator is not answering a fan). An ADMIN answers
+    // anyone for free; that is support, not a purchase.
     //
     // Read from the database, not from the token: a role can change long before
     // a seven-day session is reissued, and this decides who pays.
@@ -94,14 +104,32 @@ export async function POST(request: NextRequest) {
       where: { id: auth.userId },
       select: { role: true },
     });
-    const freeReply = sender?.role === "CREATOR" || sender?.role === "ADMIN";
+    const senderIsCreator = sender?.role === "CREATOR";
+    const senderIsAdmin = sender?.role === "ADMIN";
+
+    // `&&` short-circuits, so an ordinary viewer never spends a query on it: a
+    // viewer's message is never free, whatever the thread history says.
+    const answeringFan =
+      senderIsCreator &&
+      receiver.role !== "CREATOR" &&
+      Boolean(
+        await prisma.payMessage.findFirst({
+          where: { senderId: receiverId, receiverId: auth.userId },
+          select: { id: true },
+        })
+      );
+    const freeReply = senderIsAdmin || answeringFan;
 
     // A creator's inbox is for their subscribers. A viewer can only write to a
     // creator they are subscribed to; the subscription is the door, and the
     // fixed price below is still the price of the message once inside. Checked
     // server-side so hiding the composer is not the whole control — an
     // unsubscribed viewer posting straight to this route is refused here.
-    if (!freeReply && receiver.role === "CREATOR") {
+    //
+    // The door is for VIEWERS. A creator (or an admin) writing to another
+    // creator is not a fan writing to one, so they are not sent to buy a
+    // subscription to a peer — they pay the price below like everyone else.
+    if (!senderIsCreator && !senderIsAdmin && receiver.role === "CREATOR") {
       const subscription = await prisma.creatorSubscription.findFirst({
         where: {
           viewerId: auth.userId,

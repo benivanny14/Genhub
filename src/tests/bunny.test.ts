@@ -327,33 +327,53 @@ describe("Bunny signing", () => {
       vi.unstubAllGlobals();
     });
 
-    // The pull zone can also be gated by "Allowed Referrers", and that gate reads
-    // the Referer — so a bare server-to-server probe passed while every browser
-    // from the app's own domain was refused with 403 (measured against the live
-    // zone: no Referer 206, an allowed host 200, localhost and the custom domain
-    // 403). Playback was broken for every viewer and this check called it healthy.
-    it("fails when the CDN accepts the signature but blocks our own origin", async () => {
+    // A pull zone can also be gated beyond the token. Measured against the live
+    // zone the same correctly-signed URL answered 206 bare, 200 with an Origin,
+    // and 403 with a Referer — so a browser from the app's own domain was
+    // refused while a bare server-to-server fetch looked healthy. The player now
+    // sends the shape this zone accepts (Origin, NO Referer), and the probe asks
+    // for that exact shape.
+    it("fails when the CDN refuses the browser-shaped request from our own origin", async () => {
       const seen: { url: string; referer?: string; origin?: string }[] = [];
       vi.stubGlobal(
         "fetch",
         vi.fn(async (url: string, init?: RequestInit) => {
           const headers = (init?.headers || {}) as Record<string, string>;
           seen.push({ url, referer: headers.Referer, origin: headers.Origin });
-          // Server-to-server: accepted. With a Referer: refused.
-          return { ok: !headers.Referer, status: headers.Referer ? 403 : 206 } as Response;
+          // Bare: accepted. With our Origin: refused.
+          return { ok: !headers.Origin, status: headers.Origin ? 403 : 206 } as Response;
         })
       );
 
       const result = await probeSignedPlayback("abc-123");
 
       expect(result.state).toBe("fail");
-      expect(result.detail).toMatch(/Allowed Referrers/);
       expect(result.detail).toMatch(/server-to-server/);
-      // The second request has to carry the app's real origin, or it proves
-      // nothing about what a browser on our site experiences.
+      expect(result.detail).toMatch(/Security/);
+      // The second request has to look like the player's: our real Origin and NO
+      // Referer. A probe that sent a Referer would measure a request no browser
+      // makes, and report a failure that playback does not have.
       expect(seen).toHaveLength(2);
-      expect(seen[1].referer).toBe(`${config.appUrl.replace(/\/+$/, "")}/`);
       expect(seen[1].origin).toBe(config.appUrl.replace(/\/+$/, ""));
+      expect(seen[1].referer).toBeUndefined();
+      vi.unstubAllGlobals();
+    });
+
+    it("stays ok when only a Referer-carrying request would be refused", async () => {
+      // The live zone's behaviour: it refuses a Referer, and the player sends
+      // none. Nothing about that blocks playback, so it must not be reported as
+      // a failure the operator has to chase.
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init?: RequestInit) => {
+          const headers = (init?.headers || {}) as Record<string, string>;
+          return { ok: !headers.Referer, status: headers.Referer ? 403 : 206 } as Response;
+        })
+      );
+
+      const result = await probeSignedPlayback("abc-123");
+
+      expect(result.state).toBe("ok");
       vi.unstubAllGlobals();
     });
 

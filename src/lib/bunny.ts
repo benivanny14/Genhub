@@ -710,22 +710,29 @@ const PLAYBACK_PROBE_TIMEOUT_MS = 10_000;
 /**
  * One manifest request, optionally dressed the way a BROWSER sends it.
  *
- * The `Origin` / `Referer` pair is not decoration. A pull zone can be gated by
- * "Allowed Referrers" as well as by token authentication, and that gate reads the
- * REFERER: measured against the live zone, the same correctly-signed URL answers
- * 206 with no Referer, 200 for an allowed host, and 403 for a host that is not on
- * the list — localhost and the custom domain were both refused while
- * `*.vercel.app` was allowed. A server-to-server probe therefore reports a
- * perfectly healthy CDN while every real viewer's browser (which always sends its
- * own origin) is refused, and the only symptom inside the app is a spinner.
- * Asking twice is what tells those two apart.
+ * The extra headers are not decoration. A pull zone can be gated by more than
+ * the token — measured against the live zone, the same correctly-signed URL
+ * answered 206 with no headers, 200 with an `Origin`, and 403 with a `Referer`
+ * (`https://www.genhub-two.site/` among them). So a browser that sent a Referer
+ * was refused while a bare server-to-server fetch looked perfect, and the only
+ * symptom inside the app was a spinner.
+ *
+ * The request that matters is the one the player now actually makes: this app's
+ * `Origin` and NO `Referer` (the watch page sets `referrer: "no-referrer"`, see
+ * src/app/video/[id]/page.tsx). That is what `origin` below reproduces; a
+ * `Referer` is only passed when a caller explicitly asks for the old shape, to
+ * keep the probe honest about a zone whose restriction is aimed at it.
  */
-async function manifestStatus(url: string, appOrigin?: string): Promise<number> {
+async function manifestStatus(
+  url: string,
+  opts: { origin?: string; referer?: string } = {}
+): Promise<number> {
   const res = await fetch(url, {
     // A manifest is a few hundred bytes; no need for the whole stream.
     headers: {
       Range: "bytes=0-2047",
-      ...(appOrigin ? { Origin: appOrigin, Referer: `${appOrigin}/` } : {}),
+      ...(opts.origin ? { Origin: opts.origin } : {}),
+      ...(opts.referer ? { Referer: opts.referer } : {}),
     },
     signal: AbortSignal.timeout(PLAYBACK_PROBE_TIMEOUT_MS),
     cache: "no-store",
@@ -778,21 +785,21 @@ export async function probeSignedPlayback(bunnyVideoId: string): Promise<Playbac
     }
 
     // The signature works. Now the question the viewer actually asks: does the
-    // CDN accept a request that comes FROM this deployment?
+    // CDN accept the request the BROWSER makes — this app's Origin, no Referer?
+    // That is the shape the watch page produces now, so it is the one that has
+    // to answer 2xx for playback to work.
     if (appOrigin) {
-      const browserStatus = await manifestStatus(url, appOrigin);
+      const browserStatus = await manifestStatus(url, { origin: appOrigin });
       if (browserStatus < 200 || browserStatus >= 300) {
         return {
           state: "fail",
           detail:
             `playback is blocked for real viewers: the signed manifest is accepted server-to-server ` +
-            `(HTTP ${status}) but answered HTTP ${browserStatus} when the request came from ` +
-            `${appOrigin}. The pull zone's Allowed Referrers list does not include this address, and ` +
-            "every browser request — the manifest AND each segment fetched straight from the CDN — " +
-            "carries it. Add this domain to the pull zone's Allowed Referrers (Bunny -> Pull Zone -> " +
-            "Security / Referrer restrictions), and add http://localhost:3000 too so playback can be " +
-            "tested locally. Nothing in the app can work around it: the browser has to fetch media " +
-            `from ${config.bunny.cdnHostname} directly.`,
+            `(HTTP ${status}) but answered HTTP ${browserStatus} to a request carrying ` +
+            `Origin: ${appOrigin} and no Referer — which is exactly what the player sends. Check the ` +
+            "pull zone's Security settings (Bunny -> Pull Zone -> Security): token authentication, and " +
+            "any Origin / Referrer restriction that refuses this address. The browser fetches media " +
+            `straight from ${config.bunny.cdnHostname}, so a restriction there cannot be fixed in the app.`,
         };
       }
     }
