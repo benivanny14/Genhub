@@ -789,6 +789,8 @@ async function lastGatewayPhone(
   viewerId: string,
   creatorId: string
 ): Promise<string | null> {
+  // The retired gateway is named on purpose: a membership first funded through
+  // it still needs its phone found when it comes up for renewal.
   const tx = await prisma.transaction.findFirst({
     where: { userId: viewerId, creatorId, gateway: { in: ["CLICKPESA", "HARAKAPAY"] } },
     select: { metadata: true },

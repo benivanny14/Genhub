@@ -984,7 +984,7 @@ model CronHeartbeat {
 // =============================================================================
 
 model SetupStep {
-  /// The checklist item id (e.g. "harakapay_float"), so a step cannot be
+  /// The checklist item id (e.g. "clickpesa_client_id"), so a step cannot be
   /// ticked twice and the record survives the checklist being reordered.
   id     String   @id
   title  String

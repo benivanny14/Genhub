@@ -24,10 +24,10 @@ const translations: Record<string, Record<Locale, string>> = {
   "nav.admin": { en: "Admin Panel", sw: "Paneli ya Admin" },
 
   // Home
-  "home.heroTitle": { en: "Premium Video Streaming", sw: "Video ya Kulipia" },
+  "home.heroTitle": { en: "Videos by Tanzanian Creators", sw: "Video za Creators wa Kitanzania" },
   "home.heroDesc": {
-    en: "The platform for East African creators to share, earn, and thrive.\nUpload content, earn revenue, and enjoy quality entertainment.",
-    sw: "Jukwaa la video kwa waumbaji wa Afrika Mashariki.\nPakia, jichukulie mapato, na ufurahie maudhui ya ubora.",
+    en: "Create your own videos, upload them, and start earning from your content.\nSubscribe to a creator's profile and watch all of their videos — without paying for each one.",
+    sw: "Jukwaa la video kwa creators wa Tanzania. Tengeneza video zako, zipakie, na uanze kutengeneza pesa.\nSubscribe kwa profile ya creator na uone video zake zote — bila kulipia kila video.",
   },
   "home.searchPlaceholder": { en: "Search videos, creators, or content...", sw: "Tafuta video, waumbaji, au maudhui..." },
   "home.search": { en: "Search", sw: "Tafuta" },

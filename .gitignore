@@ -36,6 +36,9 @@ public/uploads/
 .setup-test/
 .vercel/
 .freebuff/
+# Scratch probes: throwaway scripts that hardcode live tokens, keys and
+# connection strings while debugging against production. Never shipped.
+tmp-emu/
 .DS_Store
 
 # Wrangler's build output and local dev state, wherever a Worker lives — it also

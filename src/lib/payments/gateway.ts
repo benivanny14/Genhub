@@ -5,21 +5,15 @@
 // wired back in silently: an unexpected value fails loudly instead of quietly
 // routing money somewhere else.
 //
-// HARAKAPAY is still named in the Prisma enum (and so in `LEGACY_GATEWAYS`)
-// because the transactions it processed are real history — dropping the value
-// would make those rows unreadable. It is deliberately NOT in
-// `SUPPORTED_GATEWAYS` or `SETTLEMENT_PROVIDERS`, so it can never settle a new
-// payment: it is a label for the past, not a route for money.
+// A retired gateway is still named in the Prisma enum because the transactions
+// it processed are real history — dropping the value would make those rows
+// unreadable. It is deliberately NOT in `SUPPORTED_GATEWAYS` or
+// `SETTLEMENT_PROVIDERS`, so it can never settle a new payment: it is a label
+// for the past, not a route for money.
 // =============================================================================
 
 export const SUPPORTED_GATEWAYS = ["CLICKPESA"] as const;
 export type SupportedGateway = (typeof SUPPORTED_GATEWAYS)[number];
-
-/**
- * Gateways that appear in historical rows but may never settle a new payment.
- * Kept for readability of old transactions only.
- */
-export const LEGACY_GATEWAYS = ["HARAKAPAY"] as const;
 
 /**
  * `provider` labels allowed to reach settlement. ClickPesa is the only real

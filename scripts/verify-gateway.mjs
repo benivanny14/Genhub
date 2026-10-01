@@ -5,9 +5,9 @@
 //
 // ClickPesa is the only payment gateway. Exits 1 the moment a second gateway
 // reappears in src/lib/payments or anywhere in shipped source — so a legacy
-// integration can never slip back in unnoticed. HARAKAPAY may remain in the
-// Prisma enum as a historical label for old transactions, but it is never a
-// supported gateway (see src/lib/payments/gateway.ts).
+// integration can never slip back in unnoticed. A retired gateway may remain
+// in the Prisma enum as a historical label for old transactions, but it is
+// never a supported gateway (see src/lib/payments/gateway.ts).
 // =============================================================================
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";

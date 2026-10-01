@@ -6,7 +6,7 @@
 // whenever the deployment is degraded — and degraded includes the background
 // workers running late. So a perfectly reachable deployment reported its own job
 // lag back to itself as "Public URL -> HTTP 503", which then travelled into
-// `launch:check --remote` ("2 service(s) failing — HarakaPay, Public URL") and
+// `launch:check --remote` ("2 service(s) failing — ClickPesa, Public URL") and
 // into the post-deploy workflow, sending whoever read it to DNS and to
 // NEXT_PUBLIC_APP_URL — neither of which was wrong.
 //

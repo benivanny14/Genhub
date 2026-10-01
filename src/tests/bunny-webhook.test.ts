@@ -6,7 +6,7 @@
 //
 //   1. an unsigned (or wrongly signed) body is refused, and
 //   2. with no secret configured the route fails CLOSED in production, exactly
-//      like the cron and HarakaPay rules next door.
+//      like the cron and ClickPesa rules next door.
 //
 // Signature verification is pure, so it is tested against the raw bytes without
 // a server or a database.

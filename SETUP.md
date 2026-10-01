@@ -304,8 +304,8 @@ Hatua hizi zinafanya kazi ikiwa utaihitaji siku moja:
 
 ## Hatua 7 — ClickPesa (dakika 15, inahitaji akaunti)
 
-ClickPesa ndiyo gateway pekee. Tofauti na HarakaPay, **ClickPesa haina float**:
-kila collection inaingia moja kwa moja kwenye akaunti yako ya merchant, kwa hivyo
+ClickPesa ndiyo gateway pekee. **ClickPesa haina float**: kila collection
+inaingia moja kwa moja kwenye akaunti yako ya merchant, kwa hivyo
 hakuna salio la kuweka. Kinachohitajika ni vitambulisho vitatu, vyote kutoka
 *Settings → Developers* kwenye dashboard yako ya ClickPesa:
 

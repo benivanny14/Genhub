@@ -103,7 +103,7 @@ describe("requireCronSecret", () => {
     // Reading the implementation is the only way to assert this from outside:
     // a plain `===` on different-length strings returns early and leaks length.
     //
-    // The comparison now lives in src/lib/shared-secret.ts because the HarakaPay
+    // The comparison now lives in src/lib/shared-secret.ts because the ClickPesa
     // webhook needed the same property and compared with `!==` instead. So the
     // property is asserted where it is implemented, and this route is asserted
     // to *use* it rather than roll its own.

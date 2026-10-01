@@ -96,7 +96,7 @@ describe("reconcile sweep and the gateway breaker", () => {
       calls += 1;
       // Two failures in a row is what opens the real breaker.
       if (calls >= 2) gw.open = true;
-      throw new Error("HarakaPay /api/v1/status/HP timed out after 20s");
+      throw new Error("ClickPesa /payments/HP timed out after 20s");
     });
 
     const result = await reconcileStalePayments();

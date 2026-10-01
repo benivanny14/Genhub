@@ -666,8 +666,8 @@ node scripts/preflight.mjs --production --gateway
 #     balance to top up.
 ```
 
-ClickPesa has **no float and no balance API**, so unlike HarakaPay there is
-nothing on our side to fund. A silent push usually means the merchant account is
+ClickPesa has **no float and no balance API**, so there is nothing on our side
+to fund. A silent push usually means the merchant account is
 not yet activated for live collections (pre-KYC the account is capped at
 TZS 100,000 in total and 100 API calls a day). Everything below is the longer
 diagnostic. Use `GET /api/payments/health` (admin) as the dashboard:
@@ -1572,8 +1572,7 @@ writes nothing.
 ### 4.0.6 No float to watch (ClickPesa)
 
 ClickPesa settles collections straight into the merchant account and exposes
-**no float or balance API**, so the prepaid-float alarm HarakaPay needed does not
-exist here. There is nothing on our side to fund and nothing to page an operator
+**no float or balance API**, so there is no prepaid-float alarm to run here. There is nothing on our side to fund and nothing to page an operator
 about. A silent USSD push is therefore an account issue, not a balance — see §3.1
 for the diagnostic (activation/KYC, pre-KYC limits, phone format).
 
