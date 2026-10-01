@@ -1126,11 +1126,16 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
         }}
       />
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
-        <div className="flex flex-col lg:flex-row gap-8 items-start">
-          <div className="flex-1 min-w-0 w-full max-w-5xl">
+      <main className="w-full py-3 sm:py-5">
+        {/* The player band.
+
+            Full-bleed on purpose: the picture is what the visitor came for, so
+            it takes the whole window instead of a 1024px column that shared the
+            row with a sidebar. The only cap is for an ultrawide monitor, where
+            an uncapped 16:9 frame turns into a thin letterbox strip. */}
+        <div className="mx-auto w-full max-w-[1600px] px-0 sm:px-3 lg:px-4">
         {/* Back Button + "View as visitor" */}
-        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+        <div className="flex items-center justify-between gap-3 mb-3 flex-wrap">
           <Link
             href="/"
             className="inline-flex items-center gap-2 text-white/60 hover:text-white text-sm transition"
@@ -1580,36 +1585,18 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           </div>
         )}
 
-        {/* Scene photo gallery */}
-        {(video.galleryImages?.length ?? 0) > 0 && (
-          <section className="mt-4">
-            <h2 className="font-display font-bold text-sm flex items-center gap-2 mb-2 text-white/80">
-              <Images className="w-4 h-4 text-brand-400" /> Gallery
-              <span className="text-white/40 font-normal">({video.galleryImages!.length})</span>
-            </h2>
-            <div className="flex gap-3 overflow-x-auto pb-2">
-              {video.galleryImages!.map((img, i) => (
-                <button
-                  key={img.id}
-                  onClick={() => setLightboxIndex(i)}
-                  className="relative shrink-0 w-36 sm:w-44 aspect-video rounded-xl overflow-hidden group/gallery border border-white/5 hover:border-brand-500/60 transition"
-                  aria-label={`Open photo ${i + 1}`}
-                >
-                  <Image
-                    src={img.url}
-                    alt={`${video.title} — photo ${i + 1}`}
-                    fill
-                    className="object-cover group-hover/gallery:scale-105 transition-transform duration-300"
-                    sizes="176px"
-                  />
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
+        </div>
+
+        {/* Everything under the picture.
+
+            One readable column, so the title, the description and the row of
+            actions stop spreading across a wide screen as a stack of separate
+            full-width cards — the thing that made the page read as clutter.
+            The width is capped for reading, not for the grid below. */}
+        <div className="mx-auto mt-5 w-full max-w-6xl space-y-4 px-4 sm:px-6">
 
         {/* Video Info */}
-        <div className="mt-6 space-y-6">
+        <div className="space-y-4">
           <div>
             <h1 className="text-2xl md:text-3xl font-display font-bold">{video.title}</h1>
 
@@ -1971,6 +1958,35 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             </div>
           )}
 
+          {/* Scene photo gallery — below the details, where it is a set of
+              stills to browse instead of a strip pushing the title off-screen. */}
+          {(video.galleryImages?.length ?? 0) > 0 && (
+            <section>
+              <h2 className="font-display font-bold text-sm flex items-center gap-2 mb-2 text-white/80">
+                <Images className="w-4 h-4 text-brand-400" /> Gallery
+                <span className="text-white/40 font-normal">({video.galleryImages!.length})</span>
+              </h2>
+              <div className="flex gap-3 overflow-x-auto pb-2">
+                {video.galleryImages!.map((img, i) => (
+                  <button
+                    key={img.id}
+                    onClick={() => setLightboxIndex(i)}
+                    className="relative shrink-0 w-36 sm:w-44 aspect-video rounded-xl overflow-hidden group/gallery border border-white/5 hover:border-brand-500/60 transition"
+                    aria-label={`Open photo ${i + 1}`}
+                  >
+                    <Image
+                      src={img.url}
+                      alt={`${video.title} — photo ${i + 1}`}
+                      fill
+                      className="object-cover group-hover/gallery:scale-105 transition-transform duration-300"
+                      sizes="176px"
+                    />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Comments */}
           <CommentsSection
             videoId={video.id}
@@ -1979,19 +1995,15 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           </div>
         </div>
 
-          {/* More scenes — the same card language as the browse grids (cover,
-              length badge, price chip, category tag), so a viewer coming from
-              a grid does not have to re-learn what a card is.
-
-              This closes the main column first, so the sidebar is a sibling of
-              it rather than a child: as a child it sat under the player at
-              every width and the `lg:flex-row` above never took effect, which
-              put a 320px column of scenes at the bottom-left of the page. */}
-          <aside className="w-full lg:w-80 shrink-0">
+        {/* More scenes — full width beneath everything, several to a row, the
+            same card language as the browse grids (cover, length badge, price
+            chip, category tag). As a 320px sidebar it both squeezed the player
+            and hid the scenes in one thin column nobody scrolled. */}
+        <div className="mx-auto mt-10 w-full max-w-7xl px-4 sm:px-6">
             <h2 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
               <Play className="w-4 h-4 text-brand-400" /> More scenes
             </h2>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-4">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
               {related.length === 0 ? (
                 <p className="text-sm text-white/40">No related scenes yet.</p>
               ) : (
@@ -2008,7 +2020,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                             alt={r.title}
                             fill
                             className="object-cover transition-transform duration-500 group-hover:scale-105"
-                            sizes="(max-width: 1024px) 100vw, 320px"
+                            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
                           />
                         ) : (
                           <div className="w-full h-full flex items-center justify-center">
@@ -2052,7 +2064,6 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 })
               )}
             </div>
-          </aside>
         </div>
       </main>
 
