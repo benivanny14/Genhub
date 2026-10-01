@@ -59,8 +59,9 @@ strict limiter. `src/app/api/videos/status/route.test.ts` pins the privacy rule.
 * Every JSON route reads through `readJsonBody` (`Content-Length` check first,
   then a streaming byte counter, default 256 KB).
 * The Bunny webhook reads through `readRawBodyCapped` (64 KB) before HMAC.
-* The HarakaPay webhook keeps the 1 MB ceiling and verifies its token before any
-  database access; repeat deliveries are idempotent via transaction status.
+* The ClickPesa webhook keeps the 1 MB ceiling and verifies its checksum (HMAC)
+  or shared token before any database access; repeat deliveries are idempotent
+  via transaction status.
 * Stream/intro/intro-clip take no client-supplied upstream path (except the
   stream route, which polices `?path=` with `safeManifestPath`); segments go to
   the CDN directly and never through the app server.
@@ -141,7 +142,7 @@ yet applied** (see §7) and should be enforced at the edge (§5).
 | Route | Method | Auth | Body | Notes |
 |---|---|---|---|---|
 | `/api/webhooks/bunny` | POST | HMAC signature | 64 KB cap | Fails closed with no secret; ignores other libraries; idempotent |
-| `/api/webhooks/harakapay` | POST | shared token | 1 MB cap | Token verified before DB; amount taken from our row |
+| `/api/webhooks/clickpesa` | POST | checksum (HMAC) or shared token | 1 MB cap | Verified before DB; amount taken from our row |
 | `/api/cron/*` | GET/POST | `CRON_SECRET` | – | Secret-gated worker triggers |
 | `/api/health/services`, `/api/health/attention` | GET/POST | `CRON_SECRET` | – | Live probes |
 | `/api/health` | GET | public | – | Verdict only, no internals |
@@ -254,7 +255,7 @@ EMAIL_FROM=Genhub <no-reply@your-verified-domain>
 ## 9. Required environment variables
 
 Already required and unchanged: `DATABASE_URL`, `JWT_SECRET`,
-`NEXT_PUBLIC_APP_URL`, `CRON_SECRET`, HarakaPay keys, Bunny keys.
+`NEXT_PUBLIC_APP_URL`, `CRON_SECRET`, ClickPesa keys, Bunny keys.
 
 **Now effectively required for the hardening to be distributed:**
 `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` (or a managed `REDIS_URL`).

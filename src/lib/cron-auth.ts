@@ -26,7 +26,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import config from "./config";
-// Shared with the HarakaPay webhook, which needed the same property (problem 2
+// Shared with the gateway webhook, which needed the same property (problem 2
 // below) and did not have it. One implementation, so neither can drift.
 import { secretMatches } from "./shared-secret";
 // The same question the development-only endpoints ask, asked once: a localhost

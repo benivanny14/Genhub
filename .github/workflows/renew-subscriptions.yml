@@ -46,7 +46,7 @@ jobs:
             echo "CRON_SECRET repository secret not set — skipping run."
             exit 0
           fi
-          # 300s: this batch sends HarakaPay USSD pushes, which are slower than
+          # 300s: this batch sends ClickPesa USSD pushes, which are slower than
           # a status lookup and are the reason this worker is hourly.
           curl -fsS -X POST "$BASE_URL/api/cron/renew-subscriptions" \
             -H "x-cron-secret: $CRON_SECRET" \

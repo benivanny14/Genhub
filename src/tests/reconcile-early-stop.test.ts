@@ -3,7 +3,7 @@
 //
 // `reconcileStalePayments` asks the gateway about every pending charge, one at a
 // time. Once the gateway has stopped answering, the breaker in
-// lib/payments/harakapay refuses further calls instantly — so the sweep would
+// lib/payments/clickpesa refuses further calls instantly — so the sweep would
 // race through the remaining rows doing nothing but inflating `errors`, and
 // report a `checked` count that looks like work.
 //
@@ -38,23 +38,25 @@ vi.mock("@/lib/config", async (importOriginal) => {
     ...actual,
     default: {
       ...actual.default,
-      harakaPay: {
+      clickPesa: {
+        clientId: "test-client",
         apiKey: "test-key",
-        baseUrl: "https://harakapay.test",
+        baseUrl: "https://clickpesa.test/third-parties",
         webhookToken: "test-webhook-token",
+        checksumKey: "",
         sandbox: false,
       },
     },
   };
 });
 
-vi.mock("@/lib/payments/harakapay", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/payments/harakapay")>();
+vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments/clickpesa")>();
   return {
     ...actual,
-    harakaStatus: gw.status,
+    clickpesaStatus: gw.status,
     // Stands in for the breaker: the sweep only reads `open`.
-    harakaGatewayState: () => ({
+    clickpesaGatewayState: () => ({
       open: gw.open,
       openUntil: 0,
       failures: 0,

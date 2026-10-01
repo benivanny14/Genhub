@@ -82,11 +82,14 @@ enum TransactionStatus {
   UNDER_INVESTIGATION
 }
 
-// Genhub settles every checkout through HarakaPay (USSD push to the phone).
-// Kept as an enum so transactions stay self-describing if a second processor is
-// ever added, but HARAKAPAY is the only supported value.
+// Genhub settles every checkout through ClickPesa (USSD push to the phone).
+// HARAKAPAY is kept as a historical value so the transactions it processed stay
+// readable; it can never settle a new payment (see src/lib/payments/gateway.ts).
+// The value is appended after HARAKAPAY on purpose, so the migration is an
+// ADD VALUE and old rows are untouched.
 enum PaymentGateway {
   HARAKAPAY
+  CLICKPESA
 }
 
 enum PayoutMethod {

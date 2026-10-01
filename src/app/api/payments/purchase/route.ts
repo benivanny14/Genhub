@@ -1,6 +1,6 @@
 // =============================================================================
 // GENHUB - Video Purchase API Route
-// POST /api/payments/purchase - Initiate PPV payment via HarakaPay
+// POST /api/payments/purchase - Initiate PPV payment via ClickPesa
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -9,7 +9,12 @@ import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { initiatePaymentSchema } from "@/lib/validation";
-import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
+import {
+  clickpesaCollect,
+  clickpesaErrorReason,
+  clickpesaOrderReference,
+  normalizeTzPhoneMsisdn,
+} from "@/lib/payments/clickpesa";
 import { purchaseVideoWithWallet } from "@/lib/services/balance.service";
 import { notifyPaymentResult } from "@/lib/services/payment-notify.service";
 import { resolvePendingCheckout } from "@/lib/services/checkout-lock.service";
@@ -58,7 +63,7 @@ export async function POST(request: NextRequest) {
       return api.validation(result.error.errors[0].message);
     }
 
-    // HarakaPay is the only gateway — checkout is a USSD push to the phone.
+    // ClickPesa is the only gateway — checkout is a USSD push to the phone.
     // The assertion is belt-and-braces on top of the Zod enum: if anything ever
     // routes here with another gateway it fails loudly instead of silently.
     assertSupportedGateway(result.data.gateway);
@@ -282,6 +287,11 @@ export async function POST(request: NextRequest) {
 
     // Create pending transaction
     const orderId = generateOrderId("PPV");
+    // ClickPesa takes an alphanumeric reference of at most 20 characters that WE
+    // choose and it echoes back; it is stored as providerRef so the webhook and
+    // the status poll can match the callback. Distinct from `orderId`, which is
+    // our own database-friendly id.
+    const providerRef = clickpesaOrderReference("PP");
     const transaction = await prisma.transaction.create({
       data: {
         userId: auth.userId,
@@ -290,7 +300,8 @@ export async function POST(request: NextRequest) {
         amount: finalAmount,
         type: "PPV_PURCHASE",
         status: "PENDING",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
+        providerRef,
         metadata: couponId
           ? { couponId, originalPrice: video.price, discount: video.price - finalAmount }
           : undefined,
@@ -305,14 +316,14 @@ export async function POST(request: NextRequest) {
     // PAYMENT_SANDBOX=true in local dev skips the real USSD push; the client
     // completes via POST /api/dev/sandbox/complete, which runs the exact same
     // webhook processing as production.
-    const harakaSandbox =
+    const clickPesaSandbox =
       config.nodeEnv !== "production" &&
-      (!config.harakaPay.apiKey || config.harakaPay.sandbox);
+      (!config.clickPesa.apiKey || config.clickPesa.sandbox);
 
-    if (harakaSandbox) {
-      // Mirror production: store a HarakaPay-style order id so the real
-      // webhook (/api/webhooks/harakapay) can map callbacks to this row.
-      const sandboxRef = `hp_sbx_${transaction.id}`;
+    if (clickPesaSandbox) {
+      // Mirror production: a predictable reference so the dev completion route
+      // can map the callback to this row.
+      const sandboxRef = `cp_sbx_${transaction.id}`;
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { providerRef: sandboxRef },
@@ -322,66 +333,58 @@ export async function POST(request: NextRequest) {
         orderId: sandboxRef,
         checkoutUrl: null,
         sandbox: true,
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         amount: finalAmount,
         originalAmount: video.price,
         discount: video.price - finalAmount,
       });
     }
 
-    // Live USSD push — customer confirms on their phone
-    const webhookUrl = `${config.appUrl}/api/webhooks/harakapay${
-      config.harakaPay.webhookToken ? `?t=${config.harakaPay.webhookToken}` : ""
-    }`;
-
+    // Live USSD push — customer confirms on their phone. ClickPesa does not take
+    // a webhook URL per request; the endpoint is configured in the dashboard, so
+    // nothing is passed here.
     try {
-      // Live mode with a non-public app URL means HarakaPay can never reach
-      // our webhook; the /payments/status poll reconciles the payment instead.
-      // Log it once so a stuck payment is diagnosable from the server log.
+      // Live mode with a non-public app URL means ClickPesa can never reach our
+      // webhook; the /payments/status poll reconciles the payment instead. Log
+      // it once so a stuck payment is diagnosable from the server log.
       if (/localhost|127\.0\.0\.1/i.test(config.appUrl)) {
         console.warn(
-          "[HarakaPay] Live collect with a local app URL — webhooks cannot arrive; relying on status polling to reconcile."
+          "[ClickPesa] Live collect with a local app URL — webhooks cannot arrive; relying on status polling to reconcile."
         );
       }
 
-      const response = await harakaCollect({
-        phone: phoneNumber,
+      const response = await clickpesaCollect({
+        phone: normalizeTzPhoneMsisdn(phoneNumber),
         amount: finalAmount,
-        description: `Genhub - ${video.title}`,
-        webhookUrl,
+        orderReference: providerRef,
       });
 
-      if (!response.success || !response.order_id) {
+      if (!response.success || !response.orderReference) {
         await prisma.transaction.update({
           where: { id: transaction.id },
           data: { status: "FAILED" },
         });
         return api.error(
-          response.error || "HarakaPay rejected the payment request. Please try again.",
+          response.error || "ClickPesa rejected the payment request. Please try again.",
           502,
           "GATEWAY_REJECTED"
         );
       }
 
-      // Track HarakaPay's order_id so the webhook/status poll can find us
-      await prisma.transaction.update({
-        where: { id: transaction.id },
-        data: { providerRef: response.order_id },
-      });
-
+      // providerRef is already stored; echo the reference back to the client.
       return api.success({
         transactionId: transaction.id,
-        orderId: response.order_id,
+        orderId: response.orderReference,
         checkoutUrl: null,
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         status: "pending",
         amount: finalAmount,
         originalAmount: video.price,
         discount: video.price - finalAmount,
         message: response.message || "USSD push sent to phone",
       });
-    } catch (harakaError: any) {
-      const reason = harakaErrorReason(harakaError);
+    } catch (gatewayError: any) {
+      const reason = clickpesaErrorReason(gatewayError);
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { status: "FAILED", metadata: { gatewayError: reason } },

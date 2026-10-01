@@ -63,9 +63,9 @@ describe("checklist integrity", () => {
     const manual = SETUP_ITEMS.filter((i) => !i.key);
 
     expect(SETUP_GROUPS.length).toBeGreaterThan(0);
-    expect(itemsWithKeys.length).toBe(18);
+    expect(itemsWithKeys.length).toBe(21);
     // Three steps are work in someone else's dashboard, not a variable: the
-    // HarakaPay float, the Bunny pull zone's Allowed Referrers list — which
+    // ClickPesa account activation, the Bunny pull zone's Allowed Referrers list — which
     // refuses the manifest and every segment of any host it does not name, so a
     // missing entry there is a video that only spins (see probeSignedPlayback) —
     // and the library's Webhook URL, which is what makes a finished encode go
@@ -74,7 +74,7 @@ describe("checklist integrity", () => {
     const manualText = manual
       .map((i) => [i.title, ...(i.steps || [])].join(" "))
       .join(" ");
-    expect(manualText).toMatch(/float/i);
+    expect(manualText).toMatch(/collections/i);
     expect(manualText).toMatch(/Referrers/i);
     expect(manualText).toMatch(/webhook/i);
   });

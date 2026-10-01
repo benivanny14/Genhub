@@ -48,7 +48,7 @@ export default function WalletPage() {
   const { format } = useCurrency();
   const { toast } = useToast();
 
-  // Live HarakaPay pushes a USSD prompt to the phone; the payment only settles
+  // Live ClickPesa pushes a USSD prompt to the phone; the payment only settles
   // when the webhook (or our reconcile poll) marks the transaction SUCCESS. Poll
   // /api/payments/status until then so the wallet balance updates by itself.
   // ~2 minutes: entering a USSD PIN can easily take a minute on a slow network.
@@ -175,7 +175,7 @@ export default function WalletPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount: topUpAmount,
-          gateway: "HARAKAPAY",
+          gateway: "CLICKPESA",
           phoneNumber,
           couponCode: couponCode.trim() || undefined,
         }),
@@ -205,7 +205,7 @@ export default function WalletPage() {
         fetchUserData();
         fetchTransactions();
       } else if (data.success) {
-        // Live HarakaPay: USSD push sent — poll until the payment settles.
+        // Live ClickPesa: USSD push sent — poll until the payment settles.
         const orderId: string | undefined = data.data?.orderId;
         setShowTopUp(false);
         setCouponCode("");

@@ -100,7 +100,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
   }, [fetchCreator]);
 
   // Open the checkout modal — subscribing pays by phone like every other
-  // purchase on the site (HarakaPay USSD push), with wallet as a fallback.
+  // purchase on the site (ClickPesa USSD push), with wallet as a fallback.
   function openSubscribe() {
     setShowSubModal(true);
   }
@@ -116,7 +116,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
     } catch {}
   }
 
-  // Pay for the subscription by phone (HarakaPay USSD push)
+  // Pay for the subscription by phone (ClickPesa USSD push)
   async function handlePayWithPhone() {
     if (!phoneNumber) return;
     setSubscribing(true);
@@ -150,7 +150,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
           toast("error", doneData.error || "Sandbox payment failed");
         }
       } else if (data.success) {
-        // Live HarakaPay: USSD push sent — poll until the gateway confirms
+        // Live ClickPesa: USSD push sent — poll until the gateway confirms
         setShowSubModal(false);
         toast("info", "USSD push sent to your phone — enter your PIN to confirm.");
         pollSubscription(data.data.transactionId);
@@ -194,7 +194,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
     }
   }
 
-  // Poll the transaction until HarakaPay completes/fails it (webhook or reconcile)
+  // Poll the transaction until ClickPesa completes/fails it (webhook or reconcile)
   // ~2 minutes: entering a USSD PIN can easily take a minute on a slow network.
   function pollSubscription(transactionId: string, attempt = 0) {
     if (attempt >= 40) {

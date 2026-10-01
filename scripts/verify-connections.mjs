@@ -18,7 +18,7 @@
 //   Bunny     library lookup (GET)
 //   CDN       HEAD on the pull-zone hostname
 //   SMTP      transport verify (opens a session, sends nothing)
-//   HarakaPay GET /api/v1/balance
+//   ClickPesa POST /third-parties/generate-token (proves the credentials)
 //   App URL   GET /api/health
 //
 // The Redis, Bunny and SMTP probes live in ./_probes.mjs because
@@ -104,44 +104,50 @@ async function checkDatabase() {
 // =============================================================================
 
 // =============================================================================
-// 5. HarakaPay
+// 5. ClickPesa
 // =============================================================================
-async function checkHarakapay() {
-  const key = env("HARAKAPAY_API_KEY");
-  if (!key) return record({ name: "HarakaPay", state: "skip", detail: "HARAKAPAY_API_KEY not set" });
+async function checkClickpesa() {
+  const clientId = env("CLICKPESA_CLIENT_ID");
+  const apiKey = env("CLICKPESA_API_KEY");
+  if (!clientId || !apiKey) {
+    return record({
+      name: "ClickPesa",
+      state: "skip",
+      detail: "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY not set",
+    });
+  }
 
-  const base = env("HARAKAPAY_BASE_URL") || "https://harakapay.net";
+  const base = env("CLICKPESA_BASE_URL") || "https://api.clickpesa.com/third-parties";
   try {
-    const res = await fetch(`${base}/api/v1/balance`, {
-      headers: { "X-API-Key": key },
+    // Minting a token is the read-only proof that the credentials work — it
+    // moves no money and charges nothing.
+    const res = await fetch(`${base}/generate-token`, {
+      method: "POST",
+      headers: { "client-id": clientId, "api-key": apiKey },
       signal: timeout(15_000),
     });
     const body = await res.json().catch(() => ({}));
 
-    if (!res.ok || body.success === false) {
+    if (!res.ok || body.success === false || !body.token) {
       record({
-        name: "HarakaPay",
+        name: "ClickPesa",
         state: "fail",
-        detail: `HTTP ${res.status} ${JSON.stringify(body).slice(0, 110)} — key rejected`,
+        detail: `HTTP ${res.status} ${JSON.stringify(body).slice(0, 110)} — credentials rejected`,
       });
       return;
     }
 
-    const float = Number(body.float_balance ?? 0);
     record({
-      name: "HarakaPay",
-      // A zero float is a WARNING: the key is valid and the gateway answers, so
-      // nothing is broken. It is a balance on the HarakaPay account, not a
-      // credential, and the app never refuses a collect over it.
-      state: float > 0 ? "ok" : "warn",
+      name: "ClickPesa",
+      state: "ok",
       detail:
-        `key valid · wallet ${body.wallet_balance ?? 0} · float ${float}` +
-        (float <= 0
-          ? ` · ${AMBER} float is 0 — top up the merchant float so collections keep settling`
-          : ""),
+        "credentials valid · authorization token issued" +
+        (env("CLICKPESA_CHECKSUM_KEY") || env("CLICKPESA_WEBHOOK_TOKEN")
+          ? ""
+          : ` · ${AMBER} no webhook secret set (CLICKPESA_CHECKSUM_KEY / CLICKPESA_WEBHOOK_TOKEN)`),
     });
   } catch (error) {
-    record({ name: "HarakaPay", state: "fail", detail: String(error.message || error).slice(0, 150) });
+    record({ name: "ClickPesa", state: "fail", detail: String(error.message || error).slice(0, 150) });
   }
 }
 
@@ -156,7 +162,7 @@ async function checkAppUrl() {
     return record({
       name: "App URL",
       state: "warn",
-      detail: `${url} — HarakaPay cannot reach a localhost webhook (polling still settles payments)`,
+      detail: `${url} — ClickPesa cannot reach a localhost webhook (polling still settles payments)`,
     });
   }
 
@@ -184,7 +190,7 @@ function checkSecrets() {
   for (const [name, value] of [
     ["JWT_SECRET", env("JWT_SECRET")],
     ["CRON_SECRET", env("CRON_SECRET")],
-    ["Webhook token", env("HARAKAPAY_WEBHOOK_TOKEN")],
+    ["Webhook token", env("CLICKPESA_WEBHOOK_TOKEN")],
   ]) {
     const assessed = assessSecret(value);
 
@@ -246,7 +252,7 @@ await checkDatabase();
 for (const result of await probeRedis()) record(result);
 for (const result of await probeBunny()) record(result);
 for (const result of await probeSmtp()) record(result);
-await checkHarakapay();
+await checkClickpesa();
 await checkAppUrl();
 checkSecrets();
 

@@ -20,7 +20,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   updateMany: vi.fn(),
-  harakapayStatus: vi.fn(),
+  clickpesaStatus: vi.fn(),
   processPaymentWebhook: vi.fn(),
   notifyPaymentResult: vi.fn(),
 }));
@@ -32,14 +32,14 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/config", () => ({
-  default: { harakaPay: { apiKey: "test-key", sandbox: false } },
+  default: { clickPesa: { apiKey: "test-key", sandbox: false } },
 }));
 
-vi.mock("@/lib/payments/harakapay", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/payments/harakapay")>();
+vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments/clickpesa")>();
   return {
     ...actual,
-    harakaStatus: (...args: unknown[]) => mocks.harakapayStatus(...args),
+    clickpesaStatus: (...args: unknown[]) => mocks.clickpesaStatus(...args),
   };
 });
 
@@ -66,8 +66,8 @@ function pending(overrides: Partial<Parameters<typeof resolvePendingCheckout>[0]
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (config.harakaPay as { apiKey: string; sandbox: boolean }).apiKey = "test-key";
-  (config.harakaPay as { apiKey: string; sandbox: boolean }).sandbox = false;
+  (config.clickPesa as { apiKey: string; sandbox: boolean }).apiKey = "test-key";
+  (config.clickPesa as { apiKey: string; sandbox: boolean }).sandbox = false;
   mocks.updateMany.mockResolvedValue({ count: 1 });
   mocks.processPaymentWebhook.mockResolvedValue({ processed: true });
   mocks.notifyPaymentResult.mockResolvedValue(undefined);
@@ -84,14 +84,14 @@ describe("resolvePendingCheckout", () => {
       expect(outcome.minutesLeft).toBeGreaterThan(0);
       expect(outcome.minutesLeft).toBeLessThanOrEqual(10);
     }
-    expect(mocks.harakapayStatus).not.toHaveBeenCalled();
+    expect(mocks.clickpesaStatus).not.toHaveBeenCalled();
     expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 
-  it("settles through the webhook path when the gateway says completed, and grants instead of releasing", async () => {
-    mocks.harakapayStatus.mockResolvedValue({
+  it("settles through the webhook path when the gateway says SUCCESS, and grants instead of releasing", async () => {
+    mocks.clickpesaStatus.mockResolvedValue({
       success: true,
-      payment: { status: "completed" },
+      payment: { status: "SUCCESS" },
     });
 
     const outcome = await resolvePendingCheckout(pending());
@@ -106,7 +106,7 @@ describe("resolvePendingCheckout", () => {
   });
 
   it("releases the lock when the gateway still has no verdict", async () => {
-    mocks.harakapayStatus.mockResolvedValue({
+    mocks.clickpesaStatus.mockResolvedValue({
       success: true,
       payment: { status: "processing" },
     });
@@ -126,7 +126,7 @@ describe("resolvePendingCheckout", () => {
   });
 
   it("still releases when the gateway cannot be reached — an unanswered call is not a verdict", async () => {
-    mocks.harakapayStatus.mockRejectedValue(new Error("ECONNREFUSED"));
+    mocks.clickpesaStatus.mockRejectedValue(new Error("ECONNREFUSED"));
 
     const outcome = await resolvePendingCheckout(pending());
 
@@ -137,17 +137,17 @@ describe("resolvePendingCheckout", () => {
   });
 
   it("releases a sandbox row without calling the gateway at all", async () => {
-    (config.harakaPay as { apiKey: string; sandbox: boolean }).sandbox = true;
+    (config.clickPesa as { apiKey: string; sandbox: boolean }).sandbox = true;
 
     const outcome = await resolvePendingCheckout(pending());
 
     expect(outcome.state).toBe("released");
-    expect(mocks.harakapayStatus).not.toHaveBeenCalled();
+    expect(mocks.clickpesaStatus).not.toHaveBeenCalled();
     expect(mocks.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it("does not release or notify twice when a settlement landed first", async () => {
-    mocks.harakapayStatus.mockResolvedValue({
+    mocks.clickpesaStatus.mockResolvedValue({
       success: true,
       payment: { status: "processing" },
     });
@@ -162,7 +162,7 @@ describe("resolvePendingCheckout", () => {
   });
 
   it("lets the webhook processor own a gateway-reported failure", async () => {
-    mocks.harakapayStatus.mockResolvedValue({
+    mocks.clickpesaStatus.mockResolvedValue({
       success: true,
       payment: { status: "failed" },
     });

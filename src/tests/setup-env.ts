@@ -44,7 +44,7 @@ process.env.PAYMENT_SANDBOX = "true";
 // one: it is green on the laptop and red in the pipeline, and "is this safe to
 // deploy?" stops having one answer.
 //
-// HARAKAPAY_WEBHOOK_TOKEN is the one that bit. The webhook route only compares
+// CLICKPESA_WEBHOOK_TOKEN is the one that bit. The webhook route only compares
 // the token when one is configured (it fails *open* on an empty value), so with
 // the variable absent the "rejects webhooks with the wrong shared token" test
 // was handed a 200 and the purchase suites could not build a signed callback
@@ -56,8 +56,15 @@ process.env.PAYMENT_SANDBOX = "true";
 // to run without a genuine token (scripts/verify-env.mjs).
 // =============================================================================
 const TEST_WEBHOOK_TOKEN = "test-webhook-token-not-a-real-secret";
-if (!process.env.HARAKAPAY_WEBHOOK_TOKEN) {
-  process.env.HARAKAPAY_WEBHOOK_TOKEN = TEST_WEBHOOK_TOKEN;
+if (!process.env.CLICKPESA_WEBHOOK_TOKEN) {
+  process.env.CLICKPESA_WEBHOOK_TOKEN = TEST_WEBHOOK_TOKEN;
+}
+
+// The webhook route prefers a checksum when a checksum key is configured, and a
+// test that only knows the token would then be refused. Clear it here so the
+// shared-token path is what the suite exercises, deterministically.
+if (process.env.CLICKPESA_CHECKSUM_KEY) {
+  delete process.env.CLICKPESA_CHECKSUM_KEY;
 }
 
 // =============================================================================

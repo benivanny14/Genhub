@@ -238,13 +238,14 @@ export default function SystemReference() {
       <Section icon={CreditCard} title="Payments">
         <ul className="list-disc pl-5 space-y-1.5">
           <li>
-            Checkout is a USSD push to the customer&apos;s phone via HarakaPay; the
+            Checkout is a USSD push to the customer&apos;s phone via ClickPesa; the
             charge is always the amount on the video row, never a number from the
             client.
           </li>
           <li>
-            Settlement arrives at <Code>POST /api/webhooks/harakapay</Code> (shared
-            token in <Code>?t=</Code>, fail-closed in production) and through{" "}
+            Settlement arrives at <Code>POST /api/webhooks/clickpesa</Code> (HMAC
+            checksum or a shared token in <Code>?t=</Code>, fail-closed in
+            production) and through{" "}
             <Code>/api/payments/status/&lt;orderId&gt;</Code>, which reconciles with
             the gateway on demand.
           </li>

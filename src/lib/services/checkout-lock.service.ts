@@ -24,7 +24,7 @@
 
 import prisma from "@/lib/db";
 import config from "@/lib/config";
-import { harakaStatus, harakaStatusToInternal } from "@/lib/payments/harakapay";
+import { clickpesaStatus, clickpesaStatusToInternal } from "@/lib/payments/clickpesa";
 import { processPaymentWebhook } from "./webhook.service";
 import { notifyPaymentResult } from "./payment-notify.service";
 
@@ -77,11 +77,11 @@ export async function resolvePendingCheckout(
 
   // Ask the gateway before releasing — the money may have moved while the
   // webhook was lost. Skipped in sandbox / when the gateway is not in use.
-  if (pending.providerRef && config.harakaPay.apiKey && !config.harakaPay.sandbox) {
+  if (pending.providerRef && config.clickPesa.apiKey && !config.clickPesa.sandbox) {
     try {
-      const remote = await harakaStatus(pending.providerRef);
+      const remote = await clickpesaStatus(pending.providerRef);
       const internal = remote.payment
-        ? harakaStatusToInternal(remote.payment.status)
+        ? clickpesaStatusToInternal(remote.payment.status)
         : null;
 
       if (internal) {
@@ -91,7 +91,7 @@ export async function resolvePendingCheckout(
           transactionId: pending.providerRef,
           amount: pending.amount,
           status: internal,
-          provider: "HARAKAPAY",
+          provider: "CLICKPESA",
           metadata: { reconciled: "stale-pending" },
         });
         if (internal === "SUCCESS") return { state: "paid" };

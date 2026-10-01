@@ -1,22 +1,24 @@
 // =============================================================================
-// GENHUB - HarakaPay LIVE mode (PAYMENT_SANDBOX=false)
+// GENHUB - ClickPesa LIVE mode (PAYMENT_SANDBOX=false)
 //
 // This suite locks in the fix for the "no USSD push ever reaches the phone"
-// bug: while the sandbox flag was on, the app never called HarakaPay at all.
-// Here the gateway module is replaced with a spy, so we can assert exactly
-// what the server sends and how it reacts — without charging anyone.
+// bug: while the sandbox flag was on, the app never called the gateway at all.
+// Here the gateway module is replaced with a spy, so we can assert exactly what
+// the server sends and how it reacts — without charging anyone.
 //
-//   1. a live top-up calls harakaCollect with our webhook URL and stores the
-//      gateway order id (so the webhook / status poll can map it back)
+//   1. a live top-up calls clickpesaCollect with our order reference and stores
+//      it as providerRef (so the webhook / status poll can map it back)
 //   2. a gateway rejection surfaces the gateway's own reason and fails the row
 //   3. money reaches the customer's account even when no webhook arrives,
-//      because /payments/status reconciles with HarakaPay
-//   4. stale orders are swept: completed ones settle, and anything the gateway
-//      still calls "processing" past the TTL becomes UNDER_INVESTIGATION —
+//      because /payments/status reconciles with ClickPesa
+//   4. stale orders are swept: settled ones settle, and anything the gateway
+//      still calls "PROCESSING" past the TTL becomes UNDER_INVESTIGATION —
 //      never FAILED, because the customer may already have paid
 //   5. a late approval is still honoured, even after under-investigation
 //   6. an admin can resolve an investigation either way (grant / mark unpaid)
 //   7. /api/dev/sandbox/complete is locked out once live charges are on
+//
+// Runs only against a throwaway database (see src/tests/setup-env.ts).
 // =============================================================================
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
@@ -34,7 +36,7 @@ vi.mock("@/lib/auth", async (importOriginal) => {
   };
 });
 
-// Force live mode: key present + sandbox off (the production configuration)
+// Force live mode: credentials present + sandbox off (production configuration)
 vi.mock("@/lib/config", async (importOriginal) => {
   const actual = await importOriginal<{ default: Record<string, any> }>();
   return {
@@ -43,28 +45,30 @@ vi.mock("@/lib/config", async (importOriginal) => {
       ...actual.default,
       nodeEnv: "test",
       appUrl: "https://genhub.test",
-      harakaPay: {
-        ...actual.default.harakPay,
-        ...actual.default.harakaPay,
+      clickPesa: {
+        clientId: "test-client",
         apiKey: "test-key",
+        baseUrl: "https://clickpesa.test/third-parties",
+        webhookToken: "test-webhook-token",
+        checksumKey: "",
         sandbox: false,
       },
     },
   };
 });
 
-// Spy on the gateway itself — harakaErrorReason stays real
-vi.mock("@/lib/payments/harakapay", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/payments/harakapay")>();
+// Spy on the gateway itself — clickpesaErrorReason stays real
+vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments/clickpesa")>();
   return {
     ...actual,
-    harakaCollect: vi.fn(),
-    harakaStatus: vi.fn(),
+    clickpesaCollect: vi.fn(),
+    clickpesaStatus: vi.fn(),
   };
 });
 
 import prisma from "@/lib/db";
-import { harakaCollect, harakaStatus } from "@/lib/payments/harakapay";
+import { clickpesaCollect, clickpesaStatus } from "@/lib/payments/clickpesa";
 import { POST as topupPost } from "@/app/api/payments/topup/route";
 import { GET as statusGet } from "@/app/api/payments/status/[orderId]/route";
 import { POST as completePost } from "@/app/api/dev/sandbox/complete/route";
@@ -85,8 +89,8 @@ const db = prisma as unknown as {
   user: { findUnique: (a: unknown) => Promise<{ walletBalance: number } | null> };
 };
 
-const collect = vi.mocked(harakaCollect);
-const status = vi.mocked(harakaStatus);
+const collect = vi.mocked(clickpesaCollect);
+const status = vi.mocked(clickpesaStatus);
 
 const describeLive = process.env.DATABASE_URL ? describe : describe.skip;
 
@@ -102,22 +106,21 @@ function get(url: string): NextRequest {
   return new NextRequest(`http://localhost${url}`);
 }
 
-function gatewayPayment(orderId: string, gatewayStatus: string, amount = 0) {
+/** What `clickpesaStatus` returns: a normalized single-payment envelope. */
+function gatewayPayment(orderReference: string, gatewayStatus: string, amount = 0) {
   return {
     success: true,
     payment: {
-      order_id: orderId,
+      orderReference,
       status: gatewayStatus,
-      amount,
-      net_amount: amount,
-      fee_amount: 0,
-      created_at: new Date().toISOString(),
-      completed_at: null,
+      collectedAmount: amount,
+      collectedCurrency: "TZS",
+      updatedAt: new Date().toISOString(),
     },
   };
 }
 
-describeLive("HarakaPay live mode (sandbox off)", () => {
+describeLive("ClickPesa live mode (sandbox off)", () => {
   const PHONE = "0712345678";
 
   beforeAll(async () => {
@@ -142,24 +145,25 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
   beforeEach(() => {
     collect.mockReset();
     status.mockReset();
-    // Default: every order the gateway is asked about is still unfinished, so
-    // the sweeper never invents a settlement we didn't script.
-    status.mockImplementation(async (orderId: string) =>
-      gatewayPayment(orderId, "processing")
+    // The gateway echoes the reference we sent — which is what makes the stored
+    // providerRef the value the webhook and the poll match on.
+    collect.mockImplementation(async (request) => ({
+      success: true,
+      orderReference: request.orderReference,
+      message: "USSD push sent — approve it on your phone",
+    }));
+    // Default: every order is still unfinished, so the sweeper never invents a
+    // settlement we didn't script.
+    status.mockImplementation(async (orderReference: string) =>
+      gatewayPayment(orderReference, "PROCESSING")
     );
   });
 
-  it("calls HarakaPay collect with a signed webhook URL and stores its order id", async () => {
-    collect.mockResolvedValueOnce({
-      success: true,
-      order_id: "hp_live_abc123",
-      message: "USSD push sent to phone",
-    });
-
+  it("calls ClickPesa collect and stores its order reference", async () => {
     const res = await topupPost(
       post("/api/payments/topup", {
         amount: 3_000,
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         phoneNumber: PHONE,
       })
     );
@@ -168,17 +172,18 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
     expect(res.status).toBe(200);
     // Sandbox marker must be gone — this was a real gateway round-trip
     expect(body.data.sandbox).toBeUndefined();
-    expect(body.data.orderId).toBe("hp_live_abc123");
 
     expect(collect).toHaveBeenCalledTimes(1);
     const sent = collect.mock.calls[0][0];
-    expect(sent.phone).toBe(PHONE);
+    // Normalized to the MSISDN form the gateway requires.
+    expect(sent.phone).toBe("255712345678");
     expect(sent.amount).toBe(3_000);
-    expect(sent.webhookUrl).toContain("/api/webhooks/harakapay?t=");
+    expect(sent.orderReference).toMatch(/^[A-Z0-9]{1,20}$/);
+    expect(body.data.orderId).toBe(sent.orderReference);
 
-    // The gateway order id is persisted so the webhook can find this row
+    // The order reference is persisted so the webhook can find this row
     const tx = await prisma.transaction.findFirst({
-      where: { userId: ctx.viewerId, providerRef: "hp_live_abc123" },
+      where: { userId: ctx.viewerId, providerRef: sent.orderReference },
       select: { status: true, type: true, amount: true },
     });
     expect(tx).not.toBeNull();
@@ -190,13 +195,13 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
   it("surfaces the gateway's own rejection reason and fails the transaction", async () => {
     collect.mockResolvedValueOnce({
       success: false,
-      error: "Invalid mobile number.",
+      error: "Invalid / unsupported phone number",
     });
 
     const res = await topupPost(
       post("/api/payments/topup", {
         amount: 2_000,
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         phoneNumber: PHONE,
       })
     );
@@ -204,7 +209,7 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
 
     expect(res.status).toBe(502);
     expect(body.code).toBe("GATEWAY_REJECTED");
-    expect(body.error).toContain("Invalid mobile number.");
+    expect(body.error).toContain("Invalid / unsupported phone number");
 
     const failed = await prisma.transaction.findFirst({
       where: { userId: ctx.viewerId, status: "FAILED", amount: 2_000 },
@@ -214,16 +219,10 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
   });
 
   it("credits the wallet with no webhook at all (status poll reconciles)", async () => {
-    collect.mockResolvedValueOnce({
-      success: true,
-      order_id: "hp_live_recon1",
-      message: "USSD push sent to phone",
-    });
-
     const res = await topupPost(
       post("/api/payments/topup", {
         amount: 4_000,
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         phoneNumber: PHONE,
       })
     );
@@ -232,7 +231,7 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
     const before = await db.user.findUnique({ where: { id: ctx.viewerId } });
 
     // No webhook arrives — the client polls and we ask the gateway directly
-    status.mockResolvedValueOnce(gatewayPayment(data.orderId, "completed", 4_000));
+    status.mockResolvedValueOnce(gatewayPayment(data.orderId, "SUCCESS", 4_000));
 
     const polled = await statusGet(get(`/api/payments/status/${data.orderId}`), {
       // Next 15 route handlers receive params as a promise.
@@ -242,7 +241,7 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
 
     expect(polled.status).toBe(200);
     expect(polledBody.data.status).toBe("SUCCESS");
-    expect(status).toHaveBeenCalledWith("hp_live_recon1");
+    expect(status).toHaveBeenCalledWith(data.orderId);
 
     const after = await db.user.findUnique({ where: { id: ctx.viewerId } });
     expect(after!.walletBalance - before!.walletBalance).toBe(4_000);
@@ -253,26 +252,24 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
   // but the USSD prompt is never answered (or never delivered at all).
   // ---------------------------------------------------------------------------
 
-  it("settles a pending order the gateway has already completed", async () => {
+  it("settles a pending order the gateway has already settled", async () => {
     const tx = await db.transaction.create({
       data: {
         userId: ctx.viewerId,
         amount: 2_500,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_sweep_settle",
+        gateway: "CLICKPESA",
+        providerRef: "cp_sweep_settle",
         // older than the freshness window, younger than the hard TTL
         createdAt: new Date(Date.now() - 20 * 60_000),
       },
     });
 
-    // Only this order is complete — anything else stays unfinished, so the
-    // sweeper can never settle an unrelated real transaction by accident.
-    status.mockImplementation(async (orderId: string) =>
-      orderId === "hp_sweep_settle"
-        ? gatewayPayment(orderId, "completed", 2_500)
-        : gatewayPayment(orderId, "processing")
+    status.mockImplementation(async (orderReference: string) =>
+      orderReference === "cp_sweep_settle"
+        ? gatewayPayment(orderReference, "SUCCESS", 2_500)
+        : gatewayPayment(orderReference, "PROCESSING")
     );
 
     const result = await reconcileStalePayments({
@@ -295,17 +292,14 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 1_500,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_sweep_investigate",
+        gateway: "CLICKPESA",
+        providerRef: "cp_sweep_investigate",
         createdAt: new Date(Date.now() - 3 * 60 * 60_000), // 3h > 1h TTL
       },
     });
 
-    // Gateway still reports it unfinished. This is indistinguishable from
-    // "the customer approved it and the settlement is stuck", so we must not
-    // call it a failure.
-    status.mockImplementation(async (orderId: string) =>
-      gatewayPayment(orderId, "processing", 1_500)
+    status.mockImplementation(async (orderReference: string) =>
+      gatewayPayment(orderReference, "PROCESSING", 1_500)
     );
 
     const result = await reconcileStalePayments({
@@ -330,9 +324,7 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
 
   // The sweeper must keep asking about charges it already flagged. The usual
   // reason a charge got stuck is that the webhook never arrived — the very
-  // delivery path that would have resolved it — so if only a human could re-check
-  // an investigation, a payment that settled minutes later would sit unresolved
-  // until somebody happened to look.
+  // delivery path that would have resolved it.
   it("leaves a recent processing order alone but keeps asking about flagged ones", async () => {
     const tx = await db.transaction.create({
       data: {
@@ -340,15 +332,14 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 1_200,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_sweep_fresh",
+        gateway: "CLICKPESA",
+        providerRef: "cp_sweep_fresh",
         createdAt: new Date(Date.now() - 12 * 60_000),
       },
     });
 
-    // Gateway has no verdict on anything.
-    status.mockImplementation(async (orderId: string) =>
-      gatewayPayment(orderId, "processing")
+    status.mockImplementation(async (orderReference: string) =>
+      gatewayPayment(orderReference, "PROCESSING")
     );
 
     const result = await reconcileStalePayments({
@@ -356,8 +347,6 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
       userId: ctx.viewerId,
     });
 
-    // The fresh one is inside the TTL, the flagged one from the previous test is
-    // re-asked and still unresolved — the customer is not told twice.
     expect(result.stillProcessing).toBe(1);
     expect(result.underInvestigation).toBe(0);
     expect(result.awaitingResolution).toBeGreaterThanOrEqual(1);
@@ -388,12 +377,10 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
 
     const before = await db.user.findUnique({ where: { id: ctx.viewerId } });
 
-    // The sweeper asks the gateway about the PROVIDER reference; the internal id
-    // is what we hand back to processPaymentWebhook.
-    status.mockImplementation(async (orderId: string) =>
-      orderId === flagged!.providerRef
-        ? gatewayPayment(orderId, "completed", flagged!.amount)
-        : gatewayPayment(orderId, "processing")
+    status.mockImplementation(async (orderReference: string) =>
+      orderReference === flagged!.providerRef
+        ? gatewayPayment(orderReference, "SUCCESS", flagged!.amount)
+        : gatewayPayment(orderReference, "PROCESSING")
     );
 
     const result = await reconcileStalePayments({
@@ -418,8 +405,8 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 1_800,
         type: "WALLET_TOPUP",
         status: "FAILED", // soft-expired by the sweeper
-        gateway: "HARAKAPAY",
-        providerRef: "hp_late_settle",
+        gateway: "CLICKPESA",
+        providerRef: "cp_late_settle",
         metadata: { expired: true, reason: "gateway_never_settled" },
       },
     });
@@ -428,10 +415,10 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
 
     const outcome = await processPaymentWebhook({
       orderId: tx.id,
-      transactionId: "hp_late_settle",
+      transactionId: "cp_late_settle",
       amount: 1_800,
       status: "SUCCESS",
-      provider: "HARAKAPAY",
+      provider: "CLICKPESA",
     });
 
     expect(outcome.processed).toBe(true);
@@ -452,18 +439,18 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 900,
         type: "WALLET_TOPUP",
         status: "FAILED",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_real_fail",
+        gateway: "CLICKPESA",
+        providerRef: "cp_real_fail",
         metadata: { gatewayError: "insufficient balance" },
       },
     });
 
     const outcome = await processPaymentWebhook({
       orderId: tx.id,
-      transactionId: "hp_real_fail",
+      transactionId: "cp_real_fail",
       amount: 900,
       status: "SUCCESS",
-      provider: "HARAKAPAY",
+      provider: "CLICKPESA",
     });
 
     expect(outcome.processed).toBe(false);
@@ -486,18 +473,18 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 3_000,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_inv_late",
+        gateway: "CLICKPESA",
+        providerRef: "cp_inv_late",
         metadata: { investigation: true, reason: "gateway_never_settled" },
       },
     });
 
     const outcome = await processPaymentWebhook({
       orderId: tx.id,
-      transactionId: "hp_inv_late",
+      transactionId: "cp_inv_late",
       amount: 3_000,
       status: "SUCCESS",
-      provider: "HARAKAPAY",
+      provider: "CLICKPESA",
     });
 
     expect(outcome.processed).toBe(true);
@@ -518,8 +505,8 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 2_000,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_inv_grant",
+        gateway: "CLICKPESA",
+        providerRef: "cp_inv_grant",
         metadata: { investigation: true, reason: "gateway_never_settled" },
       },
     });
@@ -550,8 +537,8 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 1_100,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_inv_unpaid",
+        gateway: "CLICKPESA",
+        providerRef: "cp_inv_unpaid",
         metadata: { investigation: true, reason: "gateway_never_settled" },
       },
     });
@@ -582,10 +569,10 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
     // the network turns out to have taken it after all.
     const late = await processPaymentWebhook({
       orderId: tx.id,
-      transactionId: "hp_inv_unpaid",
+      transactionId: "cp_inv_unpaid",
       amount: 1_100,
       status: "SUCCESS",
-      provider: "HARAKAPAY",
+      provider: "CLICKPESA",
     });
     expect(late.processed).toBe(true);
 
@@ -600,8 +587,8 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 700,
         type: "WALLET_TOPUP",
         status: "SUCCESS",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_already_paid",
+        gateway: "CLICKPESA",
+        providerRef: "cp_already_paid",
       },
     });
 
@@ -625,14 +612,14 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 1_400,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_inv_recheck",
+        gateway: "CLICKPESA",
+        providerRef: "cp_inv_recheck",
         metadata: { investigation: true },
       },
     });
 
-    status.mockImplementation(async (orderId: string) =>
-      gatewayPayment(orderId, "processing", 1_400)
+    status.mockImplementation(async (orderReference: string) =>
+      gatewayPayment(orderReference, "PROCESSING", 1_400)
     );
 
     const result = await recheckPaymentCharge(tx.id);
@@ -651,14 +638,14 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
         amount: 1_600,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "HARAKAPAY",
-        providerRef: "hp_inv_recheck_ok",
+        gateway: "CLICKPESA",
+        providerRef: "cp_inv_recheck_ok",
         metadata: { investigation: true },
       },
     });
 
-    status.mockImplementation(async (orderId: string) =>
-      gatewayPayment(orderId, "completed", 1_600)
+    status.mockImplementation(async (orderReference: string) =>
+      gatewayPayment(orderReference, "SETTLED", 1_600)
     );
 
     const result = await recheckPaymentCharge(tx.id);
@@ -671,7 +658,7 @@ describeLive("HarakaPay live mode (sandbox off)", () => {
 
   it("refuses sandbox completion once live charges are enabled", async () => {
     const res = await completePost(
-      post("/api/dev/sandbox/complete", { orderId: "hp_live_abc123" })
+      post("/api/dev/sandbox/complete", { orderId: "cp_live_abc123" })
     );
     const body = await res.json();
 

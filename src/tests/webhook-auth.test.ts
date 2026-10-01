@@ -1,7 +1,7 @@
 // =============================================================================
 // GENHUB - A webhook that cannot be verified must not be acted on
 //
-// The HarakaPay callback used to read:
+// The ClickPesa callback used to read:
 //
 //     if (config.harakaPay.webhookToken && token !== config.harakaPay.webhookToken)
 //
@@ -19,7 +19,7 @@
 //     never calls is the failure mode this file exists to prevent
 //
 // The accepting path (a verified callback actually settling) is covered where
-// it belongs, against a real database: harakapay.e2e.test.ts.
+// it belongs, against a real database: clickpesa.e2e.test.ts.
 // =============================================================================
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -35,7 +35,11 @@ vi.mock("@/lib/config", async (importOriginal) => {
     default: {
       ...actual.default,
       nodeEnv: "production",
-      harakaPay: { ...actual.default.harakaPay, webhookToken: "" },
+      clickPesa: {
+        ...actual.default.clickPesa,
+        webhookToken: "",
+        checksumKey: "",
+      },
     },
   };
 });
@@ -43,13 +47,13 @@ vi.mock("@/lib/config", async (importOriginal) => {
 import config from "@/lib/config";
 import { verifyWebhookToken } from "@/lib/webhook-auth";
 import { secretMatches } from "@/lib/shared-secret";
-import { POST as webhookPost } from "@/app/api/webhooks/harakapay/route";
+import { POST as webhookPost } from "@/app/api/webhooks/clickpesa/route";
 
 const TOKEN = "c1f4e9a7b3d85f2069a1c7e4b8d3f5061a2b3c4d5e6f708192a3b4c5d6e7f809";
 
 /** Flip the mocked configuration the route sees. */
 function setToken(token: string) {
-  (config.harakaPay as { webhookToken: string }).webhookToken = token;
+  (config.clickPesa as { webhookToken: string }).webhookToken = token;
 }
 
 afterEach(() => setToken(""));
@@ -126,7 +130,7 @@ describe("the route uses it", () => {
    * what the route does on error, so the gateway stops retrying).
    */
   function call(token?: string) {
-    const url = `http://localhost/api/webhooks/harakapay${token === undefined ? "" : `?t=${encodeURIComponent(token)}`}`;
+    const url = `http://localhost/api/webhooks/clickpesa${token === undefined ? "" : `?t=${encodeURIComponent(token)}`}`;
     return webhookPost(
       new NextRequest(url, {
         method: "POST",

@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
   // route minted free purchases for anyone who found it.
   const sandboxMode =
     developmentOnlyEnabled() &&
-    (!config.harakaPay.apiKey || config.harakaPay.sandbox);
+    (!config.clickPesa.apiKey || config.clickPesa.sandbox);
 
   if (!sandboxMode) {
     return api.error(

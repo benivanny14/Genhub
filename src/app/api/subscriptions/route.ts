@@ -12,7 +12,12 @@ import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { z } from "zod";
 import config from "@/lib/config";
-import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
+import {
+  clickpesaCollect,
+  clickpesaErrorReason,
+  clickpesaOrderReference,
+  normalizeTzPhoneMsisdn,
+} from "@/lib/payments/clickpesa";
 import { generateOrderId } from "@/lib/utils";
 import { checkRateLimit } from "@/lib/redis";
 import {
@@ -27,7 +32,7 @@ import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
 
 const subscribeSchema = z.object({
   creatorId: z.string().min(1),
-  // Optional: when present the subscription is paid by USSD push (HarakaPay)
+  // Optional: when present the subscription is paid by USSD push (ClickPesa)
   // exactly like a video purchase; when absent the legacy wallet path runs.
   phoneNumber: z.string().regex(/^(\+255|0)[67]\d{8}$/).optional(),
 });
@@ -118,6 +123,9 @@ export async function POST(request: NextRequest) {
       }
 
       const orderId = generateOrderId("SUB");
+      // Our ClickPesa order reference (alphanumeric, ≤20); stored as providerRef
+      // so the webhook and the status poll can match the callback.
+      const providerRef = clickpesaOrderReference("SB");
       const transaction = await prisma.transaction.create({
         data: {
           userId: auth.userId,
@@ -125,19 +133,20 @@ export async function POST(request: NextRequest) {
           amount: price,
           type: "SUBSCRIPTION",
           status: "PENDING",
-          gateway: "HARAKAPAY",
+          gateway: "CLICKPESA",
+          providerRef,
           metadata: { orderId, plan: "monthly", phone: body.phoneNumber },
         },
       });
 
-      // Mirror production in local dev: store a HarakaPay-style order id so the
-      // real webhook and the status poll can map callbacks to this row.
-      const harakaSandbox =
+      // Mirror production in local dev: a predictable reference so the dev
+      // completion route can map the callback to this row.
+      const clickPesaSandbox =
         config.nodeEnv !== "production" &&
-        (!config.harakaPay.apiKey || config.harakaPay.sandbox);
+        (!config.clickPesa.apiKey || config.clickPesa.sandbox);
 
-      if (harakaSandbox) {
-        const sandboxRef = `hp_sbx_${transaction.id}`;
+      if (clickPesaSandbox) {
+        const sandboxRef = `cp_sbx_${transaction.id}`;
         await prisma.transaction.update({
           where: { id: transaction.id },
           data: { providerRef: sandboxRef },
@@ -147,51 +156,43 @@ export async function POST(request: NextRequest) {
           orderId: sandboxRef,
           checkoutUrl: null,
           sandbox: true,
-          gateway: "HARAKAPAY",
+          gateway: "CLICKPESA",
           amount: price,
         });
       }
 
-      const webhookUrl = `${config.appUrl}/api/webhooks/harakapay${
-        config.harakaPay.webhookToken ? `?t=${config.harakaPay.webhookToken}` : ""
-      }`;
-
+      // ClickPesa does not take a webhook URL per request; the endpoint is
+      // configured in the dashboard.
       try {
-        const response = await harakaCollect({
-          phone: body.phoneNumber,
+        const response = await clickpesaCollect({
+          phone: normalizeTzPhoneMsisdn(body.phoneNumber),
           amount: price,
-          description: `Genhub subscription - ${creator.displayName || "creator"}`,
-          webhookUrl,
+          orderReference: providerRef,
         });
 
-        if (!response.success || !response.order_id) {
+        if (!response.success || !response.orderReference) {
           await prisma.transaction.update({
             where: { id: transaction.id },
             data: { status: "FAILED" },
           });
           return api.error(
-            response.error || "HarakaPay rejected the payment request. Please try again.",
+            response.error || "ClickPesa rejected the payment request. Please try again.",
             502,
             "GATEWAY_REJECTED"
           );
         }
 
-        await prisma.transaction.update({
-          where: { id: transaction.id },
-          data: { providerRef: response.order_id },
-        });
-
         return api.success({
           transactionId: transaction.id,
-          orderId: response.order_id,
+          orderId: response.orderReference,
           checkoutUrl: null,
-          gateway: "HARAKAPAY",
+          gateway: "CLICKPESA",
           status: "pending",
           amount: price,
           message: response.message || "USSD push sent to phone",
         });
-      } catch (harakaError: any) {
-        const reason = harakaErrorReason(harakaError);
+      } catch (gatewayError: any) {
+        const reason = clickpesaErrorReason(gatewayError);
         await prisma.transaction.update({
           where: { id: transaction.id },
           data: { status: "FAILED", metadata: { gatewayError: reason } },

@@ -3,7 +3,7 @@
 //
 // Two callers need the same property, and only one of them had it:
 // src/lib/cron-auth.ts hashed both sides and compared with timingSafeEqual,
-// while the HarakaPay webhook compared with `!==`. `!==` on a secret stops at
+// while the gateway webhook compared with `!==`. `!==` on a secret stops at
 // the first differing character, so it leaks how many leading characters were
 // correct — which is how a guess gets narrowed down. The fix for one is the fix
 // for both, so the rule lives in one place and neither caller can drift.

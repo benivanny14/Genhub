@@ -24,11 +24,11 @@ Inafanya vitu vinne kwa niaba yako:
 
 1. Inaunda `.env.local` kutoka template kama haipo.
 2. **Inazalisha siri tatu** (`JWT_SECRET`, `CRON_SECRET`,
-   `HARAKAPAY_WEBHOOK_TOKEN`) — hivi ndivyo vinavyochanganya zaidi, na sasa
+   `CLICKPESA_WEBHOOK_TOKEN`) — hivi ndivyo vinavyochanganya zaidi, na sasa
    huhitaji kuzalisha mwenyewe. Hatuonyeshi hapa; ziko kwenye faili pekee.
 3. **Haitogusi** value iliyopo tayari na nzuri. Hii ni muhimu: kubadilisha
    `CRON_SECRET` kunavunja scheduler, na kubadilisha
-   `HARAKAPAY_WEBHOOK_TOKEN` kunavunja webhook iliyosajiliwa. Inatumia kanuni
+   `CLICKPESA_WEBHOOK_TOKEN` kunavunja webhook iliyosajiliwa. Inatumia kanuni
    ile ile ya `assessSecret` ambayo `preflight` na `verify:live` zinatumia,
    kwa hivyo script tatu haziwezi kutofautiana.
 4. Inafungua faili kwenye Notepad, na inakuonyesha **kila kitu kilichobaki**
@@ -86,7 +86,7 @@ variable:
 |---|---|---|
 | `JWT_SECRET` | Vipindi vya watumiaji (login) | Kila mtu anatolewa — wote wanaingia tena |
 | `CRON_SECRET` | Cron jobs zinazolipa waundaji | Lazima uibadilishe kwenye scheduler pia |
-| `HARAKAPAY_WEBHOOK_TOKEN` | Kwamba webhook ya malipo ni yetu | Lazima ilingane na ile iliyopo kwenye `webhook_url` |
+| `CLICKPESA_WEBHOOK_TOKEN` | Kwamba webhook ya malipo ni yetu | Lazima ilingane na ile iliyopo kwenye URL ya webhook (au tumia `CLICKPESA_CHECKSUM_KEY`) |
 
 > ⚠️ **Muhimu:** `.env.local` yako ya sasa ina `JWT_SECRET=dev-freebuff-...`,
 > ambayo ni **placeholder** — neno la kibinadamu linaloweza kukisiwa, na
@@ -302,73 +302,44 @@ Hatua hizi zinafanya kazi ikiwa utaihitaji siku moja:
 
 ---
 
-## Hatua 7 — Float ya HarakaPay (dakika 15, inahitaji pesa)
+## Hatua 7 — ClickPesa (dakika 15, inahitaji akaunti)
 
-**Hiki ndicho kizuizi kikubwa sasa.** Nimepima kwa akaunti yako halisi:
+ClickPesa ndiyo gateway pekee. Tofauti na HarakaPay, **ClickPesa haina float**:
+kila collection inaingia moja kwa moja kwenye akaunti yako ya merchant, kwa hivyo
+hakuna salio la kuweka. Kinachohitajika ni vitambulisho vitatu, vyote kutoka
+*Settings → Developers* kwenye dashboard yako ya ClickPesa:
 
-```
-GET /api/v1/balance  ->  {"wallet_balance":0,"float_balance":0}
-```
+| Variable | Inalinda nini |
+|---|---|
+| `CLICKPESA_CLIENT_ID` | Kutambulisha akaunti yako kwa ClickPesa |
+| `CLICKPESA_API_KEY` | Siri ya kuzalisha token |
+| `CLICKPESA_CHECKSUM_KEY` | Kuhakikisha kila callback ni ya ClickPesa (hiari lakini inashauriwa) |
 
-Maana: ombi linatoka kwa usahihi, prompt inafika kwenye simu, mteja anaingiza
-PIN, lakini **HarakaPay inashindwa kusettle** kwa sababu akaunti haina salio.
-Order inabaki `processing` milele. Kwa mteja hisia ni "nimelipa" — lakini pesa
-haifiki.
+1. **Weka vitambulisho.** Nakili `CLIENT_ID` na `API_KEY` kwenye `.env.local`.
+   `CLICKPESA_BASE_URL` si lazima — default ni
+   `https://api.clickpesa.com/third-parties`.
 
-Dashboard ya HarakaPay (`harakapay.net/dashboard`) ina kadi moja — **Jumla
-(Wallet + Float)** — ndani yake **Wallet (94%)** na **Float**, na kwenye akaunti
-hii **hakuna kitufe cha kuweka pesa**. Kwa hivyo float haipandishwi kwa kuweka
-deposit: inaingizwa upande wa HarakaPay (au kwa sehemu wanayoshikilia kwa kila
-collection). Kwa hivyo:
+2. **Sajili webhook.** Kwenye dashboard: *Settings → Developers → application
+   yako → Application Webhooks*. Weka URL:
 
-1. **Maliza uanzishaji wa akaunti kwanza.** Kama dashboard ina *“Anza
-   Kutengeneza Pesa — Bonyeza hapa kuanza kupokea malipo”*, bonyeza na ukamilishe
-   kinachoulizwa (KYC, taarifa za biashara, akaunti ya kutolea pesa). Akaunti
-   ambayo haijaanzishwa inakubali collect kisha inaiacha ife — dalili yake
-   inafanana kabisa na float 0 (`success: true` halafu `failed`).
+   `https://<domain yako>/api/webhooks/clickpesa`
 
-   > **Muhimu: salio linaloamua ni `float_balance`.** `GET /api/v1/balance`
-   > inarudi namba mbili: `wallet_balance` ni salio la merchant la kuwalipa
-   > creators, na `float_balance` ni salio la prepaid linalolipia
-   > prompt/settlement. Mfumo **hauzuii** mteja kulipa float ikiwa 0 — kuzuia
-   > kungeweza kusimamisha mauzo yote ya simu kwa muda mrefu, kwa kuwa hakuna
-   > njia ya sisi kuiongeza wenyewe. Kwa hivyo koleza salio hili kwa makini:
-   > collection inayokubaliwa kisha kufa ndiyo dalili yake.
-2. **Omba float kwa support wa HarakaPay kwa maandishi** (*Dashboard → Support*,
-   au barua pepe yao) — swali kuu: *float inaingizwa vipi kwenye akaunti hii, na
-   je live collections zimewashwa?* Tuma reference zilizoshindwa kama ushahidi:
+   Kwa usalama wa ziada weka `CLICKPESA_CHECKSUM_KEY` ili kila callback
+   ithibitishwe kwa HMAC-SHA256. Bila key hiyo, mfumo unatumia token
+   (`CLICKPESA_WEBHOOK_TOKEN`, unaozalishwa na `npm run setup`) — na token hiyo
+   inatakiwa iwe kwenye URL iliyosajiliwa.
 
-> ⚠️ **Usiweke thamani halisi kwenye faili hii.** Repository hii ni ya **umma**.
-> Sehemu zenye `<…>` hapa chini ni sehemu ya kuweka namba yako halisi — kwenye
-> barua pepe unayotuma, si hapa. Nusu ya API key, namba ya simu ya merchant, au
-> order id halisi iliyochapishwa inamsaidia mtu kujifanya wewe mbele ya support.
-
-> **Subject: Float is 0 and there is no top-up in my dashboard — how is the float funded?**
->
-> Our account (`<your HarakaPay key prefix, e.g. hpk_xxxxxxxx…>`, phone
-> `<your merchant phone>`) shows Wallet 0 / Float 0, and the dashboard has no
-> control that credits either balance. Collections do not settle:
-> `POST /api/v1/collect` answers `success: true` ("USSD push sent") with an order
-> id, then the order stays `processing` and finally `failed`.
->
-> Orders: `<order id 1>` (1,000, <date/time>) · `<order id 2>` (1,000,
-> <date/time>) — both `failed`, `completed_at null`.
->
-> Please confirm: (1) how is the float funded on this account if the dashboard
-> has no top-up? (2) is my merchant account **activated for live collections**?
-> (3) is my key a **production** key? (4) did any money leave the customers'
-> handsets on those orders?
-
-3. Thibitisha kwa simu yako mwenyewe:
+3. **Thibitisha kwa simu yako mwenyewe:**
 
 ```bash
-npm run smoke:harakapay -- --collect 1000 0XXXXXXXXX
+npm run smoke:clickpesa -- --collect 1000 0XXXXXXXXX
 ```
 
 Ingiza PIN. Kisha `npm run verify:live` inatakiwa kuonyesha
-`✓ HarakaPay  key valid · float > 0`.
+`✓ ClickPesa  token minted`.
 
-> Hakuna mabadiliko ya msimbo yanayoweza kurekebisha float — ni pesa, sio code.
+> **ClickPesa haina sandbox** — kila ombi ni la live. Kabla ya KYC, kikomo ni
+> TZS 100,000 kwa jumla na miito 100 kwa siku (pamoja na kutengeneza token).
 >
 > Mfumo **haukuruhusu** mteja kulipa mara mbili kwa bahati mbaya: charge inayobaki
 > `processing` baada ya saa 1 inaingia hali `UNDER_INVESTIGATION` na mteja
@@ -459,8 +430,9 @@ npm run preflight:prod
 | `DATABASE_URL` | Neon (pooled) | ✅ **Ndiyo** |
 | `JWT_SECRET` | `openssl rand -hex 32` | ✅ **Ndiyo** |
 | `CRON_SECRET` | `openssl rand -hex 32` | ✅ Ndiyo |
-| `HARAKAPAY_API_KEY` | Dashboard ya HarakaPay | ✅ Ndiyo |
-| `HARAKAPAY_WEBHOOK_TOKEN` | `openssl rand -hex 32` | ✅ Ndiyo |
+| `CLICKPESA_CLIENT_ID` | ClickPesa → Settings → Developers | ✅ Ndiyo |
+| `CLICKPESA_API_KEY` | ClickPesa → Settings → Developers | ✅ Ndiyo |
+| `CLICKPESA_CHECKSUM_KEY` | ClickPesa → Settings → Developers | ✅ Ndiyo |
 | `PAYMENT_SANDBOX` | `false` kwa malipo halisi | ✅ Ndiyo |
 | `BUNNY_STREAM_API_KEY` | Bunny → Stream → API | ⬜ Kwa upload |
 | `BUNNY_STREAM_LIBRARY_ID` | Bunny → Stream → API | ⬜ Kwa upload |
@@ -473,7 +445,6 @@ npm run preflight:prod
 | `UPSTASH_REDIS_REST_URL` + `..._TOKEN` | Upstash → REST API | ⬜ Lakini rate limiting inadhoofika |
 | `REDIS_URL` (njia mbadala) | Upstash → ioredis | ⬜ Kama huna jozi ya REST |
 | `AT_API_KEY` / `AT_USERNAME` | Africa's Talking | ⬜ Kwa users wa simu pekee |
-| **Float ya HarakaPay** | Dashboard → fund | ✅ **Pesa, sio variable** |
 
 ---
 

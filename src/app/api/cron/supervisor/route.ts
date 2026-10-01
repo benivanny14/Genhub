@@ -22,7 +22,6 @@ import { requireCronSecret, SUPERVISOR_ORIGIN_LABEL } from "@/lib/cron-auth";
 import { getCronHealth } from "@/lib/services/cron-heartbeat.service";
 import { runWorkerNow } from "@/lib/services/cron-jobs.service";
 import { alertHeldWorkers } from "@/lib/services/cron-hold-alert.service";
-import { watchFloat } from "@/lib/services/harakapay-float-alert.service";
 import { expireDueBlueTicks } from "@/lib/services/blue-tick.service";
 import {
   previewDueRenewals,
@@ -88,13 +87,6 @@ async function handle(request: NextRequest) {
       ran.push(await runSupervisedWorker(decision));
     }
 
-    // The float the gateway delivers USSD prompts from. At 0 it does not refuse a
-    // payment — it accepts the collect, answers "USSD push sent", and never
-    // delivers the prompt — so the alarm has to arrive on the way down, and this
-    // poke is the schedule that exists. Read-only, bounded, and it never throws:
-    // a gateway that will not answer may cost the alarm, never the poke.
-    const float = await watchFloat();
-
     // Housekeeping that belongs to whichever poke arrives. A blue tick is bought
     // by the month and no worker owns its ending, so the take-down rides here —
     // bounded, and never able to take the poke down with it: a badge that stays
@@ -124,7 +116,7 @@ async function handle(request: NextRequest) {
     // Re-read so the answer describes the deployment after the poke, not the one
     // it just repaired — this is the health a caller would otherwise fetch next.
     const health = snapshotSupervisorHealth(await getCronHealth());
-    const report = { ran, held: plan.held, renewals, float, health, alerts, blueTicksExpired };
+    const report = { ran, held: plan.held, renewals, health, alerts, blueTicksExpired };
     const summary = summarizeSupervisorRun(ran, plan.held, alerts);
 
     const failed = ran.filter((r) => r.error);

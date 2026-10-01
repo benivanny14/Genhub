@@ -5,7 +5,7 @@
 // Run:  node scripts/preflight.mjs                       (development report)
 //       node scripts/preflight.mjs --production          (blocks: launch gate)
 //       node scripts/preflight.mjs --url https://domain  (+ live health probe)
-//       node scripts/preflight.mjs --gateway             (+ live HarakaPay float)
+//       node scripts/preflight.mjs --gateway             (+ live ClickPesa credentials)
 //       node scripts/preflight.mjs --live                (+ Redis/Bunny/SMTP probes)
 //
 // `--production` implies `--live`: the launch gate has to answer "does it work",
@@ -16,10 +16,12 @@
 // warnings (placeholders are expected); with --production they become blockers,
 // because none of them can be missing on a site taking real money.
 //
-// The HarakaPay float check is a WARNING, never a blocker: `float_balance: 0` is
-// a balance on the merchant's HarakaPay account, not a broken credential, and the
-// app's collect path never reads it. A key that is rejected or a gateway that
-// does not answer is still a blocker.
+// `--gateway` proves the ClickPesa credentials work by minting a read-only
+// authorization token — it moves no money. Missing webhook verification is a
+// WARNING, never a blocker: the status poll and the reconcile sweep still settle
+// payments, so a callback we cannot verify delays a settlement and does not lose
+// one. Credentials that are rejected, or a gateway that does not answer, are
+// still blockers.
 // =============================================================================
 
 import { readFileSync } from "node:fs";
@@ -291,14 +293,15 @@ must(
   `CRON_SECRET is unusable: ${cronSecret.reason} — cron routes would be unprotected; generate with: openssl rand -hex 32`
 );
 must(
-  !!env("HARAKAPAY_API_KEY"),
-  "HARAKAPAY_API_KEY is set",
-  "HARAKAPAY_API_KEY missing — checkout would fail"
+  !!env("CLICKPESA_CLIENT_ID") && !!env("CLICKPESA_API_KEY"),
+  "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY are set",
+  "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY missing — checkout would fail"
 );
 must(
-  !!env("HARAKAPAY_WEBHOOK_TOKEN") && env("HARAKAPAY_WEBHOOK_TOKEN").length >= 12,
-  "HARAKAPAY_WEBHOOK_TOKEN is set",
-  "HARAKAPAY_WEBHOOK_TOKEN missing or too short — payment callbacks unverifiable"
+  !!env("CLICKPESA_CHECKSUM_KEY") ||
+    (!!env("CLICKPESA_WEBHOOK_TOKEN") && env("CLICKPESA_WEBHOOK_TOKEN").length >= 12),
+  "CLICKPESA_CHECKSUM_KEY or CLICKPESA_WEBHOOK_TOKEN is set",
+  "Neither CLICKPESA_CHECKSUM_KEY nor a long enough CLICKPESA_WEBHOOK_TOKEN is set — payment callbacks unverifiable"
 );
 
 // ---------------------------------------------------- Go-live requirements
@@ -379,43 +382,37 @@ if (wantLive) {
 }
 
 // ------------------------------------------------------- Live gateway check
-// The single blocker that is NOT ours to fix: an unfunded merchant account.
-if (wantGateway && env("HARAKAPAY_API_KEY")) {
-  const base = env("HARAKAPAY_BASE_URL") || "https://harakapay.net";
-  console.log(`\nHarakaPay live account check: ${base}/api/v1/balance`);
+if (wantGateway && env("CLICKPESA_CLIENT_ID") && env("CLICKPESA_API_KEY")) {
+  const base = env("CLICKPESA_BASE_URL") || "https://api.clickpesa.com/third-parties";
+  console.log(`\nClickPesa live credential check: ${base}/generate-token`);
   try {
-    const res = await fetch(`${base}/api/v1/balance`, {
-      headers: { "X-API-Key": env("HARAKAPAY_API_KEY") },
+    // Minting a token is read-only: it moves no money and charges nothing.
+    const res = await fetch(`${base}/generate-token`, {
+      method: "POST",
+      headers: {
+        "client-id": env("CLICKPESA_CLIENT_ID"),
+        "api-key": env("CLICKPESA_API_KEY"),
+      },
       signal: AbortSignal.timeout(15_000),
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok || body.success === false) {
-      fail(`balance lookup -> HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+    if (!res.ok || body.success === false || !body.token) {
+      fail(`generate-token -> HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
       blockers++;
     } else {
-      const wallet = Number(body.wallet_balance ?? 0);
-      const float = Number(body.float_balance ?? 0);
-      ok(`API key is valid — wallet ${wallet}, float ${float}`);
-      if (float > 0) {
-        ok("Merchant float is funded — collections can settle");
-      } else {
-        // A warning, never a blocker. The key is valid and the gateway is
-        // answering, so nothing here is broken; the float is a balance on the
-        // merchant's HarakaPay account, and the app does not refuse a collect
-        // over it. Blocking a deploy because a payment provider's balance is
-        // zero would stop shipping for something no code change can fix.
+      ok("ClickPesa credentials are valid — an authorization token was issued");
+      if (!env("CLICKPESA_CHECKSUM_KEY") && !env("CLICKPESA_WEBHOOK_TOKEN")) {
+        // A warning, never a blocker: settlement does not depend on the webhook.
         warn(
-          `Merchant float is ${float} — payments are still accepted, but top the HarakaPay ` +
-            "merchant float up so collections keep settling. Use the dashboard top-up if your " +
-            "account has one; if it does not (the card shows only Wallet/Float balances), ask " +
-            "their support in writing how the float is funded, and confirm live collections are " +
-            "activated. Your order ids are the evidence to include."
+          "No webhook verification secret is set — callbacks would be accepted without proof " +
+            "they came from ClickPesa. Set CLICKPESA_CHECKSUM_KEY (preferred) or " +
+            "CLICKPESA_WEBHOOK_TOKEN."
         );
         warnings++;
       }
     }
   } catch (error) {
-    fail(`could not reach HarakaPay: ${error.message || error}`);
+    fail(`could not reach ClickPesa: ${error.message || error}`);
     blockers++;
   }
 }

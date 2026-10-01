@@ -183,7 +183,7 @@ export async function creditCreatorForPurchase(params: {
 
 // =============================================================================
 // Pay for a video from the wallet balance (instant, no gateway)
-// Used when a HarakaPay charge fails and the customer prefers to spend the
+// Used when a ClickPesa charge fails and the customer prefers to spend the
 // balance they already hold. Deduction, 70/30 split and access are ONE atomic
 // transaction: either the customer is charged and unlocked, or nothing moves.
 // =============================================================================

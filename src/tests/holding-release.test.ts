@@ -253,7 +253,7 @@ describeDb("the 14-day holding releases every source the same way", () => {
         amount: 9_000,
         type: "PPV_PURCHASE",
         status: "PENDING",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: "hp_holding_unsettled",
         metadata: { orderId: "holding-unsettled" },
       },

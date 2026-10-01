@@ -1,8 +1,8 @@
 // =============================================================================
 // GENHUB - Payment Status API Route
 // GET /api/payments/status/[orderId] - Poll a transaction's state.
-// For HarakaPay this also reconciles against the gateway: if our row is still
-// PENDING but HarakaPay already completed/failed it (webhook missed, local dev),
+// For ClickPesa this also reconciles against the gateway: if our row is still
+// PENDING but ClickPesa already completed/failed it (webhook missed, local dev),
 // we finalize through the same processPaymentWebhook and return fresh state.
 // =============================================================================
 
@@ -11,7 +11,7 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import config from "@/lib/config";
-import { harakaStatus, harakaStatusToInternal } from "@/lib/payments/harakapay";
+import { clickpesaStatus, clickpesaStatusToInternal } from "@/lib/payments/clickpesa";
 import { processPaymentWebhook } from "@/lib/services/webhook.service";
 import { checkRateLimitStrict } from "@/lib/redis";
 
@@ -38,8 +38,8 @@ export async function GET(
     // Next 15 hands route params over as a promise.
     const { orderId } = await params;
 
-    // Accept both our internal id AND the gateway order id (providerRef) —
-    // clients receive HarakaPay's hp_* order id from /payments/purchase.
+    // Accept both our internal id AND the gateway order reference (providerRef)
+    // — clients receive ClickPesa's reference from /payments/purchase.
     let transaction = await prisma.transaction.findFirst({
       where: { OR: [{ id: orderId }, { providerRef: orderId }] },
       select: {
@@ -58,7 +58,7 @@ export async function GET(
       return api.forbidden("This order does not belong to you");
     }
 
-    // Reconcile with HarakaPay while the answer is still open (webhook may not
+    // Reconcile with ClickPesa while the answer is still open (webhook may not
     // have landed). UNDER_INVESTIGATION is included deliberately: the customer
     // tapping "Check status" is our earliest warning that a charge has finally
     // settled, and the broken webhook that caused the investigation is exactly
@@ -67,15 +67,15 @@ export async function GET(
     if (
       (transaction.status === "PENDING" ||
         transaction.status === "UNDER_INVESTIGATION") &&
-      transaction.gateway === "HARAKAPAY" &&
+      transaction.gateway === "CLICKPESA" &&
       transaction.providerRef &&
-      config.harakaPay.apiKey &&
-      !config.harakaPay.sandbox
+      config.clickPesa.apiKey &&
+      !config.clickPesa.sandbox
     ) {
       try {
-        const remote = await harakaStatus(transaction.providerRef);
+        const remote = await clickpesaStatus(transaction.providerRef);
         const internal = remote.payment
-          ? harakaStatusToInternal(remote.payment.status)
+          ? clickpesaStatusToInternal(remote.payment.status)
           : null;
 
         if (internal) {
@@ -84,7 +84,7 @@ export async function GET(
             transactionId: transaction.providerRef,
             amount: transaction.amount,
             status: internal,
-            provider: "HARAKAPAY",
+            provider: "CLICKPESA",
             metadata: { reconciled: true },
           });
 
@@ -104,7 +104,7 @@ export async function GET(
       } catch (reconcileError: any) {
         // Non-fatal: the webhook can still land later
         console.warn(
-          "[Payment Status] HarakaPay reconcile failed:",
+          "[Payment Status] ClickPesa reconcile failed:",
           reconcileError?.message || reconcileError
         );
       }

@@ -61,7 +61,7 @@ describe("the development-only routes", () => {
     // money.
     const source = read("src", "app", "api", "dev", "sandbox", "complete", "route.ts");
     expect(source).toContain("developmentOnlyEnabled() &&");
-    expect(source).toContain("config.harakaPay.sandbox");
+    expect(source).toContain("config.clickPesa.sandbox");
   });
 });
 

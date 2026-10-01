@@ -30,7 +30,7 @@
 #
 # CRON_SECRET also buys the credential check: the run asks /api/health/services,
 # which runs the same live probes `npm run preflight:prod` runs — Postgres, Redis,
-# Bunny, SMTP, HarakaPay and the app URL. A revoked key or a rotated password
+# Bunny, SMTP, ClickPesa and the app URL. A revoked key or a rotated password
 # leaves a site that answers every request and cannot stream a video or send a
 # password reset; nothing inside the app fails loudly, so this is the only place
 # it becomes an alarm instead of a to-do. Additive in the same way as the worker

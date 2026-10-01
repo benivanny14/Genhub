@@ -14,7 +14,7 @@
 //   2. TAKING BACK THE CREATOR'S 70%
 //
 // -----------------------------------------------------------------------------
-// THERE IS NO HARAKAPAY REVERSAL API
+// THERE IS NO CLICKPESA REVERSAL API
 // -----------------------------------------------------------------------------
 // Its entire API surface is POST /api/v1/collect, GET /api/v1/status/{id} and
 // GET /api/v1/balance. Probing every plausible reversal path (/reverse,
@@ -33,7 +33,7 @@
 //                          ask the network to send anything back, so there is no
 //                          way to pay them twice.
 //
-//   destination = GATEWAY  the operator reversed it in the HarakaPay dashboard
+//   destination = GATEWAY  the operator reversed it in the ClickPesa dashboard
 //                          and records the reference here. We only write down
 //                          what they told us — we cannot verify it, so the
 //                          reference is REQUIRED and the customer is told to
@@ -85,7 +85,7 @@ export interface ReverseChargeParams {
   /** Why it is being reversed (shown to the customer and the creator). */
   reason?: string;
   /**
-   * The reversal reference from the HarakaPay dashboard. Required for
+   * The reversal reference from the ClickPesa dashboard. Required for
    * destination GATEWAY, since that is the only evidence the network leg
    * happened at all.
    */
@@ -525,7 +525,7 @@ async function notifyReversal(params: {
               : revoked === "MEMBERSHIP"
                 ? " That membership has ended."
                 : "")
-          : `Your ${label} of ${tzs(amount)} has been refunded by HarakaPay. The money is being returned to the number you paid from — it can take up to 48 hours to appear on your phone, and it will not show in your wallet.`;
+          : `Your ${label} of ${tzs(amount)} has been refunded by ClickPesa. The money is being returned to the number you paid from — it can take up to 48 hours to appear on your phone, and it will not show in your wallet.`;
 
     await prisma.notification.create({
       data: {

@@ -36,7 +36,7 @@ const WEBHOOK_TIMEOUT_MS = 5_000;
 const lastAlertedAt = new Map<string, number>();
 
 export interface CredentialFault {
-  /** Named the way the operator knows it: "HarakaPay", "SMTP". */
+  /** Named the way the operator knows it: "ClickPesa", "SMTP". */
   service: string;
   /** What was observed, in the words the log already used. */
   detail: string;

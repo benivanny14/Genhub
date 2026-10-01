@@ -166,7 +166,7 @@ describeDb("Reversing a collected charge", () => {
         creatorCut: 700,
         type: "PPV_PURCHASE",
         status: "SUCCESS",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: `hp_rev_${Math.random().toString(36).slice(2, 10)}`,
         createdAt,
       },
@@ -180,7 +180,7 @@ describeDb("Reversing a collected charge", () => {
         amount,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: `hp_rev_top_${Math.random().toString(36).slice(2, 10)}`,
         metadata: { investigation: true, reason: "gateway_never_settled" },
       },
@@ -382,7 +382,7 @@ describeDb("Reversing a collected charge", () => {
         amount: 1_000,
         type: "PPV_PURCHASE",
         status: "UNDER_INVESTIGATION",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: "hp_rev_investigating",
         metadata: { investigation: true, reason: "gateway_never_settled" },
       },
@@ -440,7 +440,7 @@ describeDb("Reversing a collected charge", () => {
         amount: 1_000,
         type: "PPV_PURCHASE",
         status: "UNDER_INVESTIGATION",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: "hp_rev_no_access",
         metadata: { investigation: true },
       },
@@ -620,7 +620,7 @@ describeDb("Reversing a collected charge", () => {
     expect(after!.status).toBe("UNDER_INVESTIGATION");
   });
 
-  it("requires the HarakaPay reference before claiming a network reversal", async () => {
+  it("requires the ClickPesa reference before claiming a network reversal", async () => {
     await reset();
     const tx = await settledPurchase();
 
@@ -714,7 +714,7 @@ describeDb("Reversing a collected charge", () => {
           amount: 1_000,
           type: "PPV_PURCHASE",
           status,
-          gateway: "HARAKAPAY",
+          gateway: "CLICKPESA",
           providerRef: `hp_not_held_${status}`,
         },
       });
@@ -790,7 +790,7 @@ describeDb("Reversing a collected charge", () => {
         creatorCut: 3_500,
         type: "SUBSCRIPTION",
         status: "SUCCESS",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: "hp_rev_sub",
       },
     });
@@ -834,7 +834,7 @@ describeDb("Reversing a collected charge", () => {
         creatorCut: 2_000,
         type: "TIP",
         status: "SUCCESS",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: "hp_rev_tip",
       },
     });
@@ -869,7 +869,7 @@ describeDb("Reversing a collected charge", () => {
         creatorCut: 1_400,
         type: "TIP",
         status: "SUCCESS",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: "hp_rev_tip_split",
       },
     });
@@ -979,7 +979,7 @@ describeDb("Reversing a collected charge", () => {
         amount: 100,
         type: "PPV_PURCHASE",
         status: "PENDING",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         providerRef: "hp_rev_pending",
       },
     });

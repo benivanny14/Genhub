@@ -26,8 +26,7 @@ import path from "node:path";
 import checklist from "./setup-checklist.json";
 import prisma from "./db";
 import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./redis";
-import { harakaBreakerNotice } from "./payments/harakapay";
-import { assessFloat, floatFloorTzs } from "./services/harakapay-float-alert.service";
+import { clickpesaBreakerNotice } from "./payments/clickpesa";
 import { bunnyWebhookUrl, lastBunnyWebhookDelivery } from "./services/bunny-webhook.service";
 import config from "./config";
 
@@ -662,57 +661,60 @@ async function probeSmtp(): Promise<ProbeResult> {
  * from an unreachable gateway, which would silence the alarm this exists to
  * raise.
  */
-export const HARAKA_PROBE_TIMEOUTS_MS = [15_000, 12_000] as const;
+export const CLICKPESA_PROBE_TIMEOUTS_MS = [15_000, 12_000] as const;
 
-async function probeHarakapay(): Promise<ProbeResult> {
-  const base = { id: "harakapay", name: "HarakaPay" };
-  const key = env("HARAKAPAY_API_KEY");
-  if (!key) return { ...base, state: "skip", detail: "HARAKAPAY_API_KEY not set" };
+async function probeClickPesa(): Promise<ProbeResult> {
+  const base = { id: "clickpesa", name: "ClickPesa" };
+  const clientId = env("CLICKPESA_CLIENT_ID");
+  const apiKey = env("CLICKPESA_API_KEY");
+  if (!clientId || !apiKey) {
+    return { ...base, state: "skip", detail: "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY not set" };
+  }
 
-  const url = `${env("HARAKAPAY_BASE_URL") || "https://harakapay.net"}/api/v1/balance`;
+  const url = `${env("CLICKPESA_BASE_URL") || "https://api.clickpesa.com/third-parties"}/generate-token`;
 
   // Two attempts at most. The retry exists for a request that never arrived —
-  // see HARAKA_PROBE_TIMEOUTS_MS — so an answer that DID arrive (a rejected key,
-  // an HTTP error) is returned from inside the loop rather than asked for twice.
+  // see CLICKPESA_PROBE_TIMEOUTS_MS — so an answer that DID arrive (a rejected
+  // key, an HTTP error) is returned from inside the loop rather than asked twice.
   let lastError: unknown = null;
-  for (let attempt = 0; attempt < HARAKA_PROBE_TIMEOUTS_MS.length; attempt += 1) {
+  for (let attempt = 0; attempt < CLICKPESA_PROBE_TIMEOUTS_MS.length; attempt += 1) {
     try {
       const res = await fetch(url, {
-        headers: { "X-API-Key": key },
-        signal: timeout(HARAKA_PROBE_TIMEOUTS_MS[attempt]),
+        method: "POST",
+        headers: { "client-id": clientId, "api-key": apiKey },
+        signal: timeout(CLICKPESA_PROBE_TIMEOUTS_MS[attempt]),
       });
       const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!res.ok || body.success === false) {
-        return { ...base, state: "fail", detail: `HTTP ${res.status} - the API key was rejected` };
+      if (!res.ok || !body.token) {
+        const rejected = res.status === 401 || res.status === 403;
+        return {
+          ...base,
+          state: "fail",
+          detail: rejected
+            ? `HTTP ${res.status} - CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY were rejected`
+            : `HTTP ${res.status} - ${String(body.message || res.statusText).slice(0, 120)}`,
+        };
       }
 
-      // Where the float sits. This is a BALANCE on the merchant's HarakaPay
-      // account, not a broken credential: the key is valid, the gateway answers,
-      // and the app's collect path never reads the float — so it is reported as a
-      // warning, never a failure. A `fail` here turned every deploy and uptime
-      // check red for a state no code change fixes and nothing blocks on. A
-      // rejected key or an unresponsive gateway still fails (the branches above
-      // and below); this one only lowers the level.
-      const float = Number(body.float_balance ?? 0);
-      const floor = floatFloorTzs();
-      const level = assessFloat(float, floor);
-      // The probe proves the gateway answers *now*; the breaker says whether this
-      // process has been skipping it. Both are needed: a healthy probe with an
-      // open breaker means the fault is intermittent, not fixed.
-      const breakerNotice = harakaBreakerNotice();
+      // The probe proves the gateway answers *now* and the credentials are
+      // accepted; the breaker says whether this process has been skipping it.
+      // Both are needed: a healthy probe with an open breaker means the fault is
+      // intermittent, not fixed.
+      const breakerNotice = clickpesaBreakerNotice();
+      const webhookSecretSet = Boolean(
+        env("CLICKPESA_CHECKSUM_KEY") || env("CLICKPESA_WEBHOOK_TOKEN")
+      );
       return {
         ...base,
-        state: level === "ok" && !breakerNotice ? "ok" : "warn",
+        state: breakerNotice ? "warn" : "ok",
         detail:
-          `key valid · wallet ${body.wallet_balance ?? 0} · float ${float}` +
+          "credentials valid · authorization token issued" +
           (attempt > 0
             ? " · answered on the retry (its first connection is slow, not its key)"
             : "") +
-          (level === "empty"
-            ? " · float is 0 — top up the merchant float so collections keep settling"
-            : level === "low"
-              ? ` · under the ${floor} TZS floor — top up before it reaches 0`
-              : "") +
+          (webhookSecretSet
+            ? ""
+            : " · no webhook secret set (CLICKPESA_CHECKSUM_KEY / CLICKPESA_WEBHOOK_TOKEN)") +
           (breakerNotice ? ` · ${breakerNotice}` : ""),
       };
     } catch (error) {
@@ -722,13 +724,13 @@ async function probeHarakapay(): Promise<ProbeResult> {
     }
   }
 
-  const breakerNotice = harakaBreakerNotice();
+  const breakerNotice = clickpesaBreakerNotice();
   return {
     ...base,
     state: "fail",
     detail:
       String((lastError as Error)?.message || lastError).slice(0, 160) +
-      ` · gave up after ${HARAKA_PROBE_TIMEOUTS_MS.length} attempts` +
+      ` · gave up after ${CLICKPESA_PROBE_TIMEOUTS_MS.length} attempts` +
       (breakerNotice ? ` · ${breakerNotice}` : ""),
   };
 }
@@ -769,7 +771,7 @@ export function classifyAppUrlAnswer(
     (payload.status === "ok" || payload.status === "degraded");
 
   // A different site answering 200 is the dangerous case, not a 503 from ours:
-  // NEXT_PUBLIC_APP_URL feeds the sitemap, OG tags and the gateway's webhook_url.
+  // NEXT_PUBLIC_APP_URL feeds the sitemap, OG tags and the gateway webhook URL.
   if (!isThisApp) {
     return {
       state: "fail",
@@ -795,7 +797,7 @@ async function probeAppUrl(): Promise<ProbeResult> {
     return {
       ...base,
       state: "warn",
-      detail: `${url} - HarakaPay cannot reach a localhost webhook (polling still settles payments)`,
+      detail: `${url} - ClickPesa cannot reach a localhost webhook (polling still settles payments)`,
     };
   }
   try {
@@ -827,7 +829,7 @@ export async function runLiveProbes(): Promise<ProbeResult[]> {
     probeWebhook(),
     probeCdn(),
     probeSmtp(),
-    probeHarakapay(),
+    probeClickPesa(),
     probeAppUrl(),
   ]);
 }

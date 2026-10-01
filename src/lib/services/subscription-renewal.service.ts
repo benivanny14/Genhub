@@ -4,7 +4,7 @@
 // A membership renews in the 24h before it expires. The order of preference is:
 //
 //   1. WALLET  — instant, no phone needed, settled in a single transaction.
-//   2. HARAKAPAY USSD push — used when the wallet cannot cover the price but we
+//   2. CLICKPESA USSD push — used when the wallet cannot cover the price but we
 //      have the phone number the fan originally paid with (remembered on the
 //      subscription as `renewPhone`, or recovered from their last gateway
 //      checkout). The push is settled by the normal webhook/status poll.
@@ -28,7 +28,12 @@
 
 import prisma from "../db";
 import config from "../config";
-import { harakaCollect, harakaErrorReason } from "../payments/harakapay";
+import {
+  clickpesaCollect,
+  clickpesaErrorReason,
+  clickpesaOrderReference,
+  normalizeTzPhoneMsisdn,
+} from "../payments/clickpesa";
 import { generateOrderId } from "../utils";
 import { grantSubscription, resyncSubscriberCount } from "./subscription.service";
 import { debitWallet } from "./balance.service";
@@ -573,6 +578,7 @@ async function pushRenewal(params: {
     attempts,
   } = params;
   const orderId = generateOrderId("REN");
+  const providerRef = clickpesaOrderReference("RN");
 
   const transaction = await prisma.transaction.create({
     data: {
@@ -581,7 +587,8 @@ async function pushRenewal(params: {
       amount: price,
       type: "SUBSCRIPTION",
       status: "PENDING",
-      gateway: "HARAKAPAY",
+      gateway: "CLICKPESA",
+      providerRef,
       metadata: {
         orderId,
         plan: "monthly",
@@ -597,10 +604,10 @@ async function pushRenewal(params: {
   // status poll and webhook can map a callback onto this row.
   const sandbox =
     config.nodeEnv !== "production" &&
-    (!config.harakaPay.apiKey || config.harakaPay.sandbox);
+    (!config.clickPesa.apiKey || config.clickPesa.sandbox);
 
   if (sandbox) {
-    const ref = `hp_sbx_${transaction.id}`;
+    const ref = `cp_sbx_${transaction.id}`;
     await prisma.$transaction([
       prisma.transaction.update({
         where: { id: transaction.id },
@@ -618,19 +625,16 @@ async function pushRenewal(params: {
     return { ok: true };
   }
 
-  const webhookUrl = `${config.appUrl}/api/webhooks/harakapay${
-    config.harakaPay.webhookToken ? `?t=${config.harakaPay.webhookToken}` : ""
-  }`;
-
+  // ClickPesa does not take a webhook URL per request; the endpoint is
+  // configured in the dashboard.
   try {
-    const response = await harakaCollect({
-      phone,
+    const response = await clickpesaCollect({
+      phone: normalizeTzPhoneMsisdn(phone),
       amount: price,
-      description: `Genhub renewal - ${creatorName || "creator"}`,
-      webhookUrl,
+      orderReference: providerRef,
     });
 
-    if (!response.success || !response.order_id) {
+    if (!response.success || !response.orderReference) {
       const reason = response.error || "gateway rejected the renewal charge";
       await prisma.$transaction([
         prisma.transaction.update({
@@ -653,7 +657,7 @@ async function pushRenewal(params: {
     await prisma.$transaction([
       prisma.transaction.update({
         where: { id: transaction.id },
-        data: { providerRef: response.order_id },
+        data: { providerRef: response.orderReference },
       }),
       prisma.creatorSubscription.update({
         where: { id: subscriptionId },
@@ -680,7 +684,7 @@ async function pushRenewal(params: {
 
     return { ok: true };
   } catch (error) {
-    const reason = harakaErrorReason(error);
+    const reason = clickpesaErrorReason(error);
     await prisma.transaction.update({
       where: { id: transaction.id },
       data: { status: "FAILED", metadata: { renewal: true, gatewayError: reason } },
@@ -694,7 +698,7 @@ async function pushRenewal(params: {
       creatorName,
       reason,
     });
-    console.warn(`[Renewal] HarakaPay rejected renewal for ${subscriptionId}: ${reason}`);
+    console.warn(`[Renewal] ClickPesa rejected renewal for ${subscriptionId}: ${reason}`);
     return { ok: false };
   }
 }
@@ -773,7 +777,7 @@ async function lastGatewayPhone(
   creatorId: string
 ): Promise<string | null> {
   const tx = await prisma.transaction.findFirst({
-    where: { userId: viewerId, creatorId, gateway: "HARAKAPAY" },
+    where: { userId: viewerId, creatorId, gateway: { in: ["CLICKPESA", "HARAKAPAY"] } },
     select: { metadata: true },
     orderBy: { createdAt: "desc" },
   });

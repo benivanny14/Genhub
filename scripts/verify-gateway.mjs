@@ -3,9 +3,11 @@
 // GENHUB - Gateway lock (build-time guard)
 // Run:  node scripts/verify-gateway.mjs   (also wired as `prebuild`)
 //
-// HarakaPay is the only payment gateway. Exits 1 the moment a second gateway
-// reappears in the Prisma enum, in src/lib/payments, or anywhere in shipped
-// source — so a legacy integration can never slip back in unnoticed.
+// ClickPesa is the only payment gateway. Exits 1 the moment a second gateway
+// reappears in src/lib/payments or anywhere in shipped source — so a legacy
+// integration can never slip back in unnoticed. HARAKAPAY may remain in the
+// Prisma enum as a historical label for old transactions, but it is never a
+// supported gateway (see src/lib/payments/gateway.ts).
 // =============================================================================
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -52,9 +54,9 @@ const enumValues = block
   : [];
 
 check(
-  JSON.stringify(enumValues) === JSON.stringify(["HARAKAPAY"]),
-  "Prisma PaymentGateway enum contains HARAKAPAY only",
-  `Prisma PaymentGateway enum is [${enumValues.join(", ") || "not found"}] — expected [HARAKAPAY]`
+  enumValues.includes("CLICKPESA"),
+  "Prisma PaymentGateway enum contains CLICKPESA",
+  `Prisma PaymentGateway enum is [${enumValues.join(", ") || "not found"}] — expected CLICKPESA to be present`
 );
 
 // 2) Integration modules
@@ -66,9 +68,9 @@ const modules = existsSync(paymentsDir)
   : [];
 
 check(
-  JSON.stringify(modules) === JSON.stringify(["gateway.ts", "harakapay.ts"]),
-  "src/lib/payments holds gateway.ts + harakapay.ts only",
-  `src/lib/payments holds [${modules.join(", ") || "nothing"}] — expected [gateway.ts, harakapay.ts]`
+  JSON.stringify(modules) === JSON.stringify(["clickpesa.ts", "gateway.ts"]),
+  "src/lib/payments holds gateway.ts + clickpesa.ts only",
+  `src/lib/payments holds [${modules.join(", ") || "nothing"}] — expected [clickpesa.ts, gateway.ts]`
 );
 
 // 3) No reference to a decommissioned gateway in shipped source
@@ -89,6 +91,6 @@ check(
 
 console.log(`\n=== ${failures === 0 ? "PASS" : `${failures} FAILURE(S)`} ===\n`);
 if (failures > 0) {
-  console.log("Only HarakaPay may process payments. Remove the gateway above.\n");
+  console.log("Only ClickPesa may process payments. Remove the gateway above.\n");
   process.exit(1);
 }

@@ -9,7 +9,7 @@
 // never echoed (see summariseValue in src/lib/setup-check.ts).
 //
 // Probes are split into their own verb so they talk to Postgres, Redis, Bunny,
-// your SMTP relay and HarakaPay - a page load should not do that.
+// your SMTP relay and ClickPesa - a page load should not do that.
 //
 // -----------------------------------------------------------------------------
 // WHY PATCH EXISTS: THE BADGE THAT COULD NOT BE CLEARED

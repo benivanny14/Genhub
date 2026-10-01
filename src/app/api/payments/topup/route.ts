@@ -1,6 +1,6 @@
 // =============================================================================
 // GENHUB - Wallet Top-Up API Route
-// POST /api/payments/topup - Initiate wallet top-up via HarakaPay
+// POST /api/payments/topup - Initiate wallet top-up via ClickPesa
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -9,7 +9,12 @@ import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { topUpWalletSchema } from "@/lib/validation";
-import { harakaCollect, harakaErrorReason } from "@/lib/payments/harakapay";
+import {
+  clickpesaCollect,
+  clickpesaErrorReason,
+  clickpesaOrderReference,
+  normalizeTzPhoneMsisdn,
+} from "@/lib/payments/clickpesa";
 import { assertSupportedGateway } from "@/lib/payments/gateway";
 import { generateOrderId } from "@/lib/utils";
 import { checkRateLimitStrict } from "@/lib/redis";
@@ -46,7 +51,7 @@ export async function POST(request: NextRequest) {
       return api.validation(result.error.errors[0].message);
     }
 
-    // HarakaPay is the only gateway — checkout is a USSD push to the phone.
+    // ClickPesa is the only gateway — checkout is a USSD push to the phone.
     // Kept as a hard check on top of the Zod enum (see lib/payments/gateway).
     assertSupportedGateway(result.data.gateway);
     const { amount, phoneNumber, couponCode } = result.data;
@@ -70,13 +75,17 @@ export async function POST(request: NextRequest) {
 
     // Create pending transaction (paid amount stays `amount`; bonus rides in metadata)
     const orderId = generateOrderId("WLT");
+    // Our ClickPesa order reference (alphanumeric, ≤20); stored as providerRef so
+    // the webhook and the status poll can match the callback.
+    const providerRef = clickpesaOrderReference("TP");
     const transaction = await prisma.transaction.create({
       data: {
         userId: auth.userId,
         amount,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
+        providerRef,
         metadata: couponId ? { couponId, bonus } : undefined,
       },
     });
@@ -86,13 +95,14 @@ export async function POST(request: NextRequest) {
     // checkout burned a limited coupon on every prompt nobody approved.
 
     // ------------------------------------------------------------ Sandbox mode
-    const harakaSandbox =
+    const clickPesaSandbox =
       config.nodeEnv !== "production" &&
-      (!config.harakaPay.apiKey || config.harakaPay.sandbox);
+      (!config.clickPesa.apiKey || config.clickPesa.sandbox);
 
-    if (harakaSandbox) {
-      // Mirror production: HarakaPay-style order id so the webhook can find us
-      const sandboxRef = `hp_sbx_${transaction.id}`;
+    if (clickPesaSandbox) {
+      // Mirror production: a predictable reference so the dev completion route
+      // can map the callback to this row.
+      const sandboxRef = `cp_sbx_${transaction.id}`;
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { providerRef: sandboxRef },
@@ -102,54 +112,45 @@ export async function POST(request: NextRequest) {
         orderId: sandboxRef,
         checkoutUrl: null,
         sandbox: true,
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         amount,
         bonus,
       });
     }
 
-    // Live USSD push — customer confirms on their phone
-    const webhookUrl = `${config.appUrl}/api/webhooks/harakapay${
-      config.harakaPay.webhookToken ? `?t=${config.harakaPay.webhookToken}` : ""
-    }`;
-
+    // Live USSD push — customer confirms on their phone. ClickPesa does not take
+    // a webhook URL per request; the endpoint is configured in the dashboard.
     try {
-      const response = await harakaCollect({
-        phone: phoneNumber,
+      const response = await clickpesaCollect({
+        phone: normalizeTzPhoneMsisdn(phoneNumber),
         amount,
-        description: "Genhub - Wallet top-up",
-        webhookUrl,
+        orderReference: providerRef,
       });
 
-      if (!response.success || !response.order_id) {
+      if (!response.success || !response.orderReference) {
         await prisma.transaction.update({
           where: { id: transaction.id },
           data: { status: "FAILED" },
         });
         return api.error(
-          response.error || "HarakaPay rejected the payment request. Please try again.",
+          response.error || "ClickPesa rejected the payment request. Please try again.",
           502,
           "GATEWAY_REJECTED"
         );
       }
 
-      await prisma.transaction.update({
-        where: { id: transaction.id },
-        data: { providerRef: response.order_id },
-      });
-
       return api.success({
         transactionId: transaction.id,
-        orderId: response.order_id,
+        orderId: response.orderReference,
         checkoutUrl: null,
-        gateway: "HARAKAPAY",
+        gateway: "CLICKPESA",
         status: "pending",
         amount,
         bonus,
         message: response.message || "USSD push sent to phone",
       });
-    } catch (harakaError: any) {
-      const reason = harakaErrorReason(harakaError);
+    } catch (gatewayError: any) {
+      const reason = clickpesaErrorReason(gatewayError);
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { status: "FAILED", metadata: { gatewayError: reason } },

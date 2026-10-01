@@ -71,17 +71,18 @@ check(
 check(
   !isLocal(env("NEXT_PUBLIC_APP_URL")),
   `NEXT_PUBLIC_APP_URL is "${env("NEXT_PUBLIC_APP_URL") || "(unset)"}" — must be the public https:// domain ` +
-    "(SEO, referral links, and the HarakaPay webhook_url are built from it)"
+    "(SEO, referral links, and the ClickPesa webhook URL are built from it)"
 );
 
 // --------------------------------------------------------------- Payments
 check(
-  !!env("HARAKAPAY_API_KEY"),
-  "HARAKAPAY_API_KEY is missing — checkout will fail"
+  !!env("CLICKPESA_CLIENT_ID") && !!env("CLICKPESA_API_KEY"),
+  "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY are missing — checkout will fail"
 );
 check(
-  !!env("HARAKAPAY_WEBHOOK_TOKEN") && env("HARAKAPAY_WEBHOOK_TOKEN").length >= 12,
-  "HARAKAPAY_WEBHOOK_TOKEN is missing or shorter than 12 characters — payment callbacks cannot be verified"
+  !!env("CLICKPESA_CHECKSUM_KEY") ||
+    (!!env("CLICKPESA_WEBHOOK_TOKEN") && env("CLICKPESA_WEBHOOK_TOKEN").length >= 12),
+  "Neither CLICKPESA_CHECKSUM_KEY nor a CLICKPESA_WEBHOOK_TOKEN of at least 12 characters is set — payment callbacks cannot be verified"
 );
 check(
   env("PAYMENT_SANDBOX") !== "true",

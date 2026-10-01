@@ -199,7 +199,7 @@ async function diagnostics() {
       email: config.email.host ? "smtp" : "console",
       sms: config.sms.apiKey ? "africastalking" : "console",
       // "sandbox" = no USSD push and no real money moves (dev default)
-      payments: config.harakaPay.sandbox ? "sandbox" : "live",
+      payments: config.clickPesa.sandbox ? "sandbox" : "live",
       bunny: config.bunny.apiKey ? "configured" : "missing",
       // The names of the Bunny Stream variables this deployment is missing,
       // never a value. Video uploads and playback both need them, and a

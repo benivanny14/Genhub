@@ -22,7 +22,7 @@ import { join } from "node:path";
 
 import { describe, it, expect } from "vitest";
 
-import { HARAKA_PROBE_TIMEOUTS_MS, classifyAppUrlAnswer } from "@/lib/setup-check";
+import { CLICKPESA_PROBE_TIMEOUTS_MS, classifyAppUrlAnswer } from "@/lib/setup-check";
 
 const URL_ = "https://genhub.example.test";
 
@@ -118,8 +118,8 @@ describe("warn is not a failure to the alarm", () => {
 });
 
 // -----------------------------------------------------------------------------
-// The HarakaPay probe's budget. A bound, like the ones in
-// redis-bounded.test.ts and harakapay-bounded.test.ts, because the failure it
+// The ClickPesa probe's budget. A bound, like the ones in
+// redis-bounded.test.ts and clickpesa-bounded.test.ts, because the failure it
 // prevents is silent.
 //
 // The probe shares /api/health/services with eight others inside a function
@@ -134,7 +134,7 @@ describe("warn is not a failure to the alarm", () => {
 // watchdog read, every deploy and every alarm went red for a fault no code
 // change could fix. An alarm that is red nearly all the time is its own failure.
 // -----------------------------------------------------------------------------
-describe("the HarakaPay probe's budget", () => {
+describe("the ClickPesa probe's budget", () => {
   const route = readFileSync(
     join(process.cwd(), "src", "app", "api", "health", "services", "route.ts"),
     "utf8"
@@ -142,7 +142,7 @@ describe("the HarakaPay probe's budget", () => {
 
   it("fits inside the route's function budget, retry included", () => {
     const maxDuration = Number(route.match(/export\s+const\s+maxDuration\s*=\s*(\d+)/)?.[1]);
-    const worstCaseMs = HARAKA_PROBE_TIMEOUTS_MS.reduce((total, ms) => total + ms, 0);
+    const worstCaseMs = CLICKPESA_PROBE_TIMEOUTS_MS.reduce((total, ms) => total + ms, 0);
 
     expect(maxDuration).toBeGreaterThan(0);
     expect(worstCaseMs).toBeLessThan(maxDuration * 1000);
@@ -155,10 +155,10 @@ describe("the HarakaPay probe's budget", () => {
     // cost and then answers quickly. A budget at or below that cost reports a
     // timeout for a gateway that is working.
     const MEASURED_COLD_START_MS = 11_800;
-    expect(HARAKA_PROBE_TIMEOUTS_MS[0]).toBeGreaterThan(MEASURED_COLD_START_MS);
+    expect(CLICKPESA_PROBE_TIMEOUTS_MS[0]).toBeGreaterThan(MEASURED_COLD_START_MS);
   });
 
   it("retries exactly once, so one more attempt cannot push it past the ceiling", () => {
-    expect(HARAKA_PROBE_TIMEOUTS_MS).toHaveLength(2);
+    expect(CLICKPESA_PROBE_TIMEOUTS_MS).toHaveLength(2);
   });
 });

@@ -4,10 +4,15 @@
 //
 // Answers the question "why does no USSD push reach my phone?" in one call:
 //   * sandbox mode (no real charge is ever attempted)
-//   * whether the gateway key/webhook token are configured
+//   * whether the gateway credentials + webhook verification are configured
 //   * whether the app URL is publicly reachable (webhooks) or local-only
-//   * the live HarakaPay wallet/float balance, straight from the gateway
-// Never returns the API key itself.
+//   * whether recent charges ever settled, and how many are under investigation
+//
+// ClickPesa exposes no balance/float endpoint (collections settle straight into
+// the merchant account), so there is no live balance read here — the delivery
+// counters below are the equivalent early warning.
+//
+// Never returns the API key or client id itself.
 // =============================================================================
 
 import prisma from "@/lib/db";
@@ -15,16 +20,9 @@ import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import config from "@/lib/config";
 import {
-  harakaBalance,
-  harakaErrorReason,
-  harakaGatewayState,
-  harakaBreakerNotice,
-} from "@/lib/payments/harakapay";
-import {
-  assessFloat,
-  floatAlertPending,
-  floatFloorTzs,
-} from "@/lib/services/harakapay-float-alert.service";
+  clickpesaGatewayState,
+  clickpesaBreakerNotice,
+} from "@/lib/payments/clickpesa";
 
 export const dynamic = "force-dynamic";
 
@@ -34,144 +32,107 @@ export async function GET() {
 
     const appUrl = config.appUrl;
     const isLocal = /localhost|127\.0\.0\.1/i.test(appUrl);
-    const sandbox = config.harakaPay.sandbox;
+    const sandbox = config.clickPesa.sandbox;
+    const usesChecksum = Boolean(config.clickPesa.checksumKey);
 
     const checks = {
       sandboxMode: {
         ok: !sandbox,
         value: sandbox,
         hint: sandbox
-          ? "PAYMENT_SANDBOX=true — the app never contacts HarakaPay, so no USSD push is sent. Set PAYMENT_SANDBOX=false to charge real phones."
+          ? "PAYMENT_SANDBOX=true — the app never contacts ClickPesa, so no USSD push is sent. Set PAYMENT_SANDBOX=false to charge real phones."
           : "Live mode — purchases send a real USSD push.",
       },
+      clientId: {
+        ok: !!config.clickPesa.clientId,
+        value: config.clickPesa.clientId ? "configured" : "missing",
+        hint: config.clickPesa.clientId
+          ? "CLICKPESA_CLIENT_ID is set."
+          : "Set CLICKPESA_CLIENT_ID (ClickPesa dashboard → API Integration Setup).",
+      },
       apiKey: {
-        ok: !!config.harakaPay.apiKey,
-        value: config.harakaPay.apiKey ? "configured" : "missing",
-        hint: config.harakaPay.apiKey ? "HARAKAPAY_API_KEY is set." : "Set HARAKAPAY_API_KEY.",
+        ok: !!config.clickPesa.apiKey,
+        value: config.clickPesa.apiKey ? "configured" : "missing",
+        hint: config.clickPesa.apiKey
+          ? "CLICKPESA_API_KEY is set."
+          : "Set CLICKPESA_API_KEY (ClickPesa dashboard → API Integration Setup).",
       },
       baseUrl: {
-        ok: !!config.harakaPay.baseUrl,
-        value: config.harakaPay.baseUrl,
-        hint: "HarakaPay API base URL.",
+        ok: !!config.clickPesa.baseUrl,
+        value: config.clickPesa.baseUrl,
+        hint: "ClickPesa API base URL.",
       },
-      webhookToken: {
-        ok: !!config.harakaPay.webhookToken,
-        value: config.harakaPay.webhookToken ? "configured" : "missing",
-        hint: "Shared token appended to the webhook URL (?t=…).",
+      webhookVerification: {
+        ok: usesChecksum || !!config.clickPesa.webhookToken,
+        value: usesChecksum
+          ? "checksum (CLICKPESA_CHECKSUM_KEY)"
+          : config.clickPesa.webhookToken
+            ? "shared token (CLICKPESA_WEBHOOK_TOKEN)"
+            : "missing",
+        hint: usesChecksum
+          ? "Every callback must carry a valid HMAC-SHA256 checksum."
+          : config.clickPesa.webhookToken
+            ? "Callbacks are verified by the ?t= token in the webhook URL. Add CLICKPESA_CHECKSUM_KEY for signature verification."
+            : "Set CLICKPESA_CHECKSUM_KEY (preferred) or CLICKPESA_WEBHOOK_TOKEN, or callbacks cannot be verified.",
       },
       appUrl: {
         ok: !isLocal && config.appUrlSource === "NEXT_PUBLIC_APP_URL",
         value: appUrl,
         source: config.appUrlSource,
         hint: isLocal
-          ? "The app URL is localhost, so HarakaPay cannot reach /api/webhooks/harakapay. Payments still confirm because the client polls /api/payments/status, which reconciles with the gateway. Set NEXT_PUBLIC_APP_URL to the public domain."
+          ? "The app URL is localhost, so ClickPesa cannot reach /api/webhooks/clickpesa. Payments still confirm because the client polls /api/payments/status, which reconciles with the gateway. Set NEXT_PUBLIC_APP_URL to the public domain."
           : config.appUrlSource === "NEXT_PUBLIC_APP_URL"
             ? "Public URL from NEXT_PUBLIC_APP_URL — webhooks can reach this deployment."
-            : `Public URL inferred from ${config.appUrlSource}. It works, but set NEXT_PUBLIC_APP_URL explicitly so the webhook_url never depends on the hosting provider.`,
+            : `Public URL inferred from ${config.appUrlSource}. It works, but set NEXT_PUBLIC_APP_URL explicitly so the webhook URL never depends on the hosting provider.`,
       },
     };
 
-    // Live gateway read-only check: proves the key works and shows the float.
-    let balance: {
-      ok: boolean;
-      wallet_balance?: number;
-      float_balance?: number;
-      error?: string;
-    } = { ok: false, error: "skipped (sandbox mode)" };
-
-    if (config.harakaPay.apiKey && !sandbox) {
-      try {
-        const res = await harakaBalance();
-        balance = {
-          ok: !!res.success,
-          wallet_balance: res.wallet_balance,
-          float_balance: res.float_balance,
-          error: res.success ? undefined : res.error,
-        };
-      } catch (error) {
-        balance = { ok: false, error: harakaErrorReason(error) };
-      }
-    }
-
-    // An empty merchant float is the most common reason a live collect is
-    // accepted by the API but never has money behind it.
-    const floatEmpty =
-      balance.ok === true &&
-      (balance.float_balance ?? 0) <= 0 &&
-      (balance.wallet_balance ?? 0) <= 0;
-
-    // The float on its own, for the admin card: the number, the floor it is
-    // judged against, where that puts it, and whether the alarm for this episode
-    // has already fired. `read` is the third answer — a gateway that will not
-    // answer is neither healthy nor empty, and the card must say which it is.
-    const floorTzs = floatFloorTzs();
-    // `null`, never 0, when the gateway did not report a float: a missing number
-    // is unreadable, and reading it as an empty float would page somebody about
-    // a balance that is fine.
-    const floatTzs =
-      balance.ok && typeof balance.float_balance === "number" ? balance.float_balance : null;
-    const float = {
-      read: floatTzs !== null,
-      floatTzs,
-      walletTzs: balance.ok ? balance.wallet_balance ?? null : null,
-      floorTzs,
-      level: floatTzs === null ? null : assessFloat(floatTzs, floorTzs),
-      // True when somebody has already been told about this episode, so the next
-      // poke stays quiet until the float recovers.
-      alertPending: await floatAlertPending(),
-    };
-
-    // Read AFTER the balance attempt, so a failure from this very call is
-    // included — the state an operator is looking at is the state that produced
-    // what they just saw.
-    const breaker = harakaGatewayState();
-    const breakerWarning = harakaBreakerNotice(breaker);
+    // The local circuit breaker. When it is open, gateway calls are being
+    // *skipped*, which would otherwise look like a gateway fault with no cause.
+    const breaker = clickpesaGatewayState();
+    const breakerWarning = clickpesaBreakerNotice(breaker);
 
     const readyForLive =
-      !sandbox && checks.apiKey.ok && checks.baseUrl.ok && balance.ok === true;
+      !sandbox &&
+      checks.clientId.ok &&
+      checks.apiKey.ok &&
+      checks.webhookVerification.ok;
 
-    // The symptom of an unfunded / not-yet-activated merchant account: orders are
-    // accepted ("USSD push sent") but never reach the handset, so nothing ever
-    // settles. Surface it here instead of leaving it invisible.
+    // Orders accepted but never delivered are the classic "unfunded / not yet
+    // activated merchant account" symptom. Surface them here instead of leaving
+    // it invisible.
     const staleCutoff = new Date(Date.now() - 15 * 60_000);
     const [stuckPending, lastSettled, underInvestigation] = await Promise.all([
       prisma.transaction.count({
         where: {
           status: "PENDING",
-          gateway: "HARAKAPAY",
+          gateway: "CLICKPESA",
           createdAt: { lt: staleCutoff },
         },
       }),
       prisma.transaction.findFirst({
-        where: { gateway: "HARAKAPAY", status: "SUCCESS" },
+        where: { gateway: "CLICKPESA", status: "SUCCESS" },
         orderBy: { updatedAt: "desc" },
         select: { updatedAt: true, amount: true },
       }),
       // Charges a customer approved but the gateway never settled. Money may
       // already have left their handset, so this is an operational queue, not a
       // statistic — surfaced here so it cannot hide inside the admin panel.
-      prisma.transaction.count({
-        where: { status: "UNDER_INVESTIGATION" },
-      }),
+      prisma.transaction.count({ where: { status: "UNDER_INVESTIGATION" } }),
     ]);
 
     const deliveryWarning =
       !sandbox && stuckPending > 0
-        ? `${stuckPending} HarakaPay order(s) have been PENDING for over 15 minutes. ` +
-          "If customers never see a USSD prompt, the merchant account needs attention: " +
-          "confirm with HarakaPay that live collections are activated, that the key is a " +
-          "production key, and that the merchant float is funded. Share the order ids as evidence."
+        ? `${stuckPending} ClickPesa order(s) have been PENDING for over 15 minutes. ` +
+          "If customers never see a USSD prompt, confirm with ClickPesa that live " +
+          "collections are activated on your account and that the application is set " +
+          "up for USSD push. Share the order references as evidence."
         : null;
 
     return api.success({
       readyForLive,
-      gateway: "HARAKAPAY",
+      gateway: "CLICKPESA",
       checks,
-      balance,
-      float,
-      floatWarning: floatEmpty
-        ? "HarakaPay wallet and float are both 0 — top up your HarakaPay balance or collects may not settle."
-        : null,
       delivery: {
         stuckPending,
         deliveryWarning,
@@ -181,19 +142,9 @@ export async function GET() {
         investigationWarning:
           !sandbox && underInvestigation > 0
             ? `${underInvestigation} charge(s) were approved on the customer's phone but never settled. ` +
-              "These customers have been told not to pay again — resolve each one in Admin → Payments → Being checked. " +
-              "If this is a new merchant account, suspect an unfunded float."
+              "These customers have been told not to pay again — resolve each one in Admin → Payments → Being checked."
             : null,
       },
-      // Gateways charge a per-transaction fee; the 70/30 split is computed on the
-      // gross amount, so the platform's real margin is platformFee − gateway fee.
-      gatewayFeeNotice:
-        balance.ok && balance.float_balance !== undefined
-          ? "HarakaPay deducts a transaction fee (e.g. TZS 59 on TZS 1,000). The 70/30 split uses the gross amount, so the platform keeps its 30% minus that fee."
-          : null,
-      // The local circuit breaker. When it is open, gateway calls are being
-      // *skipped*, which reads as a failed balance check unless it is named — the
-      // operator would be sent hunting for a bad key that is actually fine.
       gatewayBreaker: {
         open: breaker.open,
         openUntil: breaker.open ? new Date(breaker.openUntil).toISOString() : null,
@@ -201,20 +152,18 @@ export async function GET() {
         skipped: breaker.skipped,
         warning: breakerWarning,
       },
-      // The breaker leads when it is open: every other line below is about a
-      // gateway the operator cannot currently reach, and reading them first
-      // sends somebody after the wrong fault.
+      // The breaker leads when it is open: every other line is about a gateway
+      // the operator cannot currently reach, and reading them first sends
+      // somebody after the wrong fault.
       summary: breakerWarning
         ? breakerWarning
         : readyForLive
           ? deliveryWarning
             ? "Live payments are on, but recent orders never settled — see delivery.deliveryWarning."
-            : floatEmpty
-              ? "Live payments are on, but the HarakaPay float is empty — top it up before going live."
-              : "Live payments are ready: a purchase will send a real USSD push to the customer's phone."
+            : "Live payments are ready: a purchase will send a real USSD push to the customer's phone."
           : sandbox
             ? "Sandbox is ON: no USSD push is sent and no money moves. Set PAYMENT_SANDBOX=false to go live."
-            : "Live mode is on but one or more checks failed — see checks/balance above.",
+            : "Live mode is on but one or more checks failed — see checks above.",
     });
   } catch (error) {
     if (error instanceof AuthError) {

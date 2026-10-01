@@ -35,11 +35,11 @@
 import prisma from "../db";
 import config from "../config";
 import {
-  harakaStatus,
-  harakaStatusToInternal,
-  harakaErrorReason,
-  harakaGatewayState,
-} from "../payments/harakapay";
+  clickpesaStatus,
+  clickpesaStatusToInternal,
+  clickpesaErrorReason,
+  clickpesaGatewayState,
+} from "../payments/clickpesa";
 import { processPaymentWebhook } from "./webhook.service";
 import { notifyPaymentResult } from "./payment-notify.service";
 
@@ -94,7 +94,7 @@ export async function reconcileStalePayments(options?: {
   };
 
   // Nothing to reconcile when the gateway is never contacted.
-  if (!config.harakaPay.apiKey || config.harakaPay.sandbox) return result;
+  if (!config.clickPesa.apiKey || config.clickPesa.sandbox) return result;
 
   const cutoff = new Date(Date.now() - olderThanMinutes * 60_000);
   const hardCutoff = new Date(Date.now() - HARD_TTL_MS);
@@ -105,7 +105,7 @@ export async function reconcileStalePayments(options?: {
       // most likely to have settled without us hearing about it (that missing
       // webhook is why they got stuck), so they need asking about most of all.
       status: { in: ["PENDING", "UNDER_INVESTIGATION"] },
-      gateway: "HARAKAPAY",
+      gateway: "CLICKPESA",
       providerRef: { not: null },
       createdAt: { lt: cutoff },
       ...(userId ? { userId } : {}),
@@ -126,7 +126,7 @@ export async function reconcileStalePayments(options?: {
   // answering recently. Do not walk the queue at all: every row would be refused
   // instantly (the bound at work), so the only things this run would produce are
   // a misleading `errors` count and a report that looks like work was done.
-  if (harakaGatewayState().open) {
+  if (clickpesaGatewayState().open) {
     result.gatewayUnavailable = true;
     result.unchecked = pending.length;
     return result;
@@ -136,9 +136,9 @@ export async function reconcileStalePayments(options?: {
     result.checked += 1;
 
     try {
-      const remote = await harakaStatus(tx.providerRef!);
+      const remote = await clickpesaStatus(tx.providerRef!);
       const internal = remote.payment
-        ? harakaStatusToInternal(remote.payment.status)
+        ? clickpesaStatusToInternal(remote.payment.status)
         : null;
 
       if (internal) {
@@ -147,7 +147,7 @@ export async function reconcileStalePayments(options?: {
           transactionId: tx.providerRef!,
           amount: tx.amount,
           status: internal,
-          provider: "HARAKAPAY",
+          provider: "CLICKPESA",
           metadata: { reconciled: "sweeper" },
         });
         if (internal === "SUCCESS") result.settledSuccess += 1;
@@ -203,7 +203,7 @@ export async function reconcileStalePayments(options?: {
     // have not reached either. Stop here rather than grinding through the rest —
     // the next scheduled run picks them up, and the count of what was skipped
     // travels with the result so a green-looking summary cannot hide the gap.
-    if (harakaGatewayState().open) {
+    if (clickpesaGatewayState().open) {
       result.gatewayUnavailable = true;
       result.unchecked = pending.length - result.checked;
       break;
@@ -315,15 +315,15 @@ export async function recheckPaymentCharge(
   }
 
   // Nothing to ask when the gateway is not reachable/in use.
-  if (!config.harakaPay.apiKey || config.harakaPay.sandbox) {
+  if (!config.clickPesa.apiKey || config.clickPesa.sandbox) {
     return { ok: true, status: tx.status, gatewayStatus: null, settled: false };
   }
 
-  let remote: Awaited<ReturnType<typeof harakaStatus>>;
+  let remote: Awaited<ReturnType<typeof clickpesaStatus>>;
   try {
-    remote = await harakaStatus(tx.providerRef);
+    remote = await clickpesaStatus(tx.providerRef);
   } catch (error) {
-    // Most often: HarakaPay has never heard of this order id. Report it instead
+    // Most often: ClickPesa has never heard of this order reference. Report it instead
     // of throwing, because "we could not ask" must not be mistaken for an answer
     // — the charge stays under investigation, which is the safe reading.
     return {
@@ -331,13 +331,13 @@ export async function recheckPaymentCharge(
       status: tx.status,
       gatewayStatus: null,
       settled: false,
-      gatewayError: harakaErrorReason(error),
+      gatewayError: clickpesaErrorReason(error),
     };
   }
 
   const gatewayStatus = remote.payment?.status ?? null;
   const internal = remote.payment
-    ? harakaStatusToInternal(remote.payment.status)
+    ? clickpesaStatusToInternal(remote.payment.status)
     : null;
 
   if (!internal) {
@@ -354,7 +354,7 @@ export async function recheckPaymentCharge(
     transactionId: tx.providerRef,
     amount: tx.amount,
     status: internal,
-    provider: "HARAKAPAY",
+    provider: "CLICKPESA",
     metadata: { reconciled: "admin-recheck" },
   });
 
@@ -405,7 +405,7 @@ export async function resolveInvestigation(params: {
       transactionId: tx.providerRef || `ADMIN-GRANT-${tx.id}`,
       amount: tx.amount,
       status: "SUCCESS",
-      provider: "HARAKAPAY",
+      provider: "CLICKPESA",
       metadata: { resolution: "granted", resolvedBy: actorId, note },
     });
     return { ok: true, outcome, amount: tx.amount, userId: tx.userId };

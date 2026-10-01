@@ -223,7 +223,7 @@ describe("the real USSD push stays opt-in", () => {
     // written (--wait never collects). What must not change is that the collect
     // is still gated on both arguments actually being there.
     const guard = source.indexOf("if (collectAmount && collectPhone");
-    const smoke = source.indexOf('"scripts/harakapay-smoke.mjs"');
+    const smoke = source.indexOf('"scripts/clickpesa-smoke.mjs"');
     expect(guard).toBeGreaterThan(-1);
     expect(smoke).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(smoke);

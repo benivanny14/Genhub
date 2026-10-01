@@ -3,7 +3,7 @@
 //
 // A schedule that stops firing is invisible. No request arrives, so there is no
 // log line, no error and no metric — the app looks exactly like an app with
-// nothing to do. That is how the HarakaPay webhook and the Bunny upload both
+// nothing to do. That is how the payment webhook and the Bunny upload both
 // stayed broken while every endpoint answered "success".
 //
 // So each worker stamps this table on every run, and "silence" becomes a
@@ -101,7 +101,7 @@ export interface CronWorkerDef {
   /**
    * True when running this worker reaches a customer's phone.
    *
-   * Only renew-subscriptions does: it falls back to a HarakaPay USSD push, so a
+   * Only renew-subscriptions does: it falls back to a ClickPesa USSD push, so a
    * stray run sends a real charge request to a real fan. The admin "Run now"
    * action therefore requires an explicit confirmation for it and not for the
    * others, where a run only moves internal state.

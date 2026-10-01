@@ -20,7 +20,7 @@
 // and hands the raw string here.
 //
 // This file lives beside webhook-auth.ts rather than in lib/payments/: it is an
-// authorization decision, the same kind of thing as the HarakaPay token rule
+// authorization decision, the same kind of thing as the gateway token rule
 // next door, and the gateway guard forbids anything but the integration in
 // lib/payments/.
 // =============================================================================
