@@ -91,6 +91,13 @@ export default function InboxPage() {
   // server is the source of truth and this is refreshed on load.
   const [messagesEnabled, setMessagesEnabled] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
+  // How many messages are waiting, across every conversation. Shown here and on
+  // the Inbox link (see InboxUnreadBadge), so a creator learns a fan has written
+  // without opening each thread — the whole point of an unread count.
+  const [unreadTotal, setUnreadTotal] = useState(0);
+  // The last total we showed. `null` means "nothing read yet", which is how the
+  // first answer is told apart from a message arriving while the page is open.
+  const lastUnreadRef = useRef<number | null>(null);
   // Whether the signed-in viewer is subscribed to the creator they have open.
   // `null` means "not answered yet" and is NOT permission: the composer stays
   // closed until the answer says otherwise. Treating `null` as allowed is what
@@ -138,6 +145,34 @@ export default function InboxPage() {
       threadRef.current.scrollTop = threadRef.current.scrollHeight;
     }
   }, [messages]);
+
+  /**
+   * Keep the unread count honest while the page is open.
+   *
+   * Without this the number was whatever it was when the page loaded, so a
+   * creator sitting in their inbox never saw the next fan's message arrive —
+   * they had to reload to find out, which is the opposite of being told.
+   *
+   * Sixty seconds, like the notification bell: a paid inbox is not a live feed,
+   * and every open tab asking every couple of seconds is a worse problem than a
+   * slightly old number. Paused while the tab is hidden, asked again the moment
+   * it is looked at. Signed-out visitors never poll: there is nothing waiting
+   * for an account that does not exist.
+   */
+  useEffect(() => {
+    if (!user?.id) return;
+    const refresh = () => {
+      if (document.visibilityState !== "visible") return;
+      void fetchConversations();
+    };
+    const timer = setInterval(refresh, 60_000);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   async function init() {
     try {
@@ -203,6 +238,25 @@ export default function InboxPage() {
       if (data.success) {
         const list: Conversation[] = data.data.conversations || [];
         setConversations(list);
+        // The server's total when it sends one; the badges' own sum otherwise,
+        // so the number and the badges can never disagree.
+        const total =
+          typeof data.data.unreadTotal === "number"
+            ? data.data.unreadTotal
+            : list.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+        setUnreadTotal(total);
+        // A message that arrives while this page is open is the one a creator
+        // must not miss — but a toast on every refresh is noise, so it fires only
+        // when the number actually grew. The first read is not "new": it is what
+        // the page already shows.
+        if (lastUnreadRef.current !== null && total > lastUnreadRef.current) {
+          const fresh = total - lastUnreadRef.current;
+          toast(
+            "info",
+            fresh === 1 ? "You have a new message" : `You have ${fresh} new messages`
+          );
+        }
+        lastUnreadRef.current = total;
         setDemoMode(false);
         return list;
       }
@@ -298,6 +352,11 @@ export default function InboxPage() {
     } finally {
       setThreadLoading(false);
     }
+
+    // Reading the thread marks the other side's messages read on the server, so
+    // the badges in the list are stale the moment this returns — and a badge
+    // that survives the reader reading is one they learn to ignore.
+    void fetchConversations();
   }
 
   async function handleSend() {
@@ -445,11 +504,29 @@ export default function InboxPage() {
                 isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
               )}>
                 <div className={cn(
-                  "px-4 py-3 border-b font-medium text-sm",
+                  "px-4 py-3 border-b font-medium text-sm flex items-center justify-between gap-2",
                   isLight ? "border-gray-100 text-gray-900" : "border-white/5 text-white"
                 )}>
-                  Conversations
+                  <span>Conversations</span>
+                  {unreadTotal > 0 && (
+                    <span className={cn(
+                      "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold",
+                      isLight ? "bg-brand-100 text-brand-700" : "bg-brand-500/20 text-brand-300"
+                    )}>
+                      {unreadTotal} new
+                    </span>
+                  )}
                 </div>
+                {unreadTotal > 0 && (
+                  <p className={cn(
+                    "px-4 py-2 text-xs border-b",
+                    isLight ? "bg-brand-50 text-brand-700 border-brand-100" : "bg-brand-500/10 text-brand-200 border-white/5"
+                  )}>
+                    {unreadTotal === 1
+                      ? "1 unread message is waiting — open the conversation to read it."
+                      : `${unreadTotal} unread messages are waiting — open a conversation to read them.`}
+                  </p>
+                )}
                 {conversations.length === 0 ? (
                   <div className="p-8 text-center">
                     <Inbox className={cn("w-10 h-10 mx-auto mb-3", isLight ? "text-gray-300" : "text-white/20")} />

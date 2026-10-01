@@ -262,11 +262,24 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// GET /api/messages?userId=xxx → thread; without userId → inbox conversation list
+// GET /api/messages?userId=xxx → thread; ?unread=1 → a count; else the inbox list
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth();
     const userId = request.nextUrl.searchParams.get("userId");
+
+    // Just the number of messages waiting, for the badge on the Inbox link.
+    //
+    // Asking for the conversation list instead would fetch up to 300 messages
+    // WITH both participants, on every page of the site, to render one digit.
+    // This is one count on an indexed column — cheap enough to poll from the
+    // header everywhere, which is the whole point of a badge nobody opens.
+    if (!userId && request.nextUrl.searchParams.get("unread") === "1") {
+      const unreadCount = await prisma.payMessage.count({
+        where: { receiverId: auth.userId, isRead: false },
+      });
+      return api.success({ unreadCount });
+    }
 
     if (!userId) {
       // Inbox: grouped conversation list for the current user
@@ -313,7 +326,14 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      return api.success({ conversations: Array.from(conversations.values()) });
+      const list = Array.from(conversations.values());
+      return api.success({
+        conversations: list,
+        // The same number the per-conversation badges add up to, so a caller
+        // does not have to re-derive it and cannot disagree with the badges it
+        // just rendered.
+        unreadTotal: list.reduce((sum, c) => sum + c.unreadCount, 0),
+      });
     }
 
     const messages = await prisma.payMessage.findMany({

@@ -34,6 +34,7 @@ import { useI18n } from "@/lib/i18n";
 import { useCurrency } from "@/lib/currency";
 import Image from "next/image";
 import NotificationBell from "@/components/NotificationBell";
+import InboxUnreadBadge from "@/components/InboxUnreadBadge";
 import { canOptimizeImage } from "@/lib/media";
 import { displayHandle } from "@/lib/usernames";
 
@@ -280,9 +281,12 @@ export default function Header() {
                   <Flame className="w-4 h-4" />
                   <span className="hidden lg:inline">Trending</span>
                 </Link>
-                <Link href="/inbox" className="btn-ghost flex items-center gap-2" title="Inbox">
+                <Link href="/inbox" className="btn-ghost relative flex items-center gap-2" title="Inbox">
                   <MessageSquare className="w-4 h-4" />
                   <span className="hidden lg:inline">Inbox</span>
+                  {/* Corner-anchored so the count is visible in the narrow
+                      layout too, where the label is hidden. */}
+                  <InboxUnreadBadge className="absolute -right-0.5 -top-0.5" />
                 </Link>
                 <Link href="/favorites" className="btn-ghost flex items-center gap-2" title="Saved videos">
                   <Heart className="w-4 h-4" />
@@ -530,6 +534,7 @@ export default function Header() {
                 </Link>
                 <Link href="/inbox" className="btn-ghost w-full flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
                   <MessageSquare className="w-5 h-5" /> Inbox
+                  <InboxUnreadBadge className="ml-auto" />
                 </Link>
                 <Link href="/wallet" className="btn-ghost w-full flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
                   <Wallet className="w-5 h-5" /> {t("nav.wallet")}

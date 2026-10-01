@@ -1,24 +1,24 @@
 // =============================================================================
 // GENHUB - Who pays for a message
 //
-// Two rules, and they are separate:
+// Three rules, and they are separate:
 //
 //   1. A viewer can only write to a CREATOR they are subscribed to. The
 //      subscription is the door.
-//   2. Once inside, the viewer still pays the amount they chose — a
-//      subscription does not make the message free. A CREATOR (or an admin)
-//      answering their own inbox pays nothing at all.
+//   2. Once inside, the viewer still pays — one fixed price per message
+//      (PAID_MESSAGE_PRICE). A subscription does not make a message cheaper, and
+//      a viewer never gets a free message.
+//   3. A CREATOR (or an admin) answering their own inbox pays nothing at all.
 //
 // The route used to ask three questions before naming a price — does the sender
 // subscribe, does the receiver subscribe, did the receiver write first — and a
-// yes on any of them made the message free. That is not this: here the
-// subscription is required and the price is still the request's. No viewer ever
-// gets a free message, and no thread history is read.
+// yes on any of them made the message free. It then took the amount from the
+// request, so "100 per message" was a rule only the composer followed. Neither
+// is true now: the door is the subscription, the price is a server-side
+// constant, and no thread history is read to decide either.
 //
 // The free-reply rule is keyed on the SENDER'S ROLE, read from the database (a
-// role can change long before a session is reissued) and on nothing else. The
-// amount is required, floored and capped by the same constants the composer
-// renders.
+// role can change long before a session is reissued) and on nothing else.
 //
 // Prisma, auth and the wallet service are mocked; no database, no money.
 // =============================================================================
@@ -40,9 +40,10 @@ const mocks = vi.hoisted(() => ({
   upsertBalance: vi.fn(),
   createTransaction: vi.fn(),
   createNotification: vi.fn(),
-  // Read side: the thread and the inbox.
+  // Read side: the thread, the inbox, and the badge's bare count.
   findMany: vi.fn(),
   updateMany: vi.fn(),
+  count: vi.fn(),
   // The daily spend cap, which is exercised on its own in
   // src/tests/spend-cap.test.ts. Here it is a switch, so a send test can prove
   // that a refused cap stops the charge before any money moves.
@@ -67,6 +68,7 @@ vi.mock("@/lib/db", () => ({
       findFirst: (...a: unknown[]) => mocks.findMessage(...a),
       findMany: (...a: unknown[]) => mocks.findMany(...a),
       updateMany: (...a: unknown[]) => mocks.updateMany(...a),
+      count: (...a: unknown[]) => mocks.count(...a),
     },
     $transaction: (fn: (client: unknown) => unknown) => fn(tx),
   },
@@ -624,5 +626,54 @@ describe("both sides of the conversation can read it", () => {
     expect(body.data.conversations[0].partner.id).toBe(CREATOR);
     // The reply is what the fan has not read yet.
     expect(body.data.conversations[0].unreadCount).toBe(1);
+  });
+});
+
+// =============================================================================
+// How many are waiting — the number the Inbox link and the list both show.
+//
+// A creator earns from their inbox, so the one thing they must not miss is a fan
+// who has paid to be heard. The badge asks a question of its own rather than
+// reading the conversation list, because it runs on every page of the site.
+// =============================================================================
+
+describe("how many messages are waiting", () => {
+  it("answers a bare count for the badge, without building the inbox", async () => {
+    asViewer();
+    mocks.count.mockResolvedValue(3);
+
+    const res = await GET(read("?unread=1"));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.unreadCount).toBe(3);
+    expect(mocks.count).toHaveBeenCalledWith({
+      where: { receiverId: VIEWER, isRead: false },
+    });
+    // The point of the mode: one indexed count, not the 300-message read the
+    // conversation list performs — on every page of the site, for one digit.
+    expect(mocks.findMany).not.toHaveBeenCalled();
+  });
+
+  it("reports the total the badges add up to, beside the list", async () => {
+    asViewer();
+    const message = (id: string) => ({
+      id,
+      senderId: CREATOR,
+      receiverId: VIEWER,
+      amount: PAID_MESSAGE_PRICE,
+      content: "hi",
+      isRead: false,
+      createdAt: new Date("2026-09-26T10:00:00Z"),
+      sender: { id: CREATOR, displayName: "Creator", avatarUrl: null, role: "CREATOR" },
+      receiver: { id: VIEWER, displayName: "Fan", avatarUrl: null, role: "VIEWER" },
+    });
+    mocks.findMany.mockResolvedValue([message("m1"), message("m2")]);
+
+    const res = await GET(read());
+    const body = await res.json();
+
+    expect(body.data.conversations[0].unreadCount).toBe(2);
+    expect(body.data.unreadTotal).toBe(2);
   });
 });
