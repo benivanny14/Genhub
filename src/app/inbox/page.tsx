@@ -92,8 +92,10 @@ export default function InboxPage() {
   const [messagesEnabled, setMessagesEnabled] = useState(true);
   const [savingSettings, setSavingSettings] = useState(false);
   // Whether the signed-in viewer is subscribed to the creator they have open.
-  // `null` means "not asked yet" (or a non-creator partner), which the composer
-  // treats as allowed — the server still enforces the real rule on send.
+  // `null` means "not answered yet" and is NOT permission: the composer stays
+  // closed until the answer says otherwise. Treating `null` as allowed is what
+  // showed a viewer a composer whose send button the subscription check then
+  // refused — the "it let me write and then blocked me" report.
   const [partnerSubscribed, setPartnerSubscribed] = useState<boolean | null>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   // The account's own role, from the loaded session. A ref because the first
@@ -114,6 +116,10 @@ export default function InboxPage() {
   // The creator on screen is one this viewer cannot write to yet.
   const partnerNeedsSubscription =
     activePartner?.role === "CREATOR" && !freeReply && partnerSubscribed === false;
+  // The answer is still on its way. Kept apart from the refusal so a slow check
+  // shows a sentence instead of briefly accusing the viewer of not following.
+  const partnerSubsCheckPending =
+    activePartner?.role === "CREATOR" && !freeReply && partnerSubscribed === null;
 
   useEffect(() => {
     init();
@@ -256,18 +262,23 @@ export default function InboxPage() {
     // are exempt (they are not writing TO a creator, they ARE one).
     const selfRole = selfRoleRef.current;
     const exempt = selfRole === "CREATOR" || selfRole === "ADMIN";
-    if (!demoMode && partner.role === "CREATOR" && !exempt) {
+    if (demoMode) {
+      // A preview has no subscriptions to check, and its composer stays usable.
+      setPartnerSubscribed(true);
+    } else if (partner.role === "CREATOR" && !exempt) {
       setPartnerSubscribed(null);
       try {
         const res = await fetch(`/api/subscriptions?creatorId=${partner.id}`);
         const data = await res.json();
         setPartnerSubscribed(Boolean(data?.success && data.data?.subscribed));
       } catch {
-        // Leave it unknown; the API refuses the send if the answer is really no.
-        setPartnerSubscribed(null);
+        // A failed check is a NO, not an unknown: leaving it open hands the
+        // viewer a composer the very next tap refuses.
+        setPartnerSubscribed(false);
       }
     } else {
-      setPartnerSubscribed(null);
+      // Not writing to a creator (or exempt from the rule): nothing to gate.
+      setPartnerSubscribed(true);
     }
 
     if (demoMode) {
@@ -565,6 +576,15 @@ export default function InboxPage() {
                       {demoMode ? (
                         <p className={cn("text-xs text-center py-2", isLight ? "text-amber-600" : "text-amber-400")}>
                           Demo mode — connect a database to send real messages.
+                        </p>
+                      ) : partnerSubsCheckPending ? (
+                        <p
+                          className={cn(
+                            "text-xs text-center py-2",
+                            isLight ? "text-gray-400" : "text-white/40"
+                          )}
+                        >
+                          Checking your subscription…
                         </p>
                       ) : partnerNeedsSubscription ? (
                         /* The composer is replaced, not merely disabled: an

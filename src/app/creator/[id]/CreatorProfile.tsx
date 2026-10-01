@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { canOptimizeImage } from "@/lib/media";
 import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
+import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 import { displayHandle } from "@/lib/usernames";
 
 interface CreatorProfile {
@@ -388,14 +389,29 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
             )}
 
             {/* Messages are paid per message at a fixed price (see
-                lib/pay-message.ts), and the composer in /inbox is where a
-                subscriber sends one — so this is the way in. */}
-            <Link
-              href={`/inbox?userId=${creator.id}`}
-              className="btn-ghost flex items-center justify-center gap-2 text-sm"
-            >
-              <MessageCircle className="w-4 h-4" /> Message
-            </Link>
+                lib/pay-message.ts), and a subscription is the DOOR to them:
+                /api/messages refuses a viewer who does not follow the creator.
+                So the link is offered only to somebody who is through that
+                door — a Message button that opens a composer the send button
+                then refuses is a dead end, and it advertised a free inbox that
+                does not exist. The Subscribe button beside it is the way in. */}
+            {subscribed ? (
+              <Link
+                href={`/inbox?userId=${creator.id}`}
+                className="btn-ghost flex items-center justify-center gap-2 text-sm"
+              >
+                <MessageCircle className="w-4 h-4" /> Message
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled
+                title={`Subscribe to ${displayHandle(creator, "this creator")} first — messages then cost TZS ${PAID_MESSAGE_PRICE} each`}
+                className="btn-ghost flex items-center justify-center gap-2 text-sm opacity-40 cursor-not-allowed"
+              >
+                <MessageCircle className="w-4 h-4" /> Subscribe to message
+              </button>
+            )}
           </div>
         </div>
 

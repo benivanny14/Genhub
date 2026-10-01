@@ -68,6 +68,7 @@ import { serializeJsonLd } from "@/lib/json-ld";
 import IntroClipPlayer from "@/components/IntroClipPlayer";
 import { displayHandle } from "@/lib/usernames";
 import { categoryHref, getCategory } from "@/lib/categories";
+import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 
 /**
  * How many times the animated intro is asked for again before the page gives up
@@ -544,6 +545,41 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     // saved position every time the video object is replaced after a purchase.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [video?.id, user?.id, isDemo, viewAsVisitor]);
+
+  /**
+   * Whether this viewer may write to the creator.
+   *
+   * A subscription is the DOOR to a creator's inbox — /api/messages refuses a
+   * viewer who does not follow them — so the Message button is only offered once
+   * that door is open. `null` (still asking, or signed out) is deliberately NOT
+   * permission: a button that opens a composer the send button then refuses is a
+   * dead end, and it advertised a free inbox that does not exist. The creator
+   * themself and an admin are through already.
+   */
+  const [subscribedToCreator, setSubscribedToCreator] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!user || !video) return;
+    if (isDemo || user.id === video.creator.id || user.role === "ADMIN") {
+      setSubscribedToCreator(true);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/subscriptions?creatorId=${video.creator.id}`);
+        const data = await res.json();
+        if (!cancelled) {
+          setSubscribedToCreator(Boolean(data?.success && data.data?.subscribed));
+        }
+      } catch {
+        if (!cancelled) setSubscribedToCreator(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id, user?.role, video?.id, video?.creator.id, isDemo]);
 
   const fetchVideo = useCallback(async () => {
     let found = false;
@@ -1808,13 +1844,29 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
             {/* Straight into this creator's thread: the inbox opens on the
                 conversation list otherwise, and a creator the viewer has never
-                written to is not on it. */}
-            <Link
-              href={`/inbox?userId=${video.creator.id}`}
-              className="btn-ghost flex items-center gap-2 text-sm"
-            >
-              <MessageCircle className="w-4 h-4" /> Message creator
-            </Link>
+                written to is not on it.
+
+                Offered only once the viewer follows the creator, because that
+                is the rule /api/messages enforces — a viewer who is not through
+                that door gets the way to it instead of a composer that refuses
+                to send. */}
+            {subscribedToCreator === true ? (
+              <Link
+                href={`/inbox?userId=${video.creator.id}`}
+                className="btn-ghost flex items-center gap-2 text-sm"
+              >
+                <MessageCircle className="w-4 h-4" /> Message creator
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled
+                title={`Subscribe to ${displayHandle(video.creator, "this creator")} first — messages then cost TZS ${PAID_MESSAGE_PRICE} each`}
+                className="btn-ghost flex items-center gap-2 text-sm opacity-40 cursor-not-allowed"
+              >
+                <MessageCircle className="w-4 h-4" /> Subscribe to message
+              </button>
+            )}
             <button
               onClick={handleShare}
               className="btn-ghost flex items-center gap-2 text-sm"
