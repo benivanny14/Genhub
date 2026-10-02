@@ -91,13 +91,42 @@ export async function getFeatureFlags(): Promise<FeatureFlags> {
   };
 }
 
+/**
+ * The banner's colour. `danger` is the loud red one, and it is the default: an
+ * announcement exists to be noticed, and a banner that blends into the page is a
+ * banner nobody reads ("malipo yamerudi", "tunafanya matengenezo"). The other
+ * three stay for the cases where red would be crying wolf — a soft greeting, a
+ * scheduled-window note — so `danger` is not forced on every message.
+ */
+export type AnnouncementTone = "danger" | "info" | "warning" | "success";
+
+const ANNOUNCEMENT_TONES: readonly AnnouncementTone[] = [
+  "danger",
+  "info",
+  "warning",
+  "success",
+];
+
+/**
+ * A stored tone, or the red default.
+ *
+ * Anything unrecognised — an older row, a hand-edited value, a typo — becomes
+ * `danger` rather than `info`. The failure this avoids: an operator publishes a
+ * warning, the tone is not one we know, and it renders as a quiet blue note.
+ */
+export function normalizeAnnouncementTone(value: unknown): AnnouncementTone {
+  return ANNOUNCEMENT_TONES.includes(value as AnnouncementTone)
+    ? (value as AnnouncementTone)
+    : "danger";
+}
+
 export interface Announcement {
   active: boolean;
   message: string;
-  tone: "info" | "warning" | "success";
+  tone: AnnouncementTone;
 }
 
-const NO_ANNOUNCEMENT: Announcement = { active: false, message: "", tone: "info" };
+const NO_ANNOUNCEMENT: Announcement = { active: false, message: "", tone: "danger" };
 
 /** The site-wide banner an admin sets, or an inactive one. Parse failures are inactive. */
 export async function getAnnouncement(): Promise<Announcement> {
@@ -107,12 +136,10 @@ export async function getAnnouncement(): Promise<Announcement> {
 
   try {
     const parsed = JSON.parse(raw) as Partial<Announcement>;
-    const tone =
-      parsed.tone === "warning" || parsed.tone === "success" ? parsed.tone : "info";
     return {
       active: parsed.active === true,
       message: typeof parsed.message === "string" ? parsed.message.slice(0, 500) : "",
-      tone,
+      tone: normalizeAnnouncementTone(parsed.tone),
     };
   } catch {
     return NO_ANNOUNCEMENT;

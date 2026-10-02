@@ -959,8 +959,10 @@ export default function AdminDashboard() {
   const [announcement, setAnnouncement] = useState<{
     active: boolean;
     message: string;
-    tone: "info" | "warning" | "success";
-  }>({ active: false, message: "", tone: "info" });
+    tone: "danger" | "info" | "warning" | "success";
+    // `danger` (red) by default: an announcement is published to be noticed, and
+    // a quiet default is how one gets missed.
+  }>({ active: false, message: "", tone: "danger" });
   const [announcementBusy, setAnnouncementBusy] = useState(false);
   // Starting a worker by hand: which one is running, which one is waiting for
   // the operator to confirm that it may charge a customer's phone, and what the
@@ -2488,9 +2490,10 @@ export default function AdminDashboard() {
                     }
                     className="input-field text-xs py-1.5 w-auto"
                   >
-                    <option value="info">Info</option>
-                    <option value="warning">Warning</option>
-                    <option value="success">Success</option>
+                    <option value="danger">Red — urgent (default)</option>
+                    <option value="warning">Amber — warning</option>
+                    <option value="success">Green — good news</option>
+                    <option value="info">Blue — quiet note</option>
                   </select>
                   <button
                     onClick={() =>

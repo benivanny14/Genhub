@@ -161,12 +161,20 @@ export default function Header() {
   const isLight = theme === "light";
 
   return (
-    <header className={cn(
-      "sticky top-0 z-50 backdrop-blur-xl border-b safe-top transition-colors duration-300",
-      isLight
-        ? "bg-white/80 border-gray-200/50"
-        : "bg-surface-500/80 border-white/5"
-    )}>
+    <header
+      // `top` is not 0: the announcement banner (SiteBanner) is sticky above this
+      // header and is taller than one line when its message wraps, so it
+      // publishes its measured height as a CSS variable and the header parks
+      // itself directly beneath it. With no banner the variable is 0px, which is
+      // exactly the old `top-0`.
+      style={{ top: "var(--site-banner-height, 0px)" }}
+      className={cn(
+        "sticky z-50 backdrop-blur-xl border-b safe-top transition-colors duration-300",
+        isLight
+          ? "bg-white/80 border-gray-200/50"
+          : "bg-surface-500/80 border-white/5"
+      )}
+    >
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}

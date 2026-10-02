@@ -23,6 +23,7 @@ import {
   getAllVideosFree,
   getAnnouncement,
   getFeatureFlags,
+  normalizeAnnouncementTone,
   setSetting,
   type Announcement,
 } from "@/lib/services/platform-setting.service";
@@ -114,7 +115,9 @@ export async function POST(request: NextRequest) {
       const announcement: Announcement = {
         active: raw.active === true,
         message: typeof raw.message === "string" ? raw.message.slice(0, 500) : "",
-        tone: raw.tone === "warning" || raw.tone === "success" ? raw.tone : "info",
+        // Red by default (see normalizeAnnouncementTone): an announcement is
+        // published to be noticed.
+        tone: normalizeAnnouncementTone(raw.tone),
       };
       await setSetting(
         PLATFORM_SETTING_KEYS.announcement,
