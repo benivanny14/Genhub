@@ -66,6 +66,7 @@
 import prisma from "../db";
 import { resyncSubscriberCount } from "./subscription.service";
 import { debitWallet } from "./balance.service";
+import { createNotification } from "./notify.service";
 
 /** Where the customer's money actually goes back to. */
 export type RefundDestination = "WALLET" | "GATEWAY";
@@ -527,14 +528,13 @@ async function notifyReversal(params: {
                 : "")
           : `Your ${label} of ${tzs(amount)} has been refunded by ClickPesa. The money is being returned to the number you paid from — it can take up to 48 hours to appear on your phone, and it will not show in your wallet.`;
 
-    await prisma.notification.create({
-      data: {
-        userId,
-        title: "Refund processed 💸",
-        message: customerMessage + (reason?.trim() ? ` (${reason.trim()})` : ""),
-        type: "success",
-        link: "/payments",
-      },
+    await createNotification({
+      userId,
+      title: "Refund processed 💸",
+      message: customerMessage + (reason?.trim() ? ` (${reason.trim()})` : ""),
+      type: "success",
+      link: "/payments",
+      pushTag: "refund",
     });
   } catch (error) {
     console.warn("[Reversal] Customer notice failed:", error);
@@ -543,19 +543,18 @@ async function notifyReversal(params: {
   if (!creatorId || creatorShare <= 0) return;
 
   try {
-    await prisma.notification.create({
-      data: {
-        userId: creatorId,
-        title: "A sale was reversed",
-        message:
-          `A ${label} of ${tzs(amount)} was refunded to the customer. ` +
-          `Your ${tzs(creatorShare - shortfall)} share was taken back from your balance` +
-          (shortfall > 0
-            ? `; ${tzs(shortfall)} had already been paid out and could not be recovered, so it has been recorded as a platform loss.`
-            : "."),
-        type: "warning",
-        link: "/creator/analytics",
-      },
+    await createNotification({
+      userId: creatorId,
+      title: "A sale was reversed",
+      message:
+        `A ${label} of ${tzs(amount)} was refunded to the customer. ` +
+        `Your ${tzs(creatorShare - shortfall)} share was taken back from your balance` +
+        (shortfall > 0
+          ? `; ${tzs(shortfall)} had already been paid out and could not be recovered, so it has been recorded as a platform loss.`
+          : "."),
+      type: "warning",
+      link: "/creator/analytics",
+      pushTag: "reversal",
     });
   } catch (error) {
     console.warn("[Reversal] Creator notice failed:", error);

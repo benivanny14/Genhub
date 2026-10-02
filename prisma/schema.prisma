@@ -231,6 +231,8 @@ model User {
   playlists           Playlist[]
   couponRedemptions   CouponRedemption[]
   blueTickRequests    BlueTickRequest[]
+  appeals             Appeal[]
+  pushSubscriptions   PushSubscription[]
 
   @@index([email])
   @@index([referralCode])
@@ -238,6 +240,75 @@ model User {
   @@index([role])
   @@index([kycStatus])
   @@index([isBanned])
+}
+
+// =============================================================================
+// APPEALS
+//
+// When an account is suspended, the person's only route back was to email and
+// hope. There was no queue, no status they could see, and no record of the
+// decision — so "did anyone read my appeal?" had no answer. This is that queue:
+// one row per request, readable by the person who filed it and by the admins who
+// decide it.
+//
+// The verdict is stamped with who made it and when, and every decision writes
+// an AdminAuditLog entry as well (appeal.resolved), so the appeal row can be
+// edited for tidiness without erasing the fact that a decision happened.
+// =============================================================================
+
+model Appeal {
+  id           String       @id @default(cuid())
+  userId       String
+  /// What is being appealed: BAN | KYC | CONTENT.
+  kind         String       @default("BAN")
+  message      String
+  status       AppealStatus @default(PENDING)
+  reviewedBy   String?
+  reviewerNote String?
+  reviewedAt   DateTime?
+  createdAt    DateTime     @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+enum AppealStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// =============================================================================
+// PUSH SUBSCRIPTIONS
+//
+// One row per device a person has allowed browser notifications on. The
+// `endpoint` is unique because it IS the device: re-subscribing the same phone
+// must update the keys it rotates, not add a second row that sends the same
+// notification twice. A dead endpoint is deleted when the push service rejects
+// it (see lib/services/push.service.ts) rather than kept forever.
+//
+// The keys are secrets in the same sense a password hash is: they let us send a
+// message only the browser that made them can read, so they never leave the
+// server.
+// =============================================================================
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  /// The push service URL for one browser install. @unique — see above.
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  /// Best-effort label, so a person with several devices can tell rows apart.
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 // =============================================================================
@@ -303,6 +374,14 @@ model Video {
   dislikesCount   Int      @default(0)
   purchaseCount   Int      @default(0)
   isPublished     Boolean  @default(false)
+  /// A creator's unfinished post: not published, and not scheduled either.
+  /// Kept separate from `scheduledAt` so "hold this until I finish it" and
+  /// "publish this at 20:00" cannot be confused for each other.
+  isDraft         Boolean  @default(false)
+  /// When a scheduled post should go live. NULL for an immediately-published
+  /// post. The row stays `isPublished: false` until a sweep sees the time pass,
+  /// so the feed's existing `isPublished: true` filter hides it without change.
+  scheduledAt     DateTime?
   isFlagged       Boolean  @default(false)
   isDeleted       Boolean  @default(false)
   isPremium       Boolean  @default(false) // Shown with lock + watermark
@@ -367,6 +446,8 @@ model Video {
   @@index([price])
   // Drives the poller: find everything still encoding without scanning the table.
   @@index([encodingStatus])
+  // Drives the scheduled-publish sweep: find posts whose time has come.
+  @@index([scheduledAt])
 }
 
 // =============================================================================
@@ -409,6 +490,7 @@ model Transaction {
   viewer     User              @relation("ViewerTransactions", fields: [userId], references: [id])
   creator    User?             @relation("CreatorTransactions", fields: [creatorId], references: [id])
   video      Video?            @relation(fields: [videoId], references: [id])
+  events     PaymentEvent[]
 
   @@index([userId])
   @@index([creatorId])
@@ -416,6 +498,41 @@ model Transaction {
   @@index([status])
   @@index([type])
   @@index([providerRef])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// PAYMENT EVENTS (the journey of one charge)
+//
+// A charge can fail in a dozen places — the gateway rejects it outright, it
+// throws before producing an answer, the customer approves and no settlement
+// ever arrives, an admin resolves it by hand. `Transaction.status` records only
+// the LAST of those, so a FAILED row tells an operator nothing about whether a
+// USSD prompt was ever sent, whether a webhook ever arrived, or what the
+// customer was actually shown. That is the difference between a five-minute
+// diagnosis and an afternoon.
+//
+// One append-only row per thing that happened, with the moment it happened. The
+// table is a log, not a state machine: nothing here is ever rewritten, so the
+// order of the rows is the truth even after the status column has moved on.
+// =============================================================================
+
+model PaymentEvent {
+  id            String   @id @default(cuid())
+  transactionId String
+  /// Dotted code: checkout.created, collect.started, collect.rejected,
+  /// collect.failed, webhook.received, webhook.ignored, settled.success,
+  /// settled.failed, investigation.open, checkout.expired, admin.action.
+  kind          String
+  /// One human sentence for the timeline.
+  detail        String?
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+
+  @@index([transactionId])
+  @@index([kind])
   @@index([createdAt])
 }
 
@@ -1042,6 +1159,32 @@ model BlueTickRequest {
 /// that has already been fixed. One row per worker that the watchdog has seen
 /// needing attention; the row is closed out with `resolvedAt` rather than
 /// deleted, so the app keeps the record even when a webhook delivery fails.
+// =============================================================================
+// PLATFORM SETTINGS (operator switches that affect every account)
+//
+// A small key/value table, deliberately. The first entry is the admin's
+// "all videos are free right now" switch: while it is on, every paid scene plays
+// for everyone — signed in or not — without a purchase, a subscription or a
+// charge, and the switch is recorded in AdminAuditLog (videos.all_free /
+// videos.paid) so "who opened the whole catalogue, and when?" has an answer.
+//
+// A row rather than an environment variable because the whole point is that an
+// admin flips it from the panel and it takes effect immediately, with no
+// redeploy — and a table rather than a boolean column on a singleton because the
+// next operator switch should not need its own migration.
+// =============================================================================
+
+model PlatformSetting {
+  key       String   @id
+  value     String
+  /// The admin who last changed it. Not a relation — a setting outlives the
+  /// account that set it, and deleting that admin must not erase the switch.
+  updatedBy String?
+  updatedAt DateTime @updatedAt
+
+  @@index([key])
+}
+
 model CronWatch {
   id           String    @id @default(cuid())
   worker       String    @unique

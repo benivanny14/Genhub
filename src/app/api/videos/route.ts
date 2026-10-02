@@ -25,6 +25,22 @@ import { normalizeMediaUrl } from "@/lib/media";
 import { BUNNY_FAILED, videoStatus } from "@/lib/video-status";
 import config from "@/lib/config";
 import { confirmVideoUpload, verifyVideoUploadSession } from "@/lib/video-upload-session";
+import { getFeatureFlags } from "@/lib/services/platform-setting.service";
+import { publishDueVideos } from "@/lib/services/scheduled-publish.service";
+
+/**
+ * A non-negative integer query param, or `undefined` when absent or junk.
+ *
+ * `intParam` cannot be reused here: it floors at 1, which is right for a page
+ * number and wrong for a price bound — `priceMin=0` (free scenes included in a
+ * range) is a real filter, and "absent" has to stay distinguishable from it.
+ */
+function optionalPrice(raw: string | null): number | undefined {
+  if (raw === null || raw.trim() === "") return undefined;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return undefined;
+  return Math.min(100_000_000, parsed);
+}
 
 // =============================================================================
 // GET /api/videos - Public feed with optional search
@@ -38,6 +54,12 @@ export async function GET(request: NextRequest) {
       60_000
     );
     if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
+
+    // Publish any scheduled post whose time has arrived, BEFORE the feed is
+    // read or its cache consulted. This is the whole reason the sweep lives
+    // here: a viewer's request is the one that must not be wrong, so the request
+    // that lists the feed is the request that guarantees a due post is in it.
+    await publishDueVideos();
 
     const searchParams = request.nextUrl.searchParams;
     // intParam, not `parseInt`: a letter in the page number is NaN, and a NaN
@@ -61,12 +83,23 @@ export async function GET(request: NextRequest) {
     const sortBy = searchParams.get("sort") || "newest";
     const durationFilter = searchParams.get("duration") || ""; // short | medium | long
     const dateFilter = searchParams.get("date") || ""; // day | week | month | year
+    // Price and creator-quality filters. `priceMin`/`priceMax` bound the price;
+    // `maxPrice` is the "under X" shorthand the UI sends for its preset chips,
+    // folded onto priceMax so the two cannot disagree. `verified=1` keeps only
+    // videos by a blue-tick creator. All are clamped to sane integers so a junk
+    // value cannot become a NaN bound Prisma refuses (or widen the cache).
+    const minPrice = optionalPrice(searchParams.get("priceMin"));
+    const priceMax = optionalPrice(
+      searchParams.get("priceMax") ?? searchParams.get("maxPrice")
+    );
+    const verifiedOnly = searchParams.get("verified") === "1";
+    const freeOnly = searchParams.get("free") === "1";
 
     // creatorId belongs in the key: without it one creator's page would be
     // served the cached general feed, and the bug above would survive the fix.
     // Every attacker-controlled part is bounded above, so the number of distinct
     // keys is finite.
-    const cacheKey = `videos:list:${page}:${limit}:${search.toLowerCase()}:${category}:${sortBy}:${durationFilter}:${dateFilter}:${creatorId}`;
+    const cacheKey = `videos:list:${page}:${limit}:${search.toLowerCase()}:${category}:${sortBy}:${durationFilter}:${dateFilter}:${creatorId}:${minPrice ?? ""}:${priceMax ?? ""}:${verifiedOnly ? 1 : 0}:${freeOnly ? 1 : 0}`;
     const cached = await cacheGet(cacheKey);
     if (cached) {
       return api.success(cached);
@@ -123,6 +156,19 @@ export async function GET(request: NextRequest) {
             },
           }
         : {}),
+      // Free-only wins over any price bound: a viewer asking for free scenes
+      // means exactly 0, not "0 to something".
+      ...(freeOnly
+        ? { price: 0 }
+        : minPrice !== undefined || priceMax !== undefined
+        ? {
+            price: {
+              ...(minPrice !== undefined ? { gte: minPrice } : {}),
+              ...(priceMax !== undefined ? { lte: priceMax } : {}),
+            },
+          }
+        : {}),
+      ...(verifiedOnly ? { creator: { isVerified: true } } : {}),
     };
 
     const orderBy =
@@ -331,6 +377,18 @@ export async function POST(request: NextRequest) {
   try {
     const auth = await requireRole("CREATOR");
 
+    // Operator kill switch: uploads can be paused without a deploy (a storage
+    // incident, a moderation backlog). Refused BEFORE any Bunny work, and the
+    // creator is told why rather than watching an upload fail at the end.
+    const flags = await getFeatureFlags();
+    if (!flags.uploadsEnabled && auth.role !== "ADMIN") {
+      return api.error(
+        "Uploads are temporarily paused. Your file was not sent — please try again shortly.",
+        503,
+        "UPLOADS_PAUSED"
+      );
+    }
+
     // Check KYC
     if (auth.role !== "ADMIN") {
       const user = await prisma.user.findUnique({
@@ -369,7 +427,21 @@ export async function POST(request: NextRequest) {
       fileSize,
       uploadSessionToken,
       teaserUploadSessionToken,
+      isDraft,
+      publishAt,
     } = result.data;
+
+    // A draft is unpublished; a future `publishAt` is scheduled; anything else
+    // publishes now. Draft wins over a time, because "I am not finished" is a
+    // stronger statement than "go live at 8".
+    const holdAsDraft = isDraft === true;
+    const scheduledAt = publishAt ? new Date(publishAt) : null;
+    const publishLater =
+      !holdAsDraft &&
+      !!scheduledAt &&
+      Number.isFinite(scheduledAt.getTime()) &&
+      scheduledAt.getTime() > Date.now() + 60_000;
+    const shouldPublish = !holdAsDraft && !publishLater;
 
     // The file is uploaded before this request. If the response is lost, the
     // creator retries finalization with the same Bunny id; creating a second
@@ -547,7 +619,12 @@ export async function POST(request: NextRequest) {
         teaserDuration,
         category,
         tags: tags || [],
-        isPublished: true,
+        // A scheduled or draft post is stored unpublished; the feed's existing
+        // `isPublished: true` filter hides it with no change there, and
+        // publishDueVideos() flips it when the time comes.
+        isPublished: shouldPublish,
+        isDraft: holdAsDraft,
+        scheduledAt: publishLater ? scheduledAt : null,
         encodingStatus: awaitingTranscode ? 0 : null,
         // The creator's own size, kept beside the host's number so the dashboard
         // can answer "did the whole file arrive?" instead of only "does the host
@@ -581,7 +658,11 @@ export async function POST(request: NextRequest) {
         ...video,
         status: videoStatus(video.encodingStatus, video.encodeProgress),
       },
-      awaitingTranscode
+      holdAsDraft
+        ? "Saved as a draft — publish it from your dashboard when you are ready"
+        : publishLater
+        ? `Scheduled — it goes live ${scheduledAt!.toLocaleString()}`
+        : awaitingTranscode
         ? "Video posted — it is already on your profile while it finishes processing"
         : "Video created successfully",
       201

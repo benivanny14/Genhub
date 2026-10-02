@@ -16,6 +16,7 @@
 
 import prisma from "../db";
 import config from "../config";
+import { sendPushToUser } from "./push.service";
 
 const TYPE_LABELS: Record<string, string> = {
   PPV_PURCHASE: "Video purchase",
@@ -81,22 +82,37 @@ export async function notifyPaymentResult(params: PaymentNoticeParams): Promise<
       "**Please do not pay again** — if it turns out the money did leave your phone we will unlock your purchase, " +
       "and if it did not we will release the charge so you can retry.";
 
+    const noticeTitle = succeeded
+      ? "Payment successful ✅"
+      : investigating
+        ? "We are checking your payment ⏳"
+        : "Payment failed";
+    const noticeBody = succeeded
+      ? `${label}${detail} — ${amount} has been paid.`
+      : investigating
+        ? `${label}${detail} — ${amount}: ${investigationDetail}`
+        : `${label}${detail} — ${amount} did not go through. ${failureDetail}`;
+    const noticeLink = succeeded ? link : "/payments";
+
     await prisma.notification.create({
       data: {
         userId: tx.userId,
-        title: succeeded
-          ? "Payment successful ✅"
-          : investigating
-            ? "We are checking your payment ⏳"
-            : "Payment failed",
-        message: succeeded
-          ? `${label}${detail} — ${amount} has been paid.`
-          : investigating
-            ? `${label}${detail} — ${amount}: ${investigationDetail}`
-            : `${label}${detail} — ${amount} did not go through. ${failureDetail}`,
+        title: noticeTitle,
+        message: noticeBody,
         type: succeeded ? "success" : investigating ? "warning" : "error",
-        link: succeeded ? link : "/payments",
+        link: noticeLink,
       },
+    });
+
+    // The same notice, on the customer's lock screen. Best-effort: the in-app
+    // notification above is already delivered, so a push failure changes nothing
+    // the customer needs. The `tag` collapses a retried charge's notices into
+    // one banner rather than stacking duplicates.
+    void sendPushToUser(tx.userId, {
+      title: noticeTitle,
+      body: noticeBody,
+      url: noticeLink,
+      tag: `payment-${transactionId}`,
     });
 
     if (tx.viewer.email) {

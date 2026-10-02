@@ -21,6 +21,7 @@ import BottomNav from "@/components/BottomNav";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/lib/currency";
+import { copyToClipboard } from "@/lib/clipboard";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { displayHandle } from "@/lib/usernames";
 import {
@@ -38,6 +39,8 @@ import {
   ReceiptText,
   PlayCircle,
   Wallet,
+  Copy,
+  LifeBuoy,
 } from "lucide-react";
 
 interface PaymentTransaction {
@@ -484,6 +487,31 @@ export default function PaymentsPage() {
                       <p className={cn("text-sm font-semibold", heading)}>{format(tx.amount)}</p>
                       <StatusBadge tx={tx} />
                     </div>
+                  </div>
+
+                  {/* The two things a receipt is actually for: a reference the
+                      support desk can act on, and a way to hand it over with one
+                      tap. Read aloud on a call, the reference is the whole
+                      conversation. */}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                    {tx.providerRef && (
+                      <button
+                        onClick={() => {
+                          copyToClipboard(tx.providerRef || "");
+                          toast("success", `Reference ${tx.providerRef} copied`);
+                        }}
+                        className={cn("inline-flex items-center gap-1 hover:underline", muted)}
+                        title="Copy this payment reference"
+                      >
+                        <Copy className="w-3.5 h-3.5" /> Copy ref {tx.providerRef}
+                      </button>
+                    )}
+                    <Link
+                      href={`/support?ref=${encodeURIComponent(tx.providerRef || tx.id)}`}
+                      className="text-brand-400 hover:underline inline-flex items-center gap-1"
+                    >
+                      <LifeBuoy className="w-3.5 h-3.5" /> Contact support about this payment
+                    </Link>
                   </div>
 
                   {tx.status === "PENDING" && (

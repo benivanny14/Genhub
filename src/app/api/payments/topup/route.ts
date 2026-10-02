@@ -20,10 +20,27 @@ import { generateOrderId } from "@/lib/utils";
 import { checkRateLimitStrict } from "@/lib/redis";
 import config from "@/lib/config";
 import { applyCoupon } from "@/lib/coupons";
+import { classifyGatewayFailure, gatewayFailureResponse } from "@/lib/gateway-failure";
+import {
+  PAYMENT_EVENT,
+  recordPaymentEvent,
+} from "@/lib/services/payment-journey.service";
+import { getFeatureFlags } from "@/lib/services/platform-setting.service";
 
 export async function POST(request: NextRequest) {
   try {
     const auth = await requireAuth();
+
+    // Operator kill switch: an admin can pause checkout while sorting a gateway
+    // problem, and the customer is told the truth before any charge row exists.
+    const flags = await getFeatureFlags();
+    if (!flags.checkoutEnabled) {
+      return api.error(
+        "Top-ups are temporarily paused. Nothing was charged — please try again shortly.",
+        503,
+        "CHECKOUT_PAUSED"
+      );
+    }
 
     // Same ceiling as a video purchase, and for the same reason: every call here
     // is a real USSD push to somebody's handset, so an unrestricted caller is
@@ -90,6 +107,15 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    await recordPaymentEvent({
+      transactionId: transaction.id,
+      kind: PAYMENT_EVENT.checkoutCreated,
+      detail: `Top-up checkout created for TZS ${amount.toLocaleString("en-US")}${
+        bonus > 0 ? ` (+${bonus.toLocaleString("en-US")} coupon bonus)` : ""
+      }`,
+      metadata: { providerRef, amount },
+    });
+
     // Spent at settlement, not here: the bonus rides in metadata and the shared
     // payment webhook records the redemption when the money lands. Counting it at
     // checkout burned a limited coupon on every prompt nobody approved.
@@ -121,6 +147,13 @@ export async function POST(request: NextRequest) {
     // Live USSD push — customer confirms on their phone. ClickPesa does not take
     // a webhook URL per request; the endpoint is configured in the dashboard.
     try {
+      await recordPaymentEvent({
+        transactionId: transaction.id,
+        kind: PAYMENT_EVENT.collectStarted,
+        detail: "USSD push requested from ClickPesa.",
+        metadata: { providerRef },
+      });
+
       const response = await clickpesaCollect({
         phone: normalizeTzPhoneMsisdn(phoneNumber),
         amount,
@@ -132,11 +165,19 @@ export async function POST(request: NextRequest) {
           where: { id: transaction.id },
           data: { status: "FAILED" },
         });
-        return api.error(
-          response.error || "ClickPesa rejected the payment request. Please try again.",
-          502,
-          "GATEWAY_REJECTED"
-        );
+        await recordPaymentEvent({
+          transactionId: transaction.id,
+          kind: PAYMENT_EVENT.collectRejected,
+          detail: `ClickPesa refused the top-up: ${response.error || "no reason given"}`,
+          metadata: { gatewayError: response.error ?? null },
+        });
+        // A refusal about OUR account (the daily API cap, unfinished KYC) is
+        // answered with a plain sentence and logged — see lib/gateway-failure.ts.
+        return gatewayFailureResponse({
+          failure: classifyGatewayFailure(response.error),
+          context: "Payments",
+          transactionId: transaction.id,
+        });
       }
 
       return api.success({
@@ -154,6 +195,12 @@ export async function POST(request: NextRequest) {
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { status: "FAILED", metadata: { gatewayError: reason } },
+      });
+      await recordPaymentEvent({
+        transactionId: transaction.id,
+        kind: PAYMENT_EVENT.collectFailed,
+        detail: `Could not reach ClickPesa: ${reason}`,
+        metadata: { gatewayError: reason },
       });
       // Detail to the log, a plain sentence to the user — see api.upstream.
       return api.upstream(`top-up collect failed for transaction ${transaction.id}: ${reason}`, {

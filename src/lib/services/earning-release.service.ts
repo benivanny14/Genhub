@@ -15,6 +15,7 @@
 
 import prisma from "../db";
 import config from "../config";
+import { createNotification } from "./notify.service";
 
 export interface ReleaseResult {
   /** Total TZS moved from pending to available in this run */
@@ -88,17 +89,16 @@ export async function releaseMatureEarnings(
       // pending sit still and assumes the platform is keeping it. Best effort:
       // a notification must never undo a release that already happened.
       try {
-        await prisma.notification.create({
-          data: {
-            userId: balance.creatorId,
-            title: "Earnings released 💰",
-            message:
-              `TZS ${amount.toLocaleString("en-US")} finished its ` +
-              `${config.business.holdingPeriodDays}-day holding period and is now ` +
-              `available to withdraw.`,
-            type: "success",
-            link: "/creator",
-          },
+        await createNotification({
+          userId: balance.creatorId,
+          title: "Earnings released 💰",
+          message:
+            `TZS ${amount.toLocaleString("en-US")} finished its ` +
+            `${config.business.holdingPeriodDays}-day holding period and is now ` +
+            `available to withdraw.`,
+          type: "success",
+          link: "/creator",
+          pushTag: "earnings-released",
         });
       } catch (notifyError) {
         console.error(
@@ -118,16 +118,15 @@ export async function releaseMatureEarnings(
         balance.availableBalance + amount >= minPayout
       ) {
         try {
-          await prisma.notification.create({
-            data: {
-              userId: balance.creatorId,
-              title: "You can withdraw now 💸",
-              message:
-                `Your available balance reached TZS ${minPayout.toLocaleString("en-US")}. ` +
-                "You can request a withdrawal to M-Pesa, Tigo Pesa, Airtel Money or your bank.",
-              type: "success",
-              link: "/creator",
-            },
+          await createNotification({
+            userId: balance.creatorId,
+            title: "You can withdraw now 💸",
+            message:
+              `Your available balance reached TZS ${minPayout.toLocaleString("en-US")}. ` +
+              "You can request a withdrawal to M-Pesa, Tigo Pesa, Airtel Money or your bank.",
+            type: "success",
+            link: "/creator",
+            pushTag: "withdraw-ready",
           });
         } catch (nudgeError) {
           console.error(

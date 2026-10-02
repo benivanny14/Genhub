@@ -23,7 +23,13 @@ import { generateOrderId } from "@/lib/utils";
 import config from "@/lib/config";
 import { checkRateLimitStrict } from "@/lib/redis";
 import { applyCoupon, consumeCoupon } from "@/lib/coupons";
+import { classifyGatewayFailure, gatewayFailureResponse } from "@/lib/gateway-failure";
 import { videoStatus } from "@/lib/video-status";
+import {
+  PAYMENT_EVENT,
+  recordPaymentEvent,
+} from "@/lib/services/payment-journey.service";
+import { getFeatureFlags } from "@/lib/services/platform-setting.service";
 
 /**
  * The smallest amount the gateway will collect.
@@ -285,6 +291,17 @@ export async function POST(request: NextRequest) {
       return api.validation("A phone number is required for mobile money payments");
     }
 
+    // Operator kill switch, checked on the PHONE path only: a wallet purchase
+    // never touches the gateway, so pausing mobile money must not pause it too.
+    const flags = await getFeatureFlags();
+    if (!flags.checkoutEnabled) {
+      return api.error(
+        "Mobile money is temporarily paused. Nothing was charged — pay from your wallet, or try again shortly.",
+        503,
+        "CHECKOUT_PAUSED"
+      );
+    }
+
     // Create pending transaction
     const orderId = generateOrderId("PPV");
     // ClickPesa takes an alphanumeric reference of at most 20 characters that WE
@@ -306,6 +323,18 @@ export async function POST(request: NextRequest) {
           ? { couponId, originalPrice: video.price, discount: video.price - finalAmount }
           : undefined,
       },
+    });
+
+    // The journey of this charge starts here. Every later step appends to it, so
+    // an operator can see whether a prompt was ever sent, what the gateway said,
+    // and whether a callback ever arrived — see payment-journey.service.ts.
+    await recordPaymentEvent({
+      transactionId: transaction.id,
+      kind: PAYMENT_EVENT.checkoutCreated,
+      detail: `Checkout created for TZS ${finalAmount.toLocaleString("en-US")}${
+        couponId ? " (coupon applied)" : ""
+      }`,
+      metadata: { providerRef, amount: finalAmount },
     });
 
     // The coupon is recorded in the transaction metadata and spent later, at
@@ -353,6 +382,13 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      await recordPaymentEvent({
+        transactionId: transaction.id,
+        kind: PAYMENT_EVENT.collectStarted,
+        detail: "USSD push requested from ClickPesa.",
+        metadata: { providerRef },
+      });
+
       const response = await clickpesaCollect({
         phone: normalizeTzPhoneMsisdn(phoneNumber),
         amount: finalAmount,
@@ -364,11 +400,21 @@ export async function POST(request: NextRequest) {
           where: { id: transaction.id },
           data: { status: "FAILED" },
         });
-        return api.error(
-          response.error || "ClickPesa rejected the payment request. Please try again.",
-          502,
-          "GATEWAY_REJECTED"
-        );
+        await recordPaymentEvent({
+          transactionId: transaction.id,
+          kind: PAYMENT_EVENT.collectRejected,
+          detail: `ClickPesa refused the request: ${response.error || "no reason given"}`,
+          metadata: { gatewayError: response.error ?? null },
+        });
+        // A refusal that is about OUR account (the daily API cap, unfinished
+        // KYC) is answered with a plain sentence and logged — see
+        // lib/gateway-failure.ts. The customer must never be told to complete
+        // our KYC.
+        return gatewayFailureResponse({
+          failure: classifyGatewayFailure(response.error),
+          context: "Payments",
+          transactionId: transaction.id,
+        });
       }
 
       // providerRef is already stored; echo the reference back to the client.
@@ -389,16 +435,20 @@ export async function POST(request: NextRequest) {
         where: { id: transaction.id },
         data: { status: "FAILED", metadata: { gatewayError: reason } },
       });
+      await recordPaymentEvent({
+        transactionId: transaction.id,
+        kind: PAYMENT_EVENT.collectFailed,
+        detail: `Could not reach ClickPesa: ${reason}`,
+        metadata: { gatewayError: reason },
+      });
       // The gateway's own words go to the log with a reference; the buyer gets a
       // sentence about their money and the reference. The old answer named the
       // gateway and repeated its reason, which told a customer nothing they could
       // act on and handed anyone watching the response a map of the payment path.
-      return api.upstream(`collect failed for transaction ${transaction.id}: ${reason}`, {
+      return gatewayFailureResponse({
+        failure: classifyGatewayFailure(reason),
         context: "Payments",
-        status: 502,
-        code: "GATEWAY_ERROR",
-        message:
-          "We could not start the payment just now. Nothing has been charged — please try again.",
+        transactionId: transaction.id,
       });
     }
   } catch (error) {

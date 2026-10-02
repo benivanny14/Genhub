@@ -12,6 +12,7 @@ import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
+import { pushForNotification } from "@/lib/services/notify.service";
 import config from "@/lib/config";
 import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 import { z } from "zod";
@@ -279,6 +280,20 @@ export async function POST(request: NextRequest) {
         `Your wallet balance is too low (TZS ${message.balance.toLocaleString()})`
       );
     }
+
+    // The in-app notice was written inside the transaction; the lock-screen
+    // mirror fires here, after it committed. One push for both the free reply
+    // and the paid message — the two branches write different copy but the same
+    // recipient, so the branch keeps its own wording.
+    void pushForNotification({
+      userId: receiverId,
+      title: "New message 💬",
+      message:
+        charged === 0
+          ? `${sender?.role === "ADMIN" ? "Genhub support" : "The creator"} replied to you.`
+          : `You received a paid message worth TZS ${charged.toLocaleString()} — your share is TZS ${creatorCut.toLocaleString()}`,
+      link: "/inbox",
+    });
 
     return api.success(message, "Message sent", 201);
   } catch (error) {

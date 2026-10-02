@@ -69,6 +69,15 @@ import IntroClipPlayer from "@/components/IntroClipPlayer";
 import { displayHandle } from "@/lib/usernames";
 import { categoryHref, getCategory } from "@/lib/categories";
 import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
+import {
+  usePaymentAvailability,
+  paymentUnavailableMessage,
+} from "@/hooks/usePaymentAvailability";
+import {
+  outcomeForApiError,
+  outcomeForStatus,
+  type PaymentOutcome,
+} from "@/lib/payment-errors";
 
 /**
  * How many times the animated intro is asked for again before the page gives up
@@ -112,6 +121,7 @@ interface VideoData {
    */
   accessSource?:
     | "free"
+    | "global"
     | "purchase"
     | "subscription"
     | "admin"
@@ -243,6 +253,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [viewAsVisitor, setViewAsVisitor] = useState(false);
   const [purchasing, setPurchasing] = useState(false);
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
+  // The last thing the payment screen told the customer. One of the three
+  // answers (lib/payment-errors.ts), kept so the modal can show a persistent
+  // panel instead of a toast that disappears before a worried person reads it.
+  const [paymentOutcome, setPaymentOutcome] = useState<PaymentOutcome | null>(null);
   const [phoneNumber, setPhoneNumber] = useState("");
   const [couponCode, setCouponCode] = useState("");
   const [couponDiscount, setCouponDiscount] = useState(0);
@@ -329,6 +343,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [linkCopied, setLinkCopied] = useState(false);
   const { toast } = useToast();
   const { format } = useCurrency();
+  // Whether the gateway can be reached at all. Read from the public endpoint so
+  // the Buy button tells the truth instead of letting a customer click into a
+  // generic error — `null` until read, which keeps the button enabled.
+  const { availability: paymentAvailability } = usePaymentAvailability();
 
   // ===========================================================================
   // Library: Watch Later + playlists
@@ -816,10 +834,17 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
       if (data.success) {
         setShowPurchaseModal(false);
+        setPaymentOutcome(null);
         toast("success", "Paid from your wallet — enjoy the full video!");
         fetchVideo();
       } else {
-        toast("error", data.error || "Could not pay from your wallet");
+        const outcome = outcomeForApiError({
+          error: data.error,
+          code: data.code,
+          status: res.status,
+        });
+        setPaymentOutcome(outcome);
+        toast(outcome.tone, `${outcome.title} — ${outcome.body}`);
       }
     } catch {
       toast("error", "An error occurred. Please try again.");
@@ -875,10 +900,17 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       } else if (data.success) {
         // Live ClickPesa: USSD push sent — poll until the gateway confirms
         setShowPurchaseModal(false);
+        setPaymentOutcome(outcomeForStatus("PENDING"));
         toast("info", "USSD push sent to your phone — enter your PIN to confirm.");
         pollPaymentStatus(data.data.transactionId);
       } else {
-        toast("error", data.error || "Payment failed");
+        const outcome = outcomeForApiError({
+          error: data.error,
+          code: data.code,
+          status: res.status,
+        });
+        setPaymentOutcome(outcome);
+        toast(outcome.tone, `${outcome.title} — ${outcome.body}`);
       }
     } catch {
       toast("error", "An error occurred. Please try again.");
@@ -907,16 +939,17 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           return;
         }
         if (status === "FAILED") {
-          toast("error", "Payment failed or was cancelled. Please try again.");
+          const outcome = outcomeForStatus("FAILED");
+          setPaymentOutcome(outcome);
+          toast(outcome.tone, `${outcome.title} — ${outcome.body}`);
           return;
         }
         if (status === "UNDER_INVESTIGATION") {
           // We cannot tell whether this customer's money moved. Stop insisting
           // they pay: the paywall switches to a "we are checking" panel.
-          toast(
-            "warning",
-            "You approved the charge but the money has not reached us yet. We are checking with your network — please do not pay again."
-          );
+          const outcome = outcomeForStatus("UNDER_INVESTIGATION");
+          setPaymentOutcome(outcome);
+          toast(outcome.tone, `${outcome.title} — ${outcome.body}`);
           fetchVideo();
           return;
         }
@@ -1087,6 +1120,13 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       );
       return;
     }
+    if (paymentAvailability && !paymentAvailability.available) {
+      toast("warning", paymentUnavailableMessage(paymentAvailability.reason));
+      return;
+    }
+    // A fresh attempt starts from a clean slate — an old "check your phone"
+    // panel must not still be sitting there when the customer reopens the modal.
+    setPaymentOutcome(null);
     setShowPurchaseModal(true);
   }
 
@@ -1707,6 +1747,19 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                   </span>
                 </div>
               </div>
+            ) : !canPlayFull && effectiveUser && paymentAvailability && !paymentAvailability.available ? (
+              /* The gateway is down or unreachable. Saying so here, before the
+                 click, is the difference between "mobile money is temporarily
+                 unavailable" and a customer tapping Pay into a generic error. */
+              <div className="max-w-md rounded-xl border border-amber-500/30 bg-amber-500/10 p-3">
+                <p className="text-sm font-semibold text-amber-400">
+                  Mobile money is temporarily unavailable
+                </p>
+                <p className="text-xs text-white/60 mt-1">
+                  {paymentUnavailableMessage(paymentAvailability.reason)} You can also
+                  pay from your wallet if you have a balance.
+                </p>
+              </div>
             ) : !canPlayFull && effectiveUser ? (
               <button
                 onClick={openPurchase}
@@ -1750,6 +1803,13 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                  badge, which would read as if THEY were the admin. */
               <span className="badge-success text-sm px-4 py-2">
                 🎁 Free access — you can watch everything
+              </span>
+            ) : video.accessSource === "global" ? (
+              /* The platform-wide switch is on: every scene is free to everyone
+                 for now. Said plainly, because "Full access" would read as if
+                 this particular viewer had bought something. */
+              <span className="badge-success text-sm px-4 py-2">
+                🎉 Free right now — everything is free
               </span>
             ) : video.accessSource === "free" ? (
               <span className="badge-success text-sm px-4 py-2">Free to watch</span>
@@ -2264,6 +2324,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               Choose your payment method and enter your details.
             </p>
 
+            {paymentOutcome && (
+              <PaymentOutcomePanel outcome={paymentOutcome} />
+            )}
+
             <div className="space-y-4">
               {/* Payment method — mobile money USSD push (all networks supported) */}
               <div>
@@ -2385,6 +2449,30 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The persistent payment panel.
+ *
+ * A toast is gone in three seconds, and the moment a customer most needs the
+ * words is the moment they are worried about their money. This renders the same
+ * three-kind answer (lib/payment-errors.ts) as a panel that stays on screen
+ * until the next attempt, so "nothing was charged" and "do not pay again" are
+ * readable for as long as it takes to believe them.
+ */
+function PaymentOutcomePanel({ outcome }: { outcome: PaymentOutcome }) {
+  const styles: Record<PaymentOutcome["tone"], string> = {
+    error: "border-red-500/40 bg-red-500/10 text-red-300",
+    warning: "border-amber-500/40 bg-amber-500/10 text-amber-300",
+    info: "border-sky-500/40 bg-sky-500/10 text-sky-300",
+    success: "border-emerald-500/40 bg-emerald-500/10 text-emerald-300",
+  };
+  return (
+    <div className={`mb-4 rounded-xl border p-3 ${styles[outcome.tone]}`} role="status">
+      <p className="text-sm font-semibold">{outcome.title}</p>
+      <p className="text-xs mt-1 opacity-90">{outcome.body}</p>
     </div>
   );
 }

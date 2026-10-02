@@ -30,6 +30,7 @@
 import prisma from "@/lib/db";
 import config from "@/lib/config";
 import { sendMail } from "@/lib/email";
+import { createNotification } from "./notify.service";
 import type { SupervisorDecision } from "./cron-supervisor.service";
 
 /**
@@ -235,14 +236,12 @@ export async function alertHeldWorkers(
         });
         if (recent) continue;
 
-        await prisma.notification.create({
-          data: {
-            userId: admin.id,
-            title: copy.title,
-            message: copy.message,
-            type: "warning",
-            link: HOLD_ALERT_LINK,
-          },
+        await createNotification({
+          userId: admin.id,
+          title: copy.title,
+          message: copy.message,
+          type: "warning",
+          link: HOLD_ALERT_LINK,
         });
         toldAnyone = true;
         outcome.notifications += 1;

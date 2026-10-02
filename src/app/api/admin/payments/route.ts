@@ -34,6 +34,10 @@ import {
 } from "@/lib/services/payment-reconcile.service";
 import { reverseCollectedCharge } from "@/lib/services/payment-reversal.service";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
+import {
+  PAYMENT_EVENT,
+  recordPaymentEvent,
+} from "@/lib/services/payment-journey.service";
 import { z } from "zod";
 import { intParam } from "@/lib/utils";
 
@@ -134,6 +138,17 @@ export async function POST(request: NextRequest) {
 
     const { action, transactionId, reason, note, destination, gatewayRef } =
       result.data;
+
+    // One journey entry per admin action, recorded before it runs: the decision
+    // is the point, and an action that then failed still happened. The actor and
+    // the reason travel with it, so "who decided this, and why" is on the charge
+    // itself and not only in the audit log.
+    await recordPaymentEvent({
+      transactionId,
+      kind: PAYMENT_EVENT.adminAction,
+      detail: `Admin action "${action}"${note ? ` — ${note}` : reason ? ` — ${reason}` : ""}`,
+      metadata: { action, actorId: auth.userId, reason: reason ?? null, note: note ?? null },
+    });
 
     switch (action) {
       case "refund": {

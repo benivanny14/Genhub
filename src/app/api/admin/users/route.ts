@@ -13,6 +13,7 @@ import { invalidateAccountStatus } from "@/lib/services/account-status.service";
 import { canEraseAccount, eraseAccount } from "@/lib/services/account-erasure.service";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import { sendPasswordResetLink } from "@/lib/services/password-reset.service";
+import { createNotification } from "@/lib/services/notify.service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -176,16 +177,14 @@ export async function POST(request: NextRequest) {
         where: { id: userId },
         data: { isVerified },
       });
-      await prisma.notification.create({
-        data: {
-          userId,
-          title: isVerified ? "You are verified! 🎉" : "Verification removed",
-          message: isVerified
-            ? "Your account now displays the verified badge."
-            : "The verified badge was removed from your account.",
-          type: isVerified ? "success" : "warning",
-          link: "/profile",
-        },
+      await createNotification({
+        userId,
+        title: isVerified ? "You are verified! 🎉" : "Verification removed",
+        message: isVerified
+          ? "Your account now displays the verified badge."
+          : "The verified badge was removed from your account.",
+        type: isVerified ? "success" : "warning",
+        link: "/profile",
       });
       await recordAudit({
         actorId: auth.userId,
@@ -264,14 +263,12 @@ export async function POST(request: NextRequest) {
       // must acknowledge before the dashboard is usable again (GET/POST
       // /api/creator/warnings, and the block on /creator). type "error" so the
       // bell cannot be mistaken for a sale notice.
-      await prisma.notification.create({
-        data: {
-          userId,
-          title: "Warning from Genhub ⚠️ — open your dashboard",
-          message: `${reason} (Strike ${nextStrikes}/3 — three strikes removes your account.) Confirm you have read this on your creator dashboard.`,
-          type: "error",
-          link: "/creator",
-        },
+      await createNotification({
+        userId,
+        title: "Warning from Genhub ⚠️ — open your dashboard",
+        message: `${reason} (Strike ${nextStrikes}/3 — three strikes removes your account.) Confirm you have read this on your creator dashboard.`,
+        type: "error",
+        link: "/creator",
       });
       await recordAudit({
         actorId: auth.userId,
@@ -301,16 +298,14 @@ export async function POST(request: NextRequest) {
         where: { id: userId },
         data: { freeAccess: grant },
       });
-      await prisma.notification.create({
-        data: {
-          userId,
-          title: grant ? "Free access unlocked 🎁" : "Free access ended",
-          message: grant
-            ? "An admin has opened your account: you can watch every video on Genhub for free for now."
-            : "Your free access has ended. Paid videos need to be unlocked again.",
-          type: grant ? "success" : "info",
-          link: "/",
-        },
+      await createNotification({
+        userId,
+        title: grant ? "Free access unlocked 🎁" : "Free access ended",
+        message: grant
+          ? "An admin has opened your account: you can watch every video on Genhub for free for now."
+          : "Your free access has ended. Paid videos need to be unlocked again.",
+        type: grant ? "success" : "info",
+        link: "/",
       });
       await recordAudit({
         actorId: auth.userId,
@@ -343,16 +338,14 @@ export async function POST(request: NextRequest) {
         where: { id: userId },
         data: { payoutFrozenUntil: until, payoutFrozenReason: reason },
       });
-      await prisma.notification.create({
-        data: {
-          userId,
-          title: isFreeze ? "Withdrawals paused" : "Withdrawals restored",
-          message: isFreeze
-            ? `Withdrawals are paused until ${until!.toLocaleDateString("en-GB")}: ${reason}`
-            : "You can request withdrawals again.",
-          type: isFreeze ? "warning" : "success",
-          link: "/wallet",
-        },
+      await createNotification({
+        userId,
+        title: isFreeze ? "Withdrawals paused" : "Withdrawals restored",
+        message: isFreeze
+          ? `Withdrawals are paused until ${until!.toLocaleDateString("en-GB")}: ${reason}`
+          : "You can request withdrawals again.",
+        type: isFreeze ? "warning" : "success",
+        link: "/wallet",
       });
       await recordAudit({
         actorId: auth.userId,
@@ -440,16 +433,14 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    await prisma.notification.create({
-      data: {
-        userId,
-        title: isBanned ? "Account suspended" : "Account reinstated",
-        message: isBanned
-          ? `Your account has been suspended: ${body?.reason || "Terms violation"}`
-          : "Your account has been reinstated. Your videos can be republished.",
-        type: isBanned ? "error" : "success",
-        link: "/",
-      },
+    await createNotification({
+      userId,
+      title: isBanned ? "Account suspended" : "Account reinstated",
+      message: isBanned
+        ? `Your account has been suspended: ${body?.reason || "Terms violation"}`
+        : "Your account has been reinstated. Your videos can be republished.",
+      type: isBanned ? "error" : "success",
+      link: "/",
     });
 
     return api.success({ isBanned }, isBanned ? "User banned" : "User unbanned");

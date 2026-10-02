@@ -13,6 +13,7 @@
 import type { Prisma } from "@prisma/client";
 import prisma from "../db";
 import { splitRevenue } from "./balance.service";
+import { resolveSubscriptionPlan } from "../subscription";
 
 /** A membership period is one calendar month. */
 export const SUBSCRIPTION_PERIOD_MONTHS = 1;
@@ -23,15 +24,24 @@ export const SUBSCRIPTION_PERIOD_MONTHS = 1;
  * Extending from the current expiry (rather than from "now") means a fan who
  * renews early never loses the days they already paid for. If the membership
  * has already lapsed we start from today.
+ *
+ * `months` and `days` are alternatives: a month-based plan moves by calendar
+ * month so the expiry keeps its day-of-month, while a day-based plan (weekly)
+ * adds a fixed number of days so it cannot drift across a short February.
  */
 export function nextRenewalDate(
   currentExpiry?: Date | null,
-  months: number = SUBSCRIPTION_PERIOD_MONTHS
+  months: number = SUBSCRIPTION_PERIOD_MONTHS,
+  days: number = 0
 ): Date {
   const now = new Date();
   const base =
     currentExpiry && currentExpiry.getTime() > now.getTime() ? currentExpiry : now;
   const next = new Date(base);
+  if (days > 0) {
+    next.setDate(next.getDate() + days);
+    return next;
+  }
   next.setMonth(next.getMonth() + months);
   return next;
 }
@@ -58,6 +68,8 @@ export interface GrantSubscriptionParams {
   phone?: string | null;
   /** Total amount already applied to this period (fresh subscribe vs renewal). */
   isRenewal?: boolean;
+  /** weekly | monthly | quarterly — defaults to monthly when absent. */
+  plan?: string | null;
 }
 
 export interface GrantSubscriptionResult {
@@ -82,6 +94,9 @@ export async function grantSubscription(
 ): Promise<GrantSubscriptionResult> {
   const { viewerId, creatorId, amount, phone, isRenewal } = params;
   const { platformFee, creatorCut } = splitSubscriptionAmount(amount);
+  // The period the payment bought. Defaults to monthly, so every existing
+  // caller (webhook, renewal cron) keeps the behaviour it had.
+  const plan = resolveSubscriptionPlan(params.plan);
 
   const existing = await tx.creatorSubscription.findUnique({
     where: { viewerId_creatorId: { viewerId, creatorId } },
@@ -92,7 +107,11 @@ export async function grantSubscription(
   const stillActive = !!existing && existing.isActive && existing.expiresAt > now;
 
   // Never lose paid-for days: extend an active membership from its expiry.
-  const expiresAt = nextRenewalDate(stillActive ? existing!.expiresAt : null);
+  const expiresAt = nextRenewalDate(
+    stillActive ? existing!.expiresAt : null,
+    plan.months || SUBSCRIPTION_PERIOD_MONTHS,
+    plan.days
+  );
 
   const subscription = await tx.creatorSubscription.upsert({
     where: { viewerId_creatorId: { viewerId, creatorId } },

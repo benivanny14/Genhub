@@ -26,6 +26,10 @@ import { readJsonBody, MAX_WEBHOOK_BODY_BYTES } from "@/lib/request-body";
 import { processPaymentWebhook } from "@/lib/services/webhook.service";
 import type { ClickPesaWebhookPayload } from "@/lib/payments/clickpesa";
 import { clickpesaStatusToInternal } from "@/lib/payments/clickpesa";
+import {
+  PAYMENT_EVENT,
+  recordPaymentEvent,
+} from "@/lib/services/payment-journey.service";
 import { verifyClickPesaWebhook, verifyWebhookToken } from "@/lib/webhook-auth";
 
 /** Derive a verdict from the event name when the body carries no status. */
@@ -112,13 +116,41 @@ export async function POST(request: NextRequest) {
     const status = statusFromEvent(payload.event, payload.data?.status);
     if (!status) {
       // PROCESSING / PENDING and other in-flight states — nothing to do yet.
+      // Recorded anyway: "a webhook arrived and said nothing decisive" is a
+      // different fact from "no webhook ever arrived", and an operator debugging
+      // a stuck charge needs to be able to tell them apart.
+      await recordPaymentEvent({
+        transactionId: transaction.id,
+        kind: PAYMENT_EVENT.webhookIgnored,
+        detail: `Callback received with no decisive status (event: ${payload.event || "unknown"}).`,
+        metadata: { event: payload.event ?? null, status: payload.data?.status ?? null },
+      });
       return NextResponse.json({ status: "ok" });
     }
 
     if (transaction.status !== "PENDING") {
       // Idempotent: already fulfilled (duplicate delivery).
+      await recordPaymentEvent({
+        transactionId: transaction.id,
+        kind: PAYMENT_EVENT.webhookIgnored,
+        detail: `Duplicate callback ignored — the charge is already ${transaction.status}.`,
+        metadata: { event: payload.event ?? null, incomingStatus: status },
+      });
       return NextResponse.json({ status: "ok" });
     }
+
+    // The proof this route exists to provide: a verified callback DID arrive,
+    // and when. From here the settlement engine takes over and appends its own.
+    await recordPaymentEvent({
+      transactionId: transaction.id,
+      kind: PAYMENT_EVENT.webhookReceived,
+      detail: `Verified ClickPesa callback — verdict ${status}.`,
+      metadata: {
+        event: payload.event ?? null,
+        gatewayStatus: payload.data?.status ?? null,
+        channel: payload.data?.channel ?? null,
+      },
+    });
 
     // 4. Fulfil through the shared webhook processor (70/30 split, access, etc.)
     //    Amount comes from OUR transaction row — never trust the caller's number.

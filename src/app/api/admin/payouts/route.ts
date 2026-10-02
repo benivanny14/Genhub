@@ -10,6 +10,7 @@ import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
+import { createNotification } from "@/lib/services/notify.service";
 import { z } from "zod";
 import { intParam } from "@/lib/utils";
 
@@ -191,14 +192,13 @@ export async function POST(request: NextRequest) {
         },
       };
       const n = messages[action];
-      await prisma.notification.create({
-        data: {
-          userId: payout.creatorId,
-          title: n.title,
-          message: n.message,
-          type: n.type,
-          link: "/creator",
-        },
+      await createNotification({
+        userId: payout.creatorId,
+        title: n.title,
+        message: n.message,
+        type: n.type,
+        link: "/creator",
+        pushTag: "payout",
       });
     } catch (notifyError) {
       console.warn("[Admin Payout] Notification failed:", (notifyError as Error)?.message);

@@ -51,6 +51,8 @@ vi.mock("@/lib/db", () => ({
       findUnique: mocks.findUnique,
       create: mocks.create,
       count: mocks.count,
+      // The scheduled-publish sweep runs at the top of the feed read.
+      updateMany: async () => ({ count: 0 }),
     },
     user: { findUnique: mocks.userFindUnique },
   },

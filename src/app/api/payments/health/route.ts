@@ -23,6 +23,7 @@ import {
   clickpesaGatewayState,
   clickpesaBreakerNotice,
 } from "@/lib/payments/clickpesa";
+import { classifyGatewayFailure } from "@/lib/gateway-failure";
 
 export const dynamic = "force-dynamic";
 
@@ -121,6 +122,44 @@ export async function GET() {
       prisma.transaction.count({ where: { status: "UNDER_INVESTIGATION" } }),
     ]);
 
+    // Collects refused because of OUR merchant account (the pre-KYC daily API cap,
+    // an unfinished account) rather than anything about the customer. This is the
+    // one fault that makes EVERY checkout fail identically until it clears, so it
+    // gets its own line here — the customer-facing side now answers with a plain
+    // "try later", which means without this the operator would see a quiet day
+    // rather than an outage.
+    const recentFailures = await prisma.transaction.findMany({
+      where: {
+        gateway: "CLICKPESA",
+        status: "FAILED",
+        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60_000) },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      select: { metadata: true },
+    });
+
+    let accountFaults = 0;
+    let accountFaultSample = "";
+    for (const row of recentFailures) {
+      const raw = (row.metadata as { gatewayError?: string } | null)?.gatewayError;
+      const failure = classifyGatewayFailure(raw);
+      if (failure.kind === "account-limit" || failure.kind === "account-setup") {
+        accountFaults += 1;
+        if (!accountFaultSample) accountFaultSample = failure.gatewayMessage;
+      }
+    }
+
+    const accountFaultWarning =
+      !sandbox && accountFaults > 0
+        ? `${accountFaults} charge(s) in the last 24h were refused because of THIS account, ` +
+          "not the customer's: " +
+          accountFaultSample +
+          " Until that clears, every mobile-money checkout fails the same way — complete " +
+          "your ClickPesa KYC to lift the 100-calls-per-day cap. Customers are told nothing " +
+          "was charged and to try later."
+        : null;
+
     const deliveryWarning =
       !sandbox && stuckPending > 0
         ? `${stuckPending} ClickPesa order(s) have been PENDING for over 15 minutes. ` +
@@ -136,6 +175,8 @@ export async function GET() {
       delivery: {
         stuckPending,
         deliveryWarning,
+        accountFaults,
+        accountFaultWarning,
         lastSuccessfulPaymentAt: lastSettled?.updatedAt ?? null,
         lastSuccessfulPaymentAmount: lastSettled?.amount ?? null,
         underInvestigation,
@@ -155,12 +196,16 @@ export async function GET() {
       // The breaker leads when it is open: every other line is about a gateway
       // the operator cannot currently reach, and reading them first sends
       // somebody after the wrong fault.
+      // The account fault leads over the delivery warning: a customer never seeing
+      // a prompt is a symptom, and this is the cause when it is present.
       summary: breakerWarning
         ? breakerWarning
-        : readyForLive
-          ? deliveryWarning
-            ? "Live payments are on, but recent orders never settled — see delivery.deliveryWarning."
-            : "Live payments are ready: a purchase will send a real USSD push to the customer's phone."
+        : accountFaultWarning
+          ? accountFaultWarning
+          : readyForLive
+            ? deliveryWarning
+              ? "Live payments are on, but recent orders never settled — see delivery.deliveryWarning."
+              : "Live payments are ready: a purchase will send a real USSD push to the customer's phone."
           : sandbox
             ? "Sandbox is ON: no USSD push is sent and no money moves. Set PAYMENT_SANDBOX=false to go live."
             : "Live mode is on but one or more checks failed — see checks above.",

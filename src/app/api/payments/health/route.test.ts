@@ -40,6 +40,9 @@ vi.mock("@/lib/db", () => ({
     transaction: {
       count: async () => 0,
       findFirst: async () => null,
+      // The account-fault scan reads recent FAILED rows and classifies each
+      // gatewayError; an empty page is the healthy case.
+      findMany: async () => [],
     },
   },
 }));

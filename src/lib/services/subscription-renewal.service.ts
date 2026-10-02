@@ -37,6 +37,8 @@ import {
 import { generateOrderId } from "../utils";
 import { grantSubscription, resyncSubscriberCount } from "./subscription.service";
 import { debitWallet } from "./balance.service";
+import { createNotification, pushForNotification } from "./notify.service";
+import { classifyGatewayFailure } from "../gateway-failure";
 
 /** Start trying this long before the membership expires. */
 export const RENEW_LEAD_MS = 24 * 60 * 60 * 1000;
@@ -562,6 +564,27 @@ async function renewFromWallet(params: {
     return granted;
   }, TX_OPTIONS);
 
+  // The two in-app notices were written inside the transaction; the lock-screen
+  // mirrors fire here, after the money actually moved.
+  if (outcome !== null) {
+    void pushForNotification({
+      userId: viewerId,
+      title: "Membership renewed ✅",
+      message: `Your ${formatTZS(price)} monthly membership with ${
+        creatorName || "the creator"
+      } was renewed from your wallet balance.`,
+      link: "/billing",
+    });
+    void pushForNotification({
+      userId: creatorId,
+      title: "Membership renewed ⭐",
+      message: `A fan's ${formatTZS(price)} membership auto-renewed. You earned ${formatTZS(
+        outcome.creatorCut
+      )} (held for ${config.business.holdingPeriodDays} days).`,
+      link: "/creator",
+    });
+  }
+
   return outcome !== null;
 }
 
@@ -695,6 +718,19 @@ async function pushRenewal(params: {
       }),
     ]);
 
+    // The in-app notice was written in the batch above; the lock-screen mirror
+    // fires here, after it committed. Best effort.
+    void pushForNotification({
+      userId: viewerId,
+      title: "Approve your renewal 📱",
+      message: `We sent a USSD request to ${phone} to renew your ${formatTZS(
+        price
+      )} membership with ${creatorName || "the creator"}. Enter your PIN to keep access — it expires ${formatDate(
+        expiresAt
+      )}.`,
+      link: "/billing",
+    });
+
     return { ok: true };
   } catch (error) {
     const reason = clickpesaErrorReason(error);
@@ -750,20 +786,34 @@ async function recordFailure(params: {
 
   if (attempts > 0 && !exhausted) return;
 
-  await prisma.notification.create({
-    data: {
-      userId,
-      title: exhausted ? "Your membership could not be renewed" : "Renewal needs your attention",
-      message: exhausted
+  // A renewal that failed because OUR account hit its daily API cap or is not
+  // finished is not the fan's fault, and telling them "top up your wallet" sends
+  // them to spend money that would fail identically. The gateway's own words stay
+  // in `lastRenewError` above; the notice is about the customer's money.
+  const fault = classifyGatewayFailure(reason);
+  const ourFault = fault.kind === "account-limit" || fault.kind === "account-setup";
+
+  await createNotification({
+    userId,
+    title: ourFault
+      ? "We could not renew your membership just now"
+      : exhausted
+        ? "Your membership could not be renewed"
+        : "Renewal needs your attention",
+    message: ourFault
+      ? `We could not renew your ${formatTZS(price)} membership with ${
+          creatorName || "the creator"
+        } because payments are temporarily unavailable on our side. We will try again — you do not need to do anything.`
+      : exhausted
         ? `We could not renew your ${formatTZS(price)} membership with ${
             creatorName || "the creator"
           } (${reason}). You will lose access when the current period ends — you can re-subscribe any time.`
         : `We could not renew your ${formatTZS(price)} membership with ${
             creatorName || "the creator"
           } automatically: ${reason}. Top up your wallet (or wait for the USSD prompt) and we will try again.`,
-      type: exhausted ? "error" : "warning",
-      link: exhausted ? `/creator/${creatorId}` : "/payments",
-    },
+    type: exhausted && !ourFault ? "error" : ourFault ? "info" : "warning",
+    link: exhausted && !ourFault ? `/creator/${creatorId}` : "/payments",
+    pushTag: "renewal",
   });
 }
 

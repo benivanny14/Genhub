@@ -36,6 +36,7 @@
 import prisma from "../db";
 import { cacheDel } from "../redis";
 import { displayHandle } from "../usernames";
+import { pushForNotification } from "./notify.service";
 
 export const REFERRAL_BONUS_AMOUNT = 1000;
 
@@ -128,6 +129,15 @@ export async function releaseReferralBonus(params: {
           link: "/wallet",
         },
       });
+    });
+
+    // The in-app notice was written inside the transaction; the lock-screen
+    // mirror fires here, after the money actually moved.
+    void pushForNotification({
+      userId: referrerId,
+      title: "Referral bonus! 🎉",
+      message: `${displayHandle(referred, "Someone you invited")} made their first payment — TZS ${REFERRAL_BONUS_AMOUNT.toLocaleString()} added to your wallet.`,
+      link: "/wallet",
     });
 
     // The referrer's cached profile carries the old balance (and the wallet page

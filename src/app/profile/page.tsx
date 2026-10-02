@@ -5,6 +5,7 @@ import { fetchCurrentUser, forgetCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
 import Image from "next/image";
 import ImageCropper from "@/components/ImageCropper";
+import PushToggle from "@/components/PushToggle";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -372,6 +373,8 @@ export default function ProfilePage() {
 
       <main className="max-w-2xl mx-auto px-4 py-8 space-y-6">
         <h1 className={cn("text-2xl font-display font-bold", isLight && "text-gray-900")}>My Profile</h1>
+
+        <PushToggle />
 
         {/* Profile Info */}
         <div className="glass-card p-6 space-y-4">

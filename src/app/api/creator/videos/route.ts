@@ -56,6 +56,10 @@ export async function GET(request: NextRequest) {
         slug: true,
         price: true,
         isPublished: true,
+        // Draft / schedule state, so the creator's own list can say "draft" or
+        // "goes live at 20:00" instead of a flat "Not live".
+        isDraft: true,
+        scheduledAt: true,
         viewsCount: true,
         purchaseCount: true,
         // Without this the creator's own list had no image to show, which is how

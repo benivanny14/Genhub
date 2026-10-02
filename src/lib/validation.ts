@@ -215,6 +215,13 @@ export const createVideoSchema = z.object({
       message:
         "You must confirm that every performer is an adult (18+) and that age records are kept",
     }),
+  // Scheduling a post. `publishAt` is an ISO timestamp: a future time holds the
+  // post unpublished until then, a past one publishes it now. `isDraft` keeps it
+  // unpublished with no schedule, for a creator who is not finished. The two are
+  // mutually exclusive in spirit — a draft has no time — and the route resolves
+  // them in that order.
+  isDraft: z.boolean().optional(),
+  publishAt: z.string().datetime({ offset: true }).optional(),
 })
   // Pointing the trailer at the scene itself would recreate exactly the leak the
   // teaser column exists to close: non-buyers would be signed into the whole
@@ -275,6 +282,10 @@ export const updateVideoSchema = z.object({
   category: z.string().optional(),
   tags: z.array(z.string()).max(10).optional(),
   isPublished: z.boolean().optional(),
+  // Scheduling / drafts, editable after upload: publish later, or hold as a
+  // draft until the creator is ready. `""` in publishAt clears the schedule.
+  publishAt: z.union([z.string().datetime({ offset: true }), z.literal("")]).optional(),
+  isDraft: z.boolean().optional(),
   teaserBunnyVideoId: z.string().min(1).optional(),
   teaserUploadSessionToken: z.string().min(80).max(20_000).optional(),
   thumbnailUrl: mediaOrExternalUrl("thumbnail URL").optional(),

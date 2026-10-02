@@ -259,6 +259,8 @@ interface CreatorVideo {
   category: string | null;
   tags: string[];
   captionsUrl: string | null;
+  isDraft: boolean;
+  scheduledAt: string | null;
   createdAt: string;
   encoding: EncodingState;
   /**
@@ -394,6 +396,22 @@ const COVER_UNREADABLE =
   "This device could not read that picture, so nothing was sent. Move it into the " +
   "phone's own storage (Downloads) and choose it again.";
 
+/**
+ * An ISO timestamp as the local `datetime-local` value the input expects.
+ *
+ * `toISOString()` is UTC and would pre-fill the wrong wall-clock time in a
+ * browser that is not on UTC — the creator would schedule 20:00 and see the
+ * box say 17:00. Offsetting by the timezone gap keeps the box saying what the
+ * creator typed, which is the time they mean.
+ */
+function toLocalInputValue(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 16);
+}
+
 export default function CreatorDashboard() {
   const router = useRouter();
   const { toast } = useToast();
@@ -427,6 +445,8 @@ export default function CreatorDashboard() {
   const [editTeaserDuration, setEditTeaserDuration] = useState(15);
   const [editCoverUrl, setEditCoverUrl] = useState<string | null>(null);
   const [editCaptionsUrl, setEditCaptionsUrl] = useState("");
+  // The datetime-local value for a scheduled post, or "" when it is not one.
+  const [editPublishAt, setEditPublishAt] = useState("");
   const [uploadingCaptions, setUploadingCaptions] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   // The cover waiting to be framed — a 16:9 crop of the picture just picked.
@@ -589,6 +609,8 @@ export default function CreatorDashboard() {
     setEditTeaserDuration(video.teaserDuration || 15);
     setEditCoverUrl(video.thumbnailUrl);
     setEditCaptionsUrl(video.captionsUrl || "");
+    // ISO -> the `datetime-local` shape the input needs (local time, no zone).
+    setEditPublishAt(video.scheduledAt ? toLocalInputValue(video.scheduledAt) : "");
     setOpenMenuId(null);
   }
 
@@ -748,6 +770,11 @@ export default function CreatorDashboard() {
           // Always sent, empty included: clearing the field is how a creator
           // removes captions, and an omitted field could not mean that.
           captionsUrl,
+          // "" clears a schedule; a future time schedules; a past time
+          // publishes now. See the PATCH route.
+          publishAt: editPublishAt
+            ? new Date(editPublishAt).toISOString()
+            : "",
         }),
       });
       const data = await res.json();
@@ -1471,7 +1498,11 @@ export default function CreatorDashboard() {
                     <p className="text-sm font-medium truncate">{video.title}</p>
                     {!video.isPublished && (
                       <span className="shrink-0 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
-                        Not live
+                        {video.isDraft
+                          ? "Draft"
+                          : video.scheduledAt
+                          ? `Goes live ${new Date(video.scheduledAt).toLocaleString()}`
+                          : "Not live"}
                       </span>
                     )}
                   </div>
@@ -2017,6 +2048,28 @@ export default function CreatorDashboard() {
                     {editTags.split(",").map((t) => t.trim()).filter(Boolean).slice(0, 10).length}/10 tags
                   </p>
                 </div>
+              </div>
+
+              {/* Publishing — reschedule, clear a schedule, or leave as is. */}
+              <div>
+                <label
+                  className="text-sm text-white/60 mb-2 block flex items-center gap-2"
+                  htmlFor="edit-publish-at"
+                >
+                  <Clock className="w-4 h-4" /> Publish time
+                </label>
+                <input
+                  id="edit-publish-at"
+                  type="datetime-local"
+                  value={editPublishAt}
+                  onChange={(e) => setEditPublishAt(e.target.value)}
+                  className="input-field"
+                />
+                <p className="text-xs text-white/40 mt-1">
+                  {editPublishAt
+                    ? "The post stays hidden until this time."
+                    : "Leave empty to publish normally. Clear it to cancel a schedule."}
+                </p>
               </div>
 
               {/* Captions */}

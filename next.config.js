@@ -133,6 +133,16 @@ const nextConfig = {
       bodySizeLimit: "50mb",
     },
   },
+  // The admin readiness card reports pending Prisma migrations by reading
+  // prisma/migrations and comparing it with `_prisma_migrations`. A serverless
+  // bundle only traces files that are referenced, and `fs.readdirSync` is
+  // invisible to that analysis — so without this the folder is absent in
+  // production, the check reports "cannot tell", and the one number that would
+  // have made a failed deploy obvious is the one that goes missing exactly
+  // where it matters. The SQL files are a few KB.
+  outputFileTracingIncludes: {
+    "/api/admin/live-probes": ["./prisma/migrations/**/*"],
+  },
   headers: async () => [
     {
       source: "/:path*",

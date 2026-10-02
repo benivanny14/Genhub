@@ -12,6 +12,8 @@ import { notifyPaymentResult } from "./payment-notify.service";
 import { grantSubscription } from "./subscription.service";
 import { consumeCoupon } from "../coupons";
 import { releaseReferralBonus } from "./referral.service";
+import { PAYMENT_EVENT, recordPaymentEvent } from "./payment-journey.service";
+import { sendPushToUser } from "./push.service";
 
 // =============================================================================
 // Process Successful Payment Webhook
@@ -75,6 +77,12 @@ export async function processPaymentWebhook(params: {
     });
     // Tell the customer (in-app + email) so a failed charge never goes silent.
     await notifyPaymentResult({ transactionId: orderId, outcome: "FAILED" });
+    await recordPaymentEvent({
+      transactionId: orderId,
+      kind: PAYMENT_EVENT.settledFailed,
+      detail: `The gateway settled this charge as FAILED (${provider}).`,
+      metadata: { provider },
+    });
     return { processed: true, reason: "Payment failed" };
   }
 
@@ -166,6 +174,16 @@ export async function processPaymentWebhook(params: {
       );
       const phone =
         (transaction.metadata as { phone?: string } | null)?.phone ?? null;
+      // The plan the customer paid for (weekly / monthly / quarterly). A
+      // gateway-funded settlement must extend by the SAME period the checkout
+      // charged, or a quarterly payment would silently grant one month.
+      const plan =
+        (transaction.metadata as { plan?: string } | null)?.plan ?? null;
+
+      // The in-app notice is written inside the transaction; the push must wait
+      // for it to commit. Hoisted so the send happens after the money and the
+      // membership are durable, not while they are still provisional.
+      let subscriptionPush: { userId: string; title: string; body: string } | null = null;
 
       await prisma.$transaction(async (tx) => {
         // One shared implementation of "a subscription payment succeeded" is
@@ -177,6 +195,7 @@ export async function processPaymentWebhook(params: {
           amount,
           phone,
           isRenewal,
+          plan,
         });
 
         await tx.transaction.update({
@@ -189,18 +208,39 @@ export async function processPaymentWebhook(params: {
           },
         });
 
+        const noticeTitle = isRenewal ? "Membership renewed ⭐" : "New follower! ⭐";
+        const noticeBody = `${isRenewal ? "A fan's" : "A viewer's"} subscription ${
+          isRenewal ? "auto-renewed" : "is active"
+        } — you earned TZS ${granted.creatorCut.toLocaleString("en-US")}.`;
         await tx.notification.create({
           data: {
             userId: creatorId,
-            title: isRenewal ? "Membership renewed ⭐" : "New follower! ⭐",
-            message: `${isRenewal ? "A fan's" : "A viewer's"} subscription ${
-              isRenewal ? "auto-renewed" : "is active"
-            } — you earned TZS ${granted.creatorCut.toLocaleString("en-US")}.`,
+            title: noticeTitle,
+            message: noticeBody,
             type: "success",
             link: "/creator",
           },
         });
+        subscriptionPush = { userId: creatorId, title: noticeTitle, body: noticeBody };
       });
+
+      // Cast defeats the compiler's control-flow narrowing, which cannot see an
+      // assignment made inside the transaction callback above.
+      const pendingSubscriptionPush = subscriptionPush as {
+        userId: string;
+        title: string;
+        body: string;
+      } | null;
+      if (pendingSubscriptionPush) {
+        // Best-effort: the follower is already recorded and paid for, so a push
+        // failure changes nothing the creator needs.
+        void sendPushToUser(pendingSubscriptionPush.userId, {
+          title: pendingSubscriptionPush.title,
+          body: pendingSubscriptionPush.body,
+          url: "/creator",
+          tag: `subscription-${creatorId}`,
+        });
+      }
       break;
     }
 
@@ -261,6 +301,13 @@ export async function processPaymentWebhook(params: {
 
   // Tell the customer the charge is done (in-app + email when we have one).
   await notifyPaymentResult({ transactionId: orderId, outcome: "SUCCESS" });
+
+  await recordPaymentEvent({
+    transactionId: orderId,
+    kind: PAYMENT_EVENT.settledSuccess,
+    detail: `Settled as SUCCESS — TZS ${amount.toLocaleString("en-US")} (${transaction.type}, via ${provider}).`,
+    metadata: { provider, amount, type: transaction.type },
+  });
 
   console.log(
     `[Webhook] Payment processed: ${orderId} | ${provider} | TZS ${amount} | ${transaction.type}`

@@ -12,6 +12,7 @@ import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import config from "@/lib/config";
+import { createNotification } from "@/lib/services/notify.service";
 
 const userSelect = {
   id: true,
@@ -122,14 +123,13 @@ export async function POST(
         where: { id: auth.userId },
         select: { displayName: true },
       });
-      await prisma.notification.create({
-        data: {
-          userId: video.creatorId,
-          title: parentId ? "New reply" : "New comment",
-          message: `${commenter?.displayName || "Someone"} commented on "${video.title}"`,
-          type: "info",
-          link: `/video/${video.id}`,
-        },
+      await createNotification({
+        userId: video.creatorId,
+        title: parentId ? "New reply" : "New comment",
+        message: `${commenter?.displayName || "Someone"} commented on "${video.title}"`,
+        type: "info",
+        link: `/video/${video.id}`,
+        pushTag: `comment-${video.id}`,
       });
     }
 

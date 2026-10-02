@@ -11,6 +11,7 @@ import { readJsonBody } from "@/lib/request-body";
 import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
 import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 import { checkRateLimit } from "@/lib/redis";
+import { pushForNotification } from "@/lib/services/notify.service";
 import config from "@/lib/config";
 import { z } from "zod";
 
@@ -124,6 +125,16 @@ export async function POST(request: NextRequest) {
         `Your wallet balance is too low (TZS ${transaction.balance.toLocaleString()}). Top up first.`
       );
     }
+
+    // The in-app notice was written inside the transaction; the lock-screen
+    // mirror fires here, after it committed, so a rolled-back tip can never
+    // push. Best effort — a push failure does not change what was stored.
+    void pushForNotification({
+      userId: creatorId,
+      title: "New tip! 🎁",
+      message: `A viewer tipped you TZS ${amount.toLocaleString()} — your share is TZS ${creatorCut.toLocaleString()}${message ? `: "${message}"` : ""}`,
+      link: "/creator",
+    });
 
     return api.success(transaction, "Tip sent!");
   } catch (error) {

@@ -81,7 +81,13 @@ interface SystemReadiness {
     ready: boolean;
     blockers: { id: string; label: string; fix: string }[];
   };
-  delivery?: { stuckPending?: number; deliveryWarning?: string | null };
+  delivery?: {
+    stuckPending?: number;
+    deliveryWarning?: string | null;
+    /** Charges in the last 24h refused because of OUR account, not the customer's. */
+    accountFaults?: number;
+    accountFaultWarning?: string | null;
+  };
   /**
    * The local gateway circuit breaker. Open means calls are being skipped for a
    * moment because ClickPesa stopped answering — not that the key is wrong.
@@ -223,6 +229,7 @@ interface CreatorVideo {
   slug: string | null;
   price: number;
   isPublished: boolean;
+  isFeatured: boolean;
   isFlagged: boolean;
   isDeleted: boolean;
   duration: number | null;
@@ -708,6 +715,115 @@ function SetupGroupCard({
   );
 }
 
+/**
+ * One charge's journey, as the admin Payments panel reads it.
+ */
+interface PaymentJourneyEvent {
+  id: string;
+  kind: string;
+  detail: string | null;
+  metadata: unknown;
+  at: string;
+}
+interface PaymentJourneyData {
+  transaction: {
+    id: string;
+    amount: number;
+    status: string;
+    type: string;
+    providerRef: string | null;
+    createdAt: string;
+    updatedAt: string;
+    ageMinutes: number;
+    viewer: { id: string; displayName: string | null; email: string | null; phone: string | null } | null;
+    video: { id: string; title: string } | null;
+  };
+  events: PaymentJourneyEvent[];
+  summary: {
+    attempts: number;
+    webhookArrived: boolean;
+    lastWebhookAt: string | null;
+    gatewayError: string | null;
+    customerSaw: string;
+    ageMinutes: number;
+  };
+}
+
+// ---- Operations tab: incident timeline, appeals queue, signup cohorts -------
+interface IncidentRow {
+  id: string;
+  source: "admin" | "payment";
+  code: string;
+  summary: string;
+  severity: "info" | "notice" | "warning" | "critical";
+  createdAt: string;
+  actor: string | null;
+  targetId: string | null;
+}
+
+interface AppealRow {
+  id: string;
+  kind: string;
+  message: string;
+  status: string;
+  createdAt: string;
+  user: {
+    id: string;
+    displayName: string | null;
+    username: string | null;
+    email: string | null;
+    isBanned: boolean;
+  };
+}
+
+interface CohortRow {
+  key: string;
+  label: string;
+  size: number;
+  retained: number;
+  retentionRate: number;
+}
+
+interface ViewAsOverview {
+  user: {
+    id: string;
+    displayName: string | null;
+    username: string | null;
+    email: string | null;
+    phone: string | null;
+    role: string;
+    isBanned: boolean;
+    banReason: string | null;
+    freeAccess: boolean;
+    kycStatus: string;
+    strikes: number;
+    walletBalance: number;
+    createdAt: string;
+    lastLoginAt: string | null;
+    _count: { videos: number; videoAccess: number; subscriptions: number };
+    creatorBalance: {
+      availableBalance: number;
+      pendingBalance: number;
+      totalEarned: number;
+    } | null;
+  };
+  transactions: {
+    id: string;
+    amount: number;
+    type: string;
+    status: string;
+    createdAt: string;
+    video?: { title: string } | null;
+  }[];
+  subscriptions: {
+    expiresAt: string;
+    price: number;
+    creator: { displayName: string | null };
+  }[];
+  unlocks: { createdAt: string; video: { title: string } }[];
+  readOnly: boolean;
+}
+
 export default function AdminDashboard() {
   const router = useRouter();
   const { toast } = useToast();
@@ -728,9 +844,16 @@ export default function AdminDashboard() {
     | "comments"
     | "system"
     | "uploadFailures"
+    | "operations"
   >("overview");
   const [loading, setLoading] = useState(true);
   const [kycList, setKycList] = useState<KycItem[]>([]);
+  // Bulk selection: a moderation backlog is worked in batches, so rows can be
+  // ticked and decided together through /api/admin/bulk.
+  const [selectedKyc, setSelectedKyc] = useState<string[]>([]);
+  const [selectedComments, setSelectedComments] = useState<string[]>([]);
+  const [selectedViewers, setSelectedViewers] = useState<string[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [reportList, setReportList] = useState<ReportItem[]>([]);
   const [payoutList, setPayoutList] = useState<PayoutItem[]>([]);
   const [creatorList, setCreatorList] = useState<CreatorItem[]>([]);
@@ -752,6 +875,15 @@ export default function AdminDashboard() {
   const [viewerList, setViewerList] = useState<ViewerItem[]>([]);
   const [viewerQuery, setViewerQuery] = useState("");
   const [busyBlueTick, setBusyBlueTick] = useState<string | null>(null);
+  // Operations tab: the incident feed, the appeals queue and signup cohorts.
+  const [incidentList, setIncidentList] = useState<IncidentRow[]>([]);
+  const [appealList, setAppealList] = useState<AppealRow[]>([]);
+  const [cohortList, setCohortList] = useState<CohortRow[]>([]);
+  const [operationsLoading, setOperationsLoading] = useState(false);
+  const [busyAppeal, setBusyAppeal] = useState<string | null>(null);
+  // "View as user" — a read-only look at what one account holds and sees.
+  const [viewAsUser, setViewAsUser] = useState<ViewAsOverview | null>(null);
+  const [viewAsLoading, setViewAsLoading] = useState(false);
   // Moderation of what people write: every comment, searchable, with a delete
   // that reaches the same endpoint a user's own delete uses.
   const [commentList, setCommentList] = useState<AdminCommentItem[]>([]);
@@ -766,6 +898,10 @@ export default function AdminDashboard() {
   const [earnings, setEarnings] = useState<EarningsData | null>(null);
   const [releasing, setReleasing] = useState<string | null>(null);
   const [paymentList, setPaymentList] = useState<AdminPayment[]>([]);
+  // One charge's journey, opened from a row. Read on demand: it is a diagnostic,
+  // not something every row should fetch.
+  const [journey, setJourney] = useState<PaymentJourneyData | null>(null);
+  const [journeyBusy, setJourneyBusy] = useState<string | null>(null);
   const [paymentSummary, setPaymentSummary] = useState<PaymentSummary | null>(null);
   const [paymentStatus, setPaymentStatus] = useState("PENDING");
   const [expiring, setExpiring] = useState<string | null>(null);
@@ -792,8 +928,40 @@ export default function AdminDashboard() {
   const [refunding, setRefunding] = useState<string | null>(null);
   const [system, setSystem] = useState<SystemReadiness | null>(null);
   const [systemBusy, setSystemBusy] = useState(false);
+  // What the services ACTUALLY answered, as opposed to what their variables say
+  // they are. Loaded separately from the rest of the card because the gateway
+  // probe mints a real token and can take tens of seconds.
+  const [liveProbes, setLiveProbes] = useState<
+    { id: string; name: string; state: "ok" | "warn" | "fail" | "skip"; detail: string }[] | null
+  >(null);
+  const [migrations, setMigrations] = useState<{
+    known: boolean;
+    expectedCount: number;
+    appliedCount: number;
+    pending: string[];
+    failed: string[];
+    lastAppliedAt: string | null;
+  } | null>(null);
+  const [liveBusy, setLiveBusy] = useState(false);
+  const [alertBusy, setAlertBusy] = useState(false);
   const [jobs, setJobs] = useState<CronHealth | null>(null);
   const [jobsBusy, setJobsBusy] = useState(false);
+  // The platform-wide "everything is free right now" switch. Null while it is
+  // being read, so the card can tell "off" apart from "not loaded yet".
+  const [allVideosFree, setAllVideosFree] = useState<boolean | null>(null);
+  const [freeVideosBusy, setFreeVideosBusy] = useState(false);
+  // Operator kill switches. null while unread, so the card can tell "off" from
+  // "not loaded yet".
+  const [flagUploads, setFlagUploads] = useState<boolean | null>(null);
+  const [flagCheckout, setFlagCheckout] = useState<boolean | null>(null);
+  const [flagBusy, setFlagBusy] = useState(false);
+  // The site-wide announcement an admin can publish without a deploy.
+  const [announcement, setAnnouncement] = useState<{
+    active: boolean;
+    message: string;
+    tone: "info" | "warning" | "success";
+  }>({ active: false, message: "", tone: "info" });
+  const [announcementBusy, setAnnouncementBusy] = useState(false);
   // Starting a worker by hand: which one is running, which one is waiting for
   // the operator to confirm that it may charge a customer's phone, and what the
   // last manual run came back with.
@@ -927,6 +1095,8 @@ export default function AdminDashboard() {
       fetchPayments();
       fetchSystemReadiness();
       fetchJobs();
+      fetchPlatformSettings();
+      fetchLiveProbes();
       // Cheap on purpose: reading config opens no connections, and this is what
       // populates the tab badge before anyone clicks it.
       fetchSetup();
@@ -944,6 +1114,7 @@ export default function AdminDashboard() {
     if (activeTab === "blueTicks") fetchBlueTicks();
     if (activeTab === "viewers") fetchViewers();
     if (activeTab === "audit") fetchAudit();
+    if (activeTab === "operations") fetchOperations();
     if (activeTab === "uploadFailures") fetchUploadFailures();
     if (activeTab === "comments") fetchComments();
     if (activeTab === "earnings") fetchEarnings();
@@ -961,6 +1132,41 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (data.success) setStats(data.data);
     } catch {}
+  }
+
+  async function fetchLiveProbes() {
+    setLiveBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/live-probes");
+      const data = await res.json();
+      if (data.success) {
+        setLiveProbes(data.data.probes);
+        setMigrations(data.data.migrations);
+      }
+    } catch {
+      // Informational — never surface as an error toast
+    } finally {
+      setLiveBusy(false);
+    }
+  }
+
+  async function sendTestAlert() {
+    setAlertBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/test-alert", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        // "sent" is a real delivery; everything else tells the operator which
+        // half of the channel is missing, so it is a warning, not a success.
+        toast(data.data?.outcome === "sent" ? "success" : "warning", data.message || "Done");
+      } else {
+        toast("error", data.error || "Could not send the test alert.");
+      }
+    } catch {
+      toast("error", "The request failed.");
+    } finally {
+      setAlertBusy(false);
+    }
   }
 
   async function fetchSystemReadiness() {
@@ -1035,6 +1241,12 @@ export default function AdminDashboard() {
           // First, because it is the one that makes every other gateway result
           // read wrong while it lasts.
           ...(pay?.data?.gatewayBreaker?.warning ? [pay.data.gatewayBreaker.warning] : []),
+          // Second, because it is the CAUSE of the delivery warning below: when
+          // our own account is capped or unfinished, no customer ever sees a
+          // prompt, and the delivery line would otherwise be read as their fault.
+          ...(pay?.data?.delivery?.accountFaultWarning
+            ? [pay.data.delivery.accountFaultWarning]
+            : []),
           ...(pay?.data?.delivery?.deliveryWarning ? [pay.data.delivery.deliveryWarning] : []),
           ...(health?.warnings || []),
         ],
@@ -1059,6 +1271,84 @@ export default function AdminDashboard() {
       // Informational, like readiness — never an error toast
     } finally {
       setJobsBusy(false);
+    }
+  }
+
+  async function fetchPlatformSettings() {
+    try {
+      const res = await adminFetch("/api/admin/settings");
+      const data = await res.json();
+      if (data.success) {
+        setAllVideosFree(Boolean(data.data.allVideosFree));
+        setFlagUploads(Boolean(data.data.flags?.uploadsEnabled));
+        setFlagCheckout(Boolean(data.data.flags?.checkoutEnabled));
+        if (data.data.announcement) setAnnouncement(data.data.announcement);
+      }
+    } catch {
+      // Informational, like readiness — never an error toast
+    }
+  }
+
+  /**
+   * Save one or more platform switches.
+   *
+   * Deliberately not optimistic: these change what every visitor can do, so the
+   * card redraws only from what the server confirms.
+   */
+  async function savePlatformSettings(
+    body: Record<string, unknown>,
+    setBusy: (busy: boolean) => void
+  ) {
+    setBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAllVideosFree(Boolean(data.data.allVideosFree));
+        setFlagUploads(Boolean(data.data.flags?.uploadsEnabled));
+        setFlagCheckout(Boolean(data.data.flags?.checkoutEnabled));
+        if (data.data.announcement) setAnnouncement(data.data.announcement);
+        toast("success", data.message || "Saved");
+      } else {
+        toast("error", data.error || "Could not save that.");
+      }
+    } catch {
+      toast("error", "The request failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * Flip the platform-wide free-viewing switch.
+   *
+   * Deliberately not optimistic: this changes whether every other number on
+   * this page is money or not, so the card is only redrawn from what the server
+   * confirms. A failure leaves the switch where it was and says so.
+   */
+  async function toggleAllVideosFree(next: boolean) {
+    setFreeVideosBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ allVideosFree: next }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setAllVideosFree(Boolean(data.data.allVideosFree));
+        toast("success", data.message || "Saved");
+      } else {
+        toast("error", data.error || "Could not change it.");
+      }
+    } catch {
+      toast("error", "The request failed.");
+    } finally {
+      setFreeVideosBusy(false);
     }
   }
 
@@ -1292,6 +1582,66 @@ export default function AdminDashboard() {
     } catch {}
   }
 
+  // The Operations tab reads three independent views; one may fail without
+  // blanking the others, so each is fetched on its own.
+  async function fetchOperations() {
+    setOperationsLoading(true);
+    try {
+      const [incidentsRes, appealsRes, cohortsRes] = await Promise.all([
+        adminFetch("/api/admin/incidents?limit=200"),
+        adminFetch("/api/admin/appeals?status=PENDING"),
+        adminFetch("/api/admin/analytics/cohorts?weeks=12"),
+      ]);
+      const [incidents, appeals, cohorts] = await Promise.all([
+        incidentsRes.json().catch(() => null),
+        appealsRes.json().catch(() => null),
+        cohortsRes.json().catch(() => null),
+      ]);
+      if (incidents?.success) setIncidentList(incidents.data.entries ?? []);
+      if (appeals?.success) setAppealList(appeals.data.appeals ?? []);
+      if (cohorts?.success) setCohortList(cohorts.data.cohorts ?? []);
+    } finally {
+      setOperationsLoading(false);
+    }
+  }
+
+  async function openViewAs(userId: string) {
+    setViewAsLoading(true);
+    setViewAsUser(null);
+    try {
+      const res = await adminFetch(`/api/admin/users/${userId}/overview`);
+      const data = await res.json();
+      if (data.success) setViewAsUser(data.data as ViewAsOverview);
+      else toast("error", data.error || "Could not load that account");
+    } catch {
+      toast("error", "Could not load that account");
+    } finally {
+      setViewAsLoading(false);
+    }
+  }
+
+  async function decideAppeal(appealId: string, decision: "APPROVED" | "REJECTED") {
+    setBusyAppeal(appealId);
+    try {
+      const res = await adminFetch("/api/admin/appeals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ appealId, decision }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast("success", data.message || "Appeal decided");
+        setAppealList((prev) => prev.filter((a) => a.id !== appealId));
+      } else {
+        toast("error", data.error || "Could not decide the appeal");
+      }
+    } catch {
+      toast("error", "Could not decide the appeal");
+    } finally {
+      setBusyAppeal(null);
+    }
+  }
+
   async function createCoupon() {
     if (!newCoupon.code.trim() || creatingCoupon) return;
     setCreatingCoupon(true);
@@ -1494,7 +1844,7 @@ export default function AdminDashboard() {
 
   async function handleVideoAction(
     videoId: string,
-    action: "DELETE" | "HIDE" | "RESTORE" | "UNFLAG",
+    action: "DELETE" | "HIDE" | "RESTORE" | "UNFLAG" | "FEATURE" | "UNFEATURE",
     reason?: string
   ) {
     setBusyVideo(videoId);
@@ -1558,6 +1908,39 @@ export default function AdminDashboard() {
       }
     } catch {
       toast("error", "An error occurred");
+    }
+  }
+
+  /** Apply one decision to many rows through the bulk endpoint. */
+  async function runBulk(action: string, ids: string[], reason?: string) {
+    if (ids.length === 0) return;
+    setBulkBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ids, reason }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast("success", data.message || "Bulk action applied");
+        if (action.startsWith("kyc_")) {
+          setSelectedKyc([]);
+          fetchKyc();
+        } else if (action === "comment_delete") {
+          setSelectedComments([]);
+          fetchComments();
+        } else if (action === "ban" || action === "unban") {
+          setSelectedViewers([]);
+          fetchViewers();
+        }
+      } else {
+        toast("error", data.error || "Bulk action failed");
+      }
+    } catch {
+      toast("error", "Bulk action failed");
+    } finally {
+      setBulkBusy(false);
     }
   }
 
@@ -1704,6 +2087,22 @@ export default function AdminDashboard() {
       toast("error", "An error occurred");
     } finally {
       setRechecking(null);
+    }
+  }
+
+  async function openJourney(payment: AdminPayment) {
+    setJourneyBusy(payment.id);
+    try {
+      const res = await adminFetch(
+        `/api/admin/payments/journey?transactionId=${encodeURIComponent(payment.id)}`
+      );
+      const data = await res.json();
+      if (data.success) setJourney(data.data as PaymentJourneyData);
+      else toast("error", data.error || "Could not load the journey.");
+    } catch {
+      toast("error", "The request failed.");
+    } finally {
+      setJourneyBusy(null);
     }
   }
 
@@ -1883,6 +2282,15 @@ export default function AdminDashboard() {
       badge: (paymentSummary?.investigating || 0) + (paymentSummary?.stuck || 0),
     },
     {
+      // The "what just happened, in order?" tab: the incident timeline, the
+      // appeals queue and signup cohorts in one place. The badge is open appeals
+      // — a person waiting on a decision to get their account back.
+      id: "operations" as const,
+      label: "Operations",
+      icon: Activity,
+      badge: appealList.length,
+    },
+    {
       id: "audit" as const,
       label: "Audit",
       icon: ScrollText,
@@ -1948,6 +2356,171 @@ export default function AdminDashboard() {
         {/* Overview Tab */}
         {activeTab === "overview" && (
           <div className="space-y-6">
+            {/* Platform-wide free viewing. Placed first because it changes what
+                every other number below it means while it is on: no buy button,
+                no subscription needed, and no new revenue from video sales. */}
+            <div
+              className={`glass-card p-5 border ${
+                allVideosFree ? "border-emerald-500/40" : "border-white/5"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-4 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                      allVideosFree ? "bg-emerald-500/20" : "bg-white/5"
+                    }`}
+                  >
+                    <DollarSign
+                      className={`w-5 h-5 ${
+                        allVideosFree ? "text-emerald-400" : "text-white/50"
+                      }`}
+                    />
+                  </div>
+                  <div>
+                    <p className="font-display font-bold">Free viewing — every video</p>
+                    <p className="text-xs text-white/50 mt-0.5">
+                      {allVideosFree === null
+                        ? "Checking…"
+                        : allVideosFree
+                          ? "ON — anyone can watch any video for free. Wallet top-ups, tips and blue ticks keep working."
+                          : "OFF — videos are paid the normal way (buy or subscribe)."}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => toggleAllVideosFree(!allVideosFree)}
+                  disabled={freeVideosBusy || allVideosFree === null}
+                  className={`${
+                    allVideosFree ? "btn-ghost" : "btn-brand"
+                  } disabled:opacity-50 whitespace-nowrap`}
+                >
+                  {freeVideosBusy
+                    ? "Working…"
+                    : allVideosFree
+                      ? "Turn OFF — make videos paid"
+                      : "Turn ON — make all videos free"}
+                </button>
+              </div>
+
+              {/* The other operator kill switches. Both pause something that
+                  costs money or causes support load, without a deploy. */}
+              <div className="mt-4 pt-4 border-t border-white/5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-white/5 px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium">Uploads</p>
+                    <p className="text-xs text-white/50">
+                      {flagUploads === null
+                        ? "…"
+                        : flagUploads
+                          ? "ON — creators can upload"
+                          : "PAUSED — no new uploads"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() =>
+                      savePlatformSettings({ uploadsEnabled: !flagUploads }, setFlagBusy)
+                    }
+                    disabled={flagBusy || flagUploads === null}
+                    className={`${
+                      flagUploads ? "btn-ghost" : "btn-brand"
+                    } text-xs disabled:opacity-50 whitespace-nowrap`}
+                  >
+                    {flagBusy ? "Working…" : flagUploads ? "Pause uploads" : "Resume uploads"}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-white/5 px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium">Mobile-money checkout</p>
+                    <p className="text-xs text-white/50">
+                      {flagCheckout === null
+                        ? "…"
+                        : flagCheckout
+                          ? "ON — USSD pushes are sent"
+                          : "PAUSED — no new phone charges"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() =>
+                      savePlatformSettings({ checkoutEnabled: !flagCheckout }, setFlagBusy)
+                    }
+                    disabled={flagBusy || flagCheckout === null}
+                    className={`${
+                      flagCheckout ? "btn-ghost" : "btn-brand"
+                    } text-xs disabled:opacity-50 whitespace-nowrap`}
+                  >
+                    {flagBusy ? "Working…" : flagCheckout ? "Pause checkout" : "Resume checkout"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Announcement banner */}
+              <div className="mt-3 rounded-xl border border-white/5 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium">Announcement banner</p>
+                    <p className="text-xs text-white/50">
+                      Shown at the top of every page. Publishes without a deploy.
+                    </p>
+                  </div>
+                  {announcement.active && (
+                    <span className="text-xs text-emerald-400">LIVE</span>
+                  )}
+                </div>
+                <textarea
+                  value={announcement.message}
+                  onChange={(e) =>
+                    setAnnouncement((a) => ({ ...a, message: e.target.value }))
+                  }
+                  rows={2}
+                  maxLength={500}
+                  placeholder="e.g. Malipo yamerudi — unaweza kulipa kwa M-Pesa tena."
+                  className="input-field text-sm mt-2"
+                />
+                <div className="flex items-center gap-2 mt-2">
+                  <select
+                    value={announcement.tone}
+                    onChange={(e) =>
+                      setAnnouncement((a) => ({
+                        ...a,
+                        tone: e.target.value as typeof a.tone,
+                      }))
+                    }
+                    className="input-field text-xs py-1.5 w-auto"
+                  >
+                    <option value="info">Info</option>
+                    <option value="warning">Warning</option>
+                    <option value="success">Success</option>
+                  </select>
+                  <button
+                    onClick={() =>
+                      savePlatformSettings(
+                        { announcement: { ...announcement, active: true } },
+                        setAnnouncementBusy
+                      )
+                    }
+                    disabled={announcementBusy || !announcement.message.trim()}
+                    className="btn-brand text-xs disabled:opacity-50"
+                  >
+                    {announcementBusy ? "Publishing…" : "Publish banner"}
+                  </button>
+                  {announcement.active && (
+                    <button
+                      onClick={() =>
+                        savePlatformSettings(
+                          { announcement: { ...announcement, active: false } },
+                          setAnnouncementBusy
+                        )
+                      }
+                      disabled={announcementBusy}
+                      className="btn-ghost text-xs disabled:opacity-50"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="glass-card p-5">
                 <div className="flex items-center gap-3 mb-3">
@@ -2138,6 +2711,89 @@ export default function AdminDashboard() {
                 {!system && (
                   <p className="text-sm text-white/50">
                     {systemBusy ? "Checking…" : "Readiness not loaded."}
+                  </p>
+                )}
+              </div>
+
+              {/* LIVE CHECKS — what the services actually answered, not what
+                  their variables say. The gateway probe mints a real token, so
+                  a revoked key reads "rejected", not "configured". */}
+              <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+                <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+                  <div>
+                    <p className="text-sm font-medium">Live checks</p>
+                    <p className="text-xs text-white/40">
+                      Opens each service for real — the gateway mints a token, so a dead key cannot read as configured.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={fetchLiveProbes}
+                      disabled={liveBusy}
+                      className="btn-ghost text-xs disabled:opacity-50"
+                    >
+                      {liveBusy ? "Checking…" : "Re-check now"}
+                    </button>
+                    <button
+                      onClick={sendTestAlert}
+                      disabled={alertBusy}
+                      className="btn-ghost text-xs disabled:opacity-50"
+                    >
+                      {alertBusy ? "Sending…" : "Send test alert"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Migrations lead: a schema that is behind is the reason a
+                    customer's Pay click fails, and it is fixable in seconds. */}
+                {migrations && (
+                  <div
+                    className={`flex items-start gap-2 rounded-lg px-3 py-2 mb-1.5 ${
+                      migrations.failed.length ||
+                      (migrations.known && migrations.pending.length)
+                        ? "border border-amber-500/30 bg-amber-500/5"
+                        : "border border-white/5"
+                    }`}
+                  >
+                    {migrations.failed.length ||
+                    (migrations.known && migrations.pending.length) ? (
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    ) : (
+                      <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">Database migrations</p>
+                      <p className="text-xs text-white/50">
+                        {migrations.failed.length
+                          ? `${migrations.failed.length} migration(s) started but never finished: ${migrations.failed.join(", ")}`
+                          : !migrations.known
+                            ? "Cannot read the migrations list on this deployment — run `npm run db:status` to check."
+                            : migrations.pending.length
+                              ? `${migrations.pending.length} pending: ${migrations.pending.join(", ")} — run \`npm run db:deploy\` BEFORE taking payments.`
+                              : `Up to date — ${migrations.appliedCount}/${migrations.expectedCount} applied${migrations.lastAppliedAt ? ` · last ${new Date(migrations.lastAppliedAt).toLocaleString("en-GB")}` : ""}.`}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {(liveProbes || []).map((p) => (
+                  <div key={p.id} className="flex items-start gap-2 rounded-lg px-3 py-2">
+                    {p.state === "ok" ? (
+                      <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                    ) : p.state === "warn" || p.state === "skip" ? (
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    ) : (
+                      <XCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium">{p.name}</p>
+                      <p className="text-xs text-white/50 break-words">{p.detail}</p>
+                    </div>
+                  </div>
+                ))}
+                {!liveProbes && (
+                  <p className="text-xs text-white/40 px-3 py-2">
+                    {liveBusy ? "Opening each service…" : "Live checks not loaded."}
                   </p>
                 )}
               </div>
@@ -2507,6 +3163,48 @@ export default function AdminDashboard() {
         {activeTab === "kyc" && (
           <div className="space-y-4">
             <h2 className="font-display font-bold">KYC Queue</h2>
+
+            {kycList.length > 0 && (
+              <div className="glass-card p-3 flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={selectedKyc.length === kycList.length && kycList.length > 0}
+                    onChange={(e) =>
+                      setSelectedKyc(e.target.checked ? kycList.map((k) => k.id) : [])
+                    }
+                  />
+                  Select all
+                </label>
+                <span className="text-xs text-white/40">{selectedKyc.length} selected</span>
+                <div className="ml-auto flex gap-2">
+                  <button
+                    onClick={() => runBulk("kyc_approve", selectedKyc)}
+                    disabled={bulkBusy || selectedKyc.length === 0}
+                    className="bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition disabled:opacity-40"
+                  >
+                    <CheckCircle className="w-3 h-3 inline mr-1" /> Approve selected
+                  </button>
+                  <button
+                    onClick={() =>
+                      askReason({
+                        title: `Reject ${selectedKyc.length} submissions`,
+                        label: "Reason (shared with each creator)",
+                        placeholder: "e.g. Documents unreadable",
+                        confirmLabel: "Reject",
+                        tone: "danger",
+                        onConfirm: (reason) => runBulk("kyc_reject", selectedKyc, reason),
+                      })
+                    }
+                    disabled={bulkBusy || selectedKyc.length === 0}
+                    className="bg-red-500/20 text-red-400 hover:bg-red-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition disabled:opacity-40"
+                  >
+                    <XCircle className="w-3 h-3 inline mr-1" /> Reject selected
+                  </button>
+                </div>
+              </div>
+            )}
+
             {kycList.length === 0 ? (
               <div className="glass-card p-12 text-center">
                 <CheckCircle className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
@@ -2518,6 +3216,18 @@ export default function AdminDashboard() {
                   <div key={kyc.id} className="glass-card p-5">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                       <div className="flex items-center gap-4">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${kyc.user.displayName || "submission"}`}
+                          checked={selectedKyc.includes(kyc.id)}
+                          onChange={(e) =>
+                            setSelectedKyc((prev) =>
+                              e.target.checked
+                                ? [...prev, kyc.id]
+                                : prev.filter((id) => id !== kyc.id)
+                            )
+                          }
+                        />
                         <div className="w-12 h-12 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-bold">
                           {kyc.user.displayName?.[0] || "U"}
                         </div>
@@ -2794,6 +3504,38 @@ export default function AdminDashboard() {
               </div>
             </div>
 
+            {viewerList.length > 0 && (
+              <div className="glass-card p-3 flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={selectedViewers.length === viewerList.length && viewerList.length > 0}
+                    onChange={(e) =>
+                      setSelectedViewers(e.target.checked ? viewerList.map((v) => v.id) : [])
+                    }
+                  />
+                  Select all
+                </label>
+                <span className="text-xs text-white/40">{selectedViewers.length} selected</span>
+                <div className="ml-auto flex gap-2">
+                  <button
+                    onClick={() => runBulk("ban", selectedViewers, "Bulk suspension")}
+                    disabled={bulkBusy || selectedViewers.length === 0}
+                    className="bg-red-500/20 text-red-400 hover:bg-red-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition disabled:opacity-40"
+                  >
+                    <UserX className="w-3 h-3 inline mr-1" /> Ban selected
+                  </button>
+                  <button
+                    onClick={() => runBulk("unban", selectedViewers)}
+                    disabled={bulkBusy || selectedViewers.length === 0}
+                    className="bg-blue-500/20 text-blue-400 hover:bg-blue-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition disabled:opacity-40"
+                  >
+                    <CheckCircle className="w-3 h-3 inline mr-1" /> Unban selected
+                  </button>
+                </div>
+              </div>
+            )}
+
             {viewerList.length === 0 ? (
               <div className="glass-card p-12 text-center">
                 <Users className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
@@ -2807,6 +3549,19 @@ export default function AdminDashboard() {
                   <div key={viewer.id} className="glass-card p-5">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                       <div className="flex items-start gap-4 min-w-0">
+                        <input
+                          type="checkbox"
+                          aria-label="Select account"
+                          className="mt-1 shrink-0"
+                          checked={selectedViewers.includes(viewer.id)}
+                          onChange={(e) =>
+                            setSelectedViewers((prev) =>
+                              e.target.checked
+                                ? [...prev, viewer.id]
+                                : prev.filter((id) => id !== viewer.id)
+                            )
+                          }
+                        />
                         <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center font-bold text-white/70 shrink-0">
                           {viewer.displayName?.[0] || "?"}
                         </div>
@@ -2882,6 +3637,13 @@ export default function AdminDashboard() {
                           </>
                         )}
                         <button
+                          onClick={() => openViewAs(viewer.id)}
+                          className="bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          title="See this account read-only — what they hold and their recent activity"
+                        >
+                          <Eye className="w-3 h-3" /> View as user
+                        </button>
+                        <button
                           onClick={() =>
                             handleViewerAction(
                               viewer.id,
@@ -2953,6 +3715,29 @@ export default function AdminDashboard() {
               </div>
             </div>
 
+            {commentList.length > 0 && (
+              <div className="glass-card p-3 flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={selectedComments.length === commentList.length && commentList.length > 0}
+                    onChange={(e) =>
+                      setSelectedComments(e.target.checked ? commentList.map((c) => c.id) : [])
+                    }
+                  />
+                  Select all
+                </label>
+                <span className="text-xs text-white/40">{selectedComments.length} selected</span>
+                <button
+                  onClick={() => runBulk("comment_delete", selectedComments)}
+                  disabled={bulkBusy || selectedComments.length === 0}
+                  className="ml-auto bg-red-500/20 text-red-400 hover:bg-red-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition disabled:opacity-40"
+                >
+                  <Trash2 className="w-3 h-3 inline mr-1" /> Delete selected
+                </button>
+              </div>
+            )}
+
             {commentList.length === 0 ? (
               <div className="glass-card p-12 text-center">
                 <MessageSquare className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
@@ -2965,6 +3750,19 @@ export default function AdminDashboard() {
                 {commentList.map((comment) => (
                   <div key={comment.id} className="glass-card p-4">
                     <div className="flex items-start justify-between gap-4">
+                      <input
+                        type="checkbox"
+                        aria-label="Select comment"
+                        className="mt-1 shrink-0"
+                        checked={selectedComments.includes(comment.id)}
+                        onChange={(e) =>
+                          setSelectedComments((prev) =>
+                            e.target.checked
+                              ? [...prev, comment.id]
+                              : prev.filter((id) => id !== comment.id)
+                          )
+                        }
+                      />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-sm font-medium">
@@ -3234,6 +4032,21 @@ export default function AdminDashboard() {
                                   >
                                     <Eye className="w-3 h-3" /> View
                                   </a>
+                                )}
+                                {!video.isDeleted && video.isPublished && (
+                                  <button
+                                    onClick={() =>
+                                      handleVideoAction(
+                                        video.id,
+                                        video.isFeatured ? "UNFEATURE" : "FEATURE"
+                                      )
+                                    }
+                                    disabled={busyVideo === video.id}
+                                    className="btn-ghost text-xs disabled:opacity-50"
+                                    title="Show this scene in the home page's featured slot"
+                                  >
+                                    {video.isFeatured ? "Unfeature" : "Feature"}
+                                  </button>
                                 )}
                                 {!video.isDeleted && video.isPublished && (
                                   <button
@@ -3719,6 +4532,14 @@ export default function AdminDashboard() {
                       >
                         {p.status === "UNDER_INVESTIGATION" ? "BEING CHECKED" : p.status}
                       </span>
+                      <button
+                        onClick={() => openJourney(p)}
+                        disabled={journeyBusy === p.id}
+                        className="btn-ghost text-xs disabled:opacity-50"
+                        title="See what happened to this charge, step by step"
+                      >
+                        {journeyBusy === p.id ? "Loading…" : "Journey"}
+                      </button>
                       {p.status === "PENDING" && (
                         <button
                           onClick={() => setPendingExpire(p)}
@@ -3737,6 +4558,7 @@ export default function AdminDashboard() {
                             onClick={() => recheckCharge(p)}
                             disabled={rechecking === p.id || resolving === p.id}
                             className="btn-ghost text-xs disabled:opacity-50"
+                            title="Fuatilia gateway sasa — ask ClickPesa right now whether it has a verdict"
                           >
                             {rechecking === p.id ? "Asking…" : "Re-check gateway"}
                           </button>
@@ -3744,6 +4566,7 @@ export default function AdminDashboard() {
                             onClick={() => setPendingResolve({ payment: p, outcome: "GRANT" })}
                             disabled={resolving === p.id || rechecking === p.id}
                             className="btn-ghost text-xs text-emerald-400 disabled:opacity-50"
+                            title="Settle by the gateway's answer — the customer did pay"
                           >
                             {resolving === p.id ? "Working…" : "Customer paid"}
                           </button>
@@ -3753,6 +4576,7 @@ export default function AdminDashboard() {
                             }
                             disabled={resolving === p.id || rechecking === p.id}
                             className="btn-ghost text-xs text-white/60 disabled:opacity-50"
+                            title="Release without refund — the money never moved"
                           >
                             Never paid
                           </button>
@@ -3781,6 +4605,151 @@ export default function AdminDashboard() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* Operations Tab — the incident timeline, the appeals queue, and signup
+            cohorts. What happened, who is waiting, and who stayed. */}
+        {activeTab === "operations" && (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display font-bold text-lg flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-brand-400" /> Operations
+                </h2>
+                <p className="text-white/50 text-sm mt-1 max-w-2xl">
+                  What just happened, in order — every admin action beside every
+                  payment event — plus the appeals queue and signup cohorts.
+                </p>
+              </div>
+              <button
+                onClick={() => fetchOperations()}
+                disabled={operationsLoading}
+                className="btn-ghost flex items-center gap-2 disabled:opacity-50"
+              >
+                <RefreshCcw className={`w-4 h-4 ${operationsLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </button>
+            </div>
+
+            {/* Appeals queue */}
+            <div className="glass-card p-5">
+              <h3 className="font-semibold flex items-center gap-2 mb-4">
+                <Gavel className="w-4 h-4 text-brand-400" /> Appeals waiting
+                {appealList.length > 0 && (
+                  <span className="bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
+                    {appealList.length}
+                  </span>
+                )}
+              </h3>
+              {appealList.length === 0 ? (
+                <p className="text-sm text-white/40">No appeals waiting.</p>
+              ) : (
+                <div className="space-y-3">
+                  {appealList.map((appeal) => (
+                    <div key={appeal.id} className="rounded-xl border border-white/10 p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-sm font-medium">
+                          {appeal.user.displayName ||
+                            appeal.user.username ||
+                            appeal.user.email ||
+                            appeal.user.id}
+                          {appeal.user.isBanned && (
+                            <span className="ml-2 text-xs text-red-400">suspended</span>
+                          )}
+                        </p>
+                        <span className="text-xs text-white/40">
+                          {new Date(appeal.createdAt).toLocaleDateString()}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-sm text-white/70 whitespace-pre-wrap">
+                        {appeal.message}
+                      </p>
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => decideAppeal(appeal.id, "APPROVED")}
+                          disabled={busyAppeal === appeal.id}
+                          className="flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-sm text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50"
+                        >
+                          <CheckCircle className="w-4 h-4" /> Approve
+                        </button>
+                        <button
+                          onClick={() => decideAppeal(appeal.id, "REJECTED")}
+                          disabled={busyAppeal === appeal.id}
+                          className="flex items-center gap-1.5 rounded-lg border border-white/10 px-3 py-1.5 text-sm text-white/60 hover:bg-white/10 disabled:opacity-50"
+                        >
+                          <XCircle className="w-4 h-4" /> Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Incident timeline */}
+            <div className="glass-card p-5">
+              <h3 className="font-semibold mb-4">Incident timeline</h3>
+              {incidentList.length === 0 ? (
+                <p className="text-sm text-white/40">Nothing to show yet.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {incidentList.slice(0, 100).map((entry) => {
+                    const tone =
+                      entry.severity === "critical"
+                        ? "border-red-500/50 bg-red-500/10"
+                        : entry.severity === "warning"
+                        ? "border-amber-500/40 bg-amber-500/10"
+                        : entry.severity === "notice"
+                        ? "border-sky-500/30 bg-sky-500/5"
+                        : "border-white/5 bg-white/[0.02]";
+                    return (
+                      <li key={entry.id} className={`rounded-lg border p-2.5 ${tone}`}>
+                        <div className="flex items-center justify-between gap-3 text-xs text-white/40">
+                          <span className="font-mono">{entry.code}</span>
+                          <span>{new Date(entry.createdAt).toLocaleString()}</span>
+                        </div>
+                        <p className="mt-1 text-sm text-white/80">{entry.summary}</p>
+                        {entry.actor && (
+                          <p className="mt-0.5 text-xs text-white/40">by {entry.actor}</p>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            {/* Signup cohorts */}
+            <div className="glass-card p-5">
+              <h3 className="font-semibold mb-4">Signup cohorts (last 12 weeks)</h3>
+              {cohortList.length === 0 ? (
+                <p className="text-sm text-white/40">No signups in this window.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-white/40">
+                        <th className="py-2 pr-4">Week of</th>
+                        <th className="py-2 pr-4">Signed up</th>
+                        <th className="py-2 pr-4">Active (30d)</th>
+                        <th className="py-2">Retention</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cohortList.map((cohort) => (
+                        <tr key={cohort.key} className="border-t border-white/5">
+                          <td className="py-2 pr-4">{cohort.label}</td>
+                          <td className="py-2 pr-4">{cohort.size}</td>
+                          <td className="py-2 pr-4">{cohort.retained}</td>
+                          <td className="py-2">{Math.round(cohort.retentionRate * 100)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -4506,6 +5475,106 @@ export default function AdminDashboard() {
         </div>
       )}
 
+      {/* One charge's journey: every step, when it happened, what the gateway
+          actually answered, whether a webhook arrived, and what the customer
+          was shown. This is the answer to "why is this FAILED?" that the row
+          alone could never give. */}
+      {journey && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+          onClick={() => setJourney(null)}
+        >
+          <div
+            className="glass-card w-full max-w-2xl p-5 max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-display font-bold">Payment journey</h3>
+                <p className="text-xs text-white/50">
+                  {journey.transaction.type} · TZS{" "}
+                  {journey.transaction.amount.toLocaleString("en-US")} ·{" "}
+                  {journey.transaction.providerRef || journey.transaction.id}
+                </p>
+                <p className="text-xs text-white/40 mt-1">
+                  {journey.transaction.viewer?.displayName ||
+                    journey.transaction.viewer?.email ||
+                    journey.transaction.viewer?.phone ||
+                    "—"}
+                  {journey.transaction.video?.title
+                    ? ` · ${journey.transaction.video.title}`
+                    : ""}
+                </p>
+              </div>
+              <button onClick={() => setJourney(null)} className="btn-ghost text-xs">
+                Close
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4 text-xs">
+              <div className="rounded-lg border border-white/5 p-2">
+                <p className="text-white/40">Status</p>
+                <p className="font-medium">{journey.transaction.status}</p>
+              </div>
+              <div className="rounded-lg border border-white/5 p-2">
+                <p className="text-white/40">Collect attempts</p>
+                <p className="font-medium">{journey.summary.attempts}</p>
+              </div>
+              <div className="rounded-lg border border-white/5 p-2">
+                <p className="text-white/40">Webhook</p>
+                <p className="font-medium">
+                  {journey.summary.webhookArrived
+                    ? `arrived${journey.summary.lastWebhookAt ? ` (${new Date(journey.summary.lastWebhookAt).toLocaleTimeString("en-GB")})` : ""}`
+                    : "never arrived"}
+                </p>
+              </div>
+              <div className="rounded-lg border border-white/5 p-2">
+                <p className="text-white/40">Age</p>
+                <p className="font-medium">{journey.summary.ageMinutes} min</p>
+              </div>
+            </div>
+
+            <div className="mt-3 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+              <p className="text-xs text-white/40">What the customer was shown</p>
+              <p className="text-sm text-white/80 mt-1">{journey.summary.customerSaw}</p>
+            </div>
+
+            {journey.summary.gatewayError && (
+              <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/5 p-3">
+                <p className="text-xs text-red-400/80">Real gateway error (not shown to the customer)</p>
+                <p className="text-sm text-red-200/90 mt-1 break-words">
+                  {journey.summary.gatewayError}
+                </p>
+              </div>
+            )}
+
+            <div className="mt-4">
+              <p className="text-xs uppercase tracking-wider text-white/40 mb-2">Timeline</p>
+              <ol className="space-y-2">
+                {journey.events.map((ev) => (
+                  <li key={ev.id} className="flex gap-3 text-sm">
+                    <span className="text-xs text-white/40 w-32 shrink-0">
+                      {new Date(ev.at).toLocaleString("en-GB")}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="font-mono text-xs text-brand-400">{ev.kind}</span>
+                      {ev.detail ? (
+                        <span className="block text-xs text-white/60">{ev.detail}</span>
+                      ) : null}
+                    </span>
+                  </li>
+                ))}
+                {journey.events.length === 0 && (
+                  <li className="text-xs text-white/40">
+                    No events recorded for this charge yet.
+                  </li>
+                )}
+              </ol>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Resolve an under-investigation charge */}
       {pendingResolve && (
         <div
@@ -4639,6 +5708,92 @@ export default function AdminDashboard() {
                 Expire charge
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* View-as-user — read-only. Deliberately not an impersonation: it shows
+          what the account holds without ever minting a session for it. */}
+      {(viewAsLoading || viewAsUser) && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          onClick={() => !viewAsLoading && setViewAsUser(null)}
+        >
+          <div
+            className="glass-card w-full max-w-lg p-6 max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {viewAsLoading || !viewAsUser ? (
+              <div className="py-10 text-center text-white/50 flex items-center justify-center gap-2">
+                <Loader2 className="w-5 h-5 animate-spin" /> Loading account…
+              </div>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-3 mb-1">
+                  <h2 className="text-lg font-display font-bold flex items-center gap-2">
+                    <Eye className="w-5 h-5 text-brand-400" />
+                    {viewAsUser.user.displayName || viewAsUser.user.username || "Account"}
+                  </h2>
+                  <button onClick={() => setViewAsUser(null)} className="btn-ghost px-3 py-1 text-sm">
+                    Close
+                  </button>
+                </div>
+                <p className="text-xs text-white/40 mb-4">
+                  Read-only view · no session is created for this account
+                </p>
+
+                <div className="grid grid-cols-2 gap-2 text-sm mb-4">
+                  <div className="rounded-lg bg-white/5 p-2">
+                    Wallet
+                    <div className="font-bold">TZS {viewAsUser.user.walletBalance.toLocaleString()}</div>
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    Unlocked videos
+                    <div className="font-bold">{viewAsUser.user._count.videoAccess}</div>
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    KYC
+                    <div className="font-bold">{viewAsUser.user.kycStatus}</div>
+                  </div>
+                  <div className="rounded-lg bg-white/5 p-2">
+                    Strikes
+                    <div className="font-bold">{viewAsUser.user.strikes}</div>
+                  </div>
+                </div>
+
+                <p className="text-xs text-white/40 mb-1">Recent money</p>
+                <ul className="space-y-1 mb-4">
+                  {viewAsUser.transactions.length === 0 ? (
+                    <li className="text-sm text-white/40">No transactions.</li>
+                  ) : (
+                    viewAsUser.transactions.slice(0, 8).map((t) => (
+                      <li key={t.id} className="flex justify-between text-sm">
+                        <span className="text-white/70">
+                          {t.type.replace(/_/g, " ").toLowerCase()} · {t.status}
+                        </span>
+                        <span>TZS {t.amount.toLocaleString()}</span>
+                      </li>
+                    ))
+                  )}
+                </ul>
+
+                <p className="text-xs text-white/40 mb-1">Active subscriptions</p>
+                <ul className="space-y-1">
+                  {viewAsUser.subscriptions.length === 0 ? (
+                    <li className="text-sm text-white/40">None.</li>
+                  ) : (
+                    viewAsUser.subscriptions.slice(0, 8).map((s, i) => (
+                      <li key={i} className="flex justify-between text-sm">
+                        <span className="text-white/70">
+                          {s.creator.displayName || "Creator"}
+                        </span>
+                        <span>until {new Date(s.expiresAt).toLocaleDateString("en-GB")}</span>
+                      </li>
+                    ))
+                  )}
+                </ul>
+              </>
+            )}
           </div>
         </div>
       )}

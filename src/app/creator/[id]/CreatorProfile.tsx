@@ -17,7 +17,11 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/Toast";
 import { canOptimizeImage } from "@/lib/media";
-import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
+import {
+  SUBSCRIPTION_PRICE_TZS,
+  SUBSCRIPTION_PLANS,
+  planPrice,
+} from "@/lib/subscription";
 import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 import { displayHandle } from "@/lib/usernames";
 
@@ -66,6 +70,9 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
   const [subExpiresAt, setSubExpiresAt] = useState<string | null>(null);
   const [subscribing, setSubscribing] = useState(false);
   const [showSubModal, setShowSubModal] = useState(false);
+  // Which period the fan is buying. Monthly by default — the plan that was the
+  // only one on offer before this picker existed.
+  const [subPlan, setSubPlan] = useState("monthly");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [walletPaying, setWalletPaying] = useState(false);
   const router = useRouter();
@@ -124,7 +131,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
       const res = await fetch("/api/subscriptions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ creatorId: id, phoneNumber }),
+        body: JSON.stringify({ creatorId: id, phoneNumber, plan: subPlan }),
       });
       const data = await res.json();
       if (res.status === 401) {
@@ -171,7 +178,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
       const res = await fetch("/api/subscriptions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ creatorId: id }),
+        body: JSON.stringify({ creatorId: id, plan: subPlan }),
       });
       const data = await res.json();
       if (res.status === 401) {
@@ -273,6 +280,11 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
   // Never a bare literal: this page, the subscribe API and the creators list all
   // quote the same number, and a hand-written copy is how they drift apart.
   const subPrice = creator.creatorProfile?.subscriptionPrice || SUBSCRIPTION_PRICE_TZS;
+  // What the chosen period costs, from the creator's own monthly base. One
+  // function computes it, so the button, the summary and the API cannot quote
+  // three different numbers for the same plan.
+  const selectedPlan = SUBSCRIPTION_PLANS[subPlan] ?? SUBSCRIPTION_PLANS.monthly;
+  const selectedPrice = planPrice(subPrice, subPlan);
 
   return (
     <div className="min-h-screen">
@@ -462,10 +474,33 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
           <div className="glass-card w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-2">Subscribe</h2>
-            <p className="text-white/60 text-sm mb-6">
-              {displayHandle(creator, "This creator")} — TZS {subPrice.toLocaleString()}/month.
-              Cancel anytime.
+            <p className="text-white/60 text-sm mb-4">
+              {displayHandle(creator, "This creator")} — choose a period. Cancel anytime.
             </p>
+
+            {/* Plan picker. Weekly is affordable week to week; three months costs
+                less than three monthly payments. */}
+            <div className="grid grid-cols-3 gap-2 mb-4" role="radiogroup" aria-label="Subscription period">
+              {Object.values(SUBSCRIPTION_PLANS).map((plan) => (
+                <button
+                  key={plan.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={subPlan === plan.id}
+                  onClick={() => setSubPlan(plan.id)}
+                  className={`rounded-xl border px-2 py-3 text-center transition ${
+                    subPlan === plan.id
+                      ? "border-brand-400/60 bg-brand-500/20 text-brand-200"
+                      : "border-white/10 bg-white/5 text-white/50 hover:text-white"
+                  }`}
+                >
+                  <span className="block text-sm font-medium">{plan.label}</span>
+                  <span className="mt-1 block text-xs">
+                    TZS {planPrice(subPrice, plan.id).toLocaleString()}
+                  </span>
+                </button>
+              ))}
+            </div>
 
             <div className="space-y-4">
               <div>
@@ -489,8 +524,10 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
               </div>
 
               <div className="bg-surface-300/40 rounded-xl p-4 flex justify-between text-sm">
-                <span className="text-white/60">Total per month</span>
-                <span className="font-bold text-brand-400">TZS {subPrice.toLocaleString()}</span>
+                <span className="text-white/60">Total for {selectedPlan.label.toLowerCase()}</span>
+                <span className="font-bold text-brand-400">
+                  TZS {selectedPrice.toLocaleString()}
+                </span>
               </div>
 
               <div className="flex gap-3">

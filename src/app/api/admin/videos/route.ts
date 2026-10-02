@@ -47,6 +47,7 @@ export async function GET(request: NextRequest) {
         slug: true,
         price: true,
         isPublished: true,
+        isFeatured: true,
         isFlagged: true,
         isDeleted: true,
         duration: true,
@@ -72,7 +73,16 @@ export async function GET(request: NextRequest) {
   }
 }
 
-const ACTIONS = ["DELETE", "HIDE", "RESTORE", "UNFLAG"] as const;
+const ACTIONS = [
+  "DELETE",
+  "HIDE",
+  "RESTORE",
+  "UNFLAG",
+  // Homepage curation: an admin decides which scenes the home page leads with
+  // (the feed already ranks `isFeatured` first — this is the hand on the dial).
+  "FEATURE",
+  "UNFEATURE",
+] as const;
 
 export async function POST(request: NextRequest) {
   try {
@@ -165,6 +175,23 @@ export async function POST(request: NextRequest) {
         detail: { creatorId: video.creatorId },
       });
       return api.success({ isPublished: true, isDeleted: false }, "Video restored");
+    }
+
+    if (action === "FEATURE" || action === "UNFEATURE") {
+      const isFeatured = action === "FEATURE";
+      await prisma.video.update({ where: { id: video.id }, data: { isFeatured } });
+      await recordAudit({
+        actorId: auth.userId,
+        action: isFeatured ? AUDIT_ACTIONS.videoFeature : AUDIT_ACTIONS.videoUnfeature,
+        summary: `${isFeatured ? "Featured" : "Removed from the home page"} “${video.title}” by ${creatorLabel}`,
+        targetType: "video",
+        targetId: video.id,
+        detail: { creatorId: video.creatorId, isFeatured },
+      });
+      return api.success(
+        { isFeatured },
+        isFeatured ? "Video featured on the home page" : "Video removed from the home page"
+      );
     }
 
     // UNFLAG — clear a report flag without touching publication.

@@ -25,6 +25,7 @@
 import prisma from "../db";
 import config from "../config";
 import { debitWallet } from "./balance.service";
+import { pushForNotification } from "./notify.service";
 
 /** TZS per month, from the one place the platform prices things. */
 export const BLUE_TICK_PRICE = config.business.blueTickMonthlyPrice;
@@ -218,7 +219,7 @@ export async function requestBlueTick(params: {
   const months = clampMonths(params.months);
   const amount = BLUE_TICK_PRICE * months;
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const user = await tx.user.findUnique({
       where: { id: userId },
       select: {
@@ -378,6 +379,22 @@ export async function requestBlueTick(params: {
         source === "EARNINGS" ? availableBalance - amount : availableBalance,
     };
   }, TX_OPTIONS);
+
+  // The notices were written inside the transaction; the lock-screen mirror
+  // fires here, after the charge committed, so a rolled-back purchase can never
+  // push.
+  if (result.ok) {
+    void pushForNotification({
+      userId,
+      title: "Payment received — blue tick pending review ⏳",
+      message: `We received TZS ${amount.toLocaleString()} for ${result.months} month${
+        result.months > 1 ? "s" : ""
+      } of the blue tick. An admin will approve it shortly; the badge appears the moment they do.`,
+      link: "/creator",
+    });
+  }
+
+  return result;
 }
 
 function clampMonths(value: unknown): number {
@@ -413,7 +430,7 @@ export async function approveBlueTick(params: {
 }): Promise<BlueTickDecision> {
   const { requestId, adminId } = params;
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const request = await tx.blueTickRequest.findUnique({ where: { id: requestId } });
     if (!request) return { ok: false as const, reason: "NOT_FOUND" as const };
     if (request.status !== "PAID") {
@@ -464,6 +481,19 @@ export async function approveBlueTick(params: {
       refunded: false,
     };
   }, TX_OPTIONS);
+
+  if (result.ok && result.expiresAt) {
+    void pushForNotification({
+      userId: result.userId,
+      title: "Your blue tick is live 💠",
+      message: `The verified badge is now shown on your profile until ${new Date(
+        result.expiresAt
+      ).toLocaleDateString("en-GB")}.`,
+      link: "/creator",
+    });
+  }
+
+  return result;
 }
 
 /**
@@ -481,7 +511,7 @@ export async function rejectBlueTick(params: {
   const { requestId, adminId } = params;
   const reason = params.reason?.slice(0, 500) || "Not approved";
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const request = await tx.blueTickRequest.findUnique({ where: { id: requestId } });
     if (!request) return { ok: false as const, reason: "NOT_FOUND" as const };
     if (request.status !== "PAID") {
@@ -544,6 +574,17 @@ export async function rejectBlueTick(params: {
       refunded: true,
     };
   }, TX_OPTIONS);
+
+  if (result.ok) {
+    void pushForNotification({
+      userId: result.userId,
+      title: "Blue tick request declined",
+      message: `Your request was not approved: ${reason}. TZS ${result.amount.toLocaleString()} was returned to your account.`,
+      link: "/creator",
+    });
+  }
+
+  return result;
 }
 
 // ---------------------------------------------------------------------------

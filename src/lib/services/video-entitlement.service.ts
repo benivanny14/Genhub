@@ -40,9 +40,16 @@
 // =============================================================================
 
 import prisma from "@/lib/db";
+import { getAllVideosFree } from "@/lib/services/platform-setting.service";
 
 export type EntitlementSource =
   | "free"
+  // An admin switched the whole platform to "everything is free right now"
+  // (PlatformSetting videos.all_free). Distinct from "free" (a scene priced at
+  // zero) and from "granted" (one comped account): this opens every paid scene
+  // to everyone, signed in or not, and restores paid behaviour the moment the
+  // switch is off — nothing was sold, so nothing has to be taken back.
+  | "global"
   | "purchase"
   | "subscription"
   | "admin"
@@ -78,6 +85,14 @@ export async function resolveVideoEntitlement(
   // A free video has nothing to protect. Checked before the viewer so a
   // signed-out visitor can watch it too.
   if (video.price === 0) return { entitled: true, source: "free", healed: false };
+
+  // The platform-wide switch. Checked before the viewer gate so it opens a paid
+  // scene to a signed-out visitor as well, and before every other rule because
+  // while it is on there is nothing else to decide. The switch never writes a
+  // purchase row, so turning it off restores exactly what each account had.
+  if (await getAllVideosFree()) {
+    return { entitled: true, source: "global", healed: false };
+  }
 
   if (!viewer) return { entitled: false, source: null, healed: false };
   if (viewer.role === "ADMIN") return { entitled: true, source: "admin", healed: false };

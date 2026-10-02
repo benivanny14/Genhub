@@ -28,13 +28,22 @@ import {
 import { debitWallet } from "@/lib/services/balance.service";
 import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 import { resolvePendingCheckout } from "@/lib/services/checkout-lock.service";
-import { SUBSCRIPTION_PRICE_TZS } from "@/lib/subscription";
+import { classifyGatewayFailure, gatewayFailureResponse } from "@/lib/gateway-failure";
+import {
+  SUBSCRIPTION_PRICE_TZS,
+  planPrice,
+  resolveSubscriptionPlan,
+} from "@/lib/subscription";
+import { getFeatureFlags } from "@/lib/services/platform-setting.service";
+import { sendPushToUser } from "@/lib/services/push.service";
 
 const subscribeSchema = z.object({
   creatorId: z.string().min(1),
   // Optional: when present the subscription is paid by USSD push (ClickPesa)
   // exactly like a video purchase; when absent the legacy wallet path runs.
   phoneNumber: z.string().regex(/^(\+255|0)[67]\d{8}$/).optional(),
+  // weekly | monthly | quarterly — absent means monthly, the original plan.
+  plan: z.enum(["weekly", "monthly", "quarterly"]).optional(),
 });
 
 const autoRenewSchema = z.object({
@@ -62,9 +71,12 @@ export async function POST(request: NextRequest) {
     });
     if (!creator || creator.isBanned) return api.notFound("This creator does not exist");
 
-    // A per-creator price wins; otherwise the platform price. Renewals do NOT
-    // read this — they run at the price the subscriber agreed to.
-    const price = creator.creatorProfile?.subscriptionPrice || SUBSCRIPTION_PRICE_TZS;
+    // A per-creator price wins; otherwise the platform price. That base is the
+    // MONTHLY price the creator set; the plan scales it. Renewals do NOT read
+    // this — they run at the price the subscriber agreed to.
+    const basePrice = creator.creatorProfile?.subscriptionPrice || SUBSCRIPTION_PRICE_TZS;
+    const plan = resolveSubscriptionPlan(result.data.plan);
+    const price = planPrice(basePrice, plan.id);
 
     // Check existing subscription
     const existing = await prisma.creatorSubscription.findUnique({
@@ -122,6 +134,17 @@ export async function POST(request: NextRequest) {
         // through and start a fresh checkout.
       }
 
+      // Operator kill switch: mobile money can be paused (a gateway incident)
+      // without pausing the wallet path, which never touches the gateway.
+      const flags = await getFeatureFlags();
+      if (!flags.checkoutEnabled) {
+        return api.error(
+          "Mobile money is temporarily paused. Nothing was charged — please try again shortly.",
+          503,
+          "CHECKOUT_PAUSED"
+        );
+      }
+
       const orderId = generateOrderId("SUB");
       // Our ClickPesa order reference (alphanumeric, ≤20); stored as providerRef
       // so the webhook and the status poll can match the callback.
@@ -135,7 +158,9 @@ export async function POST(request: NextRequest) {
           status: "PENDING",
           gateway: "CLICKPESA",
           providerRef,
-          metadata: { orderId, plan: "monthly", phone: body.phoneNumber },
+          // `plan` is stored so the webhook settlement extends access by the
+          // same period this checkout charged — not always one month.
+          metadata: { orderId, plan: plan.id, phone: body.phoneNumber },
         },
       });
 
@@ -175,11 +200,14 @@ export async function POST(request: NextRequest) {
             where: { id: transaction.id },
             data: { status: "FAILED" },
           });
-          return api.error(
-            response.error || "ClickPesa rejected the payment request. Please try again.",
-            502,
-            "GATEWAY_REJECTED"
-          );
+          // A refusal about OUR account (the daily API cap, unfinished KYC) is
+          // answered with a plain sentence and logged — see
+          // lib/gateway-failure.ts.
+          return gatewayFailureResponse({
+            failure: classifyGatewayFailure(response.error),
+            context: "Payments",
+            transactionId: transaction.id,
+          });
         }
 
         return api.success({
@@ -198,16 +226,11 @@ export async function POST(request: NextRequest) {
           data: { status: "FAILED", metadata: { gatewayError: reason } },
         });
         // Detail to the log, a plain sentence to the subscriber — see api.upstream.
-        return api.upstream(
-          `subscription collect failed for transaction ${transaction.id}: ${reason}`,
-          {
-            context: "Payments",
-            status: 502,
-            code: "GATEWAY_ERROR",
-            message:
-              "We could not start the payment just now. Nothing has been charged — please try again.",
-          }
-        );
+        return gatewayFailureResponse({
+          failure: classifyGatewayFailure(reason),
+          context: "Payments",
+          transactionId: transaction.id,
+        });
       }
     }
 
@@ -253,7 +276,7 @@ export async function POST(request: NextRequest) {
           type: "SUBSCRIPTION",
           status: "SUCCESS",
           gateway: null, // paid from the wallet, not a gateway charge
-          metadata: { method: "wallet" },
+          metadata: { method: "wallet", plan: plan.id },
           platformFee,
           creatorCut,
         },
@@ -273,6 +296,7 @@ export async function POST(request: NextRequest) {
         viewerId: auth.userId,
         creatorId,
         amount: price,
+        plan: plan.id,
       });
     });
 
@@ -281,6 +305,16 @@ export async function POST(request: NextRequest) {
         `Your balance is too low. You need TZS ${price.toLocaleString()}. Top up your wallet to subscribe.`
       );
     }
+
+    // The creator's in-app notice is written inside the transaction above; the
+    // push goes out now that it has committed. Best-effort — the membership and
+    // the money are already durable.
+    void sendPushToUser(creatorId, {
+      title: "New follower! ⭐",
+      body: `${viewer?.displayName || "A viewer"} subscribed to your profile.`,
+      url: "/creator",
+      tag: `subscription-${creatorId}`,
+    });
 
     return api.success(subscription, "Subscription active — welcome!", 201);
   } catch (error) {

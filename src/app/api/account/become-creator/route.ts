@@ -9,6 +9,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError, generateToken, setAuthCookie } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { createNotification } from "@/lib/services/notify.service";
 
 export async function POST(request: NextRequest) {
   try {
@@ -45,15 +46,14 @@ export async function POST(request: NextRequest) {
     ]);
 
     // Welcome notification pointing at the next step (KYC)
-    await prisma.notification.create({
-      data: {
-        userId: user.id,
-        title: "Welcome to the creators' side! 🎬",
-        message:
-          "Your account is now a Creator account. Verify your identity (KYC) to unlock uploads and payouts.",
-        type: "success",
-        link: "/creator/kyc",
-      },
+    await createNotification({
+      userId: user.id,
+      title: "Welcome to the creators' side! 🎬",
+      message:
+        "Your account is now a Creator account. Verify your identity (KYC) to unlock uploads and payouts.",
+      type: "success",
+      link: "/creator/kyc",
+      pushTag: "become-creator",
     });
 
     // Role lives inside the JWT — re-issue so middleware and requireRole see CREATOR

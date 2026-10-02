@@ -37,15 +37,40 @@ export const AUDIT_ACTIONS = {
   // exactly the thing an operator needs to be able to see.
   userFreeAccess: "user.free_access",
   userRevokeFreeAccess: "user.revoke_free_access",
+  // The platform-wide switch: "every video is free for everyone right now", and
+  // the flip back to paid. Logged in both directions like the per-account comp,
+  // because an all-free window that nobody remembers opening is exactly the
+  // thing an operator has to be able to see afterwards.
+  videosAllFree: "videos.all_free",
+  videosPaid: "videos.paid",
+  // An operator kill switch (pause uploads, pause checkout) or the site
+  // announcement. Every flip is logged with the direction taken, because "why
+  // could nobody upload at 14:00?" has to have an answer that survives the tab
+  // being closed.
+  featureToggle: "platform.toggle",
   // Issuing a password-reset link on somebody's behalf. Worth a durable record:
   // it is an admin handing out account access, and "who reset this account, and
   // when?" is asked weeks later, not at the time.
   userResetLink: "user.reset_link",
+  // An admin opening one account read-only to see what that person sees. Not a
+  // state change, but worth a durable record: "who looked at this account, and
+  // when?" is the question a privacy review starts with.
+  userViewAs: "user.view_as",
+  // A bulk action applied to many targets at once. One row per run, carrying the
+  // targets and the outcome, so a mass change is one timeline entry an operator
+  // can read rather than fifty they have to reconstruct.
+  adminBulk: "admin.bulk",
+  // A banned account asking to be reinstated, and the admin's verdict.
+  appealSubmitted: "appeal.submitted",
+  appealResolved: "appeal.resolved",
   payoutFreeze: "payout.freeze",
   payoutUnfreeze: "payout.unfreeze",
   videoDelete: "video.delete",
   videoHide: "video.hide",
   videoRestore: "video.restore",
+  // Homepage curation.
+  videoFeature: "video.feature",
+  videoUnfeature: "video.unfeature",
   commentDelete: "comment.delete",
   couponCreate: "coupon.create",
   couponToggle: "coupon.toggle",

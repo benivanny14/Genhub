@@ -8,6 +8,12 @@ import { Wallet, ArrowUpRight, ArrowDownLeft, Plus, History, Phone, Ticket, Shie
 import { formatTZS, formatRelativeTime } from "@/lib/utils";
 import { useCurrency } from "@/lib/currency";
 import { useToast } from "@/components/Toast";
+import {
+  usePaymentAvailability,
+  paymentUnavailableMessage,
+} from "@/hooks/usePaymentAvailability";
+import { outcomeForApiError, outcomeForStatus } from "@/lib/payment-errors";
+import { useI18n } from "@/lib/i18n";
 
 interface UserData {
   id: string;
@@ -47,6 +53,10 @@ export default function WalletPage() {
   const [allowance, setAllowance] = useState<SpendAllowance | null>(null);
   const { format } = useCurrency();
   const { toast } = useToast();
+  const { t } = useI18n();
+  // Mobile money may be unreachable (the gateway breaker is open). Read once so
+  // the card can say so instead of taking a customer into a failing checkout.
+  const { availability: paymentAvailability } = usePaymentAvailability();
 
   // Live ClickPesa pushes a USSD prompt to the phone; the payment only settles
   // when the webhook (or our reconcile poll) marks the transaction SUCCESS. Poll
@@ -70,17 +80,16 @@ export default function WalletPage() {
           return;
         }
         if (status === "FAILED") {
-          toast("error", "Payment failed or was cancelled. Please try again.");
+          const outcome = outcomeForStatus("FAILED");
+          toast(outcome.tone, `${outcome.title} — ${outcome.body}`);
           fetchTransactions();
           return;
         }
         if (status === "UNDER_INVESTIGATION") {
           // The PIN was accepted but the gateway never settled. We do not know
           // whether the money moved, so do not invite another top-up.
-          toast(
-            "warning",
-            "We are checking this top-up with your network — please do not pay again."
-          );
+          const outcome = outcomeForStatus("UNDER_INVESTIGATION");
+          toast(outcome.tone, `${outcome.title} — ${outcome.body}`);
           fetchTransactions();
           return;
         }
@@ -167,6 +176,10 @@ export default function WalletPage() {
 
   async function handleTopUp() {
     if (!phoneNumber || !topUpAmount) return;
+    if (paymentAvailability && !paymentAvailability.available) {
+      toast("warning", paymentUnavailableMessage(paymentAvailability.reason));
+      return;
+    }
     setTopping(true);
 
     try {
@@ -220,7 +233,15 @@ export default function WalletPage() {
           fetchUserData();
         }
       } else {
-        toast("error", data.error || "An error occurred");
+        // Nothing was charged on this path — the request was refused before any
+        // prompt was sent. The three-kind taxonomy keeps a waiting-prompt case
+        // from being shown as a safe retry.
+        const outcome = outcomeForApiError({
+          error: data.error,
+          code: data.code,
+          status: res.status,
+        });
+        toast(outcome.tone, `${outcome.title} — ${outcome.body}`);
       }
     } catch {
       toast("error", "Network error — check your connection and try again.");
@@ -241,7 +262,7 @@ export default function WalletPage() {
           <div className="w-16 h-16 mx-auto rounded-full bg-brand-500/20 flex items-center justify-center mb-4 glow-brand">
             <Wallet className="w-8 h-8 text-brand-400" />
           </div>
-          <p className="text-white/50 text-sm mb-1">Wallet Balance</p>
+          <p className="text-white/50 text-sm mb-1">{t("wallet.balance")}</p>
           <p className="text-4xl font-display font-bold text-gradient">
             {format(user?.walletBalance || 0)}
           </p>
@@ -249,16 +270,31 @@ export default function WalletPage() {
             onClick={() => setShowTopUp(true)}
             className="btn-brand mt-4 flex items-center gap-2 mx-auto"
           >
-            <Plus className="w-4 h-4" /> Add Funds
+            <Plus className="w-4 h-4" /> {t("wallet.addFunds")}
           </button>
         </div>
+
+        {/* Mobile money is down or unreachable. Said here, before the form, so
+            a customer is not walked into a checkout that cannot start. */}
+        {paymentAvailability && !paymentAvailability.available && (
+          <div className="glass-card p-4 border border-amber-500/30 bg-amber-500/5">
+            <p className="text-sm font-semibold text-amber-400">
+              {t("wallet.mmUnavailable")}
+            </p>
+            <p className="text-xs text-white/60 mt-1">
+              {paymentUnavailableMessage(paymentAvailability.reason)} Your existing
+              balance can still be spent on videos, and top-ups will work again once the
+              network is back.
+            </p>
+          </div>
+        )}
 
         {/* Daily spending limit — the cap that refuses a charge, shown while
             there is still room so hitting it is never a surprise. */}
         {allowance && allowance.cap > 0 && (
           <div className="glass-card p-4">
             <h2 className="font-display font-bold mb-2 flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-brand-400" /> Daily spending limit
+              <ShieldCheck className="w-5 h-5 text-brand-400" /> {t("wallet.spendLimit")}
             </h2>
             <p className="text-sm text-white/60 mb-3">
               {allowance.remaining <= 0 ? (
@@ -296,7 +332,7 @@ export default function WalletPage() {
         {/* Transaction History */}
         <div className="glass-card p-4">
           <h2 className="font-display font-bold mb-4 flex items-center gap-2">
-            <History className="w-5 h-5 text-brand-400" /> Transaction History
+            <History className="w-5 h-5 text-brand-400" /> {t("wallet.history")}
           </h2>
 
           {loading ? (
@@ -307,7 +343,7 @@ export default function WalletPage() {
             </div>
           ) : transactions.length === 0 ? (
             <p className="text-center text-white/40 py-8 text-sm">
-              No transactions yet
+              {t("wallet.noTransactions")}
             </p>
           ) : (
             <div className="space-y-3">
@@ -332,7 +368,7 @@ export default function WalletPage() {
                   <div className="flex-1">
                     <p className="text-sm font-medium">
                       {tx.type === "WALLET_TOPUP"
-                        ? "Wallet Top-up"
+                        ? t("wallet.topUp")
                         : tx.type === "PPV_PURCHASE"
                         ? `Purchase: ${tx.video?.title || "Video"}`
                         : tx.type}

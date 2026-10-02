@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter, Poppins } from "next/font/google";
 import "./globals.css";
 import ClientProviders from "@/components/ClientProviders";
+import SiteBanner from "@/components/SiteBanner";
 import config from "@/lib/config";
 import { serializeJsonLd } from "@/lib/json-ld";
 
@@ -106,7 +107,12 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${poppins.variable} font-sans min-h-screen transition-colors duration-300`}
       >
-        <ClientProviders>{children}</ClientProviders>
+        <ClientProviders>
+          {/* The operator's announcement, above every page. Publishes without a
+              deploy — see /api/site/status and the admin Overview card. */}
+          <SiteBanner />
+          {children}
+        </ClientProviders>
       </body>
     </html>
   );

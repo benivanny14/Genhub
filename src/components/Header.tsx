@@ -27,6 +27,7 @@ import {
   ListVideo,
   CreditCard,
   ReceiptText,
+  History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
@@ -399,6 +400,13 @@ export default function Header() {
                         <ListVideo className="w-4 h-4" /> My Playlists
                       </Link>
                       <Link
+                        href="/history"
+                        className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm hover:bg-white/10"
+                        onClick={() => setUserMenuOpen(false)}
+                      >
+                        <History className="w-4 h-4" /> Watch history
+                      </Link>
+                      <Link
                         href="/billing"
                         className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm hover:bg-white/10"
                         onClick={() => setUserMenuOpen(false)}
@@ -454,6 +462,23 @@ export default function Header() {
 
           {/* Mobile Menu Toggle */}
           <div className="md:hidden flex items-center gap-1">
+            {/* The wallet, at the very top next to the currency sign, on the
+                phone layout too. The desktop bar has shown the balance in its
+                wallet link all along; on a phone it was hidden inside the menu,
+                which is exactly where a person checking their money does not
+                want to look. */}
+            {user && (
+              <Link
+                href="/wallet"
+                className="flex items-center gap-1 px-2 py-1.5 rounded-xl hover:bg-white/10"
+                title="Your wallet balance"
+              >
+                <Wallet className="w-4 h-4 text-brand-400" />
+                <span className="text-[11px] font-semibold">
+                  {format(user.walletBalance)}
+                </span>
+              </Link>
+            )}
             <button onClick={toggleTheme} className="p-2 rounded-xl hover:bg-white/10">
               {isLight ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
             </button>
@@ -544,6 +569,9 @@ export default function Header() {
                 </Link>
                 <Link href="/playlists" className="btn-ghost w-full flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
                   <ListVideo className="w-5 h-5" /> My Playlists
+                </Link>
+                <Link href="/history" className="btn-ghost w-full flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
+                  <History className="w-5 h-5" /> Watch history
                 </Link>
                 <Link href="/billing" className="btn-ghost w-full flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
                   <CreditCard className="w-5 h-5" /> Billing

@@ -61,6 +61,12 @@ export default function SearchResults({ query }: { query: string }) {
   const [loading, setLoading] = useState(Boolean(query));
   const [failed, setFailed] = useState(false);
 
+  // Narrowing filters. They belong to the videos half only — a creator is not
+  // priced or timed, so filtering creators by price would be meaningless.
+  const [duration, setDuration] = useState(""); // "" | short | medium | long
+  const [priceBand, setPriceBand] = useState(""); // "" | free | under2000 | ...
+  const [verifiedOnly, setVerifiedOnly] = useState(false);
+
   const load = useCallback(
     async (signal: AbortSignal) => {
       if (!query) {
@@ -75,9 +81,18 @@ export default function SearchResults({ query }: { query: string }) {
 
       const encoded = encodeURIComponent(query);
 
+      // The filters are folded into the videos query only. Built as a
+      // URLSearchParams rather than string-concatenated so the values cannot
+      // inject into the query without encoding.
+      const videoParams = new URLSearchParams({ q: query, limit: "24", sort: "popular" });
+      if (duration) videoParams.set("duration", duration);
+      if (priceBand === "free") videoParams.set("free", "1");
+      else if (priceBand) videoParams.set("maxPrice", priceBand.replace(/^under/, ""));
+      if (verifiedOnly) videoParams.set("verified", "1");
+
       try {
         const [videoRes, creatorRes] = await Promise.all([
-          fetch(`/api/videos?q=${encoded}&limit=24&sort=popular`, { signal }),
+          fetch(`/api/videos?${videoParams.toString()}`, { signal }),
           fetch(`/api/creators?q=${encoded}&limit=12`, { signal }),
         ]);
 
@@ -101,7 +116,7 @@ export default function SearchResults({ query }: { query: string }) {
         if (!signal.aborted) setLoading(false);
       }
     },
-    [query]
+    [query, duration, priceBand, verifiedOnly]
   );
 
   useEffect(() => {
@@ -158,6 +173,67 @@ export default function SearchResults({ query }: { query: string }) {
         {videos.length} video{videos.length === 1 ? "" : "s"} · {creators.length} creator
         {creators.length === 1 ? "" : "s"}
       </p>
+
+      {/* Filters narrow the videos list, and only the videos list. */}
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <label className="sr-only" htmlFor="search-duration">
+          Duration
+        </label>
+        <select
+          id="search-duration"
+          value={duration}
+          onChange={(e) => setDuration(e.target.value)}
+          className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
+        >
+          <option value="">Any length</option>
+          <option value="short">Under 5 min</option>
+          <option value="medium">5–20 min</option>
+          <option value="long">Over 20 min</option>
+        </select>
+
+        <label className="sr-only" htmlFor="search-price">
+          Price
+        </label>
+        <select
+          id="search-price"
+          value={priceBand}
+          onChange={(e) => setPriceBand(e.target.value)}
+          className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
+        >
+          <option value="">Any price</option>
+          <option value="free">Free only</option>
+          <option value="under2000">Under TZS 2,000</option>
+          <option value="under5000">Under TZS 5,000</option>
+          <option value="under10000">Under TZS 10,000</option>
+        </select>
+
+        <button
+          type="button"
+          onClick={() => setVerifiedOnly((v) => !v)}
+          aria-pressed={verifiedOnly}
+          className={`rounded-full border px-3 py-2 text-sm transition ${
+            verifiedOnly
+              ? "border-violet-500/60 bg-violet-600/20 text-violet-200"
+              : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"
+          }`}
+        >
+          Verified creators
+        </button>
+
+        {(duration || priceBand || verifiedOnly) && (
+          <button
+            type="button"
+            onClick={() => {
+              setDuration("");
+              setPriceBand("");
+              setVerifiedOnly(false);
+            }}
+            className="rounded-full px-3 py-2 text-sm text-gray-400 underline hover:text-white"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
 
       {nothing && (
         <div className="py-20 text-center">

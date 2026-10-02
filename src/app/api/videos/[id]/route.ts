@@ -201,18 +201,23 @@ export async function GET(
       hasAccess = true;
       accessSource = "free";
       playbackUrl = resolvePlaybackUrl(video, 10, authUser?.userId);
-    } else if (viewer) {
-      const entitlement = await resolveVideoEntitlement(video, {
-        userId: viewer.userId,
-        role: viewer.role,
-      });
+    } else {
+      // The shared service is asked even when nobody is signed in, because the
+      // platform-wide "everything is free" switch entitles a signed-out visitor
+      // too. It returns "not entitled" for an anonymous request with the switch
+      // off, which is exactly what this route used to hard-code — but hard-coding
+      // it is what would have made the switch a signed-in-only feature.
+      const entitlement = await resolveVideoEntitlement(
+        video,
+        viewer ? { userId: viewer.userId, role: viewer.role } : null
+      );
 
       hasAccess = entitlement.entitled;
       accessSource = entitlement.source;
 
       // Generate full playback URL only if user has access
       if (hasAccess) {
-        playbackUrl = resolvePlaybackUrl(video, 10, viewer.userId);
+        playbackUrl = resolvePlaybackUrl(video, 10, viewer?.userId);
       }
 
       // No access yet — but is a charge for THIS video stuck in limbo? A USSD
@@ -220,7 +225,7 @@ export async function GET(
       // worst possible place: no video, and no way to know whether they paid.
       // Surfaced here (server-side, on first render) so the paywall can refuse
       // to sell them the same video twice.
-      if (!hasAccess) {
+      if (!hasAccess && viewer) {
         const unresolved = await prisma.transaction.findFirst({
           where: {
             userId: viewer.userId,
@@ -352,7 +357,41 @@ export async function PATCH(
       return api.validation(result.error.errors[0].message);
     }
 
-    const { teaserUploadSessionToken, ...updateData } = result.data;
+    const { teaserUploadSessionToken, publishAt, ...updateData } = result.data;
+
+    // Scheduling / drafts, resolved into real columns. `publishAt` is not a
+    // column, so it must never be spread into the update; isPublished and
+    // isDraft are, and pass through with the rest.
+    const schedulePatch: {
+      scheduledAt?: Date | null;
+      isPublished?: boolean;
+      isDraft?: boolean;
+    } = {};
+    if (publishAt !== undefined) {
+      if (publishAt === "") {
+        // "" is the form's way of cancelling a schedule — leave the post as it
+        // is otherwise, just no longer queued.
+        schedulePatch.scheduledAt = null;
+      } else {
+        const when = new Date(publishAt);
+        if (when.getTime() > Date.now() + 60_000) {
+          schedulePatch.scheduledAt = when;
+          schedulePatch.isPublished = false;
+          schedulePatch.isDraft = false;
+        } else {
+          // A time already past means "go live now".
+          schedulePatch.scheduledAt = null;
+          schedulePatch.isPublished = true;
+          schedulePatch.isDraft = false;
+        }
+      }
+    }
+    // Turning a post into a draft clears any schedule: an unpublished draft is
+    // not waiting for a time.
+    if (updateData.isDraft === true) {
+      schedulePatch.scheduledAt = null;
+      schedulePatch.isPublished = false;
+    }
 
     if (updateData.teaserBunnyVideoId && updateData.teaserBunnyVideoId === video.bunnyVideoId) {
       return api.validation("The teaser must be a different video from the main video");
@@ -386,6 +425,7 @@ export async function PATCH(
       where: { id },
       data: {
         ...updateData,
+        ...schedulePatch,
         // Same healing as create: a stored Bunny CDN URL is rewritten to the
         // in-app path that actually serves the file.
         ...(result.data.thumbnailUrl !== undefined
@@ -404,6 +444,8 @@ export async function PATCH(
         description: true,
         price: true,
         isPublished: true,
+        isDraft: true,
+        scheduledAt: true,
         captionsUrl: true,
         updatedAt: true,
       },

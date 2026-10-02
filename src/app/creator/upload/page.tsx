@@ -112,6 +112,9 @@ export default function UploadPage() {
   const [category, setCategory] = useState("");
   const [tags, setTags] = useState("");
   const [complianceAttested, setComplianceAttested] = useState(false);
+  // When the scene goes live: now, at a chosen time, or held as a draft.
+  const [publishMode, setPublishMode] = useState<"now" | "schedule" | "draft">("now");
+  const [publishAt, setPublishAt] = useState("");
 
   const [mainFile, setMainFile] = useState<File | null>(null);
   const [mainSession, setMainSession] = useState<OpenedVideoUpload | null>(null);
@@ -534,6 +537,11 @@ export default function UploadPage() {
           fileSize: mainFile?.size,
           uploadSessionToken: mainSession.sessionToken,
           complianceAttested,
+          isDraft: publishMode === "draft" ? true : undefined,
+          publishAt:
+            publishMode === "schedule" && publishAt
+              ? new Date(publishAt).toISOString()
+              : undefined,
         }),
       });
       const body = await response.json();
@@ -802,6 +810,46 @@ export default function UploadPage() {
                       {CATEGORIES.filter((item) => item.id !== "all").map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
                     </select>
                   </label>
+                </div>
+
+                <div className="rounded-xl border border-white/10 p-4">
+                  <span className="flex items-center gap-2 text-sm text-white/60 mb-2">
+                    <Clock className="w-4 h-4 text-brand-400" /> Publishing
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {([
+                      { id: "now", label: "Publish now" },
+                      { id: "schedule", label: "Schedule" },
+                      { id: "draft", label: "Save as draft" },
+                    ] as const).map((option) => (
+                      <button
+                        key={option.id}
+                        type="button"
+                        onClick={() => setPublishMode(option.id)}
+                        className={cn(
+                          "rounded-full border px-3 py-1.5 text-sm transition",
+                          publishMode === option.id
+                            ? "border-brand-400/60 bg-brand-500/20 text-brand-200"
+                            : "border-white/10 text-white/50 hover:text-white"
+                        )}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                  {publishMode === "schedule" && (
+                    <input
+                      type="datetime-local"
+                      className="input-field mt-3"
+                      value={publishAt}
+                      onChange={(e) => setPublishAt(e.target.value)}
+                    />
+                  )}
+                  {publishMode === "draft" && (
+                    <p className="mt-2 text-xs text-white/40">
+                      Saved unpublished — publish it from your dashboard when you are ready.
+                    </p>
+                  )}
                 </div>
 
                 <label className="block">

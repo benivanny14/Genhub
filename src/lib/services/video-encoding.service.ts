@@ -50,6 +50,7 @@ import {
   videoStatus,
   type VideoStatus,
 } from "@/lib/video-status";
+import { createNotification } from "./notify.service";
 
 export type EncodingState = "pending" | "processing" | "ready" | "failed" | "untracked";
 
@@ -238,14 +239,18 @@ async function notifyReady(video: {
   // "is now live" would describe something that happened minutes ago — and
   // send them looking for a change that already happened. What is new is that
   // it can be PLAYED.
-  await prisma.notification.create({
-    data: {
-      userId: video.creatorId,
-      title: "Your video is ready to play",
-      message: `“${video.title}” finished processing, so the “Inachakatwa...” badge is gone and viewers can watch it.`,
-      type: "success",
-      link: video.slug ? `/video/${video.slug}` : `/video/${video.id}`,
-    },
+  const link = video.slug ? `/video/${video.slug}` : `/video/${video.id}`;
+  const body = `“${video.title}” finished processing, so the “Inachakatwa...” badge is gone and viewers can watch it.`;
+  // createNotification writes the bell entry AND mirrors it to the creator's
+  // device — the wait is minutes long and nobody keeps the dashboard open for
+  // it. Best-effort; the in-app notice is delivered regardless.
+  await createNotification({
+    userId: video.creatorId,
+    title: "Your video is ready to play",
+    message: body,
+    type: "success",
+    link,
+    pushTag: `video-ready-${video.id}`,
   });
 }
 
@@ -271,17 +276,16 @@ async function notifyFailed(video: {
   title: string;
   slug: string | null;
 }, reason: string | null): Promise<void> {
-  await prisma.notification.create({
-    data: {
-      userId: video.creatorId,
-      title: "Your video could not be processed",
-      message:
-        `“${video.title}” failed processing at Bunny Stream` +
-        (reason ? `: ${reason}` : ".") +
-        " Re-upload the file to try again.",
-      type: "error",
-      link: "/creator",
-    },
+  await createNotification({
+    userId: video.creatorId,
+    title: "Your video could not be processed",
+    message:
+      `“${video.title}” failed processing at Bunny Stream` +
+      (reason ? `: ${reason}` : ".") +
+      " Re-upload the file to try again.",
+    type: "error",
+    link: "/creator",
+    pushTag: `video-failed-${video.id}`,
   });
 }
 
