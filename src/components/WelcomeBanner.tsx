@@ -40,8 +40,15 @@ export default function WelcomeBanner() {
             >
               and start making and earning money
             </span>
-            <span className="text-gradient mt-2 block text-2xl font-black uppercase sm:text-3xl lg:text-4xl">
-              with it&apos;s me again
+            <span className="mt-3 block text-2xl font-black uppercase sm:text-3xl lg:text-4xl">
+              <span className={cn("align-middle", isLight ? "text-gray-500" : "text-white/60")}>
+                with
+              </span>{" "}
+              {/* The payoff gets its own look so it separates from the rest:
+                  a solid gradient chip that reads as a badge, not body copy. */}
+              <span className="glow-brand inline-block rounded-2xl bg-gradient-to-r from-brand-400 via-fuchsia-500 to-brand-600 px-4 py-1.5 align-middle text-white shadow-lg shadow-brand-500/40 ring-1 ring-white/20">
+                it&apos;s me again
+              </span>
             </span>
           </h2>
         </div>
