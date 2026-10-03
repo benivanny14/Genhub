@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Header from "@/components/Header";
 import AuthBrandPanel from "@/components/AuthBrandPanel";
+import WelcomeBanner from "@/components/WelcomeBanner";
 import { Play, Mail, Phone, Lock, Eye, EyeOff, Check, Loader2, ArrowRight } from "lucide-react";
 import { useTheme } from "@/lib/ThemeProvider";
 import { useI18n } from "@/lib/i18n";
@@ -140,6 +141,8 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen page-enter">
       <Header />
+
+      <WelcomeBanner />
 
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-7xl">
         <AuthBrandPanel

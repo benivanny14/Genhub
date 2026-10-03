@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import Image from "next/image";
@@ -318,6 +319,7 @@ export default function HomePage() {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [feed, setFeed] = useState<HomeFeed | null>(null);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const router = useRouter();
   const { theme } = useTheme();
   const { t } = useI18n();
   const isLight = theme === "light";
@@ -435,9 +437,18 @@ export default function HomePage() {
     } catch {}
   }
 
+  // The hero search box used to just re-query this same front page, so a search
+  // showed the home feed with a filter on it — no result count, no matched
+  // creators. It now hands the query to /search, the page whose whole job is
+  // answering it, matching the header's search. An empty submit still refreshes.
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    reload();
+    const q = search.trim();
+    if (!q) {
+      reload();
+      return;
+    }
+    router.push(`/search?q=${encodeURIComponent(q)}`);
   };
 
   // Category tile / row "See all": apply the sort+filter, then jump to the grid
