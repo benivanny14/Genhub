@@ -12,6 +12,7 @@ import { getCurrentUser } from "@/lib/auth";
 import VideoDetailPage from "./VideoDetail";
 import { displayHandle } from "@/lib/usernames";
 import { serializeJsonLd } from "@/lib/json-ld";
+import { getAllVideosFree } from "@/lib/services/platform-setting.service";
 
 interface Props {
   // Next 15 hands route params over as a promise.
@@ -73,16 +74,24 @@ function isoDuration(seconds: number | null): string | undefined {
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { id } = await params;
-  const video = await getVideo(id, await getCurrentUser());
+  const [video, allVideosFree] = await Promise.all([
+    getVideo(id, await getCurrentUser()),
+    getAllVideosFree(),
+  ]);
   if (!video) return { title: "Video not found" };
 
   const creatorName = displayHandle(video.creator, "Creator");
   // Layout applies the "%s | Genhub" template — don't repeat the brand
   const title = `${video.title} — ${creatorName}`;
+  // During a platform-wide free promotion the crawlable title/description must
+  // not quote a price either: a search result showing "Unlock for TZS 5,000"
+  // while the scene is free is the same wrong number as on the page itself.
   const description =
     (video.description || "").slice(0, 155) ||
     `Watch "${video.title}" by ${creatorName} on Genhub.` +
-      (video.price > 0 ? ` Unlock for TZS ${video.price.toLocaleString()}.` : " Free to watch.");
+      (allVideosFree || video.price === 0
+        ? " Free to watch."
+        : ` Unlock for TZS ${video.price.toLocaleString()}.`);
   const base = config.appUrl.replace(/\/$/, "");
   const url = `${base}/video/${video.slug || video.id}`;
   const image =
@@ -123,7 +132,10 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 
 export default async function VideoRoute({ params }: Props) {
   const { id } = await params;
-  const video = await getVideo(id, await getCurrentUser());
+  const [video, allVideosFree] = await Promise.all([
+    getVideo(id, await getCurrentUser()),
+    getAllVideosFree(),
+  ]);
   if (!video) notFound();
 
   const base = config.appUrl.replace(/\/$/, "");
@@ -156,7 +168,10 @@ export default async function VideoRoute({ params }: Props) {
     ],
     offers: {
       "@type": "Offer",
-      price: String(video.price),
+      // Structured data is read by search engines and price comparison tools,
+      // so it follows the same rule as the visible page: no price while the
+      // platform-wide free switch is on. `0` is a free offer, not a hidden one.
+      price: allVideosFree ? "0" : String(video.price),
       priceCurrency: "TZS",
       availability: "https://schema.org/InStock",
     },

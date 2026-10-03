@@ -73,6 +73,7 @@ import {
   usePaymentAvailability,
   paymentUnavailableMessage,
 } from "@/hooks/usePaymentAvailability";
+import { useAllVideosFree } from "@/hooks/useSiteFlags";
 import {
   outcomeForApiError,
   outcomeForStatus,
@@ -343,6 +344,11 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [linkCopied, setLinkCopied] = useState(false);
   const { toast } = useToast();
   const { format } = useCurrency();
+  // The platform-wide free-views switch. The paywall itself is already gone
+  // while it is on (the server entitles everyone), so this only has to keep a
+  // price off the "More scenes" strip — the one place on this page that quotes
+  // another scene's price. See hooks/useSiteFlags.
+  const allVideosFree = useAllVideosFree();
   // Whether the gateway can be reached at all. Read from the public endpoint so
   // the Buy button tells the truth instead of letting a customer click into a
   // generic error — `null` until read, which keeps the button enabled.
@@ -2141,7 +2147,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                         )}
                         {/* Scrim keeps the length badge readable over a bright cover */}
                         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/75 via-black/30 to-transparent" />
-                        {r.price > 0 && (
+                        {allVideosFree === false && r.price > 0 && (
                           <span className="absolute top-2 left-2 rounded-md bg-brand-500 px-2 py-0.5 text-[10px] font-bold tabular-nums text-white shadow-lg">
                             {formatTZS(r.price)}
                           </span>

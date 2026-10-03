@@ -22,6 +22,7 @@ import { Search, Loader2 } from "lucide-react";
 import VideoCard from "@/components/VideoCard";
 import VerifiedBadge from "@/components/VerifiedBadge";
 import { displayHandle } from "@/lib/usernames";
+import { useAllVideosFree } from "@/hooks/useSiteFlags";
 
 interface VideoResult {
   id: string;
@@ -56,6 +57,9 @@ interface CreatorResult {
 }
 
 export default function SearchResults({ query }: { query: string }) {
+  // While every video is free, filtering by price says nothing: every result
+  // would match every band. The filter is hidden rather than left to mislead.
+  const allVideosFree = useAllVideosFree();
   const [videos, setVideos] = useState<VideoResult[]>([]);
   const [creators, setCreators] = useState<CreatorResult[]>([]);
   const [loading, setLoading] = useState(Boolean(query));
@@ -191,21 +195,25 @@ export default function SearchResults({ query }: { query: string }) {
           <option value="long">Over 20 min</option>
         </select>
 
-        <label className="sr-only" htmlFor="search-price">
-          Price
-        </label>
-        <select
-          id="search-price"
-          value={priceBand}
-          onChange={(e) => setPriceBand(e.target.value)}
-          className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
-        >
-          <option value="">Any price</option>
-          <option value="free">Free only</option>
-          <option value="under2000">Under TZS 2,000</option>
-          <option value="under5000">Under TZS 5,000</option>
-          <option value="under10000">Under TZS 10,000</option>
-        </select>
+        {allVideosFree !== true && (
+          <>
+            <label className="sr-only" htmlFor="search-price">
+              Price
+            </label>
+            <select
+              id="search-price"
+              value={priceBand}
+              onChange={(e) => setPriceBand(e.target.value)}
+              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
+            >
+              <option value="">Any price</option>
+              <option value="free">Free only</option>
+              <option value="under2000">Under TZS 2,000</option>
+              <option value="under5000">Under TZS 5,000</option>
+              <option value="under10000">Under TZS 10,000</option>
+            </select>
+          </>
+        )}
 
         <button
           type="button"

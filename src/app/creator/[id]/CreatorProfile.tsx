@@ -24,6 +24,7 @@ import {
 } from "@/lib/subscription";
 import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 import { displayHandle } from "@/lib/usernames";
+import { useAllVideosFree } from "@/hooks/useSiteFlags";
 
 interface CreatorProfile {
   id: string;
@@ -77,6 +78,10 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
   const [walletPaying, setWalletPaying] = useState(false);
   const router = useRouter();
   const { toast } = useToast();
+  // While every video is free, the line under the grid must not pitch a
+  // subscription or a per-video purchase — the videos below cost nothing. The
+  // cards themselves are handled by VideoCard. See hooks/useSiteFlags.
+  const allVideosFree = useAllVideosFree();
 
   const fetchCreator = useCallback(async () => {
     try {
@@ -440,9 +445,11 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
           </p>
         ) : (
           <p className="text-xs text-white/40 mb-4">
-            {videos.some((v) => v.price > 0)
-              ? `Subscribe for TZS ${subPrice.toLocaleString()}/month and watch everything below, or buy a single video and keep it.`
-              : "These videos are free to watch."}
+            {allVideosFree
+              ? "These videos are free to watch."
+              : videos.some((v) => v.price > 0)
+                ? `Subscribe for TZS ${subPrice.toLocaleString()}/month and watch everything below, or buy a single video and keep it.`
+                : "These videos are free to watch."}
           </p>
         )}
         {videos.length === 0 ? (

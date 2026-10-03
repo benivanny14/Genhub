@@ -6,6 +6,7 @@ import Image from "next/image";
 import { Play, Clock, Eye, Heart, Bookmark, Lock, Loader2 } from "lucide-react";
 import VerifiedBadge from "@/components/VerifiedBadge";
 import { useVideoStatuses } from "@/hooks/useVideoStatuses";
+import { useAllVideosFree } from "@/hooks/useSiteFlags";
 import {
   PROCESSING_BADGE_LABEL,
   PROCESSING_BADGE_TITLE,
@@ -73,6 +74,11 @@ export default function VideoCard(video: VideoCardProps) {
   const { theme } = useTheme();
   const { toast } = useToast();
   const isLight = theme === "light";
+  // The platform-wide free-views switch. See hooks/useSiteFlags: `undefined`
+  // means the answer has not arrived, and the price stays OFF the card until it
+  // has — never showing a price is safe, showing one during a free promotion is
+  // not.
+  const allVideosFree = useAllVideosFree();
   const [liked, setLiked] = useState(false);
   const [saved, setSaved] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -339,10 +345,20 @@ export default function VideoCard(video: VideoCardProps) {
           </div>
         )}
 
-        {/* Price Badge */}
-        <div className="absolute top-2 left-2 bg-brand-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg">
-          TZS {video.price.toLocaleString()}
-        </div>
+        {/* Price badge — replaced, not merely hidden, during a platform-wide
+            free promotion: the card says FREE rather than quoting a price the
+            viewer is not being asked to pay. While the switch is still unknown
+            (undefined) no badge renders at all, so a TZS amount can never blink
+            onto a free card. */}
+        {allVideosFree === true ? (
+          <div className="absolute top-2 left-2 bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg">
+            FREE
+          </div>
+        ) : allVideosFree === false ? (
+          <div className="absolute top-2 left-2 bg-brand-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg">
+            TZS {video.price.toLocaleString()}
+          </div>
+        ) : null}
 
         {/* Premium Lock Icon */}
         {video.isPremium && (

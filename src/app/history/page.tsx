@@ -20,6 +20,7 @@ import { useCurrency } from "@/lib/currency";
 import { formatRelativeTime } from "@/lib/utils";
 import { displayHandle } from "@/lib/usernames";
 import { canOptimizeImage } from "@/lib/media";
+import { useAllVideosFree } from "@/hooks/useSiteFlags";
 import { History, Play, Clock, Loader2 } from "lucide-react";
 
 interface HistoryItem {
@@ -49,6 +50,9 @@ function isInProgress(item: HistoryItem): boolean {
 
 export default function HistoryPage() {
   const { format } = useCurrency();
+  // While every video is free, a row must not quote a price — it reads "Free",
+  // which is what the viewer would actually be charged. See hooks/useSiteFlags.
+  const allVideosFree = useAllVideosFree();
   const [items, setItems] = useState<HistoryItem[] | null>(null);
   const [error, setError] = useState("");
 
@@ -107,7 +111,7 @@ export default function HistoryPage() {
             <Clock className="w-3 h-3" />
             {formatRelativeTime(new Date(item.updatedAt))}
             {mins ? ` · ${mins} min` : ""}
-            {item.price > 0 ? ` · ${format(item.price)}` : " · Free"}
+            {allVideosFree ? " · Free" : item.price > 0 ? ` · ${format(item.price)}` : " · Free"}
           </p>
         </div>
       </Link>
