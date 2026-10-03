@@ -46,7 +46,16 @@ export async function GET(request: NextRequest) {
         },
         orderBy: { viewsCount: "desc" },
         take: 5,
-        select: { id: true, title: true, slug: true, thumbnailUrl: true, price: true },
+        // The creator comes along so the dropdown can label each row the way
+        // the results page does, instead of a title floating on its own.
+        select: {
+          id: true,
+          title: true,
+          slug: true,
+          thumbnailUrl: true,
+          price: true,
+          creator: { select: { displayName: true, username: true } },
+        },
       }),
       prisma.user.findMany({
         where: {

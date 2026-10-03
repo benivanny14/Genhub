@@ -28,6 +28,7 @@ import {
   CreditCard,
   ReceiptText,
   History,
+  ArrowRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
@@ -36,6 +37,8 @@ import { useCurrency } from "@/lib/currency";
 import Image from "next/image";
 import NotificationBell from "@/components/NotificationBell";
 import InboxUnreadBadge from "@/components/InboxUnreadBadge";
+import VerifiedBadge from "@/components/VerifiedBadge";
+import { useAllVideosFree } from "@/hooks/useSiteFlags";
 import { canOptimizeImage } from "@/lib/media";
 import { displayHandle } from "@/lib/usernames";
 
@@ -57,6 +60,8 @@ interface SuggestVideo {
   slug: string | null;
   thumbnailUrl: string | null;
   price: number;
+  /** Shown under the title so a row reads like a scene, not a bare filename. */
+  creator?: { displayName: string | null; username?: string | null } | null;
 }
 interface SuggestCreator {
   id: string;
@@ -80,6 +85,9 @@ export default function Header() {
   const { theme, toggleTheme } = useTheme();
   const { locale, setLocale, t } = useI18n();
   const { currency, toggleCurrency, format } = useCurrency();
+  // A price in the search shelf must vanish while every video is free. See
+  // hooks/useSiteFlags — the price shows only when the switch is known to be off.
+  const allVideosFree = useAllVideosFree();
   const [query, setQuery] = useState("");
   const [suggest, setSuggest] = useState<SuggestData | null>(null);
   const [showSuggest, setShowSuggest] = useState(false);
@@ -188,10 +196,10 @@ export default function Header() {
           </Link>
 
           {/* Desktop Search */}
-          <div className="hidden md:flex flex-1 max-w-md mx-8">
+          <div className="hidden md:flex flex-1 max-w-xl mx-8">
             <div className="relative w-full">
               <Search className={cn(
-                "absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 z-10",
+                "absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 z-10",
                 isLight ? "text-gray-400" : "text-white/40"
               )} />
               <input
@@ -204,59 +212,111 @@ export default function Header() {
                   if (e.key === "Enter") submitSearch();
                 }}
                 placeholder={t("nav.search")}
-                className={cn("input-field pl-10 py-2 text-sm")}
+                className="input-field rounded-2xl py-3.5 pl-12 pr-4 text-base"
               />
 
-              {/* Autocomplete dropdown */}
+              {/* Autocomplete dropdown. The old one was a list of bare titles
+                  squeezed into the input's own width, which is why the results
+                  read as unreadable. This is a proper results panel: wider than
+                  the box, with a real thumbnail per scene, a title you can
+                  actually read, the creator under it and the price on the
+                  right — the way a media search shelf looks. */}
               {showSuggest && suggest && (
-                <div className="absolute top-full left-0 right-0 mt-1 glass-card p-2 z-50 animate-fade-in max-h-96 overflow-y-auto">
+                <div className="absolute left-1/2 top-full z-50 mt-2 max-h-[70vh] w-[min(92vw,44rem)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-white/10 bg-surface-400/95 p-3 shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in">
                   {suggest.videos.length > 0 && (
-                    <div className="mb-1">
-                      <p className="px-2 py-1 text-[10px] uppercase tracking-wider text-white/40">Videos</p>
-                      {suggest.videos.map((v) => (
-                        <button
-                          key={v.id}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => goVideo(v)}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm hover:bg-white/10 text-left"
-                        >
-                          <Play className="w-3.5 h-3.5 text-brand-400 shrink-0" />
-                          <span className="truncate flex-1">{v.title}</span>
-                          {v.price > 0 && (
-                            <span className="text-[10px] text-white/40 shrink-0">
-                              {format(v.price)}
+                    <div className="mb-2">
+                      <p className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">Videos</p>
+                      <div className="space-y-1">
+                        {suggest.videos.map((v) => (
+                          <button
+                            key={v.id}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => goVideo(v)}
+                            className="group flex w-full items-center gap-4 rounded-xl px-2 py-2 text-left transition hover:bg-white/10"
+                          >
+                            <span className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-white/10">
+                              {v.thumbnailUrl ? (
+                                <Image
+                                  src={v.thumbnailUrl}
+                                  alt=""
+                                  fill
+                                  sizes="112px"
+                                  className="object-cover"
+                                />
+                              ) : (
+                                <span className="flex h-full w-full items-center justify-center text-white/30">
+                                  <Play className="h-5 w-5" />
+                                </span>
+                              )}
                             </span>
-                          )}
-                        </button>
-                      ))}
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-[15px] font-semibold text-white group-hover:text-brand-300">
+                                {v.title}
+                              </span>
+                              <span className="mt-0.5 block truncate text-xs text-white/50">
+                                {v.creator
+                                  ? displayHandle(v.creator, "Creator")
+                                  : "Video"}
+                              </span>
+                            </span>
+                            {allVideosFree === false && v.price > 0 && (
+                              <span className="shrink-0 rounded-full bg-brand-500/15 px-3 py-1 text-xs font-bold text-brand-300">
+                                {format(v.price)}
+                              </span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                   {suggest.creators.length > 0 && (
-                    <div className="mb-1">
-                      <p className="px-2 py-1 text-[10px] uppercase tracking-wider text-white/40">Creators</p>
-                      {suggest.creators.map((c) => (
-                        <button
-                          key={c.id}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => goCreator(c)}
-                          className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-sm hover:bg-white/10 text-left"
-                        >
-                          <User className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                          <span className="truncate flex-1">{displayHandle(c, "Creator")}</span>
-                        </button>
-                      ))}
+                    <div className="mb-2">
+                      <p className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">Creators</p>
+                      <div className="space-y-1">
+                        {suggest.creators.map((c) => (
+                          <button
+                            key={c.id}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => goCreator(c)}
+                            className="group flex w-full items-center gap-4 rounded-xl px-2 py-2 text-left transition hover:bg-white/10"
+                          >
+                            <span className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full bg-white/10">
+                              {c.avatarUrl ? (
+                                <Image
+                                  src={c.avatarUrl}
+                                  alt=""
+                                  fill
+                                  sizes="48px"
+                                  className="object-cover"
+                                />
+                              ) : (
+                                <span className="flex h-full w-full items-center justify-center text-sm font-bold text-white/60">
+                                  {(c.username || c.displayName || "?").charAt(0).toUpperCase()}
+                                </span>
+                              )}
+                            </span>
+                            <span className="flex min-w-0 flex-1 items-center gap-2">
+                              <span className="truncate text-[15px] font-semibold text-white group-hover:text-brand-300">
+                                {displayHandle(c, "Creator")}
+                              </span>
+                              {c.isVerified && <VerifiedBadge className="h-4 w-4 shrink-0" />}
+                            </span>
+                            <span className="shrink-0 text-xs text-white/40">Creator</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   )}
                   {suggest.tags.length > 0 && (
-                    <div>
-                      <p className="px-2 py-1 text-[10px] uppercase tracking-wider text-white/40">Tags</p>
-                      <div className="flex flex-wrap gap-1.5 px-2 pb-1">
+                    <div className="mb-1">
+                      <p className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">Tags</p>
+                      <div className="flex flex-wrap gap-2 px-2 pb-2">
                         {suggest.tags.map((tag) => (
                           <button
                             key={tag}
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => goTag(tag)}
-                            className="bg-brand-500/15 text-brand-400 px-2 py-0.5 rounded-full text-xs hover:bg-brand-500/25"
+                            className="rounded-full bg-brand-500/15 px-3 py-1.5 text-sm text-brand-300 transition hover:bg-brand-500/25"
                           >
                             #{tag}
                           </button>
@@ -264,9 +324,17 @@ export default function Header() {
                       </div>
                     </div>
                   )}
-                  {suggest.videos.length === 0 && suggest.creators.length === 0 && suggest.tags.length === 0 && (
-                    <p className="px-3 py-2 text-sm text-white/40">No matches</p>
-                  )}
+
+                  <button
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={submitSearch}
+                    className="mt-1 flex w-full items-center justify-between border-t border-white/10 px-3 pt-3 pb-1 text-sm font-medium text-white/70 transition hover:text-white"
+                  >
+                    <span className="truncate">
+                      See all results for “{query.trim()}”
+                    </span>
+                    <ArrowRight className="h-4 w-4 shrink-0" />
+                  </button>
                 </div>
               )}
             </div>
@@ -522,7 +590,7 @@ export default function Header() {
         )}>
           <div className="px-4 py-4 space-y-2">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40" />
               <input
                 type="text"
                 value={query}
@@ -531,7 +599,7 @@ export default function Header() {
                   if (e.key === "Enter") submitSearch();
                 }}
                 placeholder={t("nav.search")}
-                className="input-field pl-10 py-2.5 text-sm"
+                className="input-field rounded-2xl py-3.5 pl-12 pr-4 text-base"
               />
             </div>
 

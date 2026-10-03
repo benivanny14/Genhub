@@ -303,7 +303,7 @@ export default function SearchResults({ query }: { query: string }) {
       {videos.length > 0 && (
         <section className="mt-10">
           <h2 className="mb-4 text-lg font-semibold text-white">Videos</h2>
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-x-5 gap-y-8 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {videos.map((video) => (
               <VideoCard
                 key={video.id}
