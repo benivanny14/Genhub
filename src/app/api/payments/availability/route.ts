@@ -22,14 +22,17 @@
 
 import config from "@/lib/config";
 import { api } from "@/lib/api-response";
-import { clickpesaGatewayState } from "@/lib/payments/clickpesa";
+import { resolvePaymentGateway } from "@/lib/payments/gateway";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const breaker = clickpesaGatewayState();
+  // Resolved through the registry, not the integration file, so this route
+  // stays unaware of which gateway is behind it.
+  const gateway = resolvePaymentGateway("CLICKPESA");
+  const breaker = gateway.breakerState();
   const sandbox = config.clickPesa.sandbox;
-  const configured = Boolean(config.clickPesa.clientId && config.clickPesa.apiKey);
+  const configured = gateway.isConfigured();
 
   // Sandbox simulates the charge, so it is always "available" — a dev build must
   // not disable its own Pay button because no live key is set.
