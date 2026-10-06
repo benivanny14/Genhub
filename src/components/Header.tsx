@@ -39,6 +39,7 @@ import NotificationBell from "@/components/NotificationBell";
 import InboxUnreadBadge from "@/components/InboxUnreadBadge";
 import VerifiedBadge from "@/components/VerifiedBadge";
 import { useAllVideosFree } from "@/hooks/useSiteFlags";
+import { usePurchasedVideoIds } from "@/hooks/usePurchasedVideos";
 import { canOptimizeImage } from "@/lib/media";
 import { displayHandle } from "@/lib/usernames";
 
@@ -88,6 +89,9 @@ export default function Header() {
   // A price in the search shelf must vanish while every video is free. See
   // hooks/useSiteFlags — the price shows only when the switch is known to be off.
   const allVideosFree = useAllVideosFree();
+  // Scenes this viewer already owns show PAID in the shelf instead of a price
+  // they have already paid — same rule as the cards, same shared read.
+  const purchased = usePurchasedVideoIds();
   const [query, setQuery] = useState("");
   const [suggest, setSuggest] = useState<SuggestData | null>(null);
   const [showSuggest, setShowSuggest] = useState(false);
@@ -259,11 +263,15 @@ export default function Header() {
                                   : "Video"}
                               </span>
                             </span>
-                            {allVideosFree === false && v.price > 0 && (
+                            {allVideosFree !== true && purchased.has(v.id) ? (
+                              <span className="shrink-0 rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-bold text-emerald-300">
+                                PAID
+                              </span>
+                            ) : allVideosFree === false && v.price > 0 ? (
                               <span className="shrink-0 rounded-full bg-brand-500/15 px-3 py-1 text-xs font-bold text-brand-300">
                                 {format(v.price)}
                               </span>
-                            )}
+                            ) : null}
                           </button>
                         ))}
                       </div>

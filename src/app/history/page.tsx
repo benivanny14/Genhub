@@ -21,6 +21,7 @@ import { formatRelativeTime } from "@/lib/utils";
 import { displayHandle } from "@/lib/usernames";
 import { canOptimizeImage } from "@/lib/media";
 import { useAllVideosFree } from "@/hooks/useSiteFlags";
+import { usePurchasedVideoIds } from "@/hooks/usePurchasedVideos";
 import { History, Play, Clock, Loader2 } from "lucide-react";
 
 interface HistoryItem {
@@ -53,6 +54,9 @@ export default function HistoryPage() {
   // While every video is free, a row must not quote a price — it reads "Free",
   // which is what the viewer would actually be charged. See hooks/useSiteFlags.
   const allVideosFree = useAllVideosFree();
+  // A row for a scene the viewer already paid for says "Paid" instead of
+  // quoting its price again — the same rule the cards use.
+  const purchased = usePurchasedVideoIds();
   const [items, setItems] = useState<HistoryItem[] | null>(null);
   const [error, setError] = useState("");
 
@@ -111,7 +115,13 @@ export default function HistoryPage() {
             <Clock className="w-3 h-3" />
             {formatRelativeTime(new Date(item.updatedAt))}
             {mins ? ` · ${mins} min` : ""}
-            {allVideosFree ? " · Free" : item.price > 0 ? ` · ${format(item.price)}` : " · Free"}
+            {allVideosFree
+              ? " · Free"
+              : purchased.has(item.videoId)
+                ? " · Paid"
+                : item.price > 0
+                  ? ` · ${format(item.price)}`
+                  : " · Free"}
           </p>
         </div>
       </Link>

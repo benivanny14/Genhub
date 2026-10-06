@@ -3,10 +3,11 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Play, Clock, Eye, Heart, Bookmark, Lock, Loader2 } from "lucide-react";
+import { Play, Clock, Eye, Heart, Bookmark, Lock, Loader2, Check } from "lucide-react";
 import VerifiedBadge from "@/components/VerifiedBadge";
 import { useVideoStatuses } from "@/hooks/useVideoStatuses";
 import { useAllVideosFree } from "@/hooks/useSiteFlags";
+import { usePurchasedVideoIds } from "@/hooks/usePurchasedVideos";
 import {
   PROCESSING_BADGE_LABEL,
   PROCESSING_BADGE_TITLE,
@@ -79,6 +80,11 @@ export default function VideoCard(video: VideoCardProps) {
   // has — never showing a price is safe, showing one during a free promotion is
   // not.
   const allVideosFree = useAllVideosFree();
+  // The scenes this viewer has already paid for. One shared read for the whole
+  // page (see hooks/usePurchasedVideos): a card that knows the viewer owns this
+  // scene says PAID rather than quoting a price they have already paid.
+  const purchased = usePurchasedVideoIds();
+  const isPurchased = purchased.has(video.id);
   const [liked, setLiked] = useState(false);
   const [saved, setSaved] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -345,14 +351,26 @@ export default function VideoCard(video: VideoCardProps) {
           </div>
         )}
 
-        {/* Price badge — replaced, not merely hidden, during a platform-wide
-            free promotion: the card says FREE rather than quoting a price the
-            viewer is not being asked to pay. While the switch is still unknown
-            (undefined) no badge renders at all, so a TZS amount can never blink
-            onto a free card. */}
+        {/* Price badge — replaced, not merely hidden, in two cases.
+
+            A platform-wide free promotion says FREE rather than quoting a price
+            the viewer is not being asked to pay (and while that switch is still
+            unknown, no badge renders at all, so a TZS amount can never blink onto
+            a free card).
+
+            A scene THIS viewer already owns says PAID instead of pricing it
+            again: the price is the one number on the card that stops being true
+            the moment it is paid, and a buyer scanning a grid needs to tell
+            "buy this" from "you own this" at a glance. It is per-viewer — every
+            other account still sees the price, because for them it is unchanged. */}
         {allVideosFree === true ? (
           <div className="absolute top-2 left-2 bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg">
             FREE
+          </div>
+        ) : isPurchased ? (
+          <div className="absolute top-2 left-2 flex items-center gap-1 bg-emerald-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg">
+            <Check className="w-3 h-3" />
+            PAID
           </div>
         ) : allVideosFree === false ? (
           <div className="absolute top-2 left-2 bg-brand-500 text-white px-2.5 py-1 rounded-lg text-xs font-bold shadow-lg">

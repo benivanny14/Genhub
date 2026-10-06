@@ -75,6 +75,10 @@ import {
 } from "@/hooks/usePaymentAvailability";
 import { useAllVideosFree } from "@/hooks/useSiteFlags";
 import {
+  usePurchasedVideoIds,
+  refreshPurchasedVideoIds,
+} from "@/hooks/usePurchasedVideos";
+import {
   outcomeForApiError,
   outcomeForStatus,
   type PaymentOutcome,
@@ -349,6 +353,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   // price off the "More scenes" strip — the one place on this page that quotes
   // another scene's price. See hooks/useSiteFlags.
   const allVideosFree = useAllVideosFree();
+  // Scenes this viewer already owns: the "More scenes" strip prices a scene
+  // they have already paid for the same way a browse grid would, so it reads
+  // from the same shared list instead of quoting the price again.
+  const purchased = usePurchasedVideoIds();
   // Whether the gateway can be reached at all. Read from the public endpoint so
   // the Buy button tells the truth instead of letting a customer click into a
   // generic error — `null` until read, which keeps the button enabled.
@@ -843,6 +851,9 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
         setPaymentOutcome(null);
         toast("success", "Paid from your wallet — enjoy the full video!");
         fetchVideo();
+        // The scene is owned now: drop the stale price list so it reads PAID
+        // here and on every grid the viewer goes back to.
+        void refreshPurchasedVideoIds();
       } else {
         const outcome = outcomeForApiError({
           error: data.error,
@@ -900,6 +911,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           setShowPurchaseModal(false);
           toast("success", "Payment confirmed — enjoy the full video!");
           fetchVideo();
+          void refreshPurchasedVideoIds();
         } else {
           toast("error", doneData.error || "Sandbox payment failed");
         }
@@ -942,6 +954,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
         if (status === "SUCCESS") {
           toast("success", "Payment confirmed — enjoy the full video!");
           fetchVideo();
+          void refreshPurchasedVideoIds();
           return;
         }
         if (status === "FAILED") {
@@ -2147,11 +2160,16 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                         )}
                         {/* Scrim keeps the length badge readable over a bright cover */}
                         <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/75 via-black/30 to-transparent" />
-                        {allVideosFree === false && r.price > 0 && (
+                        {allVideosFree !== true && purchased.has(r.id) ? (
+                          <span className="absolute top-2 left-2 flex items-center gap-1 rounded-md bg-emerald-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-lg">
+                            <Check className="w-3 h-3" />
+                            PAID
+                          </span>
+                        ) : allVideosFree === false && r.price > 0 ? (
                           <span className="absolute top-2 left-2 rounded-md bg-brand-500 px-2 py-0.5 text-[10px] font-bold tabular-nums text-white shadow-lg">
                             {formatTZS(r.price)}
                           </span>
-                        )}
+                        ) : null}
                         {!!r.duration && r.duration > 0 && (
                           <span className="absolute bottom-2 right-2 rounded-md bg-black/75 px-2 py-0.5 text-xs font-semibold tabular-nums text-white ring-1 ring-white/15 backdrop-blur-sm">
                             {formatDuration(r.duration)}
