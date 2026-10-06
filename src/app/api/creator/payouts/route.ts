@@ -30,7 +30,12 @@ export async function POST(request: NextRequest) {
     // creator move money right now?
     const user = await prisma.user.findUnique({
       where: { id: auth.userId },
-      select: { kycStatus: true, payoutFrozenUntil: true, payoutFrozenReason: true },
+      select: {
+        kycStatus: true,
+        payoutFrozenUntil: true,
+        payoutFrozenReason: true,
+        payoutMinimumWaived: true,
+      },
     });
 
     if (user?.kycStatus !== "APPROVED") {
@@ -60,13 +65,20 @@ export async function POST(request: NextRequest) {
     if (!outcome.ok) {
       const minimum = outcome.minimum.toLocaleString();
 
+      // Both floor refusals name the rule and the way around it, because the way
+      // around it is a person: an admin can approve a smaller withdrawal for this
+      // account. Saying only "minimum is TZS 30,000" leaves a creator with 25,000
+      // stuck with no idea that asking is an option.
       if (outcome.reason === "AMOUNT_BELOW_MINIMUM") {
-        return api.error(`The minimum withdrawal is TZS ${minimum}`, 400);
+        return api.error(
+          `The minimum withdrawal is TZS ${minimum}. To withdraw less, ask support to allow it for your account.`,
+          400
+        );
       }
 
       if (outcome.reason === "BALANCE_BELOW_MINIMUM") {
         return api.error(
-          `Your balance is too low. The minimum payout is TZS ${minimum}`,
+          `Your balance is below the TZS ${minimum} minimum. Keep earning, or ask support to allow a smaller withdrawal for your account.`,
           400
         );
       }

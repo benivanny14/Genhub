@@ -1,11 +1,13 @@
 // =============================================================================
 // GENHUB - Creator Balance Service
-// Manages the 70/30 revenue split, 14-day holding period, and payout logic
+// Manages the 70/30 revenue split and every credit to a creator's balance.
+// There is no holding period: a sale is withdrawable the moment it settles.
 // =============================================================================
 
 import prisma from "../db";
 import config from "../config";
 import { Prisma } from "@prisma/client";
+import { maybeNotifyAdminsPayoutReady } from "./payout-threshold.service";
 
 const BUSINESS = config.business;
 
@@ -24,6 +26,45 @@ export function splitRevenue(amount: number): {
 } {
   const platformFee = Math.round(amount * (BUSINESS.platformFeePercent / 100));
   return { platformFee, creatorCut: amount - platformFee };
+}
+
+// =============================================================================
+// Crediting a creator — ONE rule, ONE place
+//
+// Every revenue path (a video sale, a tip, a paid message, a subscription) lands
+// here, so "when does a creator get the money?" has exactly one answer:
+// immediately. Earnings used to sit in `pendingBalance` for a 14-day holding
+// period before they could be withdrawn; that window is gone, so a sale is
+// spendable — and withdrawable — the moment it settles.
+//
+// The only gate left is the withdrawal rule in payout.service.ts: at least
+// config.business.minPayoutAmount (TZS 30,000) available, which an admin can
+// waive for one creator. That rule reads `availableBalance`, so nothing here has
+// to know about it.
+//
+// `totalEarned` is lifetime and only ever grows here. Runs inside the caller's
+// transaction so a credit and the sale that caused it commit together.
+// =============================================================================
+
+export async function creditCreatorAvailable(
+  tx: Prisma.TransactionClient,
+  params: { creatorId: string; amount: number }
+): Promise<void> {
+  const { creatorId, amount } = params;
+  if (amount <= 0) return;
+
+  await tx.creatorBalance.upsert({
+    where: { creatorId },
+    create: {
+      creatorId,
+      availableBalance: amount,
+      totalEarned: amount,
+    },
+    update: {
+      availableBalance: { increment: amount },
+      totalEarned: { increment: amount },
+    },
+  });
 }
 
 // =============================================================================
@@ -51,20 +92,9 @@ async function grantVideoPurchase(
     data: { platformFee, creatorCut, status: "SUCCESS" },
   });
 
-  // Add to creator's pending balance (14-day holding)
-  await tx.creatorBalance.upsert({
-    where: { creatorId },
-    create: {
-      creatorId,
-      pendingBalance: creatorCut,
-      availableBalance: 0,
-      totalEarned: creatorCut,
-    },
-    update: {
-      pendingBalance: { increment: creatorCut },
-      totalEarned: { increment: creatorCut },
-    },
-  });
+  // Straight to the withdrawable balance — no holding period. See
+  // creditCreatorAvailable above for why this is the only credit path.
+  await creditCreatorAvailable(tx, { creatorId, amount: creatorCut });
 
   // Update video earnings
   await tx.videoEarning.upsert({
@@ -179,6 +209,11 @@ export async function creditCreatorForPurchase(params: {
       totalAmount,
     });
   });
+
+  // The sale is committed; tell the admins if this pushed the creator over the
+  // withdrawal floor. Best-effort and after the commit, so a notification can
+  // never undo a sale that already settled.
+  await maybeNotifyAdminsPayoutReady(creatorId);
 }
 
 // =============================================================================
@@ -202,7 +237,7 @@ export async function purchaseVideoWithWallet(params: {
 }): Promise<WalletPurchaseResult> {
   const { userId, creatorId, videoId, amount, originalPrice, couponId } = params;
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     // Conditional debit — see debitWallet. The pre-check that used to sit here
     // was a read, so five simultaneous purchases of one 5,000 balance all passed
     // it and all decremented. Nothing is decided in JavaScript any more.
@@ -245,6 +280,12 @@ export async function purchaseVideoWithWallet(params: {
       newBalance: debited.balance,
     };
   });
+
+  // Committed: tell the admins if this crossed the withdrawal floor (see
+  // creditCreatorForPurchase). Skipped when the debit was refused.
+  if (result.success) await maybeNotifyAdminsPayoutReady(creatorId);
+
+  return result;
 }
 
 // =============================================================================

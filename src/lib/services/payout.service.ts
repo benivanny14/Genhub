@@ -64,6 +64,17 @@ export async function requestPayout(params: PayoutRequestParams): Promise<Payout
   return prisma.$transaction(async (tx) => {
     const availableBalance = await availableBalanceOf(tx, creatorId);
 
+    // An admin can waive the floor for one creator (User.payoutMinimumWaived) —
+    // the "let this person take out a small amount" lever. Read inside the
+    // transaction, with the balance, so the permission and the money are the
+    // same snapshot and a waiver revoked a moment ago cannot slip a small
+    // payout through on a stale read.
+    const creator = await tx.user.findUnique({
+      where: { id: creatorId },
+      select: { payoutMinimumWaived: true },
+    });
+    const floorWaived = creator?.payoutMinimumWaived === true;
+
     // Answered before the balance, deliberately. A creator with a request
     // already in flight usually also has a low balance — the money is earmarked
     // — and telling them their balance is too low invites them to top up and try
@@ -77,11 +88,13 @@ export async function requestPayout(params: PayoutRequestParams): Promise<Payout
       return { ok: false as const, reason: "ALREADY_PENDING" as const, availableBalance, minimum };
     }
 
-    if (amount < minimum) {
+    // The floor — unless an admin has waived it for this creator, in which case
+    // any positive amount they actually hold may be withdrawn.
+    if (!floorWaived && amount < minimum) {
       return { ok: false as const, reason: "AMOUNT_BELOW_MINIMUM" as const, availableBalance, minimum };
     }
 
-    if (availableBalance < minimum) {
+    if (!floorWaived && availableBalance < minimum) {
       return { ok: false as const, reason: "BALANCE_BELOW_MINIMUM" as const, availableBalance, minimum };
     }
 

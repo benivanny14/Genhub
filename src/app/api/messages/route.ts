@@ -7,7 +7,8 @@
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
-import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
+import { creditCreatorAvailable, debitWallet, splitRevenue } from "@/lib/services/balance.service";
+import { maybeNotifyAdminsPayoutReady } from "@/lib/services/payout-threshold.service";
 import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
@@ -218,26 +219,14 @@ export async function POST(request: NextRequest) {
       }
 
       if (receiver.role === "CREATOR") {
-        // Credit creator's pending balance (14-day holding, like a purchase)
-        await tx.creatorBalance.upsert({
-          where: { creatorId: receiverId },
-          create: {
-            creatorId: receiverId,
-            pendingBalance: creatorCut,
-            availableBalance: 0,
-            totalEarned: creatorCut,
-          },
-          update: {
-            pendingBalance: { increment: creatorCut },
-            totalEarned: { increment: creatorCut },
-          },
-        });
+        // Credit the creator immediately — no holding period.
+        await creditCreatorAvailable(tx, { creatorId: receiverId, amount: creatorCut });
       } else {
         // A paid message to an ordinary account. Their share goes where every
-        // other incoming payment goes — their wallet. Writing a CreatorBalance row
-        // instead (what this route used to do) invented a creator who does not
-        // exist and held their money for 14 days against a payout they cannot
-        // request.
+        // other incoming payment goes — their wallet. Writing a CreatorBalance
+        // row instead (what this route used to do) invented a creator who does
+        // not exist and put their money somewhere they cannot request a payout
+        // from.
         await tx.user.update({
           where: { id: receiverId },
           data: { walletBalance: { increment: creatorCut } },
@@ -294,6 +283,12 @@ export async function POST(request: NextRequest) {
           : `You received a paid message worth TZS ${charged.toLocaleString()} — your share is TZS ${creatorCut.toLocaleString()}`,
       link: "/inbox",
     });
+
+    // A paid message is a sale like any other: nudge the admins if the creator's
+    // withdrawable balance crossed the floor.
+    if (receiver.role === "CREATOR" && charged > 0) {
+      await maybeNotifyAdminsPayoutReady(receiverId);
+    }
 
     return api.success(message, "Message sent", 201);
   } catch (error) {

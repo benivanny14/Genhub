@@ -50,6 +50,10 @@ import {
   isBankPayout,
   lastPayoutAccount,
 } from "@/lib/payout-account";
+// The withdrawal floor, from the same constant the creator guidelines quote, so
+// the number a creator reads on this page is the number the payout service
+// enforces.
+import { CREATOR_MIN_WITHDRAWAL_TZS } from "@/lib/creator-guidelines";
 import { formatTZS, formatRelativeTime, formatCount, cn } from "@/lib/utils";
 // What the video host reports holding, and how to read it beside the encoding
 // state — a stalled transfer is a byte count, not a bar that will not move.
@@ -64,12 +68,11 @@ interface CreatorData {
     availableBalance: number;
     totalEarned: number;
   };
-  /** Days a sale is held before it becomes withdrawable. Optional for old payloads. */
-  holdingPeriodDays?: number;
-  /** When the oldest still-held earning clears. Null when nothing is held. */
-  nextReleaseAt?: string | null;
-  /** Creator cut that finished its holding period in the last seven days. */
-  releasedThisWeek?: number;
+  /**
+   * True when an admin has waived the TZS 30,000 withdrawal floor for this
+   * account, so they may withdraw any amount. Optional for old payloads.
+   */
+  payoutMinimumWaived?: boolean;
   todayEarnings: number;
   totalViews: number;
   videoStats: {
@@ -87,9 +90,9 @@ interface CreatorData {
     creatorCut: number | null;
     type: string;
     createdAt: string;
-    /** When this sale's holding period ends. Optional for older payloads. */
+    /** When this sale became withdrawable — i.e. when it settled. */
     clearsAt?: string;
-    /** Still inside the 14-day window (so still counted in Pending). */
+    /** Always false now: nothing is held. Kept so old payloads still type. */
     held?: boolean;
     /** `{ method: "pay_message" }` for a message; a plain tip has none. */
     metadata?: { method?: string } | null;
@@ -113,7 +116,7 @@ interface CreatorData {
     createdAt: string;
     processedAt: string | null;
   }[];
-  /** Chat income: every message is paid, and it clears on the 14-day clock. */
+  /** Chat income: every message is paid, and it is available immediately. */
   paidMessages: {
     messages: number;
     /** What fans paid, before the 30% platform share. */
@@ -900,15 +903,17 @@ export default function CreatorDashboard() {
   }
 
   const balance = creatorData?.balance;
-  // The holding window and the next clear date, with the same defaults the
-  // server uses, so the copy below is right even before the payload arrives.
-  const holdingDays = creatorData?.holdingPeriodDays ?? 14;
+  // The one rule that gates a withdrawal, and whether an admin has waived it for
+  // this account. Both come from the payload rather than being invented here, so
+  // the dashboard and the payout service cannot disagree.
+  const payoutFloorWaived = creatorData?.payoutMinimumWaived === true;
+  const meetsPayoutFloor = (balance?.availableBalance || 0) >= CREATOR_MIN_WITHDRAWAL_TZS;
+  const canWithdrawNow = meetsPayoutFloor || payoutFloorWaived;
   // Null when the endpoint could not read the ledger, which is a different
   // statement from "nobody has messaged you": a failed read renders zeros that
   // look like the truth, so it renders an apology instead.
   const paidMessages = creatorData?.paidMessages ?? null;
-  const canRequestPayout =
-    (balance?.availableBalance || 0) >= 30000 && user?.kycStatus === "APPROVED";
+  const canRequestPayout = canWithdrawNow && user?.kycStatus === "APPROVED";
 
   // Where the money goes: read from the payout history, so the form asks once.
   const savedPayoutAccount = lastPayoutAccount(creatorData?.payouts);
@@ -934,13 +939,11 @@ export default function CreatorDashboard() {
       linkLabel: "Finish verification",
     });
   }
-  if ((balance?.availableBalance || 0) < 30000) {
+  if (!canWithdrawNow) {
     withdrawalBlockers.push({
       text:
-        `Minimum per withdrawal is TZS 30,000 and your available balance is ${formatTZS(balance?.availableBalance || 0)}.` +
-        ((balance?.pendingBalance || 0) > 0
-          ? ` ${formatTZS(balance?.pendingBalance || 0)} is still clearing — sales become available after 14 days (the window a buyer can dispute one in).`
-          : " Earnings appear here as your videos sell."),
+        `Minimum per withdrawal is TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()} and your available balance is ${formatTZS(balance?.availableBalance || 0)}.` +
+        " Keep earning — your balance grows with every sale. To withdraw less, ask support to allow it for your account.",
     });
   }
   if (pendingPayout) {
@@ -1081,22 +1084,22 @@ export default function CreatorDashboard() {
           <div className="glass-card p-5">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
-                <Clock className="w-5 h-5 text-amber-400" />
+                <Banknote className="w-5 h-5 text-amber-400" />
               </div>
-              <span className="text-sm text-white/60">Pending ({holdingDays} days)</span>
+              <span className="text-sm text-white/60">Ready to withdraw</span>
             </div>
             <p className="text-2xl font-bold text-amber-400">
-              {formatTZS(balance?.pendingBalance || 0)}
+              {canWithdrawNow ? "Yes" : "Not yet"}
             </p>
-            {creatorData?.nextReleaseAt ? (
-              <p className="text-xs text-white/45 mt-1">
-                Next clears {formatDay(creatorData.nextReleaseAt)}
-              </p>
-            ) : (
-              <p className="text-xs text-white/45 mt-1">
-                Clears {holdingDays} days after each sale
-              </p>
-            )}
+            <p className="text-xs text-white/45 mt-1">
+              {payoutFloorWaived
+                ? "An admin allows you to withdraw any amount"
+                : meetsPayoutFloor
+                  ? `You have reached the TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()} minimum`
+                  : `${formatTZS(
+                      Math.max(0, CREATOR_MIN_WITHDRAWAL_TZS - (balance?.availableBalance || 0))
+                    )} to reach TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}`}
+            </p>
           </div>
 
           <div className="glass-card p-5">
@@ -1112,59 +1115,51 @@ export default function CreatorDashboard() {
           </div>
         </div>
 
-        {/* Why the pending figure cannot be withdrawn yet, in the creator's own
-            words. Without this the 14-day rule is invisible: the number just
-            sits there, and a creator who does not know the rule reads it as
-            money the platform is keeping. */}
+        {/* The withdrawal instructions, in the creator's own words. One rule,
+            and it is about the AMOUNT: you can withdraw yourself once your
+            balance reaches TZS 30,000, and below that an admin can allow it for
+            your account. Money is yours the moment it lands, so there is no
+            wait to explain here. */}
         <div className="glass-card p-5">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center shrink-0">
-              <Clock className="w-5 h-5 text-amber-400" />
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center shrink-0">
+              <Banknote className="w-5 h-5 text-emerald-400" />
             </div>
             <div className="space-y-2">
-              <p className="font-display font-bold">
-                Pesa yako inafika lini? (siku {holdingDays})
-              </p>
-              <p className="text-sm text-white/70">
-                <span className="text-emerald-400 font-bold">
-                  {formatTZS(creatorData?.releasedThisWeek || 0)}
-                </span>{" "}
-                ilifunguka wiki hii · released this week
-              </p>
+              <p className="font-display font-bold">Jinsi ya kutoa pesa zako</p>
               <ul className="text-sm text-white/60 space-y-1.5 list-disc pl-5">
                 <li>
                   <span className="text-white/80 font-medium">
-                    Pesa inaingia mara moja.
+                    Pesa yako ni yako mara moja.
                   </span>{" "}
-                  Kila malipo ya mtu inaingia kwenye akaunti yako papo hapo, lakini
-                  inakaa kwenye eneo la{" "}
-                  <span className="text-amber-300 font-medium">Pending</span> kwa
-                  siku {holdingDays}.
+                  Kila malipo (video, tip, subscription au message) inaingia kwenye
+                  salio lako papo hapo — hakuna kusubiri siku zozote.
                 </li>
                 <li>
                   <span className="text-white/80 font-medium">
-                    Siku {holdingDays} ni kwa kila malipo yenyewe.
+                    Unatoa mwenyewe ukifikisha TZS{" "}
+                    {CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}.
                   </span>{" "}
-                  Hiki ni kipindi cha mwanunuzi kurudisha pesa (refund). Hivyo kila
-                  malipo inafunguliwa siku {holdingDays} baada ya <em>hiyo</em>{" "}
-                  malipo — sio siku {holdingDays} moja kwa akaunti yako yote. Ukisha
-                  uza kwa siku kadhaa, baada ya siku {holdingDays} pesa huanza
-                  kufunguka kila siku.
+                  Salio lako likifikia TZS {CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}{" "}
+                  unaweza kuomba kutoa. Kama halijafikia kiwango hicho,
+                  hauwezi kutoa.
                 </li>
-                <li>
-                  <span className="text-white/80 font-medium">
-                    Kutoa pesa (withdraw) hakusubiri siku {holdingDays}.
-                  </span>{" "}
-                  Unaweza kutoa{" "}
-                  <span className="text-emerald-300 font-medium">Available</span>{" "}
-                  yoyote mara moja, mradi ifikie TZS 30,000.
-                </li>
+                {payoutFloorWaived && (
+                  <li>
+                    <span className="text-emerald-300 font-medium">
+                      Akaunti yako imeruhusiwa kutoa chini ya TZS{" "}
+                      {CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}.
+                    </span>{" "}
+                    Admin amekuruhusu kutoa kiasi chochote ulichonacho.
+                  </li>
+                )}
               </ul>
               <p className="text-xs text-white/40">
-                Sales are held for {holdingDays} days after each sale, then unlock
-                on their own — pending becomes available automatically, no button
-                to press. Withdrawals have no wait of their own beyond the TZS
-                30,000 minimum.
+                Withdraw any amount in your available balance once it reaches TZS{" "}
+                {CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}. Below that you cannot
+                withdraw — unless an admin has allowed a smaller withdrawal for
+                your account. Payouts go to M-Pesa, Tigo Pesa, Airtel Money or a
+                bank account.
               </p>
             </div>
           </div>
@@ -1383,9 +1378,9 @@ export default function CreatorDashboard() {
               </p>
             </div>
             <div className="rounded-xl bg-surface-300/30 p-3">
-              <p className="text-xs text-white/50">Still clearing (14 days)</p>
+              <p className="text-xs text-white/50">You can withdraw from</p>
               <p className="font-bold text-amber-400">
-                {formatTZS(balance?.pendingBalance || 0)}
+                {payoutFloorWaived ? "Any amount" : "TZS 30,000"}
               </p>
             </div>
             <div className="rounded-xl bg-surface-300/30 p-3">
@@ -1663,9 +1658,8 @@ export default function CreatorDashboard() {
         </div>
 
         {/* Paid Messages — the inbox as a revenue line. Every message is paid,
-            and the money clears on the same 14-day schedule as a video sale, so
-            the held part is shown with the date it frees up instead of being
-            folded into one number that cannot be spent yet. */}
+            and the creator's share lands in their balance the moment it
+            settles, exactly like a video sale or a tip. */}
         <div className="glass-card p-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
             <div className="flex items-center gap-3">
@@ -1710,20 +1704,12 @@ export default function CreatorDashboard() {
                   </p>
                 </div>
                 <div className="rounded-xl bg-surface-300/30 p-4">
-                  <p className="text-xs text-white/40">In 14-day holding</p>
-                  <p className="text-xl font-bold mt-1 text-amber-400">
-                    {formatTZS(paidMessages.held)}
+                  <p className="text-xs text-white/40">Available right away</p>
+                  <p className="text-xl font-bold mt-1 text-emerald-400">
+                    {formatTZS(paidMessages.cleared)}
                   </p>
                   <p className="text-[11px] text-white/35 mt-1">
-                    {paidMessages.heldMessages === 0
-                      ? "Nothing held right now"
-                      : `${paidMessages.heldMessages} message${
-                          paidMessages.heldMessages === 1 ? "" : "s"
-                        }${
-                          paidMessages.nextReleaseAt
-                            ? ` — first frees up ${formatDay(paidMessages.nextReleaseAt)}`
-                            : ""
-                        }`}
+                    Message income lands in your balance as soon as it settles.
                   </p>
                 </div>
               </div>
@@ -1744,7 +1730,7 @@ export default function CreatorDashboard() {
                         </p>
                         <p className="text-xs text-white/40">
                           {formatRelativeTime(new Date(m.createdAt))}
-                          {m.held ? ` · clears ${formatDay(m.clearsAt)}` : " · cleared"}
+                          {" · paid to your balance"}
                         </p>
                       </div>
                       <div className="text-right shrink-0">
@@ -1784,10 +1770,7 @@ export default function CreatorDashboard() {
                   <p className="text-sm">{transactionLabel(tx)}</p>
                   <p className="text-xs text-white/40">
                     {formatRelativeTime(new Date(tx.createdAt))}
-                    {tx.clearsAt &&
-                      (tx.held
-                        ? ` · clears ${formatDay(tx.clearsAt)}`
-                        : " · available")}
+                    {" · available to withdraw"}
                   </p>
                 </div>
                 <p className="font-bold text-sm text-emerald-400">

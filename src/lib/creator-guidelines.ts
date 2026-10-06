@@ -6,9 +6,9 @@
 // prose pasted into the upload page:
 //
 //   1. The upload page renders them, and the numbers they quote come from here
-//      (the withdrawal floor, the holding period, the recommended length) so the
-//      screen and the platform cannot drift apart — the failure that produced
-//      this file was a rule written in one place and checked in none.
+//      (the withdrawal floor, the recommended length) so the screen and the
+//      platform cannot drift apart — the failure that produced this file was a
+//      rule written in one place and checked in none.
 //
 //      The length is GUIDANCE, not a gate: an upload of any duration is accepted,
 //      and nothing takes a published video down for being short. It used to be
@@ -35,13 +35,6 @@ export const MIN_VIDEO_DURATION_SECONDS = 8 * 60;
  * and the number the payout service enforces are recognisably the same one.
  */
 export const CREATOR_MIN_WITHDRAWAL_TZS = 30_000;
-
-/**
- * Days a sale is held before it becomes withdrawable. Mirrors
- * config.business.holdingPeriodDays, and kept here so the guideline that
- * explains the wait reads the same number the release job enforces.
- */
-export const HOLDING_PERIOD_DAYS = 14;
 
 export interface CreatorGuideline {
   /** Stable id — used as the React key and the acknowledgement receipt. */
@@ -107,13 +100,8 @@ export const CREATOR_GUIDELINES: CreatorGuideline[] = [
   },
   {
     id: "withdrawal",
-    sw: `Utaruhusiwa kutoa (withdraw) pesa zako pale tu salio lako linapofikia TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()} ndipo unaweza kuanza kutoa.`,
-    en: `You can withdraw only once your balance reaches TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}.`,
-  },
-  {
-    id: "holding",
-    sw: `Pesa yako inaingia akaunti yako mara moja, lakini kila malipo hukaa siku ${HOLDING_PERIOD_DAYS} (kipindi cha mwanunuzi kurudisha pesa) kabla ya kuwa Available. Siku ${HOLDING_PERIOD_DAYS} ni kwa kila malipo yenyewe — sio siku ${HOLDING_PERIOD_DAYS} moja kwa akaunti yako yote: ukiuza kila siku, baada ya siku ${HOLDING_PERIOD_DAYS} pesa huanza kufunguka kila siku. Kutoa (withdraw) hakusubiri siku ${HOLDING_PERIOD_DAYS}; unatoa Available yoyote mara tu inapofikia TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}.`,
-    en: `Your money reaches your account immediately, but each sale is held for ${HOLDING_PERIOD_DAYS} days (the window a buyer can dispute it in) before it becomes Available. The ${HOLDING_PERIOD_DAYS} days attach to each sale — not one ${HOLDING_PERIOD_DAYS}-day wait for the whole account: sell daily and after ${HOLDING_PERIOD_DAYS} days money starts unlocking every day. Withdrawals do not wait ${HOLDING_PERIOD_DAYS} days: withdraw any Available balance once it reaches TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}.`,
+    sw: `Pesa zako zinaingia kwenye salio lako mara moja. Utaruhusiwa kutoa (withdraw) pale tu salio lako linapofikia TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}; kama halijafikia kiwango hicho hauwezi kutoa.`,
+    en: `Your money reaches your balance immediately. You can withdraw only once your balance reaches TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}; below that you cannot withdraw.`,
   },
 ];
 
@@ -131,7 +119,7 @@ export const GUIDELINE_ACK_LABEL_EN =
  * acknowledgement, so a rule that changed is re-read before the next upload —
  * a creation-time receipt nobody re-checks is not consent.
  */
-export const CREATOR_GUIDELINES_VERSION = 4;
+export const CREATOR_GUIDELINES_VERSION = 5;
 
 /**
  * True when an account's accepted version is behind the rules as they stand

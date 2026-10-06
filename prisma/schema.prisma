@@ -175,6 +175,13 @@ model User {
   // who forgets to unfreeze does not leave a creator locked out forever.
   payoutFrozenUntil  DateTime?
   payoutFrozenReason String?
+  // Admin OVERRIDE of the withdrawal floor. OFF by default: a creator may only
+  // withdraw once their balance reaches config.business.minPayoutAmount. When an
+  // admin turns this ON for one account, that creator may withdraw any amount,
+  // including below the floor — the "let this person take out a small amount"
+  // lever. On the account rather than on CreatorBalance because it is a
+  // permission about the person, not a number about their money.
+  payoutMinimumWaived Boolean @default(false)
   // "This account watches everything free." An admin turns it on for one user
   // and off again; while it is on, resolveVideoEntitlement grants every paid
   // scene without a purchase, subscription or charge. A boolean rather than a
@@ -544,10 +551,23 @@ model PaymentEvent {
 model CreatorBalance {
   id              String   @id @default(cuid())
   creatorId       String   @unique
-  pendingBalance  Int      @default(0) // Funds within 14-day holding
-  availableBalance Int     @default(0) // Funds available for payout
+  /// LEGACY. Creator earnings used to sit here for a 14-day holding period
+  /// before they could be withdrawn. There is no holding period any more: every
+  /// sale is credited straight to `availableBalance` (see creditCreatorAvailable
+  /// in services/balance.service.ts). The column stays so the release job can
+  /// still clear a balance left over from before the change; new money never
+  /// lands here.
+  pendingBalance  Int      @default(0)
+  availableBalance Int     @default(0) // Money a payout can draw on, immediately
   totalEarned     Int      @default(0) // Lifetime earnings
-  releasedTotal   Int      @default(0) // Cumulative amount released from holding (14-day maturity job)
+  /// LEGACY. Cumulative amount released out of the old holding period.
+  releasedTotal   Int      @default(0)
+  /// When the admins were last told this creator's withdrawable balance crossed
+  /// config.business.minPayoutAmount. NULL = not told, or told and then reset
+  /// because a payout took the balance back below the floor. Dedupes the
+  /// "this creator can withdraw now" alert so it fires once per crossing rather
+  /// than once per sale.
+  payoutReadyNotifiedAt DateTime?
   updatedAt       DateTime @updatedAt
 
   // Relations

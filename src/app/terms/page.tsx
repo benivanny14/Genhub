@@ -49,7 +49,7 @@ export default function TermsPage() {
           <section>
             <h2 className="text-lg font-display font-bold mb-3">4. Revenue & Payouts</h2>
             <p className={cn("text-sm leading-relaxed", isLight ? "text-gray-600" : "text-white/60")}>
-              Creators earn 70% of revenue from video sales. Genhub retains a 30% platform fee. All earnings are subject to a 14-day holding period. Minimum payout threshold is TZS 30,000. KYC verification is required before payouts.
+              Creators earn 70% of revenue from video sales. Genhub retains a 30% platform fee. Earnings are available for payout as soon as a sale completes. The minimum payout threshold is TZS 30,000, though an administrator may authorise a smaller payout for a specific account. KYC verification is required before payouts.
             </p>
           </section>
 

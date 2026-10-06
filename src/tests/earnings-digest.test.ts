@@ -10,6 +10,9 @@
 //   2. the week is claimed before the send, so two pokes cannot both send — and
 //      a creator with nothing to report does not burn the week either.
 //
+// The digest is a summary now, not a holding-period explainer: everything earned
+// in the week shows up as earnings, with no "cleared" subset.
+//
 // Prisma and the mailer are mocked; no database, no email.
 // =============================================================================
 
@@ -72,20 +75,35 @@ beforeEach(() => {
 });
 
 describe("sendDueEarningsDigests", () => {
-  it("sends one digest with what cleared and what is still held", async () => {
+  it("sends one digest with the week's earnings and what is available", async () => {
     const result = await sendDueEarningsDigests(NOW);
 
     expect(result).toEqual({ checked: 1, sent: 1, skipped: 0, errors: 0 });
     expect(mocks.sendDigest).toHaveBeenCalledTimes(1);
     const params = mocks.sendDigest.mock.calls[0][0];
     expect(params.to).toBe("creator@genhub.test");
-    expect(params.clearedThisWeek).toBe(3_500);
-    expect(params.pending).toBe(7_000);
+    // Everything earned in the last seven days is income; there is no holding
+    // period any more, so there is no "cleared" subset of it.
+    expect(params.earnedThisWeek).toBe(3_500);
     expect(params.available).toBe(12_000);
-    expect(params.holdingDays).toBe(config.business.holdingPeriodDays);
-    // The creator's own language is carried through, so the email that explains
-    // the hold is in the language the rule confuses.
+    expect(params.totalEarned).toBe(19_000);
+    expect(params.minWithdrawal).toBe(config.business.minPayoutAmount);
+    // The creator's own language is carried through, so the summary arrives in
+    // the language they read.
     expect(params.locale).toBe("sw");
+  });
+
+  it("reads the week from the last seven days, not a holding window", async () => {
+    await sendDueEarningsDigests(NOW);
+
+    const where = mocks.txAggregate.mock.calls[0][0].where;
+    expect(where.creatorId).toBe("creator-1");
+    expect(where.status).toBe("SUCCESS");
+    const since = where.createdAt.gt as Date;
+    expect(NOW.getTime() - since.getTime()).toBe(7 * DAY);
+    // No upper bound any more: the old second query cut at "older than 14 days",
+    // which no longer means anything.
+    expect(where.createdAt.lte).toBeUndefined();
   });
 
   it("only considers creators who have not opted out", async () => {
@@ -161,16 +179,16 @@ describe("sendDueEarningsDigests", () => {
     expect(mocks.userUpdateMany).not.toHaveBeenCalled();
   });
 
-  it("dates the next release from the oldest still-held sale", async () => {
-    const soldAt = new Date(NOW.getTime() - 3 * DAY);
-    mocks.txFindFirst.mockResolvedValue({ createdAt: soldAt });
+  it("emails a creator with a withdrawable balance even in a quiet week", async () => {
+    // Nothing was earned, but there is money to withdraw: that is worth saying,
+    // and the alternative is never telling them the balance is there.
+    mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 0 } });
 
-    await sendDueEarningsDigests(NOW);
+    const result = await sendDueEarningsDigests(NOW);
 
+    expect(result.sent).toBe(1);
     const params = mocks.sendDigest.mock.calls[0][0];
-    const expected = new Date(
-      soldAt.getTime() + config.business.holdingPeriodDays * DAY
-    ).toISOString();
-    expect(params.nextReleaseAt).toBe(expected);
+    expect(params.earnedThisWeek).toBe(0);
+    expect(params.available).toBe(12_000);
   });
 });

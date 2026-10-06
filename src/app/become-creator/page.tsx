@@ -34,7 +34,7 @@ const BENEFITS = [
   {
     icon: Wallet,
     title: "Keep 70% of everything",
-    body: "Every sale, subscription and tip splits 70/30 in your favor — with a 14-day holding period you can track in your dashboard.",
+    body: "Every sale, subscription and tip splits 70/30 in your favor — yours the moment it lands, and withdrawable once your balance reaches TZS 30,000.",
   },
   {
     icon: TrendingUp,

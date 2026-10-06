@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   releaseMatureEarnings: vi.fn(),
   getPaidMessageEarnings: vi.fn(),
   balanceFindUnique: vi.fn(),
+  userFindUnique: vi.fn(),
   videoFindMany: vi.fn(),
   earningFindMany: vi.fn(),
   txAggregate: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock("@/lib/db", () => ({
       findMany: (...a: unknown[]) => mocks.txFindMany(...a),
       findFirst: (...a: unknown[]) => mocks.txFindFirst(...a),
     },
+    user: { findUnique: (...a: unknown[]) => mocks.userFindUnique(...a) },
     payoutRequest: { findMany: (...a: unknown[]) => mocks.payoutFindMany(...a) },
   },
 }));
@@ -99,6 +101,8 @@ beforeEach(() => {
     availableBalance: 12000,
     totalEarned: 40000,
   });
+  // The withdrawal floor has not been waived for this creator.
+  mocks.userFindUnique.mockResolvedValue({ payoutMinimumWaived: false });
   mocks.videoFindMany.mockResolvedValue([]);
   mocks.earningFindMany.mockResolvedValue([]);
   mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 900 } });

@@ -126,7 +126,7 @@ export const translations: Record<string, Record<Locale, string>> = {
   "creator.submitNow": { en: "Submit now", sw: "Wasilisha sasa" },
   "creator.totalEarnings": { en: "Total Earnings", sw: "Jumla ya Mapato" },
   "creator.available": { en: "Available Balance", sw: "Salio Linalopatikana" },
-  "creator.pending": { en: "Pending (14 days)", sw: "Kwenye Kukomaa (14 siku)" },
+  "creator.pending": { en: "Ready to withdraw", sw: "Tayari kutoa" },
   "creator.todays": { en: "Today's Earnings", sw: "Mapato ya Leo" },
   "creator.totalViews": { en: "Total Views", sw: "Jumla ya Maoni" },
   "creator.videos": { en: "Videos", sw: "Video" },

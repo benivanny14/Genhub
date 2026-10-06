@@ -44,6 +44,7 @@ export async function GET(
         messagesEnabled: true,
         payoutFrozenUntil: true,
         payoutFrozenReason: true,
+        payoutMinimumWaived: true,
         locale: true,
         lastLoginAt: true,
         createdAt: true,

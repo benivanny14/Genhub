@@ -168,15 +168,12 @@ export interface EarningsDigestParams {
   displayName: string;
   /** "sw" (Kiswahili, the default audience) or "en". */
   locale: string;
-  /** Creator cut that finished its holding period in the last seven days. */
-  clearedThisWeek: number;
-  /** Still inside the holding window. */
-  pending: number;
+  /** Creator cut from sales in the last seven days. */
+  earnedThisWeek: number;
   /** Withdrawable right now. */
   available: number;
-  holdingDays: number;
-  /** ISO date the oldest held earning clears. Null when nothing is held. */
-  nextReleaseAt: string | null;
+  /** Lifetime earnings, so the email also answers "how am I doing overall?". */
+  totalEarned: number;
   /** The withdrawal floor, quoted so the number matches what the app enforces. */
   minWithdrawal: number;
 }
@@ -187,39 +184,32 @@ const tzs = (amount: number) => `TZS ${amount.toLocaleString("en-US")}`;
  * The digest in both languages, chosen by the creator's own setting.
  *
  * Kiswahili is the default (it is the locale the account is born with), because
- * an English-only explanation of the 14-day hold is one the audience this rule
- * confuses does not read.
+ * an English-only summary is one the audience the platform serves does not read.
  */
 const DIGEST_COPY = {
   sw: {
     subject: (headline: string) => `Mapato yako Genhub: ${headline}`,
     greeting: (name: string) =>
       `${name ? `${name}, ` : ""}hii ni wiki yako Genhub.`,
-    clearedHeadline: (a: string) => `${a} yamefunguka`,
+    earnedHeadline: (a: string) => `Umepata ${a} wiki hii`,
     availableHeadline: (a: string) => `${a} tayari kutoa`,
-    pendingHeadline: (a: string) => `${a} yanakuja`,
-    clearedLabel: (days: number) => `Yaliyofunguka kwenye kipindi cha siku ${days}`,
+    earnedLabel: "Uliyopata wiki hii",
     availableLabel: "Yanayoweza kutolewa (available)",
-    pendingLabel: "Yaliyoshikiliwa (pending)",
-    nextPrefix: "Kufunguka ijayo",
-    nothingHeld: "Kufunguka ijayo: hakuna kilichoshikiliwa kwa sasa",
-    explain: (days: number, min: string) =>
-      `Kila malipo hushikiliwa siku ${days} kuanzia siku inayolipwa, hivyo pesa hufunguka yenyewe kadri muda unavyopita. Kutoa hakusubiri siku ${days} — unaweza kutoa kiasi chochote kilichofunguka mara kifikie ${min}.`,
+    lifetimeLabel: "Jumla uliyopata",
+    explain: (min: string) =>
+      `Malipo yako yanaingia kwenye salio lako papo hapo — hakuna kusubiri. Unaweza kutoa kiasi chochote kilichopo mara salio lako linapofikia ${min}.`,
     cta: "Fungua dashboard yako",
   },
   en: {
     subject: (headline: string) => `Genhub earnings: ${headline}`,
     greeting: (name: string) => `${name ? `${name}, ` : ""}here is your week on Genhub.`,
-    clearedHeadline: (a: string) => `${a} just cleared`,
+    earnedHeadline: (a: string) => `${a} earned this week`,
     availableHeadline: (a: string) => `${a} ready to withdraw`,
-    pendingHeadline: (a: string) => `${a} on its way`,
-    clearedLabel: (days: number) => `Cleared the ${days}-day hold this week`,
+    earnedLabel: "Earned this week",
     availableLabel: "Available to withdraw",
-    pendingLabel: "Still held (pending)",
-    nextPrefix: "Next release",
-    nothingHeld: "Next release: nothing is being held right now",
-    explain: (days: number, min: string) =>
-      `Every sale is held ${days} days from the day it is paid, so money keeps unlocking as those windows close. Withdrawals do not wait ${days} days — you can withdraw any available balance once it reaches ${min}.`,
+    lifetimeLabel: "Lifetime earnings",
+    explain: (min: string) =>
+      `Your earnings land in your balance the moment a sale completes — there is no waiting period. You can withdraw any available balance once it reaches ${min}.`,
     cta: "Open your dashboard",
   },
 } as const;
@@ -229,40 +219,28 @@ function digestCopy(locale: string) {
 }
 
 /**
- * A Monday-morning summary, not a receipt: what cleared, what is still held and
- * when it unlocks. The 14-day rule is spelled out in the body because this email
- * is the one place a creator reads it without opening the dashboard.
+ * A Monday-morning summary, not a receipt: what came in this week and what is
+ * available to withdraw. The withdrawal rule is spelled out in the body because
+ * this email is the one place a creator reads it without opening the dashboard.
  */
 export async function sendEarningsDigestEmail(
   params: EarningsDigestParams
 ): Promise<MailResult> {
   const home = config.appUrl;
   const copy = digestCopy(params.locale);
-  const where =
-    params.clearedThisWeek > 0 ? "cleared" : params.available > 0 ? "available" : "held";
   const headline =
-    where === "cleared"
-      ? copy.clearedHeadline(tzs(params.clearedThisWeek))
-      : where === "available"
-        ? copy.availableHeadline(tzs(params.available))
-        : copy.pendingHeadline(tzs(params.pending));
+    params.earnedThisWeek > 0
+      ? copy.earnedHeadline(tzs(params.earnedThisWeek))
+      : copy.availableHeadline(tzs(params.available));
 
-  const explain = copy.explain(params.holdingDays, tzs(params.minWithdrawal));
-  const nextLine = params.nextReleaseAt
-    ? `${copy.nextPrefix}: ${new Date(params.nextReleaseAt).toLocaleDateString("en-GB", {
-        day: "numeric",
-        month: "short",
-        year: "numeric",
-      })}`
-    : copy.nothingHeld;
+  const explain = copy.explain(tzs(params.minWithdrawal));
 
   const text = [
     copy.greeting(params.displayName || "Creator"),
     "",
-    `${copy.clearedLabel(params.holdingDays)}: ${tzs(params.clearedThisWeek)}`,
+    `${copy.earnedLabel}: ${tzs(params.earnedThisWeek)}`,
     `${copy.availableLabel}: ${tzs(params.available)}`,
-    `${copy.pendingLabel}: ${tzs(params.pending)}`,
-    nextLine,
+    `${copy.lifetimeLabel}: ${tzs(params.totalEarned)}`,
     "",
     explain,
     "",
@@ -282,11 +260,10 @@ export async function sendEarningsDigestEmail(
           </p>
           <p style="color:#e5e7eb;font-size:18px;font-weight:bold;margin:20px 0">${headline}</p>
           <table style="width:100%;border-collapse:collapse;color:#d1d5db;font-size:14px">
-            <tr><td style="padding:6px 0">${copy.clearedLabel(params.holdingDays)}</td><td style="padding:6px 0;text-align:right;color:#34d399;font-weight:bold">${tzs(params.clearedThisWeek)}</td></tr>
+            <tr><td style="padding:6px 0">${copy.earnedLabel}</td><td style="padding:6px 0;text-align:right;color:#34d399;font-weight:bold">${tzs(params.earnedThisWeek)}</td></tr>
             <tr><td style="padding:6px 0">${copy.availableLabel}</td><td style="padding:6px 0;text-align:right;color:#34d399;font-weight:bold">${tzs(params.available)}</td></tr>
-            <tr><td style="padding:6px 0">${copy.pendingLabel}</td><td style="padding:6px 0;text-align:right;color:#fbbf24;font-weight:bold">${tzs(params.pending)}</td></tr>
+            <tr><td style="padding:6px 0">${copy.lifetimeLabel}</td><td style="padding:6px 0;text-align:right;color:#a78bfa;font-weight:bold">${tzs(params.totalEarned)}</td></tr>
           </table>
-          <p style="color:#9ca3af;font-size:13px;margin-top:16px">${nextLine}</p>
           <p style="color:#9ca3af;font-size:13px;line-height:1.6">${explain}</p>
           <p style="text-align:center;margin:28px 0">
             <a href="${home}/creator" style="background:#7c3aed;color:#fff;padding:14px 28px;border-radius:999px;text-decoration:none;font-weight:bold">

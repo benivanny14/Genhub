@@ -529,7 +529,7 @@ export default function ProfilePage() {
             </select>
           </div>
 
-          {/* Creators only: the one email that explains the 14-day hold. Opt-out,
+          {/* Creators only: the weekly earnings summary. Opt-out,
               so a creator who does not want it can switch it off. */}
           {user?.role === "CREATOR" && (
             <div className={cn("rounded-xl border p-4", isLight ? "border-gray-200" : "border-white/10")}>
@@ -539,7 +539,7 @@ export default function ProfilePage() {
                   <div>
                     <p className="text-sm font-medium">Weekly earnings email</p>
                     <p className={cn("text-xs leading-relaxed", isLight ? "text-gray-500" : "text-white/50")}>
-                      One email a week: what cleared the 14-day hold and is now available to
+                      One email a week: what you earned and what is now available to
                       withdraw, plus what is still pending and when it unlocks.
                     </p>
                   </div>

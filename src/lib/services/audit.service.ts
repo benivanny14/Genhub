@@ -65,6 +65,12 @@ export const AUDIT_ACTIONS = {
   appealResolved: "appeal.resolved",
   payoutFreeze: "payout.freeze",
   payoutUnfreeze: "payout.unfreeze",
+  // Waiving the TZS 30,000 withdrawal floor for one creator, and putting it back.
+  // A permission to move money out below the platform's stated rule, so both
+  // directions are logged — "who was allowed to withdraw less, and when?" is a
+  // question a reconciliation asks.
+  payoutMinimumWaive: "payout.minimum_waive",
+  payoutMinimumRestore: "payout.minimum_restore",
   videoDelete: "video.delete",
   videoHide: "video.hide",
   videoRestore: "video.restore",

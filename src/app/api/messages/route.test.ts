@@ -212,7 +212,9 @@ describe("the split", () => {
       platformFee: 30,
       creatorCut: 70,
     });
-    expect(mocks.upsertBalance.mock.calls[0][0].update.pendingBalance).toEqual({
+    // No holding period: the creator's share lands straight in the withdrawable
+    // balance.
+    expect(mocks.upsertBalance.mock.calls[0][0].update.availableBalance).toEqual({
       increment: 70,
     });
   });
@@ -440,20 +442,19 @@ describe("only a reply is free", () => {
 });
 
 describe("the ledger a paid message writes", () => {
-  it("credits a creator's holding balance, not their wallet", async () => {
+  it("credits a creator's withdrawable balance, not their wallet", async () => {
     asViewer();
 
     const res = await POST(send({ receiverId: CREATOR, content: "hi" }));
 
     expect(res.status).toBe(201);
     expect(mocks.updateUser).not.toHaveBeenCalled();
-    // The creator's 70% of the price: the holding gets their share, not what
-    // the fan paid.
+    // The creator's 70% of the price, available immediately.
     expect(mocks.upsertBalance.mock.calls[0][0]).toMatchObject({
       where: { creatorId: CREATOR },
-      create: { creatorId: CREATOR, pendingBalance: 70, availableBalance: 0, totalEarned: 70 },
+      create: { creatorId: CREATOR, availableBalance: 70, totalEarned: 70 },
       update: {
-        pendingBalance: { increment: 70 },
+        availableBalance: { increment: 70 },
         totalEarned: { increment: 70 },
       },
     });

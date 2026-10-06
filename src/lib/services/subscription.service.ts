@@ -12,7 +12,7 @@
 
 import type { Prisma } from "@prisma/client";
 import prisma from "../db";
-import { splitRevenue } from "./balance.service";
+import { creditCreatorAvailable, splitRevenue } from "./balance.service";
 import { resolveSubscriptionPlan } from "../subscription";
 
 /** A membership period is one calendar month. */
@@ -139,19 +139,8 @@ export async function grantSubscription(
     select: { id: true },
   });
 
-  await tx.creatorBalance.upsert({
-    where: { creatorId },
-    create: {
-      creatorId,
-      pendingBalance: creatorCut,
-      availableBalance: 0,
-      totalEarned: creatorCut,
-    },
-    update: {
-      pendingBalance: { increment: creatorCut },
-      totalEarned: { increment: creatorCut },
-    },
-  });
+  // Credit the creator immediately — no holding period.
+  await creditCreatorAvailable(tx, { creatorId, amount: creatorCut });
 
   // Resync the public counter from real active rows — it can never drift.
   const active = await tx.creatorSubscription.count({

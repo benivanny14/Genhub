@@ -1,9 +1,11 @@
 // =============================================================================
 // GENHUB - Cron: Release Matured Earnings
 // GET/POST /api/cron/release-earnings
-// Moves creator earnings out of the 14-day holding period into
-// availableBalance. Schedule every hour (Vercel Cron, GitHub Actions, or any
-// external scheduler) with header `x-cron-secret: $CRON_SECRET`.
+// LEGACY. There is no holding period any more — creator earnings are credited to
+// availableBalance the moment a sale settles — so this normally has nothing to
+// do. It remains scheduled only to clear a balance left over from before that
+// change. Schedule every hour (Vercel Cron, GitHub Actions, or any external
+// scheduler) with header `x-cron-secret: $CRON_SECRET`.
 // Auth: CRON_SECRET via `Authorization: Bearer` or `x-cron-secret` header
 // only — a query-string secret would be written to access logs. Refuses to run
 // unprotected in production. Rule lives in lib/cron-auth.ts.

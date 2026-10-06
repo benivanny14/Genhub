@@ -2,7 +2,7 @@
 // GENHUB - Sandbox Payment Completion (DEVELOPMENT ONLY)
 // POST /api/dev/sandbox/complete - Marks a pending transaction as paid by
 // running it through the same processPaymentWebhook used for real gateway
-// callbacks (70/30 split, holding period, video access grant).
+// callbacks (70/30 split, immediate credit, video access grant).
 // Disabled in production.
 // =============================================================================
 

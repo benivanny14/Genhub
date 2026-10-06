@@ -374,13 +374,26 @@ describe("requestPayoutSchema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("should reject amount below minimum payout", () => {
+  it("rejects a non-positive amount", () => {
+    const result = requestPayoutSchema.safeParse({
+      amount: 0,
+      paymentMethod: "MPESA",
+      accountDetails: "+255712345678",
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts an amount below the TZS 30,000 floor, because the floor is enforced later", () => {
+    // The floor is a rule about the account — and an admin can waive it for one
+    // creator — so it cannot live in a schema that cannot see the account.
+    // requestPayout (services/payout.service.ts) applies it, atomically with
+    // the balance check, and reports AMOUNT_BELOW_MINIMUM/BALANCE_BELOW_MINIMUM.
     const result = requestPayoutSchema.safeParse({
       amount: 10000,
       paymentMethod: "MPESA",
       accountDetails: "+255712345678",
     });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 });
 

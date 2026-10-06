@@ -1,19 +1,17 @@
 // =============================================================================
 // GENHUB - Paid-message earnings
 //
-// Every direct message is paid, so a creator's inbox is a revenue line — and one
-// that clears on a schedule of its own: the amount lands in `pendingBalance` and
-// matures after the same 14-day holding period a video purchase does.
+// Every direct message is paid, so a creator's inbox is a revenue line — and the
+// money is theirs the moment it settles: a paid message is credited straight to
+// the creator's available balance, with no holding period.
 //
-// The figures are read from the ledger the release job reads
-// (src/lib/services/earning-release.service.ts), so this card can never promise
-// money the holding job will not move: SUCCESS transactions carrying a
-// `creatorCut`. A TIP is not a message unless its metadata says so — /api/tips
-// writes the same transaction type for a plain tip — hence the JSON-path filter.
+// The figures are read from the same ledger every other earnings card reads:
+// SUCCESS transactions carrying a `creatorCut`. A TIP is not a message unless
+// its metadata says so — /api/tips writes the same transaction type for a plain
+// tip — hence the JSON-path filter.
 // =============================================================================
 
 import prisma from "../db";
-import config from "../config";
 import { splitRevenue } from "./balance.service";
 
 /** The `metadata.method` value POST /api/messages stamps on its transaction. */
@@ -40,9 +38,9 @@ export interface PaidMessageRow {
   /** This creator's share of that message (70%). */
   earned: number;
   createdAt: string;
-  /** When this message's money leaves the 14-day holding. */
+  /** When this message's money became withdrawable — i.e. when it settled. */
   clearsAt: string;
-  /** True while the money is still inside the holding period. */
+  /** Always false now: nothing is held. Kept so the payload shape is stable. */
   held: boolean;
   sender: {
     id: string;
@@ -60,13 +58,13 @@ export interface PaidMessageEarnings {
   gross: number;
   /** Lifetime value credited to this creator by those messages (their 70%). */
   earned: number;
-  /** How many received messages are still inside the holding period. */
+  /** Always 0 now: nothing is held. Kept so the payload shape is stable. */
   heldMessages: number;
-  /** The part of `earned` still inside the 14-day holding. */
+  /** Always 0 now: nothing is held. Kept so the payload shape is stable. */
   held: number;
-  /** The part of `earned` that has cleared the holding. */
+  /** All of `earned` — it is withdrawable as soon as it lands. */
   cleared: number;
-  /** When the oldest held message matures, or null when nothing is held. */
+  /** Always null now: nothing is waiting to clear. */
   nextReleaseAt: string | null;
   /** The five most recent paid messages, newest first. */
   recent: PaidMessageRow[];
@@ -82,29 +80,14 @@ export interface PaidMessageEarnings {
 export async function getPaidMessageEarnings(
   creatorId: string
 ): Promise<PaidMessageEarnings> {
-  const holdingMs = config.business.holdingPeriodDays * 86_400_000;
-  const cutoff = new Date(Date.now() - holdingMs);
-
   const paidMessage = { ...PAID_MESSAGE_LEDGER, creatorId };
 
-  const [lifetime, held, oldestHeld, recent] = await Promise.all([
+  const [lifetime, recent] = await Promise.all([
     prisma.transaction.aggregate({
       where: paidMessage,
       _count: { _all: true },
       // `amount` is what the fan paid; `creatorCut` is this creator's share of it.
       _sum: { creatorCut: true, amount: true },
-    }),
-    prisma.transaction.aggregate({
-      where: { ...paidMessage, createdAt: { gt: cutoff } },
-      _count: { _all: true },
-      _sum: { creatorCut: true },
-    }),
-    // The oldest still-held message matures first, so it is the date this
-    // creator's next release actually lands on.
-    prisma.transaction.findFirst({
-      where: { ...paidMessage, createdAt: { gt: cutoff } },
-      orderBy: { createdAt: "asc" },
-      select: { createdAt: true },
     }),
     prisma.payMessage.findMany({
       where: { receiverId: creatorId, amount: { gt: 0 } },
@@ -122,34 +105,31 @@ export async function getPaidMessageEarnings(
   ]);
 
   const earned = lifetime._sum.creatorCut ?? 0;
-  const heldAmount = held._sum.creatorCut ?? 0;
 
   return {
     messages: lifetime._count._all,
     gross: lifetime._sum.amount ?? 0,
     earned,
-    heldMessages: held._count._all,
-    held: heldAmount,
-    // earned = held + cleared, by definition of the cutoff above.
-    cleared: Math.max(0, earned - heldAmount),
-    nextReleaseAt: oldestHeld
-      ? new Date(oldestHeld.createdAt.getTime() + holdingMs).toISOString()
-      : null,
-    recent: recent.map((m) => {
-      const clearsAt = new Date(m.createdAt.getTime() + holdingMs);
-      return {
-        id: m.id,
-        amount: m.amount,
-        // The row shows two numbers — what the fan paid and what this creator
-        // got — and they have to be the same halves the ledger wrote, so the
-        // split is computed by the one function that owns it.
-        earned: splitRevenue(m.amount).creatorCut,
-        createdAt: m.createdAt.toISOString(),
-        clearsAt: clearsAt.toISOString(),
-        held: clearsAt.getTime() > Date.now(),
-        sender: m.sender,
-      };
-    }),
+    // Nothing is held any more: a paid message is withdrawable the moment it
+    // settles, so every figure below reports "all of it, right now". The fields
+    // stay — the dashboard and the tests keep one shape — but they no longer
+    // describe a wait, because there is not one.
+    heldMessages: 0,
+    held: 0,
+    cleared: earned,
+    nextReleaseAt: null,
+    recent: recent.map((m) => ({
+      id: m.id,
+      amount: m.amount,
+      // The row shows two numbers — what the fan paid and what this creator
+      // got — and they have to be the same halves the ledger wrote, so the
+      // split is computed by the one function that owns it.
+      earned: splitRevenue(m.amount).creatorCut,
+      createdAt: m.createdAt.toISOString(),
+      clearsAt: m.createdAt.toISOString(),
+      held: false,
+      sender: m.sender,
+    })),
   };
 }
 
@@ -166,9 +146,9 @@ export interface ChatRevenueRow {
   messages: number;
   /** Lifetime value of those messages. */
   earned: number;
-  /** How many of them are still inside the holding period. */
+  /** Always 0 now: nothing is held. Kept so the payload shape is stable. */
   heldMessages: number;
-  /** The part of `earned` still inside the 14-day holding. */
+  /** Always 0 now: nothing is held. Kept so the payload shape is stable. */
   held: number;
 }
 
@@ -201,14 +181,12 @@ export interface ChatRevenue {
  * does not have to render every creator. The totals come from separate aggregate
  * queries over the whole ledger, so the cap can never change them.
  *
- * `held` is the same 14-day window `getPaidMessageEarnings` uses — the release
- * job and both cards have to agree about what is still held.
+ * `held` is reported as zero: nothing is held any more, and the admin card must
+ * agree with the creator card about that (see getPaidMessageEarnings).
  */
 export async function getChatRevenue(
   limit: number = CHAT_REVENUE_LIMIT
 ): Promise<ChatRevenue> {
-  const holdingMs = config.business.holdingPeriodDays * 86_400_000;
-  const cutoff = new Date(Date.now() - holdingMs);
   // Messages to an ordinary account credit a wallet, not a creator balance, so
   // they are not creator revenue and carry no `creatorId` on the ledger row.
   const filter = { ...PAID_MESSAGE_LEDGER, creatorId: { not: null } };
@@ -244,25 +222,12 @@ export async function getChatRevenue(
   const listed = ranked.slice(0, limit);
   const ids = listed.map((row) => row.creatorId as string);
 
-  const [held, totals, totalsHeld, users] = await Promise.all([
-    // Only the displayed creators: the held split is a property of the rows being
-    // shown, and the platform-wide split has its own query below.
-    prisma.transaction.groupBy({
-      by: ["creatorId"],
-      where: { ...filter, creatorId: { in: ids }, createdAt: { gt: cutoff } },
-      _sum: { creatorCut: true },
-      _count: { _all: true },
-    }),
+  const [totals, users] = await Promise.all([
     prisma.transaction.aggregate({
       where: filter,
       // All three, because the platform's cut on chat is a number the admin card
       // shows rather than something left to be inferred from the other two.
       _sum: { creatorCut: true, amount: true, platformFee: true },
-      _count: { _all: true },
-    }),
-    prisma.transaction.aggregate({
-      where: { ...filter, createdAt: { gt: cutoff } },
-      _sum: { creatorCut: true },
       _count: { _all: true },
     }),
     prisma.user.findMany({
@@ -271,7 +236,6 @@ export async function getChatRevenue(
     }),
   ]);
 
-  const heldByCreator = new Map(held.map((row) => [row.creatorId as string, row]));
   const usersById = new Map(users.map((u) => [u.id, u]));
 
   return {
@@ -281,12 +245,12 @@ export async function getChatRevenue(
       gross: totals._sum.amount ?? 0,
       earned: totals._sum.creatorCut ?? 0,
       platformFee: totals._sum.platformFee ?? 0,
-      heldMessages: totalsHeld._count._all,
-      held: totalsHeld._sum.creatorCut ?? 0,
+      // Nothing is held any more — see getPaidMessageEarnings.
+      heldMessages: 0,
+      held: 0,
     },
     creators: listed.map((row) => {
       const creatorId = row.creatorId as string;
-      const heldRow = heldByCreator.get(creatorId);
       return {
         creatorId,
         username: usersById.get(creatorId)?.username ?? null,
@@ -294,8 +258,8 @@ export async function getChatRevenue(
         avatarUrl: usersById.get(creatorId)?.avatarUrl ?? null,
         messages: row._count._all,
         earned: row._sum.creatorCut ?? 0,
-        heldMessages: heldRow?._count._all ?? 0,
-        held: heldRow?._sum.creatorCut ?? 0,
+        heldMessages: 0,
+        held: 0,
       };
     }),
     truncated: ranked.length > limit,

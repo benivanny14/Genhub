@@ -52,6 +52,10 @@ export async function GET(request: NextRequest) {
         verifiedUntil: true,
         messagesEnabled: true,
         payoutFrozenUntil: true,
+        // Whether the TZS 30,000 withdrawal floor has been waived for this
+        // account (see WAIVE_PAYOUT_MINIMUM). Surfaced on every row so the list
+        // can show the state and offer the other direction of the switch.
+        payoutMinimumWaived: true,
         // Whether an admin has opened this account to watch everything free.
         // Surfaced on every row so the list can show the state and offer the
         // other direction of the switch.
@@ -134,6 +138,8 @@ const ACTIONS = [
   "DELETE_ACCOUNT",
   "FREEZE_PAYOUTS",
   "UNFREEZE_PAYOUTS",
+  "WAIVE_PAYOUT_MINIMUM",
+  "RESTORE_PAYOUT_MINIMUM",
   "SEND_RESET_LINK",
   "GRANT_FREE_ACCESS",
   "REVOKE_FREE_ACCESS",
@@ -164,6 +170,7 @@ export async function POST(request: NextRequest) {
         displayName: true,
         email: true,
         freeAccess: true,
+        payoutMinimumWaived: true,
       },
     });
     if (!target) return api.notFound("User not found");
@@ -360,6 +367,49 @@ export async function POST(request: NextRequest) {
       return api.success(
         { payoutFrozenUntil: until?.toISOString() ?? null },
         isFreeze ? "Withdrawals paused" : "Withdrawals restored"
+      );
+    }
+
+    // WAIVE_PAYOUT_MINIMUM / RESTORE_PAYOUT_MINIMUM — the withdrawal floor is
+    // TZS 30,000 by default. Waiving it lets ONE creator withdraw any amount they
+    // hold, including below the floor; restoring puts the floor back. This is the
+    // "let this person take out a small amount" lever, distinct from FREEZE,
+    // which stops withdrawals entirely.
+    if (
+      action === "WAIVE_PAYOUT_MINIMUM" ||
+      action === "RESTORE_PAYOUT_MINIMUM"
+    ) {
+      const waive = action === "WAIVE_PAYOUT_MINIMUM";
+      const note = body?.reason?.toString().slice(0, 500) || null;
+
+      await prisma.user.update({
+        where: { id: userId },
+        data: { payoutMinimumWaived: waive },
+      });
+      await createNotification({
+        userId,
+        title: waive ? "You can withdraw any amount \ud83d\udcb8" : "Withdrawals need TZS 30,000 again",
+        message: waive
+          ? "An admin has allowed your account to withdraw any amount, even below the usual TZS 30,000 minimum."
+          : "The usual rule is back: you can withdraw once your balance reaches TZS 30,000.",
+        type: waive ? "success" : "info",
+        link: "/creator",
+      });
+      await recordAudit({
+        actorId: auth.userId,
+        action: waive
+          ? AUDIT_ACTIONS.payoutMinimumWaive
+          : AUDIT_ACTIONS.payoutMinimumRestore,
+        targetType: "User",
+        targetId: userId,
+        summary: `${
+          waive ? "Waived the withdrawal minimum for" : "Restored the withdrawal minimum for"
+        } ${target.displayName || target.email || userId}${note ? ` \u2014 ${note}` : ""}`,
+        detail: { payoutMinimumWaived: waive, note },
+      });
+      return api.success(
+        { payoutMinimumWaived: waive },
+        waive ? "Smaller withdrawals allowed" : "Withdrawal minimum restored"
       );
     }
 

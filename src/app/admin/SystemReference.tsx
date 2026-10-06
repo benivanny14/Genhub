@@ -270,8 +270,9 @@ export default function SystemReference() {
         </p>
         <ul className="list-disc pl-5 space-y-1">
           <li>
-            <Code>release-earnings</Code> — move matured funds out of the 14-day
-            hold.
+            <Code>release-earnings</Code> — legacy: there is no holding period, so
+            creator earnings are available immediately; this only clears a
+            balance left over from before that change.
           </li>
           <li>
             <Code>reconcile-payments</Code> — settle or flag stale charges.

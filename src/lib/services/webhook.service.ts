@@ -5,7 +5,7 @@
 // =============================================================================
 
 import prisma from "../db";
-import { creditCreatorForPurchase, creditWallet, splitRevenue } from "./balance.service";
+import { creditCreatorAvailable, creditCreatorForPurchase, creditWallet, splitRevenue } from "./balance.service";
 import { cacheDel } from "../redis";
 import { assertSupportedSettlementProvider } from "../payments/gateway";
 import { notifyPaymentResult } from "./payment-notify.service";
@@ -146,19 +146,8 @@ export async function processPaymentWebhook(params: {
           },
         });
 
-        await tx.creatorBalance.upsert({
-          where: { creatorId: tipCreatorId },
-          create: {
-            creatorId: tipCreatorId,
-            pendingBalance: tipCut,
-            availableBalance: 0,
-            totalEarned: tipCut,
-          },
-          update: {
-            pendingBalance: { increment: tipCut },
-            totalEarned: { increment: tipCut },
-          },
-        });
+        // Credit the creator immediately — no holding period.
+        await creditCreatorAvailable(tx, { creatorId: tipCreatorId, amount: tipCut });
       });
       break;
     }

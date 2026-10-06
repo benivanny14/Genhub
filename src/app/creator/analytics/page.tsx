@@ -235,7 +235,16 @@ export default function CreatorAnalyticsPage() {
     { label: "New Subscribers (30d)", value: t.subscribers30d.toLocaleString(), icon: TrendingUp, color: "text-purple-300", bg: "bg-purple-500/10" },
     { label: "Lifetime Earned", value: formatTZS(t.lifetimeEarned), icon: Banknote, color: "text-emerald-400", bg: "bg-emerald-500/20" },
     { label: "Available Balance", value: formatTZS(t.availableBalance), icon: Wallet, color: "text-sky-400", bg: "bg-sky-500/20" },
-    { label: "Pending (14 days)", value: formatTZS(t.pendingBalance), icon: TrendingUp, color: "text-amber-400", bg: "bg-amber-500/20" },
+    // No holding period any more, so "pending" would always read zero and
+    // explain a rule the platform no longer has. What matters is whether the
+    // balance can be withdrawn: the TZS 30,000 floor.
+    {
+      label: "Ready to withdraw",
+      value: t.availableBalance >= 30000 ? "Yes" : "Not yet",
+      icon: TrendingUp,
+      color: "text-amber-400",
+      bg: "bg-amber-500/20",
+    },
     { label: "Purchase Rate", value: `${t.conversionRate}%`, icon: ArrowUpRight, color: "text-pink-400", bg: "bg-pink-500/20" },
     { label: "Revenue (30d)", value: formatTZS(t.revenue30d), icon: DollarSign, color: "text-emerald-400", bg: "bg-emerald-500/20" },
     { label: "Published Videos", value: t.publishedVideos.toLocaleString(), icon: BarChart3, color: "text-brand-400", bg: "bg-brand-500/20" },

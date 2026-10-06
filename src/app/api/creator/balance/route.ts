@@ -28,6 +28,14 @@ export async function GET(request: NextRequest) {
       where: { creatorId: auth.userId },
     });
 
+    // Whether an admin has waived the TZS 30,000 withdrawal floor for this
+    // account, so the dashboard can say "you can withdraw any amount" instead of
+    // showing a rule that no longer applies to them.
+    const creatorFlags = await prisma.user.findUnique({
+      where: { id: auth.userId },
+      select: { payoutMinimumWaived: true },
+    });
+
     // The holding window, in one place: every sale matures on its OWN clock,
     // so this is used both to date each row below and to find the next clear.
     const holdingMs = config.business.holdingPeriodDays * 86_400_000;
@@ -188,8 +196,11 @@ export async function GET(request: NextRequest) {
         availableBalance: 0,
         totalEarned: 0,
       },
-      // Shown next to the pending figure so the 14-day rule is explained where
-      // the creator sees the number, not only in a policy page they never open.
+      // The withdrawal floor, and whether an admin has waived it for this
+      // account. The dashboard renders the payout rule from these two, so the
+      // screen and the payout service cannot disagree.
+      minimumPayout: config.business.minPayoutAmount,
+      payoutMinimumWaived: creatorFlags?.payoutMinimumWaived === true,
       holdingPeriodDays: config.business.holdingPeriodDays,
       nextReleaseAt,
       releasedThisWeek,
@@ -199,14 +210,14 @@ export async function GET(request: NextRequest) {
       // Each row carries its own clear date and whether it is still held, so the
       // list answers "when does THIS payment unlock" without the client having
       // to know the holding length or re-derive the rule.
-      recentTransactions: recentTransactions.map((tx) => {
-        const clearsAt = new Date(tx.createdAt.getTime() + holdingMs);
-        return {
-          ...tx,
-          clearsAt: clearsAt.toISOString(),
-          held: clearsAt.getTime() > Date.now(),
-        };
-      }),
+      // Each row reports when the money became withdrawable. There is no holding
+      // period, so that is simply when the sale happened — the fields stay so the
+      // dashboard keeps one shape, and they say the truth: nothing is held.
+      recentTransactions: recentTransactions.map((tx) => ({
+        ...tx,
+        clearsAt: tx.createdAt.toISOString(),
+        held: false,
+      })),
       payouts,
       paidMessages,
     });

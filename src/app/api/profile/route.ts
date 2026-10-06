@@ -119,7 +119,7 @@ export async function PATCH(request: NextRequest) {
     }
     // The weekly earnings digest is opt-out, so this only ever turns it off (or
     // back on). Coerced to a boolean so a stray string cannot silently disable
-    // the one email that explains the 14-day hold.
+    // the one email that summarises their week on the platform.
     if (body.earningsDigestEnabled !== undefined) {
       if (typeof body.earningsDigestEnabled !== "boolean") {
         return api.validation("earningsDigestEnabled must be true or false");

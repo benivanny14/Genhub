@@ -50,6 +50,7 @@ import {
   Mail,
   Webhook,
   Gift,
+  Banknote,
 } from "lucide-react";
 import SystemReference from "./SystemReference";
 // Pure, and deliberately its own module: the same reading of a failure record
@@ -439,6 +440,43 @@ interface EarningsData {
   creators: EarningsCreator[];
   totals: { pending: number; available: number; released: number; ready: number };
   holdingPeriodDays: number;
+}
+
+/**
+ * One creator on the "Ready to withdraw" tab: their available balance has
+ * reached the TZS 30,000 floor (or an admin has waived it), so the money is
+ * theirs to ask for. The list is a watchlist — the actions live on the user
+ * route, so nothing here can move money by itself.
+ */
+interface PayoutReadyCreator {
+  creatorId: string;
+  displayName: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  isVerified: boolean;
+  isBanned: boolean;
+  kycStatus: string;
+  availableBalance: number;
+  totalEarned: number;
+  /** True when they reached the floor the ordinary way. */
+  atMinimum: boolean;
+  payoutMinimumWaived: boolean;
+  frozen: boolean;
+  payoutFrozenUntil: string | null;
+  payoutFrozenReason: string | null;
+  openRequests: number;
+  canWithdraw: boolean;
+}
+
+interface PayoutReadyData {
+  creators: PayoutReadyCreator[];
+  minimum: number;
+  totals: {
+    readyCount: number;
+    readyAmount: number;
+    totalCount: number;
+    totalAmount: number;
+  };
 }
 
 interface AdminPayment {
@@ -845,6 +883,7 @@ export default function AdminDashboard() {
     | "system"
     | "uploadFailures"
     | "operations"
+    | "payoutReady"
   >("overview");
   const [loading, setLoading] = useState(true);
   const [kycList, setKycList] = useState<KycItem[]>([]);
@@ -897,6 +936,10 @@ export default function AdminDashboard() {
   const [creatingCoupon, setCreatingCoupon] = useState(false);
   const [earnings, setEarnings] = useState<EarningsData | null>(null);
   const [releasing, setReleasing] = useState<string | null>(null);
+  // Creators whose withdrawable balance has reached the floor — the list the
+  // admins are pushed to when it changes.
+  const [payoutReady, setPayoutReady] = useState<PayoutReadyData | null>(null);
+  const [busyPayoutReady, setBusyPayoutReady] = useState<string | null>(null);
   const [paymentList, setPaymentList] = useState<AdminPayment[]>([]);
   // One charge's journey, opened from a row. Read on demand: it is a diagnostic,
   // not something every row should fetch.
@@ -1106,6 +1149,12 @@ export default function AdminDashboard() {
       // could not upload five minutes ago is the thing an operator is here to
       // notice.
       fetchUploadFailures();
+      // The withdrawal queue, fetched here rather than only when its tab is
+      // opened: the badge is the point. A creator whose balance has cleared the
+      // floor is money the platform owes, and until now that number stayed blank
+      // on the overview until an operator happened to click "Ready to withdraw"
+      // — which is the one thing the badge exists to make unnecessary.
+      fetchPayoutReady();
     }
     if (activeTab === "setup" && !setup) fetchSetup();
     if (activeTab === "kyc") fetchKyc();
@@ -1120,6 +1169,7 @@ export default function AdminDashboard() {
     if (activeTab === "uploadFailures") fetchUploadFailures();
     if (activeTab === "comments") fetchComments();
     if (activeTab === "earnings") fetchEarnings();
+    if (activeTab === "payoutReady") fetchPayoutReady();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
 
@@ -1695,6 +1745,8 @@ export default function AdminDashboard() {
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS"
+      | "WAIVE_PAYOUT_MINIMUM"
+      | "RESTORE_PAYOUT_MINIMUM"
       | "SEND_RESET_LINK"
       | "GRANT_FREE_ACCESS"
       | "REVOKE_FREE_ACCESS",
@@ -1714,6 +1766,9 @@ export default function AdminDashboard() {
         // admin is looking at the row they just changed.
         if (role === "VIEWER") fetchViewers();
         else fetchCreators();
+        // A withdrawal permission just changed; the ready-to-withdraw queue
+        // shows it, so refresh that list too.
+        fetchPayoutReady();
       } else {
         toast("error", data.error || "Something went wrong");
       }
@@ -1734,6 +1789,8 @@ export default function AdminDashboard() {
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS"
+      | "WAIVE_PAYOUT_MINIMUM"
+      | "RESTORE_PAYOUT_MINIMUM"
       | "SEND_RESET_LINK"
       | "GRANT_FREE_ACCESS"
       | "REVOKE_FREE_ACCESS"
@@ -1772,6 +1829,8 @@ export default function AdminDashboard() {
       | "DELETE_ACCOUNT"
       | "FREEZE_PAYOUTS"
       | "UNFREEZE_PAYOUTS"
+      | "WAIVE_PAYOUT_MINIMUM"
+      | "RESTORE_PAYOUT_MINIMUM"
       | "SEND_RESET_LINK"
       | "GRANT_FREE_ACCESS"
       | "REVOKE_FREE_ACCESS",
@@ -2005,6 +2064,41 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (data.success) setEarnings(data.data);
     } catch {}
+  }
+
+  async function fetchPayoutReady() {
+    try {
+      const res = await adminFetch("/api/admin/payout-ready");
+      const data = await res.json();
+      if (data.success) setPayoutReady(data.data);
+    } catch {}
+  }
+
+  /** Allow/restore smaller withdrawals for one creator, from the queue itself. */
+  async function handlePayoutReadyAction(
+    creatorId: string,
+    action: "WAIVE_PAYOUT_MINIMUM" | "RESTORE_PAYOUT_MINIMUM"
+  ) {
+    if (busyPayoutReady) return;
+    setBusyPayoutReady(creatorId);
+    try {
+      const res = await adminFetch("/api/admin/users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: creatorId, action }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast("success", data.message || "Done");
+        fetchPayoutReady();
+      } else {
+        toast("error", data.error || "Something went wrong");
+      }
+    } catch {
+      toast("error", "An error occurred");
+    } finally {
+      setBusyPayoutReady(null);
+    }
   }
 
   async function handleRelease(creatorId: string | "all") {
@@ -2275,6 +2369,16 @@ export default function AdminDashboard() {
     { id: "coupons" as const, label: "Coupons", icon: Ticket },
     { id: "system" as const, label: "System", icon: Activity },
     { id: "earnings" as const, label: "Earnings", icon: Wallet },
+    {
+      // The money side of the creator list: who has reached the withdrawal
+      // floor and can ask for a payout. A creator lands here automatically —
+      // there is nothing to add by hand — which is the point: the queue an
+      // operator has to watch should not be one they also have to build.
+      id: "payoutReady" as const,
+      label: "Ready to withdraw",
+      icon: Banknote,
+      badge: payoutReady?.totals.readyCount,
+    },
     {
       id: "payments" as const,
       label: "Payments",
@@ -4277,6 +4381,161 @@ export default function AdminDashboard() {
                           >
                             {releasing === c.creatorId ? "Releasing…" : "Release now"}
                           </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="skeleton h-40 w-full rounded-xl" />
+            )}
+          </div>
+        )}
+
+        {/* Ready to withdraw — the money side of the creator list. A creator
+            appears here the moment their available balance reaches the TZS
+            30,000 withdrawal floor, so the queue an operator has to watch is one
+            the platform builds, not one they have to remember to check. */}
+        {activeTab === "payoutReady" && (
+          <div className="space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display font-bold">Ready to withdraw</h2>
+                <p className="text-xs text-white/40">
+                  Creators whose available balance has reached TZS{" "}
+                  {(payoutReady?.minimum ?? 30000).toLocaleString()}. Each row can be
+                  allowed to withdraw below that floor, or have withdrawals frozen.
+                </p>
+              </div>
+              <button
+                onClick={fetchPayoutReady}
+                className="btn-ghost flex items-center gap-2 justify-center"
+              >
+                <RefreshCcw className="w-4 h-4" /> Refresh
+              </button>
+            </div>
+
+            {payoutReady ? (
+              <>
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <div className="glass-card p-4">
+                    <p className="text-xs text-white/50">Creators ready</p>
+                    <p className="text-xl font-bold mt-1">
+                      {payoutReady.totals.readyCount.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="glass-card p-4">
+                    <p className="text-xs text-white/50">Ready to withdraw</p>
+                    <p className="text-xl font-bold mt-1 text-emerald-400">
+                      TZS {payoutReady.totals.readyAmount.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="glass-card p-4">
+                    <p className="text-xs text-white/50">On this list</p>
+                    <p className="text-xl font-bold mt-1">
+                      {payoutReady.totals.totalCount.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="glass-card p-4 border border-amber-500/30">
+                    <p className="text-xs text-amber-300/80">Total held by them</p>
+                    <p className="text-xl font-bold mt-1 text-amber-400">
+                      TZS {payoutReady.totals.totalAmount.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+
+                {payoutReady.creators.length === 0 ? (
+                  <div className="glass-card p-12 text-center">
+                    <Banknote className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
+                    <p className="text-white/50">
+                      No creator has reached the withdrawal floor yet
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid gap-3">
+                    {payoutReady.creators.map((c) => (
+                      <div key={c.creatorId} className="glass-card p-4">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-medium flex items-center gap-1.5">
+                              {c.displayName || "Creator"}
+                              {c.isVerified && <VerifiedBadge className="h-5 w-5" />}
+                            </p>
+                            <p className="text-xs text-white/40 truncate">
+                              {c.email || c.creatorId}
+                            </p>
+                            <div className="flex flex-wrap gap-1.5 mt-1.5">
+                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/50">
+                                KYC: {c.kycStatus}
+                              </span>
+                              {c.payoutMinimumWaived && (
+                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">
+                                  Below floor allowed
+                                </span>
+                              )}
+                              {c.frozen && (
+                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
+                                  Withdrawals frozen
+                                </span>
+                              )}
+                              {c.openRequests > 0 && (
+                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-brand-500/15 text-brand-300">
+                                  {c.openRequests} open request{c.openRequests === 1 ? "" : "s"}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs shrink-0">
+                            <div>
+                              <p className="text-white/40">Available</p>
+                              <p className="font-semibold text-emerald-400">
+                                TZS {c.availableBalance.toLocaleString()}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-white/40">Lifetime earned</p>
+                              <p className="font-semibold">
+                                TZS {c.totalEarned.toLocaleString()}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 shrink-0">
+                            {c.payoutMinimumWaived ? (
+                              <button
+                                onClick={() => handlePayoutReadyAction(c.creatorId, "RESTORE_PAYOUT_MINIMUM")}
+                                disabled={busyPayoutReady !== null}
+                                className="bg-white/5 text-white/70 hover:bg-white/10 disabled:opacity-40 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+                              >
+                                {busyPayoutReady === c.creatorId ? "Working…" : "Require 30,000 again"}
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handlePayoutReadyAction(c.creatorId, "WAIVE_PAYOUT_MINIMUM")}
+                                disabled={busyPayoutReady !== null}
+                                className="bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 disabled:opacity-40 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+                              >
+                                {busyPayoutReady === c.creatorId ? "Working…" : "Allow below 30,000"}
+                              </button>
+                            )}
+                            {c.frozen ? (
+                              <button
+                                onClick={() => handleCreatorAction(c.creatorId, "UNFREEZE_PAYOUTS")}
+                                className="bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+                              >
+                                Unfreeze
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => handleCreatorAction(c.creatorId, "FREEZE_PAYOUTS")}
+                                className="bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+                              >
+                                Freeze withdrawals
+                              </button>
+                            )}
+                          </div>
                         </div>
                       </div>
                     ))}

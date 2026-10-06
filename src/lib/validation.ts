@@ -358,7 +358,12 @@ export const submitKycSchema = z.object({
 // =============================================================================
 
 export const requestPayoutSchema = z.object({
-  amount: z.number().int().min(30000, "The minimum is TZS 30,000"),
+  // No fixed floor here any more: an admin can waive it for one creator
+  // (User.payoutMinimumWaived), so the rule that decides has to be the one that
+  // can see the permission. requestPayout in services/payout.service.ts applies
+  // the TZS 30,000 floor — or skips it when waived — atomically with the
+  // balance check.
+  amount: z.number().int().positive("Enter an amount to withdraw"),
   paymentMethod: z.enum(["MPESA", "TIGO_PESA", "AIRTEL_MONEY", "BANK_TRANSFER"]),
   accountDetails: z.string().min(5, "Account details are required"),
   bankName: z.string().optional(),

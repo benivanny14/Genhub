@@ -8,7 +8,8 @@ import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
-import { debitWallet, splitRevenue } from "@/lib/services/balance.service";
+import { creditCreatorAvailable, debitWallet, splitRevenue } from "@/lib/services/balance.service";
+import { maybeNotifyAdminsPayoutReady } from "@/lib/services/payout-threshold.service";
 import { checkSpendCap, spendCapMessage } from "@/lib/services/spend-cap.service";
 import { checkRateLimit } from "@/lib/redis";
 import { pushForNotification } from "@/lib/services/notify.service";
@@ -88,20 +89,8 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      // Credit creator pending balance (14-day holding)
-      await tx.creatorBalance.upsert({
-        where: { creatorId },
-        create: {
-          creatorId,
-          pendingBalance: creatorCut,
-          availableBalance: 0,
-          totalEarned: creatorCut,
-        },
-        update: {
-          pendingBalance: { increment: creatorCut },
-          totalEarned: { increment: creatorCut },
-        },
-      });
+      // Credit the creator immediately — no holding period.
+      await creditCreatorAvailable(tx, { creatorId, amount: creatorCut });
 
       // Create notification for creator. Both figures: the fan sent one and the
       // creator is only ever paid the other.
@@ -135,6 +124,9 @@ export async function POST(request: NextRequest) {
       message: `A viewer tipped you TZS ${amount.toLocaleString()} — your share is TZS ${creatorCut.toLocaleString()}${message ? `: "${message}"` : ""}`,
       link: "/creator",
     });
+
+    // Money just landed: tell the admins if the creator can now withdraw.
+    await maybeNotifyAdminsPayoutReady(creatorId);
 
     return api.success(transaction, "Tip sent!");
   } catch (error) {

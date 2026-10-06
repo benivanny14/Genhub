@@ -1,7 +1,7 @@
 // =============================================================================
 // GENHUB - Cron: Weekly creator earnings digest
 // GET/POST /api/cron/earnings-digest
-// Emails creators whose earnings cleared the 14-day holding period this week,
+// Emails creators a weekly earnings summary: what came in this week and what is
 // and what is still held. Safe to call often: the worker sends at most one
 // digest per creator per seven days, so a schedule that fires hourly mostly
 // finds nobody due. Run it from the cron supervisor (the schedule it names in

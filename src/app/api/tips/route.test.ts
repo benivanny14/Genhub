@@ -9,7 +9,8 @@
 //
 //   * the fan is debited the whole amount they chose, once, atomically;
 //   * the transaction records the fee breakdown, not just the amount;
-//   * the creator's 14-day holding is credited their share, never the gross;
+//   * the creator's withdrawable balance is credited their share, never the
+//     gross — and immediately, with no holding period;
 //   * the notification names both numbers, because the gross is not what the
 //     creator will ever be paid.
 //
@@ -128,13 +129,12 @@ describe("the split", () => {
       platformFee: 600,
       creatorCut: 1_400,
     });
-    // The holding gets the creator's share — the 14-day clock applies to their
-    // money, not to what the fan paid.
+    // The credit is the creator's share — and it is withdrawable immediately.
     expect(mocks.upsertBalance.mock.calls[0][0]).toMatchObject({
       where: { creatorId: CREATOR },
-      create: { creatorId: CREATOR, pendingBalance: 1_400, availableBalance: 0, totalEarned: 1_400 },
+      create: { creatorId: CREATOR, availableBalance: 1_400, totalEarned: 1_400 },
       update: {
-        pendingBalance: { increment: 1_400 },
+        availableBalance: { increment: 1_400 },
         totalEarned: { increment: 1_400 },
       },
     });

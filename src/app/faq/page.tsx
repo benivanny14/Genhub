@@ -26,7 +26,7 @@ const FAQS: { q: string; a: string }[] = [
   },
   {
     q: "When do creators get paid?",
-    a: "Earnings enter a 14-day holding period for fraud and chargeback protection, then become available for payout. Minimum payout is TZS 30,000 and requires verified KYC.",
+    a: "Earnings become available to withdraw as soon as a sale completes — there is no holding period. You can withdraw once your balance reaches TZS 30,000 (an admin can allow a smaller withdrawal for your account), and payout requires verified KYC.",
   },
   {
     q: "Is my data safe?",
