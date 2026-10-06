@@ -24,7 +24,7 @@
 
 import prisma from "@/lib/db";
 import config from "@/lib/config";
-import { clickpesaStatus, clickpesaStatusToInternal } from "@/lib/payments/clickpesa";
+import { sonicpesaStatus, sonicpesaStatusToInternal } from "@/lib/payments/sonicpesa";
 import { processPaymentWebhook } from "./webhook.service";
 import { notifyPaymentResult } from "./payment-notify.service";
 
@@ -77,11 +77,11 @@ export async function resolvePendingCheckout(
 
   // Ask the gateway before releasing — the money may have moved while the
   // webhook was lost. Skipped in sandbox / when the gateway is not in use.
-  if (pending.providerRef && config.clickPesa.apiKey && !config.clickPesa.sandbox) {
+  if (pending.providerRef && config.sonicPesa.accessKey && !config.sonicPesa.sandbox) {
     try {
-      const remote = await clickpesaStatus(pending.providerRef);
+      const remote = await sonicpesaStatus(pending.providerRef);
       const internal = remote.payment
-        ? clickpesaStatusToInternal(remote.payment.status)
+        ? sonicpesaStatusToInternal(remote.payment.status)
         : null;
 
       if (internal) {
@@ -91,7 +91,7 @@ export async function resolvePendingCheckout(
           transactionId: pending.providerRef,
           amount: pending.amount,
           status: internal,
-          provider: "CLICKPESA",
+          provider: "SONICPESA",
           metadata: { reconciled: "stale-pending" },
         });
         if (internal === "SUCCESS") return { state: "paid" };

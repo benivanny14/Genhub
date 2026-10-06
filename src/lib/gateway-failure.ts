@@ -1,7 +1,7 @@
 // =============================================================================
 // GENHUB - What a gateway refusal means, and who it is about
 //
-// ClickPesa answers a refused collect with its own words, and the routes used to
+// SonicPesa answers a refused collect with its own words, and the routes used to
 // hand those words straight to the customer. Most of the time that is right:
 // "Insufficient funds in your Halopesa account. Please top up and try again." is
 // the single most useful sentence the checkout can print.

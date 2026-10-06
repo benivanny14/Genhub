@@ -46,11 +46,11 @@ describe("reportCredentialFault", () => {
     const { calls, fetchImpl } = recordingFetch();
 
     const first = await reportCredentialFault(
-      { service: "ClickPesa", detail: "the gateway rejected the key" },
+      { service: "SonicPesa", detail: "the gateway rejected the key" },
       { fetchImpl, webhookUrl: "https://hooks.example/genhub", now: () => 1_000 }
     );
     const second = await reportCredentialFault(
-      { service: "ClickPesa", detail: "the gateway rejected the key" },
+      { service: "SonicPesa", detail: "the gateway rejected the key" },
       { fetchImpl, webhookUrl: "https://hooks.example/genhub", now: () => 1_001 }
     );
 
@@ -114,14 +114,14 @@ describe("reportCredentialFault", () => {
     const { calls, fetchImpl } = recordingFetch();
 
     await reportCredentialFault(
-      { service: "ClickPesa", detail: "the gateway stopped answering" },
+      { service: "SonicPesa", detail: "the gateway stopped answering" },
       { fetchImpl, webhookUrl: "https://hooks.example/genhub" }
     );
 
     const body = calls[0].body as Record<string, unknown>;
-    expect(body.service).toBe("ClickPesa");
-    expect(String(body.text)).toContain("ClickPesa");
-    expect(String(body.content)).toContain("ClickPesa");
+    expect(body.service).toBe("SonicPesa");
+    expect(String(body.text)).toContain("SonicPesa");
+    expect(String(body.content)).toContain("SonicPesa");
     expect(body.detail).toBe("the gateway stopped answering");
   });
 

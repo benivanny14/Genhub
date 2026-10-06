@@ -2,7 +2,7 @@
 
 // =============================================================================
 // GENHUB - My Payments
-// Every ClickPesa charge the signed-in customer has started, in one place:
+// Every SonicPesa charge the signed-in customer has started, in one place:
 // pending (waiting for the USSD PIN), completed, failed, and UNDER
 // INVESTIGATION — the awkward one, where the customer approved the prompt but
 // the gateway never settled, so the money may already have left their handset.
@@ -136,7 +136,7 @@ export default function PaymentsPage() {
   }, [load]);
 
   // Poll our status endpoint until the charge settles (it reconciles with
-  // ClickPesa server-side, so a missed webhook does not strand the payment).
+  // SonicPesa server-side, so a missed webhook does not strand the payment).
   function pollOrder(orderId: string, attempt = 0) {
     if (attempt >= 40) {
       toast("warning", "Payment is still processing — refresh in a minute.");

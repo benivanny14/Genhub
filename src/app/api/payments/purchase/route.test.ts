@@ -53,14 +53,14 @@ vi.mock("@/lib/redis", () => ({
   }),
 }));
 
-vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/payments/clickpesa")>();
+vi.mock("@/lib/payments/sonicpesa", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments/sonicpesa")>();
   return {
     ...actual,
-    clickpesaCollect: vi.fn(),
-    clickpesaErrorReason: vi.fn(),
-    clickpesaStatus: vi.fn(),
-    clickpesaStatusToInternal: vi.fn(),
+    sonicpesaCollect: vi.fn(),
+    sonicpesaErrorReason: vi.fn(),
+    sonicpesaStatus: vi.fn(),
+    sonicpesaStatusToInternal: vi.fn(),
   };
 });
 
@@ -151,7 +151,7 @@ describe("POST /api/payments/purchase — amount tampering", () => {
   it("refuses a mismatch on the phone path too, before any checkout is made", async () => {
     const { status, body } = await post({
       videoId: "video-1",
-      gateway: "CLICKPESA",
+      gateway: "SONICPESA",
       phoneNumber: "0712345678",
       amount: 999,
     });
@@ -218,7 +218,7 @@ describe("POST /api/payments/purchase — still being prepared", () => {
 
     const { status, body } = await post({
       videoId: "video-1",
-      gateway: "CLICKPESA",
+      gateway: "SONICPESA",
       phoneNumber: "0712345678",
     });
 

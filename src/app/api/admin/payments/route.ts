@@ -121,8 +121,8 @@ const actionSchema = z.object({
   note: z.string().trim().max(500).optional(),
   // --- refund only ---------------------------------------------------------
   // WALLET: we return the money ourselves, as spendable balance (automatic).
-  // GATEWAY: the operator reversed it in the ClickPesa dashboard and must supply
-  // the reference — our ClickPesa integration exposes no reversal API, so that
+  // GATEWAY: the operator reversed it in the SonicPesa dashboard and must supply
+  // the reference — our SonicPesa integration exposes no reversal API, so that
   // reference is the only evidence the network leg happened.
   destination: z.enum(["WALLET", "GATEWAY"]).optional(),
   gatewayRef: z.string().trim().max(120).optional(),
@@ -168,7 +168,7 @@ export async function POST(request: NextRequest) {
               return api.error("This charge has already been refunded.", 409, "ALREADY_REFUNDED");
             case "gateway_ref_required":
               return api.error(
-                "ClickPesa has no reversal API wired in, so a reversal to the customer's phone must be done in their dashboard. Paste the reversal reference from there so it is on the record.",
+                "SonicPesa has no reversal API wired in, so a reversal to the customer's phone must be done in their dashboard. Paste the reversal reference from there so it is on the record.",
                 400,
                 "GATEWAY_REF_REQUIRED"
               );
@@ -268,7 +268,7 @@ export async function POST(request: NextRequest) {
             gatewayStatus: null,
             settled: false,
             gatewayError: outcome.gatewayError,
-            message: `Could not ask ClickPesa: ${outcome.gatewayError}. Nothing changed — the charge stays under investigation.`,
+            message: `Could not ask SonicPesa: ${outcome.gatewayError}. Nothing changed — the charge stays under investigation.`,
           });
         }
 

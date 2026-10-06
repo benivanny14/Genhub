@@ -71,18 +71,18 @@ check(
 check(
   !isLocal(env("NEXT_PUBLIC_APP_URL")),
   `NEXT_PUBLIC_APP_URL is "${env("NEXT_PUBLIC_APP_URL") || "(unset)"}" — must be the public https:// domain ` +
-    "(SEO, referral links, and the ClickPesa webhook URL are built from it)"
+    "(SEO, referral links, and the SonicPesa webhook URL are built from it)"
 );
 
 // --------------------------------------------------------------- Payments
 check(
-  !!env("CLICKPESA_CLIENT_ID") && !!env("CLICKPESA_API_KEY"),
-  "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY are missing — checkout will fail"
+  !!env("SONICPESA_ACCESS_KEY"),
+  "SONICPESA_ACCESS_KEY is missing — checkout will fail"
 );
 check(
-  !!env("CLICKPESA_CHECKSUM_KEY") ||
-    (!!env("CLICKPESA_WEBHOOK_TOKEN") && env("CLICKPESA_WEBHOOK_TOKEN").length >= 12),
-  "Neither CLICKPESA_CHECKSUM_KEY nor a CLICKPESA_WEBHOOK_TOKEN of at least 12 characters is set — payment callbacks cannot be verified"
+  !!env("SONICPESA_SECRET_KEY") ||
+    (!!env("SONICPESA_WEBHOOK_TOKEN") && env("SONICPESA_WEBHOOK_TOKEN").length >= 12),
+  "Neither SONICPESA_SECRET_KEY nor a SONICPESA_WEBHOOK_TOKEN of at least 12 characters is set — payment callbacks cannot be verified"
 );
 check(
   env("PAYMENT_SANDBOX") !== "true",

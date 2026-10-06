@@ -308,19 +308,19 @@ describe("createVideoSchema", () => {
 });
 
 describe("initiatePaymentSchema", () => {
-  it("should default to ClickPesa and accept a valid phone", () => {
+  it("should default to SonicPesa and accept a valid phone", () => {
     const result = initiatePaymentSchema.safeParse({
       videoId: "abc123",
       phoneNumber: "+255712345678",
     });
     expect(result.success).toBe(true);
-    expect(result.data?.gateway).toBe("CLICKPESA");
+    expect(result.data?.gateway).toBe("SONICPESA");
   });
 
-  it("should accept the ClickPesa gateway explicitly", () => {
+  it("should accept the SonicPesa gateway explicitly", () => {
     const result = initiatePaymentSchema.safeParse({
       videoId: "abc123",
-      gateway: "CLICKPESA",
+      gateway: "SONICPESA",
       phoneNumber: "0712345678",
     });
     expect(result.success).toBe(true);
@@ -351,7 +351,7 @@ describe("topUpWalletSchema", () => {
       phoneNumber: "+255712345678",
     });
     expect(result.success).toBe(true);
-    expect(result.data?.gateway).toBe("CLICKPESA");
+    expect(result.data?.gateway).toBe("SONICPESA");
   });
 
   it("should reject amount below minimum", () => {

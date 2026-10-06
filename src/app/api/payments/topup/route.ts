@@ -1,6 +1,6 @@
 // =============================================================================
 // GENHUB - Wallet Top-Up API Route
-// POST /api/payments/topup - Initiate wallet top-up via ClickPesa
+// POST /api/payments/topup - Initiate wallet top-up via SonicPesa
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -10,11 +10,11 @@ import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { topUpWalletSchema } from "@/lib/validation";
 import {
-  clickpesaCollect,
-  clickpesaErrorReason,
-  clickpesaOrderReference,
+  sonicpesaCollect,
+  sonicpesaErrorReason,
+  sonicpesaOrderReference,
   normalizeTzPhoneMsisdn,
-} from "@/lib/payments/clickpesa";
+} from "@/lib/payments/sonicpesa";
 import { assertSupportedGateway } from "@/lib/payments/gateway";
 import { generateOrderId } from "@/lib/utils";
 import { checkRateLimitStrict } from "@/lib/redis";
@@ -68,7 +68,7 @@ export async function POST(request: NextRequest) {
       return api.validation(result.error.errors[0].message);
     }
 
-    // ClickPesa is the only gateway — checkout is a USSD push to the phone.
+    // SonicPesa is the only gateway — checkout is a USSD push to the phone.
     // Kept as a hard check on top of the Zod enum (see lib/payments/gateway).
     assertSupportedGateway(result.data.gateway);
     const { amount, phoneNumber, couponCode } = result.data;
@@ -92,18 +92,22 @@ export async function POST(request: NextRequest) {
 
     // Create pending transaction (paid amount stays `amount`; bonus rides in metadata)
     const orderId = generateOrderId("WLT");
-    // Our ClickPesa order reference (alphanumeric, ≤20); stored as providerRef so
-    // the webhook and the status poll can match the callback.
-    const providerRef = clickpesaOrderReference("TP");
+    // Our own alphanumeric trace reference (kept in metadata for support).
+    // SonicPesa assigns its own order id when create_order returns, and THAT is
+    // stored as providerRef so the webhook and the status poll can match it.
+    const providerRef = sonicpesaOrderReference("TP");
     const transaction = await prisma.transaction.create({
       data: {
         userId: auth.userId,
         amount,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         providerRef,
-        metadata: couponId ? { couponId, bonus } : undefined,
+        metadata: {
+          ...(couponId ? { couponId, bonus } : {}),
+          ourReference: providerRef,
+        },
       },
     });
 
@@ -121,14 +125,14 @@ export async function POST(request: NextRequest) {
     // checkout burned a limited coupon on every prompt nobody approved.
 
     // ------------------------------------------------------------ Sandbox mode
-    const clickPesaSandbox =
+    const sonicPesaSandbox =
       config.nodeEnv !== "production" &&
-      (!config.clickPesa.apiKey || config.clickPesa.sandbox);
+      (!config.sonicPesa.accessKey || config.sonicPesa.sandbox);
 
-    if (clickPesaSandbox) {
+    if (sonicPesaSandbox) {
       // Mirror production: a predictable reference so the dev completion route
       // can map the callback to this row.
-      const sandboxRef = `cp_sbx_${transaction.id}`;
+      const sandboxRef = `sp_sbx_${transaction.id}`;
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { providerRef: sandboxRef },
@@ -138,26 +142,27 @@ export async function POST(request: NextRequest) {
         orderId: sandboxRef,
         checkoutUrl: null,
         sandbox: true,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         amount,
         bonus,
       });
     }
 
-    // Live USSD push — customer confirms on their phone. ClickPesa does not take
+    // Live USSD push — customer confirms on their phone. SonicPesa does not take
     // a webhook URL per request; the endpoint is configured in the dashboard.
     try {
       await recordPaymentEvent({
         transactionId: transaction.id,
         kind: PAYMENT_EVENT.collectStarted,
-        detail: "USSD push requested from ClickPesa.",
+        detail: "USSD push requested from SonicPesa.",
         metadata: { providerRef },
       });
 
-      const response = await clickpesaCollect({
+      const response = await sonicpesaCollect({
         phone: normalizeTzPhoneMsisdn(phoneNumber),
         amount,
         orderReference: providerRef,
+        email: auth.email,
       });
 
       if (!response.success || !response.orderReference) {
@@ -168,7 +173,7 @@ export async function POST(request: NextRequest) {
         await recordPaymentEvent({
           transactionId: transaction.id,
           kind: PAYMENT_EVENT.collectRejected,
-          detail: `ClickPesa refused the top-up: ${response.error || "no reason given"}`,
+          detail: `SonicPesa refused the top-up: ${response.error || "no reason given"}`,
           metadata: { gatewayError: response.error ?? null },
         });
         // A refusal about OUR account (the daily API cap, unfinished KYC) is
@@ -180,18 +185,33 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      // The gateway assigned the order id; store it as providerRef — the key the
+      // webhook and the status poll match on — and keep our trace reference in
+      // metadata. Echo the gateway id back to the client.
+      await prisma.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          providerRef: response.orderReference,
+          metadata: {
+            ...((transaction.metadata as Record<string, unknown> | null) ?? {}),
+            gatewayOrderId: response.orderReference,
+            gatewayReference: response.transactionId ?? null,
+          },
+        },
+      });
+
       return api.success({
         transactionId: transaction.id,
         orderId: response.orderReference,
         checkoutUrl: null,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         status: "pending",
         amount,
         bonus,
         message: response.message || "USSD push sent to phone",
       });
     } catch (gatewayError: any) {
-      const reason = clickpesaErrorReason(gatewayError);
+      const reason = sonicpesaErrorReason(gatewayError);
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { status: "FAILED", metadata: { gatewayError: reason } },
@@ -199,7 +219,7 @@ export async function POST(request: NextRequest) {
       await recordPaymentEvent({
         transactionId: transaction.id,
         kind: PAYMENT_EVENT.collectFailed,
-        detail: `Could not reach ClickPesa: ${reason}`,
+        detail: `Could not reach SonicPesa: ${reason}`,
         metadata: { gatewayError: reason },
       });
       // Detail to the log, a plain sentence to the user — see api.upstream.

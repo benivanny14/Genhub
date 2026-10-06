@@ -18,7 +18,7 @@
 //   Bunny     library lookup (GET)
 //   CDN       HEAD on the pull-zone hostname
 //   SMTP      transport verify (opens a session, sends nothing)
-//   ClickPesa POST /third-parties/generate-token (proves the credentials)
+//   SonicPesa POST /third-parties/generate-token (proves the credentials)
 //   App URL   GET /api/health
 //
 // The Redis, Bunny and SMTP probes live in ./_probes.mjs because
@@ -104,33 +104,33 @@ async function checkDatabase() {
 // =============================================================================
 
 // =============================================================================
-// 5. ClickPesa
+// 5. SonicPesa
 // =============================================================================
-async function checkClickpesa() {
-  const clientId = env("CLICKPESA_CLIENT_ID");
-  const apiKey = env("CLICKPESA_API_KEY");
-  if (!clientId || !apiKey) {
+async function checkSonicPesa() {
+  const accessKey = env("SONICPESA_ACCESS_KEY");
+  if (!accessKey) {
     return record({
-      name: "ClickPesa",
+      name: "SonicPesa",
       state: "skip",
-      detail: "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY not set",
+      detail: "SONICPESA_ACCESS_KEY not set",
     });
   }
 
-  const base = env("CLICKPESA_BASE_URL") || "https://api.clickpesa.com/third-parties";
+  const base = env("SONICPESA_BASE_URL") || "https://api.sonicpesa.com/api/v1";
   try {
-    // Minting a token is the read-only proof that the credentials work — it
-    // moves no money and charges nothing.
-    const res = await fetch(`${base}/generate-token`, {
+    // Listing transactions is the read-only proof that the access key works —
+    // it moves no money and charges nothing.
+    const res = await fetch(`${base}/transactions/readbyId`, {
       method: "POST",
-      headers: { "client-id": clientId, "api-key": apiKey },
+      headers: { "Content-Type": "application/json", "X-API-KEY": accessKey },
+      body: JSON.stringify({ page: 1 }),
       signal: timeout(15_000),
     });
     const body = await res.json().catch(() => ({}));
 
-    if (!res.ok || body.success === false || !body.token) {
+    if (!res.ok || body.status === "error") {
       record({
-        name: "ClickPesa",
+        name: "SonicPesa",
         state: "fail",
         detail: `HTTP ${res.status} ${JSON.stringify(body).slice(0, 110)} — credentials rejected`,
       });
@@ -138,16 +138,16 @@ async function checkClickpesa() {
     }
 
     record({
-      name: "ClickPesa",
+      name: "SonicPesa",
       state: "ok",
       detail:
-        "credentials valid · authorization token issued" +
-        (env("CLICKPESA_CHECKSUM_KEY") || env("CLICKPESA_WEBHOOK_TOKEN")
+        "credentials valid · transactions endpoint answered" +
+        (env("SONICPESA_SECRET_KEY") || env("SONICPESA_WEBHOOK_TOKEN")
           ? ""
-          : ` · ${AMBER} no webhook secret set (CLICKPESA_CHECKSUM_KEY / CLICKPESA_WEBHOOK_TOKEN)`),
+          : ` · ${AMBER} no webhook secret set (SONICPESA_SECRET_KEY / SONICPESA_WEBHOOK_TOKEN)`),
     });
   } catch (error) {
-    record({ name: "ClickPesa", state: "fail", detail: String(error.message || error).slice(0, 150) });
+    record({ name: "SonicPesa", state: "fail", detail: String(error.message || error).slice(0, 150) });
   }
 }
 
@@ -162,7 +162,7 @@ async function checkAppUrl() {
     return record({
       name: "App URL",
       state: "warn",
-      detail: `${url} — ClickPesa cannot reach a localhost webhook (polling still settles payments)`,
+      detail: `${url} — SonicPesa cannot reach a localhost webhook (polling still settles payments)`,
     });
   }
 
@@ -190,7 +190,7 @@ function checkSecrets() {
   for (const [name, value] of [
     ["JWT_SECRET", env("JWT_SECRET")],
     ["CRON_SECRET", env("CRON_SECRET")],
-    ["Webhook token", env("CLICKPESA_WEBHOOK_TOKEN")],
+    ["Webhook token", env("SONICPESA_WEBHOOK_TOKEN")],
   ]) {
     const assessed = assessSecret(value);
 
@@ -252,7 +252,7 @@ await checkDatabase();
 for (const result of await probeRedis()) record(result);
 for (const result of await probeBunny()) record(result);
 for (const result of await probeSmtp()) record(result);
-await checkClickpesa();
+await checkSonicPesa();
 await checkAppUrl();
 checkSecrets();
 

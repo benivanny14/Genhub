@@ -82,14 +82,15 @@ enum TransactionStatus {
   UNDER_INVESTIGATION
 }
 
-// Genhub settles every checkout through ClickPesa (USSD push to the phone).
-// HARAKAPAY is kept as a historical value so the transactions it processed stay
-// readable; it can never settle a new payment (see src/lib/payments/gateway.ts).
-// The value is appended after HARAKAPAY on purpose, so the migration is an
-// ADD VALUE and old rows are untouched.
+// Genhub settles every checkout through SonicPesa (USSD push to the phone).
+// HARAKAPAY and CLICKPESA are kept as historical values so the transactions and
+// subscriptions they processed stay readable; neither can ever settle a new
+// payment (see src/lib/payments/gateway.ts). New values are APPENDED on purpose,
+// so each migration is a plain ADD VALUE and old rows are untouched.
 enum PaymentGateway {
   HARAKAPAY
   CLICKPESA
+  SONICPESA
 }
 
 enum PayoutMethod {
@@ -1101,7 +1102,7 @@ model CronHeartbeat {
 // =============================================================================
 
 model SetupStep {
-  /// The checklist item id (e.g. "clickpesa_client_id"), so a step cannot be
+  /// The checklist item id (e.g. "sonicpesa_client_id"), so a step cannot be
   /// ticked twice and the record survives the checklist being reordered.
   id     String   @id
   title  String

@@ -9,7 +9,7 @@
 //      can never disagree about what "good enough to sign tokens" means.
 //   3. Never rewrites a value that already passes. Rewriting a live CRON_SECRET
 //      would silently break the scheduler, and rewriting
-//      CLICKPESA_WEBHOOK_TOKEN would break the token registered in the
+//      SONICPESA_WEBHOOK_TOKEN would break the token registered in the
 //      webhook URL - so values that pass are left byte-identical.
 //   4. Backs the file up before writing.
 //   5. Opens the file and prints only what is left to collect, with the exact
@@ -19,7 +19,7 @@
 // reads too. That is deliberate: when each kept its own copy they could tell you
 // different things about the same variable, and both sounded equally confident.
 //
-// No script can log into Bunny or ClickPesa for you. This removes the part that
+// No script can log into Bunny or SonicPesa for you. This removes the part that
 // does not need a human, and nothing more.
 // =============================================================================
 
@@ -38,7 +38,7 @@ const CHECKLIST_FILE = resolve(ROOT, "src/lib/setup-checklist.json");
 const GENERATE = [
   { key: "JWT_SECRET", bytes: 32 },
   { key: "CRON_SECRET", bytes: 32 },
-  { key: "CLICKPESA_WEBHOOK_TOKEN", bytes: 24 },
+  { key: "SONICPESA_WEBHOOK_TOKEN", bytes: 24 },
 ];
 
 const CHECKLIST_DATA = JSON.parse(readFileSync(CHECKLIST_FILE, "utf8"));
@@ -140,7 +140,7 @@ if (kept.length) {
   console.log("\n  Secrets already present AND fit - LEFT UNTOUCHED:");
   for (const k of kept) console.log(`    ${k}`);
   console.log("  (rotating CRON_SECRET breaks the scheduler; rotating");
-  console.log("   CLICKPESA_WEBHOOK_TOKEN breaks the registered webhook)");
+  console.log("   SONICPESA_WEBHOOK_TOKEN breaks the registered webhook)");
 }
 
 let done = 0;

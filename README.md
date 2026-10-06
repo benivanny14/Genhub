@@ -3,7 +3,7 @@
 A video monetisation and streaming platform: creators upload scenes, set a price,
 and get paid; viewers buy single videos, subscribe to creators, or pay from their
 wallet. Built for East African mobile-money audiences — payments run over
-ClickPesa USSD pushes, not cards.
+SonicPesa USSD pushes, not cards.
 
 ## What it does
 
@@ -23,7 +23,7 @@ that probes every external service for real.
 ## Stack
 
 Next.js 14 (App Router) · TypeScript · Prisma + Postgres · Tailwind ·
-Bunny Stream (video) · ClickPesa (payments) · Upstash Redis (rate limits + cache)
+Bunny Stream (video) · SonicPesa (payments) · Upstash Redis (rate limits + cache)
 · Resend/SMTP (email) · Vitest (309 tests)
 
 ## Running it locally
@@ -40,7 +40,7 @@ npm run dev
 it. Two commands tell you the truth about your configuration at any time:
 
 ```bash
-npm run verify:live      # real connections: Postgres, Redis, Bunny, SMTP, ClickPesa
+npm run verify:live      # real connections: Postgres, Redis, Bunny, SMTP, SonicPesa
 npm run preflight:prod   # what is still blocking real users
 ```
 
@@ -78,7 +78,7 @@ set on the repository (see `PRODUCTION.md` §4.0.1).
 
 ## Payments and compliance
 
-ClickPesa is the only gateway. Every charge is verified against the gateway before
+SonicPesa is the only gateway. Every charge is verified against the gateway before
 access is granted, and a charge the customer approved but the network never settled
 is shown as *under investigation* rather than inviting a second payment.
 

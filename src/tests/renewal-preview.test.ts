@@ -26,7 +26,7 @@ vi.mock("@/lib/config", () => ({
   default: {
     appUrl: "https://genhub.test",
     nodeEnv: "test",
-    clickPesa: { apiKey: "", clientId: "", sandbox: true, webhookToken: "", checksumKey: "" },
+    sonicPesa: { apiKey: "", clientId: "", sandbox: true, webhookToken: "", checksumKey: "" },
     business: { holdingPeriodDays: 14 },
   },
 }));
@@ -50,9 +50,9 @@ vi.mock("@/lib/services/balance.service", () => ({
   debitWallet: vi.fn(),
 }));
 
-vi.mock("@/lib/payments/clickpesa", () => ({
-  clickpesaCollect: vi.fn(),
-  clickpesaErrorReason: (error: unknown) => String((error as Error)?.message || error),
+vi.mock("@/lib/payments/sonicpesa", () => ({
+  sonicpesaCollect: vi.fn(),
+  sonicpesaErrorReason: (error: unknown) => String((error as Error)?.message || error),
 }));
 
 import prisma from "@/lib/db";

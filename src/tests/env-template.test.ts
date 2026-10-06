@@ -27,6 +27,10 @@ import { join, extname } from "node:path";
  */
 const SUPPLIED_BY_PLATFORM = new Set([
   "NODE_ENV",
+  // Node itself: scripts/db-migrate.mjs appends --dns-result-order to whatever
+  // the shell already set. Documenting it would invite someone to pin it by
+  // hand, which is how you break an unrelated child process.
+  "NODE_OPTIONS",
   "VERCEL_ENV",
   "VERCEL_URL",
   "VERCEL_PROJECT_PRODUCTION_URL",

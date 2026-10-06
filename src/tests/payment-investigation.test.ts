@@ -137,7 +137,7 @@ describeDb("Payment under investigation", () => {
         amount,
         type: "PPV_PURCHASE",
         status: "UNDER_INVESTIGATION",
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         providerRef: `hp_inv_${Math.random().toString(36).slice(2, 10)}`,
         metadata: {
           investigation: true,
@@ -334,7 +334,7 @@ describeDb("Payment under investigation", () => {
       transactionId: tx.providerRef!,
       amount: 2_000,
       status: "SUCCESS",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
       metadata: { reconciled: "late" },
     });
 
@@ -363,7 +363,7 @@ describeDb("Payment under investigation", () => {
       transactionId: tx.providerRef!,
       amount: 2_000,
       status: "SUCCESS",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
     });
     expect(settled.processed).toBe(true);
 
@@ -419,7 +419,7 @@ describeDb("Payment under investigation", () => {
         amount: 500,
         type: "PPV_PURCHASE",
         status: "SUCCESS",
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         providerRef: `hp_done_${Math.random().toString(36).slice(2, 10)}`,
       },
     });
@@ -450,7 +450,7 @@ describeDb("Payment under investigation", () => {
     await reset();
     const tx = await stuckCharge(2_000);
 
-    // No gateway is configured in the test env, so clickpesaStatus is never called.
+    // No gateway is configured in the test env, so sonicpesaStatus is never called.
     // The point is that the action still answers instead of throwing a 500, and
     // leaves the charge exactly where it was: an unreachable gateway is not
     // evidence that the money never moved.

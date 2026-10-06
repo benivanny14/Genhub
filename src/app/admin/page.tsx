@@ -90,7 +90,7 @@ interface SystemReadiness {
   };
   /**
    * The local gateway circuit breaker. Open means calls are being skipped for a
-   * moment because ClickPesa stopped answering — not that the key is wrong.
+   * moment because SonicPesa stopped answering — not that the key is wrong.
    */
   gatewayBreaker?: {
     open?: boolean;
@@ -918,7 +918,7 @@ export default function AdminDashboard() {
   const [rechecking, setRechecking] = useState<string | null>(null);
   const [resolveNote, setResolveNote] = useState("");
   // Reversing a charge the customer already paid: which leg of the refund we
-  // move, why, and (for a network reversal) the ClickPesa reference.
+  // move, why, and (for a network reversal) the SonicPesa reference.
   const [pendingRefund, setPendingRefund] = useState<AdminPayment | null>(null);
   const [refundDestination, setRefundDestination] = useState<"WALLET" | "GATEWAY">(
     "WALLET"
@@ -4406,7 +4406,7 @@ export default function AdminDashboard() {
                   <CreditCard className="w-5 h-5 text-brand-400" /> Payment operations
                 </h2>
                 <p className="text-white/50 text-sm mt-1 max-w-2xl">
-                  Every charge settles through ClickPesa. Expire a charge whose USSD prompt
+                  Every charge settles through SonicPesa. Expire a charge whose USSD prompt
                   was never answered to release the customer&apos;s checkout lock — a late
                   settlement is still honoured, so no money is lost. Charges marked
                   <span className="text-amber-400"> Being checked</span> were approved on
@@ -4561,7 +4561,7 @@ export default function AdminDashboard() {
                             onClick={() => recheckCharge(p)}
                             disabled={rechecking === p.id || resolving === p.id}
                             className="btn-ghost text-xs disabled:opacity-50"
-                            title="Fuatilia gateway sasa — ask ClickPesa right now whether it has a verdict"
+                            title="Fuatilia gateway sasa — ask SonicPesa right now whether it has a verdict"
                           >
                             {rechecking === p.id ? "Asking…" : "Re-check gateway"}
                           </button>
@@ -5382,8 +5382,8 @@ export default function AdminDashboard() {
                   {pendingRefund.type === "WALLET_TOPUP"
                     ? "Take the TZS " +
                       pendingRefund.amount.toLocaleString() +
-                      " credit back out of their wallet and return it to the number they paid from. ClickPesa has no reversal API wired in, so send it back in their dashboard first."
-                    : "Money goes back to the number they paid from, not to their wallet. ClickPesa has no reversal API wired in, so send it back in their dashboard first, then record the reference below."}
+                      " credit back out of their wallet and return it to the number they paid from. SonicPesa has no reversal API wired in, so send it back in their dashboard first."
+                    : "Money goes back to the number they paid from, not to their wallet. SonicPesa has no reversal API wired in, so send it back in their dashboard first, then record the reference below."}
                 </p>
               </button>
             </div>
@@ -5394,7 +5394,7 @@ export default function AdminDashboard() {
                   className="text-sm text-white/60 mb-2 block"
                   htmlFor="refund-gateway-ref"
                 >
-                  ClickPesa reversal reference (required)
+                  SonicPesa reversal reference (required)
                 </label>
                 <input
                   id="refund-gateway-ref"
@@ -5697,7 +5697,7 @@ export default function AdminDashboard() {
               {pendingExpire.providerRef ? ` · ${pendingExpire.providerRef}` : ""}
             </p>
             <p className="text-sm text-white/60 mt-2">
-              The charge is marked failed and the customer can pay again. If ClickPesa
+              The charge is marked failed and the customer can pay again. If SonicPesa
               settles it later anyway, the payment is still honoured and access is granted.
             </p>
             <div className="flex gap-3 mt-5">

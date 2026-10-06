@@ -4,7 +4,7 @@
 // Real database. Locks in the behaviour of renewDueSubscriptions():
 //   1. wallet covers the price  -> renewed instantly, 70/30 split recorded, the
 //      period is extended from the OLD expiry (no lost days)
-//   2. wallet short + phone on file -> a ClickPesa USSD push is created
+//   2. wallet short + phone on file -> a SonicPesa USSD push is created
 //   3. nothing to pay with -> the reason is recorded and the fan is told
 //   4. one attempt per retry gap, never a second push while one is live
 //   5. out of retries and lapsed -> membership closed, counter resynced
@@ -22,7 +22,7 @@ const ctx = vi.hoisted(() => ({
 }));
 
 // Force the production-like configuration: key present, sandbox off. Combined
-// with the clickpesaCollect spy below this exercises the real code path without
+// with the sonicpesaCollect spy below this exercises the real code path without
 // any network call.
 vi.mock("@/lib/config", async (importOriginal) => {
   const actual = await importOriginal<{ default: Record<string, any> }>();
@@ -32,8 +32,8 @@ vi.mock("@/lib/config", async (importOriginal) => {
       ...actual.default,
       nodeEnv: "test",
       appUrl: "https://genhub.test",
-      clickPesa: {
-        ...actual.default.clickPesa,
+      sonicPesa: {
+        ...actual.default.sonicPesa,
         clientId: "test-client",
         apiKey: "test-key",
         sandbox: false,
@@ -43,11 +43,11 @@ vi.mock("@/lib/config", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/payments/clickpesa")>();
+vi.mock("@/lib/payments/sonicpesa", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments/sonicpesa")>();
   return {
     ...actual,
-    clickpesaCollect: vi.fn(async () => ({
+    sonicpesaCollect: vi.fn(async () => ({
       success: true,
       orderReference: "CP_TEST_RENEWAL",
       message: "USSD push sent to phone",
@@ -56,7 +56,7 @@ vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
 });
 
 import prisma from "@/lib/db";
-import { clickpesaCollect } from "@/lib/payments/clickpesa";
+import { sonicpesaCollect } from "@/lib/payments/sonicpesa";
 import {
   renewDueSubscriptions,
   MAX_RENEW_ATTEMPTS,
@@ -112,7 +112,7 @@ describeE2E("Subscription auto-renewal", () => {
   });
 
   beforeEach(async () => {
-    vi.mocked(clickpesaCollect).mockClear();
+    vi.mocked(sonicpesaCollect).mockClear();
     await prisma.creatorSubscription.deleteMany({
       where: { creatorId: ctx.creatorId },
     });
@@ -222,8 +222,8 @@ describeE2E("Subscription auto-renewal", () => {
     expect(result.pushedToPhone).toBe(1);
     expect(result.renewedFromWallet).toBe(0);
 
-    expect(clickpesaCollect).toHaveBeenCalledTimes(1);
-    const call = vi.mocked(clickpesaCollect).mock.calls[0][0];
+    expect(sonicpesaCollect).toHaveBeenCalledTimes(1);
+    const call = vi.mocked(sonicpesaCollect).mock.calls[0][0];
     expect(call.phone).toBe("255712345678");
     expect(call.amount).toBe(ctx.amount);
     expect(call.orderReference).toMatch(/^[A-Z0-9]{1,20}$/);
@@ -232,7 +232,7 @@ describeE2E("Subscription auto-renewal", () => {
       where: { userId: ctx.viewerId, creatorId: ctx.creatorId, type: "SUBSCRIPTION" },
     });
     expect(tx?.status).toBe("PENDING");
-    expect(tx?.gateway).toBe("CLICKPESA");
+    expect(tx?.gateway).toBe("SONICPESA");
     expect(tx?.providerRef).toBe("CP_TEST_RENEWAL");
     expect((tx?.metadata as { renewal?: boolean } | null)?.renewal).toBe(true);
 
@@ -256,7 +256,7 @@ describeE2E("Subscription auto-renewal", () => {
     const result = await renew();
 
     expect(result.failed).toBe(1);
-    expect(clickpesaCollect).not.toHaveBeenCalled();
+    expect(sonicpesaCollect).not.toHaveBeenCalled();
 
     const sub = await prisma.creatorSubscription.findFirst({
       where: { creatorId: ctx.creatorId },
@@ -285,7 +285,7 @@ describeE2E("Subscription auto-renewal", () => {
     const result = await renew();
 
     expect(result.skipped).toBe(1);
-    expect(clickpesaCollect).not.toHaveBeenCalled();
+    expect(sonicpesaCollect).not.toHaveBeenCalled();
   });
 
   it("does not stack a second push while the first is still awaiting approval", async () => {
@@ -297,7 +297,7 @@ describeE2E("Subscription auto-renewal", () => {
         amount: ctx.amount,
         type: "SUBSCRIPTION",
         status: "PENDING",
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         providerRef: "HP_STILL_WAITING",
         metadata: { renewal: true, phone: PHONE },
       },
@@ -307,7 +307,7 @@ describeE2E("Subscription auto-renewal", () => {
 
     expect(result.awaitingApproval).toBe(1);
     expect(result.pushedToPhone).toBe(0);
-    expect(clickpesaCollect).not.toHaveBeenCalled();
+    expect(sonicpesaCollect).not.toHaveBeenCalled();
     const count = await prisma.transaction.count({ where: { creatorId: ctx.creatorId } });
     expect(count).toBe(1);
   });
@@ -327,7 +327,7 @@ describeE2E("Subscription auto-renewal", () => {
         amount: ctx.amount,
         type: "SUBSCRIPTION",
         status: "PENDING",
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         providerRef: "HP_ABANDONED",
         metadata: { renewal: true, phone: PHONE },
       },
@@ -348,7 +348,7 @@ describeE2E("Subscription auto-renewal", () => {
       select: { walletBalance: true },
     });
     expect(viewer!.walletBalance).toBe(ctx.amount * 3);
-    expect(clickpesaCollect).not.toHaveBeenCalled();
+    expect(sonicpesaCollect).not.toHaveBeenCalled();
   });
 
   it("stops retrying once the attempt budget is spent, even inside the paid period", async () => {
@@ -365,7 +365,7 @@ describeE2E("Subscription auto-renewal", () => {
     const result = await renew();
 
     expect(result.skipped).toBe(1);
-    expect(clickpesaCollect).not.toHaveBeenCalled();
+    expect(sonicpesaCollect).not.toHaveBeenCalled();
     const viewer = await prisma.user.findUnique({
       where: { id: ctx.viewerId },
       select: { walletBalance: true },
@@ -386,7 +386,7 @@ describeE2E("Subscription auto-renewal", () => {
     const result = await renew();
 
     expect(result.failed).toBe(1);
-    expect(clickpesaCollect).not.toHaveBeenCalled();
+    expect(sonicpesaCollect).not.toHaveBeenCalled();
     const viewer = await prisma.user.findUnique({
       where: { id: ctx.viewerId },
       select: { walletBalance: true },
@@ -399,7 +399,7 @@ describeE2E("Subscription auto-renewal", () => {
 
   it("advances the attempt counter when the gateway rejects a push", async () => {
     await dueSubscription({ renewPhone: PHONE, renewAttempts: 2 });
-    vi.mocked(clickpesaCollect).mockResolvedValueOnce({
+    vi.mocked(sonicpesaCollect).mockResolvedValueOnce({
       success: false,
       error: "insufficient balance",
     });
@@ -426,7 +426,7 @@ describeE2E("Subscription auto-renewal", () => {
     const result = await renew();
 
     expect(result.considered).toBe(0);
-    expect(clickpesaCollect).not.toHaveBeenCalled();
+    expect(sonicpesaCollect).not.toHaveBeenCalled();
   });
 
   it("ignores memberships whose automatic renewal is switched off", async () => {

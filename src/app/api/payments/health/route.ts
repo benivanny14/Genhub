@@ -8,7 +8,7 @@
 //   * whether the app URL is publicly reachable (webhooks) or local-only
 //   * whether recent charges ever settled, and how many are under investigation
 //
-// ClickPesa exposes no balance/float endpoint (collections settle straight into
+// SonicPesa exposes no balance/float endpoint (collections settle straight into
 // the merchant account), so there is no live balance read here — the delivery
 // counters below are the equivalent early warning.
 //
@@ -20,9 +20,9 @@ import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import config from "@/lib/config";
 import {
-  clickpesaGatewayState,
-  clickpesaBreakerNotice,
-} from "@/lib/payments/clickpesa";
+  sonicpesaGatewayState,
+  sonicpesaBreakerNotice,
+} from "@/lib/payments/sonicpesa";
 import { classifyGatewayFailure } from "@/lib/gateway-failure";
 
 export const dynamic = "force-dynamic";
@@ -33,55 +33,48 @@ export async function GET() {
 
     const appUrl = config.appUrl;
     const isLocal = /localhost|127\.0\.0\.1/i.test(appUrl);
-    const sandbox = config.clickPesa.sandbox;
-    const usesChecksum = Boolean(config.clickPesa.checksumKey);
+    const sandbox = config.sonicPesa.sandbox;
+    const usesSignature = Boolean(config.sonicPesa.secretKey);
 
     const checks = {
       sandboxMode: {
         ok: !sandbox,
         value: sandbox,
         hint: sandbox
-          ? "PAYMENT_SANDBOX=true — the app never contacts ClickPesa, so no USSD push is sent. Set PAYMENT_SANDBOX=false to charge real phones."
+          ? "PAYMENT_SANDBOX=true — the app never contacts SonicPesa, so no USSD push is sent. Set PAYMENT_SANDBOX=false to charge real phones."
           : "Live mode — purchases send a real USSD push.",
       },
-      clientId: {
-        ok: !!config.clickPesa.clientId,
-        value: config.clickPesa.clientId ? "configured" : "missing",
-        hint: config.clickPesa.clientId
-          ? "CLICKPESA_CLIENT_ID is set."
-          : "Set CLICKPESA_CLIENT_ID (ClickPesa dashboard → API Integration Setup).",
-      },
-      apiKey: {
-        ok: !!config.clickPesa.apiKey,
-        value: config.clickPesa.apiKey ? "configured" : "missing",
-        hint: config.clickPesa.apiKey
-          ? "CLICKPESA_API_KEY is set."
-          : "Set CLICKPESA_API_KEY (ClickPesa dashboard → API Integration Setup).",
+      accessKey: {
+        ok: !!config.sonicPesa.accessKey,
+        value: config.sonicPesa.accessKey ? "configured" : "missing",
+        hint: config.sonicPesa.accessKey
+          ? "SONICPESA_ACCESS_KEY is set."
+          : "Set SONICPESA_ACCESS_KEY (SonicPesa dashboard → API Settings).",
       },
       baseUrl: {
-        ok: !!config.clickPesa.baseUrl,
-        value: config.clickPesa.baseUrl,
-        hint: "ClickPesa API base URL.",
+        ok: !!config.sonicPesa.baseUrl,
+        value: config.sonicPesa.baseUrl,
+        hint: "SonicPesa API base URL.",
       },
       webhookVerification: {
-        ok: usesChecksum || !!config.clickPesa.webhookToken,
-        value: usesChecksum
-          ? "checksum (CLICKPESA_CHECKSUM_KEY)"
-          : config.clickPesa.webhookToken
-            ? "shared token (CLICKPESA_WEBHOOK_TOKEN)"
+        ok: usesSignature || !!config.sonicPesa.webhookToken,
+        value: usesSignature
+          ? "signature (SONICPESA_SECRET_KEY)"
+          : config.sonicPesa.webhookToken
+            ? "shared token (SONICPESA_WEBHOOK_TOKEN)"
             : "missing",
-        hint: usesChecksum
-          ? "Every callback must carry a valid HMAC-SHA256 checksum."
-          : config.clickPesa.webhookToken
-            ? "Callbacks are verified by the ?t= token in the webhook URL. Add CLICKPESA_CHECKSUM_KEY for signature verification."
-            : "Set CLICKPESA_CHECKSUM_KEY (preferred) or CLICKPESA_WEBHOOK_TOKEN, or callbacks cannot be verified.",
+        hint: usesSignature
+          ? "Every callback must carry a valid X-SonicPesa-Signature (HMAC-SHA256)."
+          : config.sonicPesa.webhookToken
+            ? "Callbacks are verified by the ?t= token in the webhook URL. Add SONICPESA_SECRET_KEY for signature verification."
+            : "Set SONICPESA_SECRET_KEY (preferred) or SONICPESA_WEBHOOK_TOKEN, or callbacks cannot be verified.",
       },
       appUrl: {
         ok: !isLocal && config.appUrlSource === "NEXT_PUBLIC_APP_URL",
         value: appUrl,
         source: config.appUrlSource,
         hint: isLocal
-          ? "The app URL is localhost, so ClickPesa cannot reach /api/webhooks/clickpesa. Payments still confirm because the client polls /api/payments/status, which reconciles with the gateway. Set NEXT_PUBLIC_APP_URL to the public domain."
+          ? "The app URL is localhost, so SonicPesa cannot reach /api/webhooks/sonicpesa. Payments still confirm because the client polls /api/payments/status, which reconciles with the gateway. Set NEXT_PUBLIC_APP_URL to the public domain."
           : config.appUrlSource === "NEXT_PUBLIC_APP_URL"
             ? "Public URL from NEXT_PUBLIC_APP_URL — webhooks can reach this deployment."
             : `Public URL inferred from ${config.appUrlSource}. It works, but set NEXT_PUBLIC_APP_URL explicitly so the webhook URL never depends on the hosting provider.`,
@@ -90,13 +83,12 @@ export async function GET() {
 
     // The local circuit breaker. When it is open, gateway calls are being
     // *skipped*, which would otherwise look like a gateway fault with no cause.
-    const breaker = clickpesaGatewayState();
-    const breakerWarning = clickpesaBreakerNotice(breaker);
+    const breaker = sonicpesaGatewayState();
+    const breakerWarning = sonicpesaBreakerNotice(breaker);
 
     const readyForLive =
       !sandbox &&
-      checks.clientId.ok &&
-      checks.apiKey.ok &&
+      checks.accessKey.ok &&
       checks.webhookVerification.ok;
 
     // Orders accepted but never delivered are the classic "unfunded / not yet
@@ -107,12 +99,12 @@ export async function GET() {
       prisma.transaction.count({
         where: {
           status: "PENDING",
-          gateway: "CLICKPESA",
+          gateway: "SONICPESA",
           createdAt: { lt: staleCutoff },
         },
       }),
       prisma.transaction.findFirst({
-        where: { gateway: "CLICKPESA", status: "SUCCESS" },
+        where: { gateway: "SONICPESA", status: "SUCCESS" },
         orderBy: { updatedAt: "desc" },
         select: { updatedAt: true, amount: true },
       }),
@@ -130,7 +122,7 @@ export async function GET() {
     // rather than an outage.
     const recentFailures = await prisma.transaction.findMany({
       where: {
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         status: "FAILED",
         createdAt: { gte: new Date(Date.now() - 24 * 60 * 60_000) },
       },
@@ -156,21 +148,21 @@ export async function GET() {
           "not the customer's: " +
           accountFaultSample +
           " Until that clears, every mobile-money checkout fails the same way — complete " +
-          "your ClickPesa KYC to lift the 100-calls-per-day cap. Customers are told nothing " +
+          "your SonicPesa KYC to lift the 100-calls-per-day cap. Customers are told nothing " +
           "was charged and to try later."
         : null;
 
     const deliveryWarning =
       !sandbox && stuckPending > 0
-        ? `${stuckPending} ClickPesa order(s) have been PENDING for over 15 minutes. ` +
-          "If customers never see a USSD prompt, confirm with ClickPesa that live " +
+        ? `${stuckPending} SonicPesa order(s) have been PENDING for over 15 minutes. ` +
+          "If customers never see a USSD prompt, confirm with SonicPesa that live " +
           "collections are activated on your account and that the application is set " +
           "up for USSD push. Share the order references as evidence."
         : null;
 
     return api.success({
       readyForLive,
-      gateway: "CLICKPESA",
+      gateway: "SONICPESA",
       checks,
       delivery: {
         stuckPending,

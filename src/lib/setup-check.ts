@@ -26,7 +26,7 @@ import path from "node:path";
 import checklist from "./setup-checklist.json";
 import prisma from "./db";
 import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./redis";
-import { clickpesaBreakerNotice } from "./payments/clickpesa";
+import { sonicpesaBreakerNotice } from "./payments/sonicpesa";
 import { bunnyWebhookUrl, lastBunnyWebhookDelivery } from "./services/bunny-webhook.service";
 import config from "./config";
 
@@ -661,37 +661,39 @@ async function probeSmtp(): Promise<ProbeResult> {
  * from an unreachable gateway, which would silence the alarm this exists to
  * raise.
  */
-export const CLICKPESA_PROBE_TIMEOUTS_MS = [15_000, 12_000] as const;
+export const SONICPESA_PROBE_TIMEOUTS_MS = [15_000, 12_000] as const;
 
-async function probeClickPesa(): Promise<ProbeResult> {
-  const base = { id: "clickpesa", name: "ClickPesa" };
-  const clientId = env("CLICKPESA_CLIENT_ID");
-  const apiKey = env("CLICKPESA_API_KEY");
-  if (!clientId || !apiKey) {
-    return { ...base, state: "skip", detail: "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY not set" };
+async function probeSonicPesa(): Promise<ProbeResult> {
+  const base = { id: "sonicpesa", name: "SonicPesa" };
+  const accessKey = env("SONICPESA_ACCESS_KEY");
+  if (!accessKey) {
+    return { ...base, state: "skip", detail: "SONICPESA_ACCESS_KEY not set" };
   }
 
-  const url = `${env("CLICKPESA_BASE_URL") || "https://api.clickpesa.com/third-parties"}/generate-token`;
+  // A READ-ONLY call: listing transactions proves the key is accepted without
+  // creating an order or pushing a USSD prompt to anybody's phone.
+  const url = `${env("SONICPESA_BASE_URL") || "https://api.sonicpesa.com/api/v1"}/transactions/readbyId`;
 
   // Two attempts at most. The retry exists for a request that never arrived —
-  // see CLICKPESA_PROBE_TIMEOUTS_MS — so an answer that DID arrive (a rejected
+  // see SONICPESA_PROBE_TIMEOUTS_MS — so an answer that DID arrive (a rejected
   // key, an HTTP error) is returned from inside the loop rather than asked twice.
   let lastError: unknown = null;
-  for (let attempt = 0; attempt < CLICKPESA_PROBE_TIMEOUTS_MS.length; attempt += 1) {
+  for (let attempt = 0; attempt < SONICPESA_PROBE_TIMEOUTS_MS.length; attempt += 1) {
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: { "client-id": clientId, "api-key": apiKey },
-        signal: timeout(CLICKPESA_PROBE_TIMEOUTS_MS[attempt]),
+        headers: { "Content-Type": "application/json", "X-API-KEY": accessKey },
+        body: JSON.stringify({ page: 1 }),
+        signal: timeout(SONICPESA_PROBE_TIMEOUTS_MS[attempt]),
       });
       const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!res.ok || !body.token) {
+      if (!res.ok) {
         const rejected = res.status === 401 || res.status === 403;
         return {
           ...base,
           state: "fail",
           detail: rejected
-            ? `HTTP ${res.status} - CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY were rejected`
+            ? `HTTP ${res.status} - SONICPESA_ACCESS_KEY was rejected`
             : `HTTP ${res.status} - ${String(body.message || res.statusText).slice(0, 120)}`,
         };
       }
@@ -700,21 +702,21 @@ async function probeClickPesa(): Promise<ProbeResult> {
       // accepted; the breaker says whether this process has been skipping it.
       // Both are needed: a healthy probe with an open breaker means the fault is
       // intermittent, not fixed.
-      const breakerNotice = clickpesaBreakerNotice();
+      const breakerNotice = sonicpesaBreakerNotice();
       const webhookSecretSet = Boolean(
-        env("CLICKPESA_CHECKSUM_KEY") || env("CLICKPESA_WEBHOOK_TOKEN")
+        env("SONICPESA_SECRET_KEY") || env("SONICPESA_WEBHOOK_TOKEN")
       );
       return {
         ...base,
         state: breakerNotice ? "warn" : "ok",
         detail:
-          "credentials valid · authorization token issued" +
+          "credentials valid · transactions endpoint answered" +
           (attempt > 0
             ? " · answered on the retry (its first connection is slow, not its key)"
             : "") +
           (webhookSecretSet
             ? ""
-            : " · no webhook secret set (CLICKPESA_CHECKSUM_KEY / CLICKPESA_WEBHOOK_TOKEN)") +
+            : " · no webhook secret set (SONICPESA_SECRET_KEY / SONICPESA_WEBHOOK_TOKEN)") +
           (breakerNotice ? ` · ${breakerNotice}` : ""),
       };
     } catch (error) {
@@ -724,13 +726,13 @@ async function probeClickPesa(): Promise<ProbeResult> {
     }
   }
 
-  const breakerNotice = clickpesaBreakerNotice();
+  const breakerNotice = sonicpesaBreakerNotice();
   return {
     ...base,
     state: "fail",
     detail:
       String((lastError as Error)?.message || lastError).slice(0, 160) +
-      ` · gave up after ${CLICKPESA_PROBE_TIMEOUTS_MS.length} attempts` +
+      ` · gave up after ${SONICPESA_PROBE_TIMEOUTS_MS.length} attempts` +
       (breakerNotice ? ` · ${breakerNotice}` : ""),
   };
 }
@@ -797,7 +799,7 @@ async function probeAppUrl(): Promise<ProbeResult> {
     return {
       ...base,
       state: "warn",
-      detail: `${url} - ClickPesa cannot reach a localhost webhook (polling still settles payments)`,
+      detail: `${url} - SonicPesa cannot reach a localhost webhook (polling still settles payments)`,
     };
   }
   try {
@@ -829,7 +831,7 @@ export async function runLiveProbes(): Promise<ProbeResult[]> {
     probeWebhook(),
     probeCdn(),
     probeSmtp(),
-    probeClickPesa(),
+    probeSonicPesa(),
     probeAppUrl(),
   ]);
 }

@@ -55,15 +55,15 @@ describe("classifyGatewayFailure", () => {
 
     it("classifies our own timeout and breaker text as unreachable, not as the gateway's words", () => {
       const timedOut = classifyGatewayFailure(
-        "ClickPesa /payments/initiate-ussd-push-request timed out after 20s — the gateway did not answer"
+        "SonicPesa /payments/initiate-ussd-push-request timed out after 20s — the gateway did not answer"
       );
       expect(timedOut.kind).toBe("unreachable");
       expect(timedOut.message).toMatch(/nothing has been charged/i);
       // The internal sentence must not leak.
-      expect(timedOut.message).not.toMatch(/timed out|20s|ClickPesa/);
+      expect(timedOut.message).not.toMatch(/timed out|20s|SonicPesa/);
 
       const open = classifyGatewayFailure(
-        "ClickPesa has not answered its last calls, so this one was not sent."
+        "SonicPesa has not answered its last calls, so this one was not sent."
       );
       expect(open.kind).toBe("unreachable");
     });

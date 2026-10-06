@@ -5,7 +5,7 @@
 // Run:  node scripts/preflight.mjs                       (development report)
 //       node scripts/preflight.mjs --production          (blocks: launch gate)
 //       node scripts/preflight.mjs --url https://domain  (+ live health probe)
-//       node scripts/preflight.mjs --gateway             (+ live ClickPesa credentials)
+//       node scripts/preflight.mjs --gateway             (+ live SonicPesa credentials)
 //       node scripts/preflight.mjs --live                (+ Redis/Bunny/SMTP probes)
 //
 // `--production` implies `--live`: the launch gate has to answer "does it work",
@@ -16,7 +16,7 @@
 // warnings (placeholders are expected); with --production they become blockers,
 // because none of them can be missing on a site taking real money.
 //
-// `--gateway` proves the ClickPesa credentials work by minting a read-only
+// `--gateway` proves the SonicPesa credentials work by minting a read-only
 // authorization token — it moves no money. Missing webhook verification is a
 // WARNING, never a blocker: the status poll and the reconcile sweep still settle
 // payments, so a callback we cannot verify delays a settlement and does not lose
@@ -293,15 +293,15 @@ must(
   `CRON_SECRET is unusable: ${cronSecret.reason} — cron routes would be unprotected; generate with: openssl rand -hex 32`
 );
 must(
-  !!env("CLICKPESA_CLIENT_ID") && !!env("CLICKPESA_API_KEY"),
-  "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY are set",
-  "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY missing — checkout would fail"
+  !!env("SONICPESA_ACCESS_KEY"),
+  "SONICPESA_ACCESS_KEY is set",
+  "SONICPESA_ACCESS_KEY missing — checkout would fail"
 );
 must(
-  !!env("CLICKPESA_CHECKSUM_KEY") ||
-    (!!env("CLICKPESA_WEBHOOK_TOKEN") && env("CLICKPESA_WEBHOOK_TOKEN").length >= 12),
-  "CLICKPESA_CHECKSUM_KEY or CLICKPESA_WEBHOOK_TOKEN is set",
-  "Neither CLICKPESA_CHECKSUM_KEY nor a long enough CLICKPESA_WEBHOOK_TOKEN is set — payment callbacks unverifiable"
+  !!env("SONICPESA_SECRET_KEY") ||
+    (!!env("SONICPESA_WEBHOOK_TOKEN") && env("SONICPESA_WEBHOOK_TOKEN").length >= 12),
+  "SONICPESA_SECRET_KEY or SONICPESA_WEBHOOK_TOKEN is set",
+  "Neither SONICPESA_SECRET_KEY nor a long enough SONICPESA_WEBHOOK_TOKEN is set — payment callbacks unverifiable"
 );
 
 // ---------------------------------------------------- Go-live requirements
@@ -382,37 +382,38 @@ if (wantLive) {
 }
 
 // ------------------------------------------------------- Live gateway check
-if (wantGateway && env("CLICKPESA_CLIENT_ID") && env("CLICKPESA_API_KEY")) {
-  const base = env("CLICKPESA_BASE_URL") || "https://api.clickpesa.com/third-parties";
-  console.log(`\nClickPesa live credential check: ${base}/generate-token`);
+if (wantGateway && env("SONICPESA_ACCESS_KEY")) {
+  const base = env("SONICPESA_BASE_URL") || "https://api.sonicpesa.com/api/v1";
+  console.log(`\nSonicPesa live credential check: ${base}/transactions/readbyId`);
   try {
-    // Minting a token is read-only: it moves no money and charges nothing.
-    const res = await fetch(`${base}/generate-token`, {
+    // Listing transactions is read-only: it moves no money and charges nothing.
+    const res = await fetch(`${base}/transactions/readbyId`, {
       method: "POST",
       headers: {
-        "client-id": env("CLICKPESA_CLIENT_ID"),
-        "api-key": env("CLICKPESA_API_KEY"),
+        "Content-Type": "application/json",
+        "X-API-KEY": env("SONICPESA_ACCESS_KEY"),
       },
+      body: JSON.stringify({ page: 1 }),
       signal: AbortSignal.timeout(15_000),
     });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok || body.success === false || !body.token) {
-      fail(`generate-token -> HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
+    if (!res.ok || body.status === "error") {
+      fail(`transactions/readbyId -> HTTP ${res.status}: ${JSON.stringify(body).slice(0, 200)}`);
       blockers++;
     } else {
-      ok("ClickPesa credentials are valid — an authorization token was issued");
-      if (!env("CLICKPESA_CHECKSUM_KEY") && !env("CLICKPESA_WEBHOOK_TOKEN")) {
+      ok("SonicPesa credentials are valid — the transactions endpoint answered");
+      if (!env("SONICPESA_SECRET_KEY") && !env("SONICPESA_WEBHOOK_TOKEN")) {
         // A warning, never a blocker: settlement does not depend on the webhook.
         warn(
           "No webhook verification secret is set — callbacks would be accepted without proof " +
-            "they came from ClickPesa. Set CLICKPESA_CHECKSUM_KEY (preferred) or " +
-            "CLICKPESA_WEBHOOK_TOKEN."
+            "they came from SonicPesa. Set SONICPESA_SECRET_KEY (preferred) or " +
+            "SONICPESA_WEBHOOK_TOKEN."
         );
         warnings++;
       }
     }
   } catch (error) {
-    fail(`could not reach ClickPesa: ${error.message || error}`);
+    fail(`could not reach SonicPesa: ${error.message || error}`);
     blockers++;
   }
 }

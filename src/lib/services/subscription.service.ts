@@ -3,7 +3,7 @@
 // ONE implementation of "a subscription payment succeeded", shared by all three
 // ways a membership is paid for:
 //   * POST /api/subscriptions          (wallet path)
-//   * processPaymentWebhook            (ClickPesa USSD settlement)
+//   * processPaymentWebhook            (SonicPesa USSD settlement)
 //   * subscription-renewal.service     (automatic renewal)
 //
 // Every caller runs grantSubscription() INSIDE a database transaction, so the

@@ -76,7 +76,7 @@
 //
 // With CRON_SECRET set the run also asks /api/health/services, which runs the
 // same live probes `npm run preflight:prod` runs: Postgres, Redis, Bunny, SMTP,
-// ClickPesa and the app URL. A revoked Bunny key or a rotated SMTP password
+// SonicPesa and the app URL. A revoked Bunny key or a rotated SMTP password
 // leaves a site that answers every request and cannot stream a video or send a
 // password reset — nothing inside the app fails loudly, so an outside check is
 // the only thing that can notice, and this one is already hourly.

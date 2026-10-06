@@ -104,24 +104,24 @@ export function launchBlockers(): LaunchBlocker[] {
   }
 
   // --- able to take money
-  if (config.clickPesa.sandbox) {
+  if (config.sonicPesa.sandbox) {
     add(
       "gatewayLive",
       "PAYMENT_SANDBOX=true — payments are simulated, no USSD push and no real money",
       "SETUP.md §4"
     );
   }
-  if (!config.clickPesa.clientId || !config.clickPesa.apiKey) {
+  if (!config.sonicPesa.accessKey) {
     add(
       "gatewayKey",
-      "CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY are not set — checkout fails immediately",
+      "SONICPESA_ACCESS_KEY is not set — checkout fails immediately",
       "SETUP.md §4"
     );
   }
-  if (!config.clickPesa.checksumKey && !config.clickPesa.webhookToken) {
+  if (!config.sonicPesa.secretKey) {
     add(
       "gatewayWebhook",
-      "Neither CLICKPESA_CHECKSUM_KEY nor CLICKPESA_WEBHOOK_TOKEN is set — payment callbacks would be accepted without proof they came from ClickPesa",
+      "SONICPESA_SECRET_KEY is not set — payment callbacks would be accepted without proof they came from SonicPesa",
       "SETUP.md §4"
     );
   }

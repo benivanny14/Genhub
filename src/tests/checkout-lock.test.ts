@@ -20,7 +20,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   updateMany: vi.fn(),
-  clickpesaStatus: vi.fn(),
+  sonicpesaStatus: vi.fn(),
   processPaymentWebhook: vi.fn(),
   notifyPaymentResult: vi.fn(),
 }));
@@ -32,14 +32,14 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/config", () => ({
-  default: { clickPesa: { apiKey: "test-key", sandbox: false } },
+  default: { sonicPesa: { accessKey: "test-key", sandbox: false } },
 }));
 
-vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/payments/clickpesa")>();
+vi.mock("@/lib/payments/sonicpesa", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments/sonicpesa")>();
   return {
     ...actual,
-    clickpesaStatus: (...args: unknown[]) => mocks.clickpesaStatus(...args),
+    sonicpesaStatus: (...args: unknown[]) => mocks.sonicpesaStatus(...args),
   };
 });
 
@@ -66,8 +66,8 @@ function pending(overrides: Partial<Parameters<typeof resolvePendingCheckout>[0]
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (config.clickPesa as { apiKey: string; sandbox: boolean }).apiKey = "test-key";
-  (config.clickPesa as { apiKey: string; sandbox: boolean }).sandbox = false;
+  (config.sonicPesa as { accessKey: string; sandbox: boolean }).accessKey = "test-key";
+  (config.sonicPesa as { accessKey: string; sandbox: boolean }).sandbox = false;
   mocks.updateMany.mockResolvedValue({ count: 1 });
   mocks.processPaymentWebhook.mockResolvedValue({ processed: true });
   mocks.notifyPaymentResult.mockResolvedValue(undefined);
@@ -84,12 +84,12 @@ describe("resolvePendingCheckout", () => {
       expect(outcome.minutesLeft).toBeGreaterThan(0);
       expect(outcome.minutesLeft).toBeLessThanOrEqual(10);
     }
-    expect(mocks.clickpesaStatus).not.toHaveBeenCalled();
+    expect(mocks.sonicpesaStatus).not.toHaveBeenCalled();
     expect(mocks.updateMany).not.toHaveBeenCalled();
   });
 
   it("settles through the webhook path when the gateway says SUCCESS, and grants instead of releasing", async () => {
-    mocks.clickpesaStatus.mockResolvedValue({
+    mocks.sonicpesaStatus.mockResolvedValue({
       success: true,
       payment: { status: "SUCCESS" },
     });
@@ -106,7 +106,7 @@ describe("resolvePendingCheckout", () => {
   });
 
   it("releases the lock when the gateway still has no verdict", async () => {
-    mocks.clickpesaStatus.mockResolvedValue({
+    mocks.sonicpesaStatus.mockResolvedValue({
       success: true,
       payment: { status: "processing" },
     });
@@ -126,7 +126,7 @@ describe("resolvePendingCheckout", () => {
   });
 
   it("still releases when the gateway cannot be reached — an unanswered call is not a verdict", async () => {
-    mocks.clickpesaStatus.mockRejectedValue(new Error("ECONNREFUSED"));
+    mocks.sonicpesaStatus.mockRejectedValue(new Error("ECONNREFUSED"));
 
     const outcome = await resolvePendingCheckout(pending());
 
@@ -137,17 +137,17 @@ describe("resolvePendingCheckout", () => {
   });
 
   it("releases a sandbox row without calling the gateway at all", async () => {
-    (config.clickPesa as { apiKey: string; sandbox: boolean }).sandbox = true;
+    (config.sonicPesa as { accessKey: string; sandbox: boolean }).sandbox = true;
 
     const outcome = await resolvePendingCheckout(pending());
 
     expect(outcome.state).toBe("released");
-    expect(mocks.clickpesaStatus).not.toHaveBeenCalled();
+    expect(mocks.sonicpesaStatus).not.toHaveBeenCalled();
     expect(mocks.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it("does not release or notify twice when a settlement landed first", async () => {
-    mocks.clickpesaStatus.mockResolvedValue({
+    mocks.sonicpesaStatus.mockResolvedValue({
       success: true,
       payment: { status: "processing" },
     });
@@ -162,7 +162,7 @@ describe("resolvePendingCheckout", () => {
   });
 
   it("lets the webhook processor own a gateway-reported failure", async () => {
-    mocks.clickpesaStatus.mockResolvedValue({
+    mocks.sonicpesaStatus.mockResolvedValue({
       success: true,
       payment: { status: "failed" },
     });

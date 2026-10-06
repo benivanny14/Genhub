@@ -1,6 +1,6 @@
 // =============================================================================
 // GENHUB - Payment gateway lock
-// ClickPesa is the ONLY payment gateway. Every payment entry point and the
+// SonicPesa is the ONLY payment gateway. Every payment entry point and the
 // settlement choke point import from here, so a legacy gateway can never be
 // wired back in silently: an unexpected value fails loudly instead of quietly
 // routing money somewhere else.
@@ -14,25 +14,25 @@
 // The adapter registry below is the single seam through which a caller reaches
 // a gateway. Cross-cutting code (routes, services) can depend on this module —
 // not on the integration file — so adding a future gateway means registering an
-// adapter here, without editing every caller. Today CLICKPESA is the only
+// adapter here, without editing every caller. Today SONICPESA is the only
 // registered adapter, and the guard test in src/tests/gateway-guard.test.ts
 // keeps it that way.
 // =============================================================================
 
 import config from "../config";
 import {
-  clickpesaCollect,
-  clickpesaStatus,
-  clickpesaGatewayState,
-  type ClickPesaCollectResponse,
-  type ClickPesaStatusResponse,
-} from "./clickpesa";
+  sonicpesaCollect,
+  sonicpesaStatus,
+  sonicpesaGatewayState,
+  type SonicPesaCollectResponse,
+  type SonicPesaStatusResponse,
+} from "./sonicpesa";
 
-export const SUPPORTED_GATEWAYS = ["CLICKPESA"] as const;
+export const SUPPORTED_GATEWAYS = ["SONICPESA"] as const;
 export type SupportedGateway = (typeof SUPPORTED_GATEWAYS)[number];
 
 /**
- * `provider` labels allowed to reach settlement. ClickPesa is the only real
+ * `provider` labels allowed to reach settlement. SonicPesa is the only real
  * gateway; SANDBOX is the local-dev marker emitted by POST /api/dev/sandbox.
  */
 const SETTLEMENT_PROVIDERS: readonly string[] = [...SUPPORTED_GATEWAYS, "SANDBOX"];
@@ -91,8 +91,11 @@ export interface GatewayCollectRequest {
   phone: string;
   /** Amount in the gateway's settlement currency (TZS). */
   amount: number;
-  /** Unique, alphanumeric order reference the gateway echoes back. */
+  /** Our own unique, alphanumeric trace reference for this attempt. */
   orderReference: string;
+  /** Optional buyer identity the gateway asks for on create_order. */
+  email?: string;
+  name?: string;
 }
 
 /** The gateway's circuit-breaker snapshot, for diagnostics and health pages. */
@@ -111,26 +114,26 @@ export interface PaymentGatewayAdapter {
   /** The local breaker: true while gateway calls are being skipped. */
   breakerState(): GatewayBreakerState;
   /** Send the mobile-money prompt. */
-  collect(request: GatewayCollectRequest): Promise<ClickPesaCollectResponse>;
+  collect(request: GatewayCollectRequest): Promise<SonicPesaCollectResponse>;
   /** Ask the gateway for the current verdict on an order reference. */
-  status(orderReference: string): Promise<ClickPesaStatusResponse>;
+  status(orderReference: string): Promise<SonicPesaStatusResponse>;
 }
 
 /**
- * The ClickPesa adapter. It is the only registered gateway, and it exists so
+ * The SonicPesa adapter. It is the only registered gateway, and it exists so
  * callers depend on `PaymentGatewayAdapter` rather than on the integration file.
  */
-const clickPesaAdapter: PaymentGatewayAdapter = {
-  id: "CLICKPESA",
-  isConfigured: () => Boolean(config.clickPesa.clientId && config.clickPesa.apiKey),
-  breakerState: () => clickpesaGatewayState(),
-  collect: (request) => clickpesaCollect(request),
-  status: (orderReference) => clickpesaStatus(orderReference),
+const sonicPesaAdapter: PaymentGatewayAdapter = {
+  id: "SONICPESA",
+  isConfigured: () => Boolean(config.sonicPesa.accessKey),
+  breakerState: () => sonicpesaGatewayState(),
+  collect: (request) => sonicpesaCollect(request),
+  status: (orderReference) => sonicpesaStatus(orderReference),
 };
 
 /** Every supported gateway id, mapped to its adapter. One entry today. */
 export const PAYMENT_GATEWAYS: Readonly<Record<SupportedGateway, PaymentGatewayAdapter>> = {
-  CLICKPESA: clickPesaAdapter,
+  SONICPESA: sonicPesaAdapter,
 };
 
 /**

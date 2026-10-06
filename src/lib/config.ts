@@ -10,8 +10,8 @@
 // are built from. Forgetting it on a host that knows its own address is an easy
 // way to silently break links, so when it is unset (or still localhost) we fall
 // back to the platform's own URL variables before giving up. It also has to be
-// right for the ClickPesa webhook dashboard entry, which points at
-// /api/webhooks/clickpesa on this domain.
+// right for the SonicPesa webhook dashboard entry, which points at
+// /api/webhooks/sonicpesa on this domain.
 
 import publicConfig from "@/lib/public-config";
 
@@ -140,25 +140,26 @@ const config = {
     webhookSecret: process.env.BUNNY_STREAM_WEBHOOK_SECRET || "",
   },
 
-  // ClickPesa — the only payment gateway (USSD push via mobile money).
+  // SonicPesa — the only payment gateway (USSD push via mobile money).
   //
-  // Auth is a short-lived token minted from the client id + api key (see
-  // lib/payments/clickpesa.ts). Callbacks authenticate two ways and either may
-  // be used: an HMAC-SHA256 `checksum` signed with the checksum key (the
-  // stronger option, and the one ClickPesa recommends), or a shared token the
-  // operator puts in the webhook URL as ?t=… .
-  clickPesa: {
-    clientId: process.env.CLICKPESA_CLIENT_ID || "",
-    apiKey: process.env.CLICKPESA_API_KEY || "",
+  // Auth is a static header, `X-API-KEY: <access key>` (see
+  // lib/payments/sonicpesa.ts). Callbacks are authenticated by the
+  // `X-SonicPesa-Signature` HMAC-SHA256 header, computed over the RAW request
+  // body with the secret key; a shared ?t= token is accepted as a local-only
+  // fallback when no secret key is configured.
+  sonicPesa: {
+    accessKey: process.env.SONICPESA_ACCESS_KEY || "",
+    // Signs every inbound webhook (HMAC-SHA256 over the raw body).
+    secretKey: process.env.SONICPESA_SECRET_KEY || "",
     baseUrl:
-      process.env.CLICKPESA_BASE_URL || "https://api.clickpesa.com/third-parties",
+      process.env.SONICPESA_BASE_URL || "https://api.sonicpesa.com/api/v1",
     // Shared secret the operator appends to the dashboard webhook URL (?t=…).
-    webhookToken: process.env.CLICKPESA_WEBHOOK_TOKEN || "",
-    // Checksum key from the ClickPesa dashboard. When set, every callback MUST
-    // carry a valid signature — a body without one is refused.
-    checksumKey: process.env.CLICKPESA_CHECKSUM_KEY || "",
+    webhookToken: process.env.SONICPESA_WEBHOOK_TOKEN || "",
+    // The API requires a buyer email on create_order; this is the address used
+    // when the payer's account has none. Never a secret.
+    fallbackEmail: publicConfig.compliance.supportEmail || "payments@genhub.app",
     // PAYMENT_SANDBOX=true keeps local dev off the real gateway (no USSD pushes).
-    // ClickPesa has no sandbox environment, so this is a local simulation only.
+    // SonicPesa has no sandbox environment, so this is a local simulation only.
     sandbox: process.env.PAYMENT_SANDBOX === "true",
   },
 
@@ -247,18 +248,15 @@ export function productionConfigWarnings(): string[] {
   if (config.jwtSecret === "dev-secret-change-in-production") {
     warnings.push("JWT_SECRET is still the development default — set a strong random secret");
   }
-  if (config.clickPesa.sandbox) {
+  if (config.sonicPesa.sandbox) {
     warnings.push("PAYMENT_SANDBOX=true — payments are simulated; set to false for live gateways");
   }
-  if (!config.clickPesa.clientId) {
-    warnings.push("CLICKPESA_CLIENT_ID is empty — checkout will fail in production");
+  if (!config.sonicPesa.accessKey) {
+    warnings.push("SONICPESA_ACCESS_KEY is empty — checkout will fail in production");
   }
-  if (!config.clickPesa.apiKey) {
-    warnings.push("CLICKPESA_API_KEY is empty — checkout will fail in production");
-  }
-  if (!config.clickPesa.checksumKey && !config.clickPesa.webhookToken) {
+  if (!config.sonicPesa.secretKey) {
     warnings.push(
-      "Neither CLICKPESA_CHECKSUM_KEY nor CLICKPESA_WEBHOOK_TOKEN is set — payment webhooks would be accepted without proof they came from ClickPesa"
+      "SONICPESA_SECRET_KEY is empty — payment webhooks would be accepted without proof they came from SonicPesa"
     );
   }
   if (!config.cron.secret) {
@@ -266,13 +264,13 @@ export function productionConfigWarnings(): string[] {
   }
   if (config.appUrlSource === "localhost") {
     warnings.push(
-      "The app URL is still localhost — SEO links, referral links and the ClickPesa webhook URL will be wrong. " +
+      "The app URL is still localhost — SEO links, referral links and the SonicPesa webhook URL will be wrong. " +
         "Set NEXT_PUBLIC_APP_URL to the public https:// domain."
     );
   } else if (config.appUrlSource !== "NEXT_PUBLIC_APP_URL") {
     warnings.push(
       `NEXT_PUBLIC_APP_URL is unset, so the app URL was inferred from ${config.appUrlSource} (${config.appUrl}). ` +
-        "Set it explicitly so the ClickPesa webhook URL never depends on the hosting provider."
+        "Set it explicitly so the SonicPesa webhook URL never depends on the hosting provider."
     );
   }
   if (!config.databaseUrl) {

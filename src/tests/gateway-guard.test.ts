@@ -1,11 +1,12 @@
 // =============================================================================
 // GENHUB - Payment gateway lock (guard test)
 //
-// ClickPesa is the only gateway. This suite fails the build if a second
+// SonicPesa is the only gateway. This suite fails the build if a second
 // gateway is ever wired back in — whether through the Prisma enum, a new
 // integration module, an import of a deleted module, or a stray identifier in
-// the source tree. HARAKAPAY survives only as a historical label for old
-// transactions; it may never settle a new payment.
+// the source tree. HARAKAPAY and CLICKPESA survive only as historical labels
+// for old transactions and subscriptions; neither may ever settle a new
+// payment.
 // =============================================================================
 
 import { describe, it, expect } from "vitest";
@@ -38,11 +39,11 @@ function walk(dir: string, extensions: string[]): string[] {
 }
 
 describe("payment gateway lock", () => {
-  it("supports ClickPesa and nothing else", () => {
-    expect(SUPPORTED_GATEWAYS).toEqual(["CLICKPESA"]);
+  it("supports SonicPesa and nothing else", () => {
+    expect(SUPPORTED_GATEWAYS).toEqual(["SONICPESA"]);
   });
 
-  it("declares CLICKPESA in the Prisma PaymentGateway enum, with HARAKAPAY kept for history", () => {
+  it("declares SONICPESA in the Prisma PaymentGateway enum, with the retired labels kept for history", () => {
     const schema = fs.readFileSync(path.join(ROOT, "prisma", "schema.prisma"), "utf8");
     const block = schema.match(/enum\s+PaymentGateway\s*\{([^}]*)\}/);
     expect(block, "PaymentGateway enum not found in prisma/schema.prisma").toBeTruthy();
@@ -52,19 +53,22 @@ describe("payment gateway lock", () => {
       .map((line) => line.replace(/\/\/.*$/, "").trim())
       .filter(Boolean);
 
+    expect(values).toContain("SONICPESA");
+    // The old values are allowed to remain (old rows must stay readable) but
+    // none of them may be a supported gateway.
+    expect(values).toContain("HARAKAPAY");
     expect(values).toContain("CLICKPESA");
-    // The old value is allowed to remain (old rows must stay readable) but it
-    // must never be a supported gateway.
     expect(SUPPORTED_GATEWAYS).not.toContain("HARAKAPAY");
+    expect(SUPPORTED_GATEWAYS).not.toContain("CLICKPESA");
   });
 
-  it("ships only the ClickPesa integration module", () => {
+  it("ships only the SonicPesa integration module", () => {
     const files = fs
       .readdirSync(path.join(ROOT, "src", "lib", "payments"))
       .filter((f) => f.endsWith(".ts"))
       .sort();
 
-    expect(files).toEqual(["clickpesa.ts", "gateway.ts"]);
+    expect(files).toEqual(["gateway.ts", "sonicpesa.ts"]);
   });
 
   it("has no shipped source reference to a decommissioned gateway", () => {
@@ -106,7 +110,8 @@ describe("payment gateway lock", () => {
   it("throws when an unsupported gateway is asserted", () => {
     expect(() => assertSupportedGateway("AZAMPAY")).toThrow(/Unsupported payment gateway/);
     expect(() => assertSupportedGateway("HARAKAPAY")).toThrow(/Unsupported payment gateway/);
-    expect(assertSupportedGateway("CLICKPESA")).toBe("CLICKPESA");
+    expect(() => assertSupportedGateway("CLICKPESA")).toThrow(/Unsupported payment gateway/);
+    expect(assertSupportedGateway("SONICPESA")).toBe("SONICPESA");
   });
 
   it("blocks an unsupported provider at settlement", () => {
@@ -118,8 +123,12 @@ describe("payment gateway lock", () => {
       assertSupportedSettlementProvider("HARAKAPAY", { allowSandbox: false })
     ).toThrow(/Unsupported payment provider/);
 
-    expect(assertSupportedSettlementProvider("CLICKPESA", { allowSandbox: false })).toBe(
-      "CLICKPESA"
+    expect(() =>
+      assertSupportedSettlementProvider("CLICKPESA", { allowSandbox: false })
+    ).toThrow(/Unsupported payment provider/);
+
+    expect(assertSupportedSettlementProvider("SONICPESA", { allowSandbox: false })).toBe(
+      "SONICPESA"
     );
 
     // The dev sandbox marker is allowed locally, never in production.

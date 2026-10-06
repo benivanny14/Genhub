@@ -1,6 +1,6 @@
 // =============================================================================
 // GENHUB - Payment Webhook Processor
-// Finalises every ClickPesa checkout (webhook, status poll or reconciliation)
+// Finalises every SonicPesa checkout (webhook, status poll or reconciliation)
 // and applies the 70/30 creator/platform split.
 // =============================================================================
 
@@ -29,7 +29,7 @@ export async function processPaymentWebhook(params: {
 }): Promise<{ processed: boolean; reason?: string }> {
   const { orderId, transactionId, amount, status, provider } = params;
 
-  // Runtime gateway lock: nothing but ClickPesa (or the dev sandbox marker) may
+  // Runtime gateway lock: nothing but SonicPesa (or the dev sandbox marker) may
   // settle money. This is the single choke point every payment flows through.
   assertSupportedSettlementProvider(provider);
 

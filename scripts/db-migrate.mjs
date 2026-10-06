@@ -276,12 +276,21 @@ function main() {
   console.log("");
 
   const { command: bin, args: binArgs, shell } = prismaBinary();
+  // IPv4 first. The Prisma client engine resolves the database host itself, and
+  // on a network WITHOUT an IPv6 route (a common local/dev case, and the reason
+  // this once failed with a bare `P1001: Can't reach database server` even
+  // though the host answered on 5432) it otherwise tries the host's AAAA record
+  // first, fails with ENETUNREACH, and reports the whole attempt as unreachable.
+  // Harmless where IPv6 works: it only changes which address is tried first.
+  const nodeOptions = [process.env.NODE_OPTIONS || "", "--dns-result-order=ipv4first"]
+    .filter(Boolean)
+    .join(" ");
   const result = spawnSync(bin, [...binArgs, ...forwards], {
     stdio: "inherit",
     // The loaded value must reach the child. spawnSync inherits a COPY of
     // process.env, so it does; `env` is passed explicitly to make that obvious
     // to the next reader rather than implied.
-    env: process.env,
+    env: { ...process.env, NODE_OPTIONS: nodeOptions },
     shell,
   });
 

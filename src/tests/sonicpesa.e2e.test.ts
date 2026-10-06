@@ -1,8 +1,8 @@
 // =============================================================================
-// GENHUB - ClickPesa end-to-end payment flow (real database)
+// GENHUB - SonicPesa end-to-end payment flow (real database)
 //
 // Exercises the entire purchase pipeline exactly as production runs it:
-//   purchase (sandbox gateway) -> status PENDING -> ClickPesa webhook ->
+//   purchase (sandbox gateway) -> status PENDING -> SonicPesa webhook ->
 //   processPaymentWebhook (70/30 split, access grant, earnings) ->
 //   status SUCCESS -> idempotency checks -> 14-day release job
 //
@@ -39,7 +39,7 @@ import config from "@/lib/config";
 import { POST as purchasePost } from "@/app/api/payments/purchase/route";
 import { POST as topupPost } from "@/app/api/payments/topup/route";
 import { GET as statusGet } from "@/app/api/payments/status/[orderId]/route";
-import { POST as webhookPost } from "@/app/api/webhooks/clickpesa/route";
+import { POST as webhookPost } from "@/app/api/webhooks/sonicpesa/route";
 import { POST as completePost } from "@/app/api/dev/sandbox/complete/route";
 import { POST as subscriptionsPost } from "@/app/api/subscriptions/route";
 import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
@@ -64,7 +64,7 @@ function get(url: string): NextRequest {
   return new NextRequest(`http://localhost${url}`);
 }
 
-describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
+describeE2E("SonicPesa E2E: purchase -> webhook -> status -> DB", () => {
   let orderId = "";
   let transactionId = "";
 
@@ -123,11 +123,11 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
     await prisma.$disconnect();
   });
 
-  it("creates a PENDING transaction with a ClickPesa order reference", async () => {
+  it("creates a PENDING transaction with a SonicPesa order reference", async () => {
     const res = await purchasePost(
       post("/api/payments/purchase", {
         videoId: ctx.videoId,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         phoneNumber: "0712345678",
         email: "e2e@viewer.test",
       })
@@ -138,7 +138,7 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
     expect(body.success).toBe(true);
     expect(body.data.sandbox).toBe(true);
     expect(body.data.amount).toBe(ctx.amount);
-    expect(body.data.orderId).toMatch(/^cp_sbx_/);
+    expect(body.data.orderId).toMatch(/^sp_sbx_/);
 
     orderId = body.data.orderId;
     transactionId = body.data.transactionId;
@@ -147,7 +147,7 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
     expect(tx).not.toBeNull();
     expect(tx!.status).toBe("PENDING");
     expect(tx!.providerRef).toBe(orderId);
-    expect(tx!.gateway).toBe("CLICKPESA");
+    expect(tx!.gateway).toBe("SONICPESA");
   });
 
   it("status polling reports PENDING before the webhook lands", async () => {
@@ -163,39 +163,42 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
 
   it("rejects webhooks with the wrong shared token", async () => {
     const res = await webhookPost(
-      new NextRequest(`http://localhost/api/webhooks/clickpesa?t=WRONG`, {
+      new NextRequest(`http://localhost/api/webhooks/sonicpesa?t=WRONG`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          event: "PAYMENT RECEIVED",
-          data: { orderReference: orderId, status: "SUCCESS" },
+          event: "payment.completed",
+          order_id: orderId,
+          status: "SUCCESS",
         }),
       })
     );
     expect(res.status).toBe(401);
   });
 
-  it("processes the real ClickPesa webhook (received)", async () => {
-    const token = config.clickPesa.webhookToken;
+  it("processes the real SonicPesa webhook (received)", async () => {
+    const token = config.sonicPesa.webhookToken;
     // Supplied by src/tests/setup-env.ts when the machine has no .env.local, so
     // this is the real verification path rather than a fixture token.
     expect(token).toBeTruthy();
 
     const res = await webhookPost(
       new NextRequest(
-        `http://localhost/api/webhooks/clickpesa?t=${encodeURIComponent(token)}`,
+        `http://localhost/api/webhooks/sonicpesa?t=${encodeURIComponent(token)}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            event: "PAYMENT RECEIVED",
-            data: {
-              orderReference: orderId,
-              status: "SUCCESS",
-              collectedAmount: ctx.amount,
-              collectedCurrency: "TZS",
-              updatedAt: new Date().toISOString(),
-            },
+            event: "payment.completed",
+            order_id: orderId,
+            status: "SUCCESS",
+            amount: ctx.amount,
+            currency: "TZS",
+            transid: "E2ETXN",
+            channel: "AIRTELMONEY",
+            reference: orderId,
+            msisdn: "255712345678",
+            timestamp: new Date().toISOString(),
           }),
         }
       )
@@ -251,22 +254,24 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
   });
 
   it("is idempotent: webhook replay does not double-credit", async () => {
-    const token = config.clickPesa.webhookToken;
+    const token = config.sonicPesa.webhookToken;
     const res = await webhookPost(
       new NextRequest(
-        `http://localhost/api/webhooks/clickpesa?t=${encodeURIComponent(token)}`,
+        `http://localhost/api/webhooks/sonicpesa?t=${encodeURIComponent(token)}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            event: "PAYMENT RECEIVED",
-            data: {
-              orderReference: orderId,
-              status: "SUCCESS",
-              collectedAmount: ctx.amount,
-              collectedCurrency: "TZS",
-              updatedAt: new Date().toISOString(),
-            },
+            event: "payment.completed",
+            order_id: orderId,
+            status: "SUCCESS",
+            amount: ctx.amount,
+            currency: "TZS",
+            transid: "E2ETXN",
+            channel: "AIRTELMONEY",
+            reference: orderId,
+            msisdn: "255712345678",
+            timestamp: new Date().toISOString(),
           }),
         }
       )
@@ -296,7 +301,7 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
     const res = await purchasePost(
       post("/api/payments/purchase", {
         videoId: ctx.videoId,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         phoneNumber: "0712345678",
         email: "e2e@viewer.test",
       })
@@ -309,7 +314,7 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
     const res = await topupPost(
       post("/api/payments/topup", {
         amount: topUpAmount,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         phoneNumber: "0712345678",
       })
     );
@@ -317,7 +322,7 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
 
     expect(res.status).toBe(200);
     expect(body.data.sandbox).toBe(true);
-    expect(body.data.orderId).toMatch(/^cp_sbx_/);
+    expect(body.data.orderId).toMatch(/^sp_sbx_/);
 
     const done = await completePost(
       post("/api/dev/sandbox/complete", { orderId: body.data.orderId })
@@ -370,10 +375,10 @@ describeE2E("ClickPesa E2E: purchase -> webhook -> status -> DB", () => {
 
 // =============================================================================
 // Subscription paid by phone — the same gateway pipeline as PPV purchases:
-// PENDING SUBSCRIPTION txn -> ClickPesa webhook -> plan activated + 70/30 split
+// PENDING SUBSCRIPTION txn -> SonicPesa webhook -> plan activated + 70/30 split
 // =============================================================================
 
-describeE2E("ClickPesa E2E: subscription by phone", () => {
+describeE2E("SonicPesa E2E: subscription by phone", () => {
   const stamp = Date.now();
   const creatorA = `e2esubcre${stamp}`;
   const viewerA = `e2esubvw${stamp}`;
@@ -430,7 +435,7 @@ describeE2E("ClickPesa E2E: subscription by phone", () => {
     expect(body.success).toBe(true);
     expect(body.data.sandbox).toBe(true);
     expect(body.data.amount).toBe(SUBSCRIPTION_PRICE_TZS); // the default monthly price
-    expect(body.data.orderId).toMatch(/^cp_sbx_/);
+    expect(body.data.orderId).toMatch(/^sp_sbx_/);
 
     orderId = body.data.orderId;
     transactionId = body.data.transactionId;
@@ -461,22 +466,24 @@ describeE2E("ClickPesa E2E: subscription by phone", () => {
   });
 
   it("webhook activates the plan, splits 70/30 and resynces the counter", async () => {
-    const token = config.clickPesa.webhookToken;
+    const token = config.sonicPesa.webhookToken;
     const res = await webhookPost(
       new NextRequest(
-        `http://localhost/api/webhooks/clickpesa?t=${encodeURIComponent(token)}`,
+        `http://localhost/api/webhooks/sonicpesa?t=${encodeURIComponent(token)}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            event: "PAYMENT RECEIVED",
-            data: {
-              orderReference: orderId,
-              status: "SUCCESS",
-              collectedAmount: SUBSCRIPTION_PRICE_TZS,
-              collectedCurrency: "TZS",
-              updatedAt: new Date().toISOString(),
-            },
+            event: "payment.completed",
+            order_id: orderId,
+            status: "SUCCESS",
+            amount: SUBSCRIPTION_PRICE_TZS,
+            currency: "TZS",
+            transid: "E2ESUBTXN",
+            channel: "AIRTELMONEY",
+            reference: orderId,
+            msisdn: "255712345678",
+            timestamp: new Date().toISOString(),
           }),
         }
       )
@@ -528,22 +535,24 @@ describeE2E("ClickPesa E2E: subscription by phone", () => {
   });
 
   it("webhook replay is idempotent (no double credit, no counter drift)", async () => {
-    const token = config.clickPesa.webhookToken;
+    const token = config.sonicPesa.webhookToken;
     const res = await webhookPost(
       new NextRequest(
-        `http://localhost/api/webhooks/clickpesa?t=${encodeURIComponent(token)}`,
+        `http://localhost/api/webhooks/sonicpesa?t=${encodeURIComponent(token)}`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            event: "PAYMENT RECEIVED",
-            data: {
-              orderReference: orderId,
-              status: "SUCCESS",
-              collectedAmount: SUBSCRIPTION_PRICE_TZS,
-              collectedCurrency: "TZS",
-              updatedAt: new Date().toISOString(),
-            },
+            event: "payment.completed",
+            order_id: orderId,
+            status: "SUCCESS",
+            amount: SUBSCRIPTION_PRICE_TZS,
+            currency: "TZS",
+            transid: "E2ESUBTXN",
+            channel: "AIRTELMONEY",
+            reference: orderId,
+            msisdn: "255712345678",
+            timestamp: new Date().toISOString(),
           }),
         }
       )

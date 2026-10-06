@@ -8,7 +8,7 @@
 //
 // It reports two facts and one decision:
 //   breakerOpen  the local circuit breaker has temporarily stopped calling
-//                ClickPesa because it stopped answering. This is the state that
+//                SonicPesa because it stopped answering. This is the state that
 //                produced "something went wrong" for a customer who did nothing
 //                wrong.
 //   sandbox      checkout is simulated (a dev build, or PAYMENT_SANDBOX=true),
@@ -29,9 +29,9 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   // Resolved through the registry, not the integration file, so this route
   // stays unaware of which gateway is behind it.
-  const gateway = resolvePaymentGateway("CLICKPESA");
+  const gateway = resolvePaymentGateway("SONICPESA");
   const breaker = gateway.breakerState();
-  const sandbox = config.clickPesa.sandbox;
+  const sandbox = config.sonicPesa.sandbox;
   const configured = gateway.isConfigured();
 
   // Sandbox simulates the charge, so it is always "available" — a dev build must

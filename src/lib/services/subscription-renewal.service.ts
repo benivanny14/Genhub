@@ -4,7 +4,7 @@
 // A membership renews in the 24h before it expires. The order of preference is:
 //
 //   1. WALLET  — instant, no phone needed, settled in a single transaction.
-//   2. CLICKPESA USSD push — used when the wallet cannot cover the price but we
+//   2. SONICPESA USSD push — used when the wallet cannot cover the price but we
 //      have the phone number the fan originally paid with (remembered on the
 //      subscription as `renewPhone`, or recovered from their last gateway
 //      checkout). The push is settled by the normal webhook/status poll.
@@ -29,11 +29,11 @@
 import prisma from "../db";
 import config from "../config";
 import {
-  clickpesaCollect,
-  clickpesaErrorReason,
-  clickpesaOrderReference,
+  sonicpesaCollect,
+  sonicpesaErrorReason,
+  sonicpesaOrderReference,
   normalizeTzPhoneMsisdn,
-} from "../payments/clickpesa";
+} from "../payments/sonicpesa";
 import { generateOrderId } from "../utils";
 import { grantSubscription, resyncSubscriberCount } from "./subscription.service";
 import { debitWallet } from "./balance.service";
@@ -614,7 +614,7 @@ async function pushRenewal(params: {
     attempts,
   } = params;
   const orderId = generateOrderId("REN");
-  const providerRef = clickpesaOrderReference("RN");
+  const providerRef = sonicpesaOrderReference("RN");
 
   const transaction = await prisma.transaction.create({
     data: {
@@ -623,7 +623,7 @@ async function pushRenewal(params: {
       amount: price,
       type: "SUBSCRIPTION",
       status: "PENDING",
-      gateway: "CLICKPESA",
+      gateway: "SONICPESA",
       providerRef,
       metadata: {
         orderId,
@@ -631,6 +631,7 @@ async function pushRenewal(params: {
         phone,
         renewal: true,
         subscriptionId,
+        ourReference: providerRef,
       },
     },
     select: { id: true },
@@ -640,10 +641,10 @@ async function pushRenewal(params: {
   // status poll and webhook can map a callback onto this row.
   const sandbox =
     config.nodeEnv !== "production" &&
-    (!config.clickPesa.apiKey || config.clickPesa.sandbox);
+    (!config.sonicPesa.accessKey || config.sonicPesa.sandbox);
 
   if (sandbox) {
-    const ref = `cp_sbx_${transaction.id}`;
+    const ref = `sp_sbx_${transaction.id}`;
     await prisma.$transaction([
       prisma.transaction.update({
         where: { id: transaction.id },
@@ -661,10 +662,10 @@ async function pushRenewal(params: {
     return { ok: true };
   }
 
-  // ClickPesa does not take a webhook URL per request; the endpoint is
+  // SonicPesa does not take a webhook URL per request; the endpoint is
   // configured in the dashboard.
   try {
-    const response = await clickpesaCollect({
+    const response = await sonicpesaCollect({
       phone: normalizeTzPhoneMsisdn(phone),
       amount: price,
       orderReference: providerRef,
@@ -733,7 +734,7 @@ async function pushRenewal(params: {
 
     return { ok: true };
   } catch (error) {
-    const reason = clickpesaErrorReason(error);
+    const reason = sonicpesaErrorReason(error);
     await prisma.transaction.update({
       where: { id: transaction.id },
       data: { status: "FAILED", metadata: { renewal: true, gatewayError: reason } },
@@ -747,7 +748,7 @@ async function pushRenewal(params: {
       creatorName,
       reason,
     });
-    console.warn(`[Renewal] ClickPesa rejected renewal for ${subscriptionId}: ${reason}`);
+    console.warn(`[Renewal] SonicPesa rejected renewal for ${subscriptionId}: ${reason}`);
     return { ok: false };
   }
 }
@@ -839,10 +840,16 @@ async function lastGatewayPhone(
   viewerId: string,
   creatorId: string
 ): Promise<string | null> {
-  // The retired gateway is named on purpose: a membership first funded through
-  // it still needs its phone found when it comes up for renewal.
+  // The retired gateways are named on purpose: a membership first funded
+  // through one of them still needs its phone found when it comes up for
+  // renewal. CLICKPESA and HARAKAPAY are history labels only — no new payment
+  // can ever carry them (see src/lib/payments/gateway.ts).
   const tx = await prisma.transaction.findFirst({
-    where: { userId: viewerId, creatorId, gateway: { in: ["CLICKPESA", "HARAKAPAY"] } },
+    where: {
+      userId: viewerId,
+      creatorId,
+      gateway: { in: ["SONICPESA", "CLICKPESA", "HARAKAPAY"] },
+    },
     select: { metadata: true },
     orderBy: { createdAt: "desc" },
   });

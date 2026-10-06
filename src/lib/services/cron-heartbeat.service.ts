@@ -101,7 +101,7 @@ export interface CronWorkerDef {
   /**
    * True when running this worker reaches a customer's phone.
    *
-   * Only renew-subscriptions does: it falls back to a ClickPesa USSD push, so a
+   * Only renew-subscriptions does: it falls back to a SonicPesa USSD push, so a
    * stray run sends a real charge request to a real fan. The admin "Run now"
    * action therefore requires an explicit confirmation for it and not for the
    * others, where a run only moves internal state.

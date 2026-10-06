@@ -67,7 +67,7 @@ function order(overrides: Record<string, unknown> = {}) {
     amount: 2_000,
     type: "PPV_PURCHASE",
     status: "PENDING",
-    gateway: "CLICKPESA",
+    gateway: "SONICPESA",
     metadata: null,
     ...overrides,
   };
@@ -94,7 +94,7 @@ describe("processPaymentWebhook and the referral bonus", () => {
       transactionId: "provider-ref",
       amount: 2_000,
       status: "SUCCESS",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
     });
 
     expect(result.processed).toBe(true);
@@ -111,7 +111,7 @@ describe("processPaymentWebhook and the referral bonus", () => {
       transactionId: "provider-ref",
       amount: 2_000,
       status: "FAILED",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
     });
 
     expect(mocks.releaseReferralBonus).not.toHaveBeenCalled();
@@ -125,7 +125,7 @@ describe("processPaymentWebhook and the referral bonus", () => {
       transactionId: "provider-ref",
       amount: 2_000,
       status: "SUCCESS",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
     });
 
     expect(result.processed).toBe(false);

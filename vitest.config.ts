@@ -8,7 +8,7 @@ export default defineConfig({
     include: ["src/**/*.test.ts"],
     // Loads .env.local before test files import config/prisma
     setupFiles: ["./src/tests/setup-env.ts"],
-    // The ClickPesa e2e suite talks to a real database
+    // The SonicPesa e2e suite talks to a real database
     testTimeout: 15_000,
     hookTimeout: 30_000,
   },

@@ -21,7 +21,7 @@
           "steps": [
             "No company required: 28 C.F.R. 75.2 allows an individual to be the custodian",
             "Easiest path with nothing to register: your own full legal name as it appears on your national ID or passport",
-            "If you already have a registered entity, use that instead - most commonly the name on your ClickPesa merchant account, which is a real registered business you already trade through",
+            "If you already have a registered entity, use that instead - most commonly the name on your SonicPesa merchant account, which is a real registered business you already trade through",
             "Use your BRELA certificate only if you have one; do not wait for one to launch"
           ],
           "example": "NEXT_PUBLIC_COMPANY_LEGAL_NAME=Yusuf Juma"
@@ -285,54 +285,57 @@
       "title": "Money",
       "cost": "Real money",
       "time": "Dashboard action",
-      "blurb": "ClickPesa is the gateway. Collections settle straight into your ClickPesa account, with no prepaid float to top up. What it does need is an approved KYC and an activated USSD-PUSH collection method - until then an accepted request stays processing forever and the prompt never reaches the customer's phone.",
+      "blurb": "SonicPesa is the gateway. Collections settle straight into your SonicPesa account, with no prepaid float to top up. What it does need is an approved KYC and an activated USSD-PUSH collection method - until then an accepted request stays processing forever and the prompt never reaches the customer's phone.",
       "items": [
         {
-          "id": "clickpesa_client_id",
-          "key": "CLICKPESA_CLIENT_ID",
-          "title": "ClickPesa client ID",
-          "site": "https://dashboard.clickpesa.com",
+          "id": "sonicpesa_access_key",
+          "key": "SONICPESA_ACCESS_KEY",
+          "title": "SonicPesa access key",
+          "site": "https://sonicpesa.com",
+          "sensitive": true,
           "steps": [
             "Sign in and complete KYC - collections cannot be activated before it is approved",
-            "Settings -> Developers -> API Integration Setup -> Create an application",
-            "Copy the Client ID"
+            "Open API Settings and copy the Access Key (starts with sk_)",
+            "Sent as the X-API-KEY header on every request"
           ],
-          "example": "CLICKPESA_CLIENT_ID=IDF5OPn..."
+          "example": "SONICPESA_ACCESS_KEY=sk_live_..."
         },
         {
-          "id": "clickpesa_api_key",
-          "key": "CLICKPESA_API_KEY",
-          "title": "ClickPesa API key",
-          "site": "https://dashboard.clickpesa.com",
-          "sensitive": true,
-          "steps": ["Same application page - copy the API Key"],
-          "example": "CLICKPESA_API_KEY=SK..."
-        },
-        {
-          "id": "clickpesa_webhook",
-          "key": "CLICKPESA_WEBHOOK_TOKEN",
-          "anyOf": [
-            { "key": "CLICKPESA_WEBHOOK_TOKEN" },
-            { "key": "CLICKPESA_CHECKSUM_KEY" }
-          ],
-          "title": "Webhook verification secret",
-          "site": "https://dashboard.clickpesa.com",
+          "id": "sonicpesa_secret_key",
+          "key": "SONICPESA_SECRET_KEY",
+          "title": "SonicPesa secret key",
+          "site": "https://sonicpesa.com",
           "sensitive": true,
           "steps": [
-            "Settings -> Developers -> your application -> Application Webhooks",
-            "Set the PAYMENT RECEIVED and PAYMENT FAILED webhook URL to https://<your-domain>/api/webhooks/clickpesa?t=<CLICKPESA_WEBHOOK_TOKEN>",
-            "For stronger verification set CLICKPESA_CHECKSUM_KEY instead - every callback is then signed and the ?t= token is not needed"
+            "Same API Settings page - copy the Secret Key",
+            "It signs every inbound webhook (HMAC-SHA256, header X-SonicPesa-Signature)"
+          ],
+          "example": "SONICPESA_SECRET_KEY=..."
+        },
+        {
+          "id": "sonicpesa_webhook",
+          "key": "SONICPESA_WEBHOOK_TOKEN",
+          "anyOf": [
+            { "key": "SONICPESA_SECRET_KEY" },
+            { "key": "SONICPESA_WEBHOOK_TOKEN" }
+          ],
+          "title": "Point the webhook at this app",
+          "site": "https://sonicpesa.com",
+          "steps": [
+            "API Settings -> Webhook URL",
+            "Set it to https://<your-domain>/api/webhooks/sonicpesa",
+            "With SONICPESA_SECRET_KEY set every callback is signed and verified automatically; otherwise append ?t=<SONICPESA_WEBHOOK_TOKEN>"
           ]
         },
         {
-          "id": "clickpesa_activation",
+          "id": "sonicpesa_activation",
           "key": null,
           "title": "Activate live collections",
-          "site": "ClickPesa dashboard",
+          "site": "SonicPesa dashboard",
           "steps": [
-            "Finish KYC, then ask ClickPesa support to enable USSD-PUSH collections on your account",
+            "Finish KYC, then ask SonicPesa support to enable USSD-PUSH collections on your account",
             "Confirm the account has an active mobile-money collection method - an account with none accepts nothing",
-            "Prove it from your own phone: npm run smoke:clickpesa:live"
+            "Prove it from your own phone: npm run smoke:sonicpesa:live"
           ]
         }
       ]
@@ -342,7 +345,7 @@
       "title": "Go live",
       "cost": "Domain ~TZS 25,000-40,000 / year",
       "time": "45 minutes",
-      "blurb": "ClickPesa cannot reach a localhost webhook, so until this is done settlements rely on polling. Everything else can be tested before you get here.",
+      "blurb": "SonicPesa cannot reach a localhost webhook, so until this is done settlements rely on polling. Everything else can be tested before you get here.",
       "items": [
         {
           "id": "app_url",

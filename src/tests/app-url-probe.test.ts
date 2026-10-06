@@ -6,7 +6,7 @@
 // whenever the deployment is degraded — and degraded includes the background
 // workers running late. So a perfectly reachable deployment reported its own job
 // lag back to itself as "Public URL -> HTTP 503", which then travelled into
-// `launch:check --remote` ("2 service(s) failing — ClickPesa, Public URL") and
+// `launch:check --remote` ("2 service(s) failing — SonicPesa, Public URL") and
 // into the post-deploy workflow, sending whoever read it to DNS and to
 // NEXT_PUBLIC_APP_URL — neither of which was wrong.
 //
@@ -22,7 +22,7 @@ import { join } from "node:path";
 
 import { describe, it, expect } from "vitest";
 
-import { CLICKPESA_PROBE_TIMEOUTS_MS, classifyAppUrlAnswer } from "@/lib/setup-check";
+import { SONICPESA_PROBE_TIMEOUTS_MS, classifyAppUrlAnswer } from "@/lib/setup-check";
 
 const URL_ = "https://genhub.example.test";
 
@@ -118,8 +118,8 @@ describe("warn is not a failure to the alarm", () => {
 });
 
 // -----------------------------------------------------------------------------
-// The ClickPesa probe's budget. A bound, like the ones in
-// redis-bounded.test.ts and clickpesa-bounded.test.ts, because the failure it
+// The SonicPesa probe's budget. A bound, like the ones in
+// redis-bounded.test.ts and sonicpesa-bounded.test.ts, because the failure it
 // prevents is silent.
 //
 // The probe shares /api/health/services with eight others inside a function
@@ -134,7 +134,7 @@ describe("warn is not a failure to the alarm", () => {
 // watchdog read, every deploy and every alarm went red for a fault no code
 // change could fix. An alarm that is red nearly all the time is its own failure.
 // -----------------------------------------------------------------------------
-describe("the ClickPesa probe's budget", () => {
+describe("the SonicPesa probe's budget", () => {
   const route = readFileSync(
     join(process.cwd(), "src", "app", "api", "health", "services", "route.ts"),
     "utf8"
@@ -142,7 +142,7 @@ describe("the ClickPesa probe's budget", () => {
 
   it("fits inside the route's function budget, retry included", () => {
     const maxDuration = Number(route.match(/export\s+const\s+maxDuration\s*=\s*(\d+)/)?.[1]);
-    const worstCaseMs = CLICKPESA_PROBE_TIMEOUTS_MS.reduce((total, ms) => total + ms, 0);
+    const worstCaseMs = SONICPESA_PROBE_TIMEOUTS_MS.reduce((total, ms) => total + ms, 0);
 
     expect(maxDuration).toBeGreaterThan(0);
     expect(worstCaseMs).toBeLessThan(maxDuration * 1000);
@@ -155,10 +155,10 @@ describe("the ClickPesa probe's budget", () => {
     // cost and then answers quickly. A budget at or below that cost reports a
     // timeout for a gateway that is working.
     const MEASURED_COLD_START_MS = 11_800;
-    expect(CLICKPESA_PROBE_TIMEOUTS_MS[0]).toBeGreaterThan(MEASURED_COLD_START_MS);
+    expect(SONICPESA_PROBE_TIMEOUTS_MS[0]).toBeGreaterThan(MEASURED_COLD_START_MS);
   });
 
   it("retries exactly once, so one more attempt cannot push it past the ceiling", () => {
-    expect(CLICKPESA_PROBE_TIMEOUTS_MS).toHaveLength(2);
+    expect(SONICPESA_PROBE_TIMEOUTS_MS).toHaveLength(2);
   });
 });

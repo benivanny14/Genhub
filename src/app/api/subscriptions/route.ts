@@ -13,11 +13,11 @@ import { readJsonBody } from "@/lib/request-body";
 import { z } from "zod";
 import config from "@/lib/config";
 import {
-  clickpesaCollect,
-  clickpesaErrorReason,
-  clickpesaOrderReference,
+  sonicpesaCollect,
+  sonicpesaErrorReason,
+  sonicpesaOrderReference,
   normalizeTzPhoneMsisdn,
-} from "@/lib/payments/clickpesa";
+} from "@/lib/payments/sonicpesa";
 import { generateOrderId } from "@/lib/utils";
 import { checkRateLimit } from "@/lib/redis";
 import {
@@ -39,7 +39,7 @@ import { sendPushToUser } from "@/lib/services/push.service";
 
 const subscribeSchema = z.object({
   creatorId: z.string().min(1),
-  // Optional: when present the subscription is paid by USSD push (ClickPesa)
+  // Optional: when present the subscription is paid by USSD push (SonicPesa)
   // exactly like a video purchase; when absent the legacy wallet path runs.
   phoneNumber: z.string().regex(/^(\+255|0)[67]\d{8}$/).optional(),
   // weekly | monthly | quarterly — absent means monthly, the original plan.
@@ -146,9 +146,10 @@ export async function POST(request: NextRequest) {
       }
 
       const orderId = generateOrderId("SUB");
-      // Our ClickPesa order reference (alphanumeric, ≤20); stored as providerRef
-      // so the webhook and the status poll can match the callback.
-      const providerRef = clickpesaOrderReference("SB");
+      // Our own alphanumeric trace reference (kept in metadata for support).
+      // SonicPesa assigns its own order id when create_order returns, and THAT is
+      // stored as providerRef so the webhook and the status poll can match it.
+      const providerRef = sonicpesaOrderReference("SB");
       const transaction = await prisma.transaction.create({
         data: {
           userId: auth.userId,
@@ -156,22 +157,27 @@ export async function POST(request: NextRequest) {
           amount: price,
           type: "SUBSCRIPTION",
           status: "PENDING",
-          gateway: "CLICKPESA",
+          gateway: "SONICPESA",
           providerRef,
           // `plan` is stored so the webhook settlement extends access by the
           // same period this checkout charged — not always one month.
-          metadata: { orderId, plan: plan.id, phone: body.phoneNumber },
+          metadata: {
+            orderId,
+            plan: plan.id,
+            phone: body.phoneNumber,
+            ourReference: providerRef,
+          },
         },
       });
 
       // Mirror production in local dev: a predictable reference so the dev
       // completion route can map the callback to this row.
-      const clickPesaSandbox =
+      const sonicPesaSandbox =
         config.nodeEnv !== "production" &&
-        (!config.clickPesa.apiKey || config.clickPesa.sandbox);
+        (!config.sonicPesa.accessKey || config.sonicPesa.sandbox);
 
-      if (clickPesaSandbox) {
-        const sandboxRef = `cp_sbx_${transaction.id}`;
+      if (sonicPesaSandbox) {
+        const sandboxRef = `sp_sbx_${transaction.id}`;
         await prisma.transaction.update({
           where: { id: transaction.id },
           data: { providerRef: sandboxRef },
@@ -181,18 +187,19 @@ export async function POST(request: NextRequest) {
           orderId: sandboxRef,
           checkoutUrl: null,
           sandbox: true,
-          gateway: "CLICKPESA",
+          gateway: "SONICPESA",
           amount: price,
         });
       }
 
-      // ClickPesa does not take a webhook URL per request; the endpoint is
+      // SonicPesa does not take a webhook URL per request; the endpoint is
       // configured in the dashboard.
       try {
-        const response = await clickpesaCollect({
+        const response = await sonicpesaCollect({
           phone: normalizeTzPhoneMsisdn(body.phoneNumber),
           amount: price,
           orderReference: providerRef,
+          email: auth.email,
         });
 
         if (!response.success || !response.orderReference) {
@@ -210,17 +217,32 @@ export async function POST(request: NextRequest) {
           });
         }
 
+        // The gateway assigned the order id; store it as providerRef — the key
+        // the webhook and the status poll match on — and keep our trace
+        // reference in metadata. Echo the gateway id back to the client.
+        await prisma.transaction.update({
+          where: { id: transaction.id },
+          data: {
+            providerRef: response.orderReference,
+            metadata: {
+              ...((transaction.metadata as Record<string, unknown> | null) ?? {}),
+              gatewayOrderId: response.orderReference,
+              gatewayReference: response.transactionId ?? null,
+            },
+          },
+        });
+
         return api.success({
           transactionId: transaction.id,
           orderId: response.orderReference,
           checkoutUrl: null,
-          gateway: "CLICKPESA",
+          gateway: "SONICPESA",
           status: "pending",
           amount: price,
           message: response.message || "USSD push sent to phone",
         });
       } catch (gatewayError: any) {
-        const reason = clickpesaErrorReason(gatewayError);
+        const reason = sonicpesaErrorReason(gatewayError);
         await prisma.transaction.update({
           where: { id: transaction.id },
           data: { status: "FAILED", metadata: { gatewayError: reason } },

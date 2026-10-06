@@ -22,7 +22,7 @@ import { checkRequestOrigin } from "@/lib/request-origin";
 
 describe("requests that carry no Origin", () => {
   it("are allowed, because a web page cannot produce one", () => {
-    // curl, the cron runner, the GitHub Action, ClickPesa's webhook.
+    // curl, the cron runner, the GitHub Action, SonicPesa's webhook.
     expect(checkRequestOrigin({ host: "genhub.co.tz" })).toEqual({
       ok: true,
       reason: "no-origin",

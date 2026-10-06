@@ -1,6 +1,6 @@
 // =============================================================================
 // GENHUB - Video Purchase API Route
-// POST /api/payments/purchase - Initiate PPV payment via ClickPesa
+// POST /api/payments/purchase - Initiate PPV payment via SonicPesa
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -10,11 +10,11 @@ import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { initiatePaymentSchema } from "@/lib/validation";
 import {
-  clickpesaCollect,
-  clickpesaErrorReason,
-  clickpesaOrderReference,
+  sonicpesaCollect,
+  sonicpesaErrorReason,
+  sonicpesaOrderReference,
   normalizeTzPhoneMsisdn,
-} from "@/lib/payments/clickpesa";
+} from "@/lib/payments/sonicpesa";
 import { purchaseVideoWithWallet } from "@/lib/services/balance.service";
 import { notifyPaymentResult } from "@/lib/services/payment-notify.service";
 import { resolvePendingCheckout } from "@/lib/services/checkout-lock.service";
@@ -69,7 +69,7 @@ export async function POST(request: NextRequest) {
       return api.validation(result.error.errors[0].message);
     }
 
-    // ClickPesa is the only gateway — checkout is a USSD push to the phone.
+    // SonicPesa is the only gateway — checkout is a USSD push to the phone.
     // The assertion is belt-and-braces on top of the Zod enum: if anything ever
     // routes here with another gateway it fails loudly instead of silently.
     assertSupportedGateway(result.data.gateway);
@@ -304,11 +304,11 @@ export async function POST(request: NextRequest) {
 
     // Create pending transaction
     const orderId = generateOrderId("PPV");
-    // ClickPesa takes an alphanumeric reference of at most 20 characters that WE
-    // choose and it echoes back; it is stored as providerRef so the webhook and
-    // the status poll can match the callback. Distinct from `orderId`, which is
-    // our own database-friendly id.
-    const providerRef = clickpesaOrderReference("PP");
+    // Our own alphanumeric trace reference (kept in metadata for support). It is
+    // NOT the gateway key — SonicPesa assigns its own order id when create_order
+    // returns, and THAT is stored as providerRef so the webhook and the status
+    // poll can match the callback.
+    const providerRef = sonicpesaOrderReference("PP");
     const transaction = await prisma.transaction.create({
       data: {
         userId: auth.userId,
@@ -317,11 +317,14 @@ export async function POST(request: NextRequest) {
         amount: finalAmount,
         type: "PPV_PURCHASE",
         status: "PENDING",
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         providerRef,
-        metadata: couponId
-          ? { couponId, originalPrice: video.price, discount: video.price - finalAmount }
-          : undefined,
+        metadata: {
+          ...(couponId
+            ? { couponId, originalPrice: video.price, discount: video.price - finalAmount }
+            : {}),
+          ourReference: providerRef,
+        },
       },
     });
 
@@ -345,14 +348,14 @@ export async function POST(request: NextRequest) {
     // PAYMENT_SANDBOX=true in local dev skips the real USSD push; the client
     // completes via POST /api/dev/sandbox/complete, which runs the exact same
     // webhook processing as production.
-    const clickPesaSandbox =
+    const sonicPesaSandbox =
       config.nodeEnv !== "production" &&
-      (!config.clickPesa.apiKey || config.clickPesa.sandbox);
+      (!config.sonicPesa.accessKey || config.sonicPesa.sandbox);
 
-    if (clickPesaSandbox) {
+    if (sonicPesaSandbox) {
       // Mirror production: a predictable reference so the dev completion route
       // can map the callback to this row.
-      const sandboxRef = `cp_sbx_${transaction.id}`;
+      const sandboxRef = `sp_sbx_${transaction.id}`;
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { providerRef: sandboxRef },
@@ -362,37 +365,38 @@ export async function POST(request: NextRequest) {
         orderId: sandboxRef,
         checkoutUrl: null,
         sandbox: true,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         amount: finalAmount,
         originalAmount: video.price,
         discount: video.price - finalAmount,
       });
     }
 
-    // Live USSD push — customer confirms on their phone. ClickPesa does not take
+    // Live USSD push — customer confirms on their phone. SonicPesa does not take
     // a webhook URL per request; the endpoint is configured in the dashboard, so
     // nothing is passed here.
     try {
-      // Live mode with a non-public app URL means ClickPesa can never reach our
+      // Live mode with a non-public app URL means SonicPesa can never reach our
       // webhook; the /payments/status poll reconciles the payment instead. Log
       // it once so a stuck payment is diagnosable from the server log.
       if (/localhost|127\.0\.0\.1/i.test(config.appUrl)) {
         console.warn(
-          "[ClickPesa] Live collect with a local app URL — webhooks cannot arrive; relying on status polling to reconcile."
+          "[SonicPesa] Live collect with a local app URL — webhooks cannot arrive; relying on status polling to reconcile."
         );
       }
 
       await recordPaymentEvent({
         transactionId: transaction.id,
         kind: PAYMENT_EVENT.collectStarted,
-        detail: "USSD push requested from ClickPesa.",
+        detail: "USSD push requested from SonicPesa.",
         metadata: { providerRef },
       });
 
-      const response = await clickpesaCollect({
+      const response = await sonicpesaCollect({
         phone: normalizeTzPhoneMsisdn(phoneNumber),
         amount: finalAmount,
         orderReference: providerRef,
+        email: result.data.email || auth.email,
       });
 
       if (!response.success || !response.orderReference) {
@@ -403,7 +407,7 @@ export async function POST(request: NextRequest) {
         await recordPaymentEvent({
           transactionId: transaction.id,
           kind: PAYMENT_EVENT.collectRejected,
-          detail: `ClickPesa refused the request: ${response.error || "no reason given"}`,
+          detail: `SonicPesa refused the request: ${response.error || "no reason given"}`,
           metadata: { gatewayError: response.error ?? null },
         });
         // A refusal that is about OUR account (the daily API cap, unfinished
@@ -417,12 +421,26 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // providerRef is already stored; echo the reference back to the client.
+      // The gateway assigned the order id; store it as providerRef — it is the
+      // key the webhook and the status poll match on — and keep our own trace
+      // reference in metadata. Echo the gateway id back to the client.
+      await prisma.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          providerRef: response.orderReference,
+          metadata: {
+            ...((transaction.metadata as Record<string, unknown> | null) ?? {}),
+            gatewayOrderId: response.orderReference,
+            gatewayReference: response.transactionId ?? null,
+          },
+        },
+      });
+
       return api.success({
         transactionId: transaction.id,
         orderId: response.orderReference,
         checkoutUrl: null,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         status: "pending",
         amount: finalAmount,
         originalAmount: video.price,
@@ -430,7 +448,7 @@ export async function POST(request: NextRequest) {
         message: response.message || "USSD push sent to phone",
       });
     } catch (gatewayError: any) {
-      const reason = clickpesaErrorReason(gatewayError);
+      const reason = sonicpesaErrorReason(gatewayError);
       await prisma.transaction.update({
         where: { id: transaction.id },
         data: { status: "FAILED", metadata: { gatewayError: reason } },
@@ -438,7 +456,7 @@ export async function POST(request: NextRequest) {
       await recordPaymentEvent({
         transactionId: transaction.id,
         kind: PAYMENT_EVENT.collectFailed,
-        detail: `Could not reach ClickPesa: ${reason}`,
+        detail: `Could not reach SonicPesa: ${reason}`,
         metadata: { gatewayError: reason },
       });
       // The gateway's own words go to the log with a reference; the buyer gets a

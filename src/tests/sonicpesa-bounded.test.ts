@@ -1,7 +1,7 @@
 // =============================================================================
-// GENHUB - The bound on every ClickPesa gateway call
+// GENHUB - The bound on every SonicPesa gateway call
 //
-// The gateway has a per-call timeout AND a breaker. `clickpesaStatus` is called
+// The gateway has a per-call timeout AND a breaker. `sonicpesaStatus` is called
 // in a loop by the reconcile sweep — once per pending charge — so a gateway that
 // accepts the connection and then never answers would turn one sweep into
 // minutes of sequential 20s waits, and the checkout poll into a spinner that
@@ -14,32 +14,30 @@
 // typo, twice, would pause payments for everybody.
 //
 // Each test imports the module fresh (vi.resetModules) so the breaker starts
-// closed; it is process-global by design, not per-call. The auth token is
-// seeded, so these tests exercise the API calls rather than /generate-token.
+// closed; it is process-global by design, not per-call. Auth is a static header,
+// so there is no token to seed — the calls go straight to the endpoint.
 // =============================================================================
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-const clickPesa = vi.hoisted(() => ({
-  clientId: "test-client",
-  apiKey: "test-key",
-  baseUrl: "https://clickpesa.test/third-parties",
+const sonicPesa = vi.hoisted(() => ({
+  accessKey: "test-key",
+  secretKey: "test-secret",
+  baseUrl: "https://sonicpesa.test/api/v1",
   webhookToken: "test-webhook-token",
-  checksumKey: "",
+  fallbackEmail: "payments@test.local",
   sandbox: false,
 }));
 
 vi.mock("@/lib/config", async (importOriginal) => {
   const actual = await importOriginal<{ default: Record<string, unknown> }>();
-  return { ...actual, default: { ...actual.default, clickPesa } };
+  return { ...actual, default: { ...actual.default, sonicPesa } };
 });
 
 /** A fresh module instance, so each test starts with a closed breaker. */
 async function gateway() {
   vi.resetModules();
-  const mod = await import("@/lib/payments/clickpesa");
-  mod.seedClickPesaToken("Bearer test-token");
-  return mod;
+  return import("@/lib/payments/sonicpesa");
 }
 
 const json = (body: unknown, status: number) =>
@@ -50,13 +48,13 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("ClickPesa calls are bounded", () => {
+describe("SonicPesa calls are bounded", () => {
   it("abandons a gateway that never answers, and names the wait", async () => {
-    const { clickpesaStatus } = await gateway();
+    const { sonicpesaStatus } = await gateway();
     vi.stubGlobal("fetch", vi.fn(() => new Promise<never>(() => {})));
     vi.useFakeTimers();
 
-    const pending = clickpesaStatus("CP1");
+    const pending = sonicpesaStatus("CP1");
     const rejected = expect(pending).rejects.toThrow(/timed out after 20s/);
 
     // The caller's own bound, not the OS socket timeout: nothing else would
@@ -66,7 +64,7 @@ describe("ClickPesa calls are bounded", () => {
   });
 
   it("keeps the gateway's own 4xx message and never trips the breaker on it", async () => {
-    const { clickpesaCollect, clickpesaGatewayState } = await gateway();
+    const { sonicpesaCollect, sonicpesaGatewayState } = await gateway();
     const fetchMock = vi.fn(async () =>
       json({ message: "Invalid / unsupported phone number" }, 400)
     );
@@ -74,7 +72,7 @@ describe("ClickPesa calls are bounded", () => {
 
     for (let i = 0; i < 3; i++) {
       await expect(
-        clickpesaCollect({
+        sonicpesaCollect({
           phone: "255700000000",
           amount: 1000,
           orderReference: `CP${i}`,
@@ -85,27 +83,27 @@ describe("ClickPesa calls are bounded", () => {
     // Every call reached the gateway, and none of them counted as a fault: the
     // gateway answered, it just said no.
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(clickpesaGatewayState().failures).toBe(0);
-    expect(clickpesaGatewayState().openUntil).toBe(0);
+    expect(sonicpesaGatewayState().failures).toBe(0);
+    expect(sonicpesaGatewayState().openUntil).toBe(0);
   });
 
   it("opens the breaker on repeated 5xx and refuses the next call without sending it", async () => {
-    const { clickpesaStatus, clickpesaGatewayState } = await gateway();
+    const { sonicpesaStatus, sonicpesaGatewayState } = await gateway();
     const fetchMock = vi.fn(async () => json({ message: "upstream error" }, 503));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(clickpesaStatus("CP1")).rejects.toThrow("upstream error");
-    await expect(clickpesaStatus("CP2")).rejects.toThrow("upstream error");
+    await expect(sonicpesaStatus("CP1")).rejects.toThrow("upstream error");
+    await expect(sonicpesaStatus("CP2")).rejects.toThrow("upstream error");
 
-    await expect(clickpesaStatus("CP3")).rejects.toThrow(/was not sent/);
+    await expect(sonicpesaStatus("CP3")).rejects.toThrow(/was not sent/);
 
     // The point of the breaker: the third call cost nothing.
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(clickpesaGatewayState().skipped).toBe(1);
+    expect(sonicpesaGatewayState().skipped).toBe(1);
   });
 
   it("counts a transport failure as a fault and keeps its message", async () => {
-    const { clickpesaStatus, clickpesaGatewayState } = await gateway();
+    const { sonicpesaStatus, sonicpesaGatewayState } = await gateway();
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -113,18 +111,18 @@ describe("ClickPesa calls are bounded", () => {
       })
     );
 
-    await expect(clickpesaStatus("CP1")).rejects.toThrow("ECONNREFUSED");
-    expect(clickpesaGatewayState().failures).toBe(1);
+    await expect(sonicpesaStatus("CP1")).rejects.toThrow("ECONNREFUSED");
+    expect(sonicpesaGatewayState().failures).toBe(1);
   });
 
   it("describes an open breaker without blaming the credentials", async () => {
-    const { clickpesaBreakerNotice } = await gateway();
+    const { sonicpesaBreakerNotice } = await gateway();
 
     // Closed is the normal state, and the surfaces that show this must stay
     // silent rather than print "breaker: closed" on a healthy deploy.
-    expect(clickpesaBreakerNotice({ open: false, openUntil: 0, failures: 0 }, 1_000)).toBeNull();
+    expect(sonicpesaBreakerNotice({ open: false, openUntil: 0, failures: 0 }, 1_000)).toBeNull();
 
-    const notice = clickpesaBreakerNotice({ open: true, openUntil: 31_000, failures: 2 }, 1_000);
+    const notice = sonicpesaBreakerNotice({ open: true, openUntil: 31_000, failures: 2 }, 1_000);
     expect(notice).toContain("skipping gateway calls");
     expect(notice).toContain("30s");
     // The sentence that stops someone hunting for bad credentials that are fine.
@@ -132,7 +130,7 @@ describe("ClickPesa calls are bounded", () => {
   });
 
   it("resumes once the window passes, and one success closes it", async () => {
-    const { clickpesaStatus, clickpesaGatewayState } = await gateway();
+    const { sonicpesaStatus, sonicpesaGatewayState } = await gateway();
     vi.useFakeTimers();
 
     let healthy = false;
@@ -145,15 +143,15 @@ describe("ClickPesa calls are bounded", () => {
       )
     );
 
-    await expect(clickpesaStatus("CP1")).rejects.toThrow();
-    await expect(clickpesaStatus("CP2")).rejects.toThrow();
-    expect(clickpesaGatewayState().openUntil).toBeGreaterThan(0);
-    expect(clickpesaGatewayState().failures).toBe(2);
+    await expect(sonicpesaStatus("CP1")).rejects.toThrow();
+    await expect(sonicpesaStatus("CP2")).rejects.toThrow();
+    expect(sonicpesaGatewayState().openUntil).toBeGreaterThan(0);
+    expect(sonicpesaGatewayState().failures).toBe(2);
 
     healthy = true;
     await vi.advanceTimersByTimeAsync(30_001);
 
-    await expect(clickpesaStatus("CP3")).resolves.toMatchObject({ success: true });
-    expect(clickpesaGatewayState().failures).toBe(0);
+    await expect(sonicpesaStatus("CP3")).resolves.toMatchObject({ success: true });
+    expect(sonicpesaGatewayState().failures).toBe(0);
   });
 });

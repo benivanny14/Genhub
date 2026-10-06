@@ -1,21 +1,20 @@
 #!/usr/bin/env node
 // =============================================================================
-// GENHUB - LIVE ClickPesa smoke test (real USSD push to your phone)
+// GENHUB - LIVE SonicPesa smoke test (real USSD push to your phone)
 // Usage:
-//   node scripts/clickpesa-live.mjs 0712345678 1000
-//   npm run smoke:clickpesa:live -- 0712345678 1000
+//   node scripts/sonicpesa-live.mjs 0712345678 1000
+//   npm run smoke:sonicpesa:live -- 0712345678 1000
 //
 // WHAT IT DOES
-//   1. Reads CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY + app URL from .env.local
-//   2. Mints a token, then creates a real USSD-PUSH collection of <amount> TZS
-//      to your phone
-//   3. Polls the payment status by our order reference until
-//      SUCCESS / SETTLED / FAILED / timeout (90s)
+//   1. Reads SONICPESA_ACCESS_KEY + app URL from .env.local
+//   2. Creates a real USSD-PUSH collection of <amount> TZS to your phone
+//   3. Polls the payment status by the gateway's order id until
+//      SUCCESS / FAILED / timeout (90s)
 //
-// PREREQUISITES (one-time, in the ClickPesa dashboard)
+// PREREQUISITES (one-time, in the SonicPesa dashboard)
 //   * PAYMENT_SANDBOX=false in .env.local
-//   * webhook registered:  https://<your-domain>/api/webhooks/clickpesa?t=<CLICKPESA_WEBHOOK_TOKEN>
-//     (or signed with CLICKPESA_CHECKSUM_KEY)
+//   * webhook registered:  https://<your-domain>/api/webhooks/sonicpesa?t=<SONICPESA_WEBHOOK_TOKEN>
+//     (or signed with SONICPESA_SECRET_KEY)
 //   * an approved KYC and an activated USSD-PUSH collection method
 //
 // SAFETY
@@ -48,12 +47,12 @@ const phone = (process.argv[2] || "").replace(/[^\d]/g, "");
 const amount = parseInt(process.argv[3] || "1000", 10);
 
 if (!phone || phone.length < 9) {
-  console.error("Usage: node scripts/clickpesa-live.mjs <phone> [amount=1000]");
-  console.error("  e.g. node scripts/clickpesa-live.mjs 0712345678 1000");
+  console.error("Usage: node scripts/sonicpesa-live.mjs <phone> [amount=1000]");
+  console.error("  e.g. node scripts/sonicpesa-live.mjs 0712345678 1000");
   process.exit(1);
 }
-if (!env.CLICKPESA_CLIENT_ID || !env.CLICKPESA_API_KEY) {
-  console.error("✗ CLICKPESA_CLIENT_ID / CLICKPESA_API_KEY missing in .env.local");
+if (!env.SONICPESA_ACCESS_KEY) {
+  console.error("✗ SONICPESA_ACCESS_KEY missing in .env.local");
   process.exit(1);
 }
 if (env.PAYMENT_SANDBOX === "true") {
@@ -62,32 +61,17 @@ if (env.PAYMENT_SANDBOX === "true") {
   process.exit(1);
 }
 
-const API = (env.CLICKPESA_BASE_URL || "https://api.clickpesa.com/third-parties").replace(/\/$/, "");
+const API = (env.SONICPESA_BASE_URL || "https://api.sonicpesa.com/api/v1").replace(/\/$/, "");
 const norm = phone.startsWith("255") ? phone : "255" + phone.replace(/^0/, "");
 const reference = `LIVE${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 5).toUpperCase()}`.slice(0, 20);
 
-async function token() {
-  const res = await fetch(`${API}/generate-token`, {
-    method: "POST",
-    headers: { "client-id": env.CLICKPESA_CLIENT_ID, "api-key": env.CLICKPESA_API_KEY },
-    signal: AbortSignal.timeout(20_000),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok || !json.token) {
-    console.error(`✗ generate-token -> HTTP ${res.status}: ${json.message || res.statusText}`);
-    process.exit(1);
-  }
-  return json.token;
-}
-
 async function call(path, init = {}) {
-  const bearer = await token();
   const res = await fetch(API + path, {
     ...init,
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(30_000),
     headers: {
       "Content-Type": "application/json",
-      Authorization: bearer,
+      "X-API-KEY": env.SONICPESA_ACCESS_KEY,
       ...(init.headers || {}),
     },
   });
@@ -102,53 +86,63 @@ async function call(path, init = {}) {
 }
 
 (async () => {
-  console.log("== ClickPesa LIVE smoke test ==");
+  console.log("== SonicPesa LIVE smoke test ==");
   console.log(`   api:     ${API}`);
   console.log(`   phone:   ${norm}`);
   console.log(`   amount:  ${amount} TZS (real money — cancel on the phone to abort)`);
-  console.log(`   order:   ${reference}`);
-  console.log(`   webhook: ${(env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/$/, "")}/api/webhooks/clickpesa`);
+  console.log(`   trace:   ${reference}`);
+  console.log(`   webhook: ${(env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").replace(/\/$/, "")}/api/webhooks/sonicpesa`);
   console.log("");
 
   // 1. read-only credential probe
-  const bearer = await token();
-  console.log(`   key probe: authorization token issued (${bearer.slice(0, 14)}…)`);
+  const probe = await call("/transactions/readbyId", {
+    method: "POST",
+    body: JSON.stringify({ page: 1 }),
+  });
+  if (!probe.json || probe.status >= 400) {
+    console.error(`✗ access key probe -> HTTP ${probe.status}: ${probe.json?.message || ""}`);
+    process.exit(1);
+  }
+  console.log("   key probe: access key accepted");
 
   // 2. create a real USSD push
-  const created = await call("/payments/initiate-ussd-push-request", {
+  const created = await call("/payment/create_order", {
     method: "POST",
     body: JSON.stringify({
-      amount: String(amount),
+      buyer_email: env.NEXT_PUBLIC_SUPPORT_EMAIL || "payments@genhub.app",
+      buyer_name: "Genhub smoke test",
+      buyer_phone: norm,
+      amount,
       currency: "TZS",
-      orderReference: reference,
-      phoneNumber: norm,
     }),
   });
 
   console.log(`\n   create:  HTTP ${created.status}`);
-  const orderReference = created.json?.orderReference || reference;
-  if (!created.json?.id && !created.json?.orderReference) {
+  const orderId = created.json?.data?.order_id;
+  if (!orderId) {
     console.error("   ✗ unexpected response:");
     console.error("   " + JSON.stringify(created.json, null, 2).slice(0, 800));
     process.exit(1);
   }
-  console.log(`   order:   ${orderReference}`);
+  console.log(`   order:   ${orderId}`);
   console.log("\n   → CHECK YOUR PHONE and confirm with your PIN…");
 
-  // 3. poll by order reference
+  // 3. poll by the gateway's order id
   for (let i = 1; i <= 30; i++) {
     await new Promise((r) => setTimeout(r, 3000));
-    const st = await call(`/payments/${encodeURIComponent(orderReference)}`).catch(() => null);
-    const payments = Array.isArray(st?.json) ? st.json : st?.json ? [st.json] : [];
-    const status = payments[0]?.status || "?";
+    const st = await call("/payment/order_status", {
+      method: "POST",
+      body: JSON.stringify({ order_id: orderId }),
+    }).catch(() => null);
+    const status = st?.json?.data?.payment_status || st?.json?.data?.status || "?";
     process.stdout.write(`   [${String(i).padStart(2)}] status=${status}\n`);
     const s = String(status).toUpperCase();
-    if (["SUCCESS", "SETTLED"].includes(s)) {
-      console.log("\n✓ LIVE payment completed — gateway reachable, webhook fires to /api/webhooks/clickpesa");
+    if (s === "SUCCESS") {
+      console.log("\n✓ LIVE payment completed — gateway reachable, webhook fires to /api/webhooks/sonicpesa");
       process.exit(0);
     }
-    if (["FAILED", "REFUNDED", "REVERSED"].includes(s)) {
-      console.log("\n✗ payment not completed: " + JSON.stringify(payments[0]).slice(0, 400));
+    if (["FAILED", "CANCELLED", "USERCANCELLED", "REJECTED"].includes(s)) {
+      console.log("\n✗ payment not completed: " + JSON.stringify(st?.json?.data || st?.json).slice(0, 400));
       process.exit(1);
     }
   }

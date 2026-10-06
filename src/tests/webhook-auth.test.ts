@@ -1,7 +1,7 @@
 // =============================================================================
 // GENHUB - A webhook that cannot be verified must not be acted on
 //
-// The ClickPesa callback used to read:
+// The SonicPesa callback used to read:
 //
 //     if (config.harakaPay.webhookToken && token !== config.harakaPay.webhookToken)
 //
@@ -19,7 +19,7 @@
 //     never calls is the failure mode this file exists to prevent
 //
 // The accepting path (a verified callback actually settling) is covered where
-// it belongs, against a real database: clickpesa.e2e.test.ts.
+// it belongs, against a real database: sonicpesa.e2e.test.ts.
 // =============================================================================
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -35,8 +35,8 @@ vi.mock("@/lib/config", async (importOriginal) => {
     default: {
       ...actual.default,
       nodeEnv: "production",
-      clickPesa: {
-        ...actual.default.clickPesa,
+      sonicPesa: {
+        ...actual.default.sonicPesa,
         webhookToken: "",
         checksumKey: "",
       },
@@ -47,13 +47,13 @@ vi.mock("@/lib/config", async (importOriginal) => {
 import config from "@/lib/config";
 import { verifyWebhookToken } from "@/lib/webhook-auth";
 import { secretMatches } from "@/lib/shared-secret";
-import { POST as webhookPost } from "@/app/api/webhooks/clickpesa/route";
+import { POST as webhookPost } from "@/app/api/webhooks/sonicpesa/route";
 
 const TOKEN = "c1f4e9a7b3d85f2069a1c7e4b8d3f5061a2b3c4d5e6f708192a3b4c5d6e7f809";
 
 /** Flip the mocked configuration the route sees. */
 function setToken(token: string) {
-  (config.clickPesa as { webhookToken: string }).webhookToken = token;
+  (config.sonicPesa as { webhookToken: string }).webhookToken = token;
 }
 
 afterEach(() => setToken(""));
@@ -130,7 +130,7 @@ describe("the route uses it", () => {
    * what the route does on error, so the gateway stops retrying).
    */
   function call(token?: string) {
-    const url = `http://localhost/api/webhooks/clickpesa${token === undefined ? "" : `?t=${encodeURIComponent(token)}`}`;
+    const url = `http://localhost/api/webhooks/sonicpesa${token === undefined ? "" : `?t=${encodeURIComponent(token)}`}`;
     return webhookPost(
       new NextRequest(url, {
         method: "POST",

@@ -9,7 +9,7 @@ Everything to verify before Genhub goes live as a real website. Work top to\-bot
 ```bash
 cp .env.example .env.local        # fill in real values (template documents every key)
 npm ci                            # clean install
-npm run typecheck && npm test     # gates: typecheck + the suite (ClickPesa E2E, live-mode)
+npm run typecheck && npm test     # gates: typecheck + the suite (SonicPesa E2E, live-mode)
 npm run preflight:prod            # THE LAUNCH GATE — exits 1 while blockers remain
 npm run build                     # prebuild re-runs the env check, in strict mode
 npm run preflight:prod -- --url https://your-domain.com   # after deploy: + live health
@@ -28,7 +28,7 @@ the environment, not from your laptop:
 
 `preflight:prod` is the same list plus the checks that need the network: a real
 `SELECT 1` against Postgres, live probes of **Redis, Bunny Stream + CDN and
-SMTP**, a live ClickPesa token mint, and `/api/health`. Both halves of that exist
+SMTP**, a live SonicPesa token mint, and `/api/health`. Both halves of that exist
 because "the value is set" and "the value works" are different facts — a
 suspended managed database (Neon sleeps when idle and refuses the first
 connection while it wakes), a connection string with the wrong host or password,
@@ -98,8 +98,8 @@ Integration smoke tests (move from “code exists” to “credentials proven”
 
 | Script | What it proves |
 |---|---|
-| `npm run smoke:clickpesa` | Mints a token via `POST /generate-token` — credentials work, no money moves |
-| `npm run smoke:clickpesa -- --collect 1000 0712345678` | **Real** USSD push — confirm on your handset, then check the webhook completed the transaction |
+| `npm run smoke:sonicpesa` | Mints a token via `POST /generate-token` — credentials work, no money moves |
+| `npm run smoke:sonicpesa -- --collect 1000 0712345678` | **Real** USSD push — confirm on your handset, then check the webhook completed the transaction |
 | `npm run smoke:bunny` | Stream API key + library lookup |
 | `npm run smoke:bunny -- --storage` | + storage-zone write access (thumbnails) |
 | `npm run admin:create you@domain.com` | Promote your signup to ADMIN (production has **no** demo-login) |
@@ -151,14 +151,14 @@ vercel --prod
 APP_URL=https://your-domain.com npm run launch:check  # opens with
 #      the line below plus verify:live, and prints one verdict
 npm run preflight -- --url https://your-domain.com   # blockers + live health
-npm run smoke:clickpesa                             # credential / token check
+npm run smoke:sonicpesa                             # credential / token check
 npm run smoke:bunny -- --storage                    # stream + storage check
 npm run admin:create you@domain.com                 # bootstrap the first admin
 
 # 5) manual console steps
-#    - register the webhook URL in the ClickPesa dashboard
+#    - register the webhook URL in the SonicPesa dashboard
 #    - submit https://your-domain.com/sitemap.xml to Google Search Console
-#    - buy your cheapest video with a real phone once (smoke:clickpesa --collect)
+#    - buy your cheapest video with a real phone once (smoke:sonicpesa --collect)
 ```
 
 #### One command to re-run that verification
@@ -175,7 +175,7 @@ then prints one verdict:
 === LAUNCH CHECK: NOT READY ===
   ✗ preflight:prod (https://your-domain.com)        5 blocker(s), 0 warning(s)
   ✗ verify:live                                     2 configured value(s) broken · 1 warning(s)
-  ! ClickPesa collect                               SKIPPED — pass --collect <amountTZS> <07XXXXXXXX> …
+  ! SonicPesa collect                               SKIPPED — pass --collect <amountTZS> <07XXXXXXXX> …
 ```
 
 It is a convenience, not a new source of truth: each step is the same script you
@@ -315,7 +315,7 @@ of reading a copy of its environment.
       dev and are considered public):
       - `JWT_SECRET` → `openssl rand -hex 32`
       - `CRON_SECRET` → `openssl rand -hex 24`
-      - `CLICKPESA_WEBHOOK_TOKEN` → `openssl rand -hex 24`
+      - `SONICPESA_WEBHOOK_TOKEN` → `openssl rand -hex 24`
 - [ ] No API keys appear in source files, commits, or client bundles
       (`NEXT_PUBLIC_*` values are visible to every visitor by design — keep
       only truly public values there).
@@ -338,7 +338,7 @@ guess at.
 - [ ] **No secrets in the browser bundle.** The only `NEXT_PUBLIC_*` values used
       in client code are `APP_URL`, `APP_NAME`, `COMPANY_LEGAL_NAME`,
       `COMPANY_ADDRESS`, `SUPPORT_EMAIL` and `SUPPORT_PHONE`. No `JWT_SECRET`,
-      `BUNNY_*`, `CLICKPESA_*` or `DATABASE_URL` is referenced in any `.tsx`;
+      `BUNNY_*`, `SONICPESA_*` or `DATABASE_URL` is referenced in any `.tsx`;
       those are read only in route handlers and services.
 - [ ] **Storage is not directly reachable.** `/api/upload` requires auth,
       rate-limits to 5 per 5 minutes, restricts image types, caps images at
@@ -385,11 +385,11 @@ Set these in your hosting provider (Vercel → Project → Settings → Env vars
 | `JWT_EXPIRES_IN` | `7d` |
 | `COOKIE_NAME` | `genhub_token` |
 | `PAYMENT_SANDBOX` | **`false`** — while `true` the app never calls the gateway, so **no USSD push is sent at all** |
-| `CLICKPESA_CLIENT_ID` | ClickPesa dashboard → Settings → Developers |
-| `CLICKPESA_API_KEY` | ClickPesa dashboard → Settings → Developers |
-| `CLICKPESA_BASE_URL` | `https://api.clickpesa.com/third-parties` (default — usually omit) |
-| `CLICKPESA_CHECKSUM_KEY` | From the same dashboard. Preferred over the token below |
-| `CLICKPESA_WEBHOOK_TOKEN` | Fresh random 48-hex (used when no checksum key is set) |
+| `SONICPESA_ACCESS_KEY` | SonicPesa dashboard → Settings → Developers |
+| `SONICPESA_ACCESS_KEY` | SonicPesa dashboard → Settings → Developers |
+| `SONICPESA_BASE_URL` | `https://api.sonicpesa.com/third-parties` (default — usually omit) |
+| `SONICPESA_SECRET_KEY` | From the same dashboard. Preferred over the token below |
+| `SONICPESA_WEBHOOK_TOKEN` | Fresh random 48-hex (used when no checksum key is set) |
 | `CRON_SECRET` | Fresh random 48-hex |
 | `SMTP_HOST` / `SMTP_PORT` | e.g. `smtp.resend.com` / `587` |
 | `SMTP_USER` / `SMTP_PASS` | SMTP credentials (app password for Gmail) |
@@ -439,7 +439,7 @@ one on a site that is not:
 
 ### 2.1 `NEXT_PUBLIC_APP_URL` — the one variable that silently breaks webhooks
 
-ClickPesa's `webhook_url`, the SEO tags, referral links and password-reset links
+SonicPesa's `webhook_url`, the SEO tags, referral links and password-reset links
 are all built from the app URL. If it is wrong, the gateway cannot call us back.
 
 The app now resolves it in this order and reports which source it used:
@@ -586,20 +586,20 @@ are not declared `onDelete: Cascade`, so a bare `user.delete()` fails on a
 foreign key — after the user has already been told their account is gone. See
 `src/lib/services/account-erasure.service.ts`.
 
-## 3. Payments go-live (ClickPesa)
+## 3. Payments go-live (SonicPesa)
 
 - [ ] `PAYMENT_SANDBOX=false` — while it is `true` the app never contacts
-      ClickPesa, so **no USSD prompt reaches the customer's phone**. Flip it and
+      SonicPesa, so **no USSD prompt reaches the customer's phone**. Flip it and
       restart before testing.
-- [ ] Register the webhook in the ClickPesa dashboard (*Settings → Developers →
+- [ ] Register the webhook in the SonicPesa dashboard (*Settings → Developers →
       application → Application Webhooks*):
-      `https://<domain>/api/webhooks/clickpesa`
+      `https://<domain>/api/webhooks/sonicpesa`
 
-      ClickPesa signs every callback, so set `CLICKPESA_CHECKSUM_KEY` (from the
+      SonicPesa signs every callback, so set `SONICPESA_SECRET_KEY` (from the
       same dashboard) and each request is verified with an HMAC-SHA256 over the
       key-sorted body (`src/lib/webhook-auth.ts`). When no checksum key is
       configured the app falls back to a shared token in the URL
-      (`?t=<CLICKPESA_WEBHOOK_TOKEN>`) compared in constant time. **A callback
+      (`?t=<SONICPESA_WEBHOOK_TOKEN>`) compared in constant time. **A callback
       that cannot be verified is refused**: in production, an unconfigured
       secret means 401 rather than "no secret, so nothing to check". Accepting
       there would let anyone POST a completed callback for a checkout they had
@@ -607,25 +607,25 @@ foreign key — after the user has already been told their account is gone. See
       creator credited for money nobody paid.
 
       Refusing costs nothing, because the webhook is an optimisation: the poll
-      and the reconcile sweep both ask ClickPesa directly and settle the charge
+      and the reconcile sweep both ask SonicPesa directly and settle the charge
       anyway (next bullet). What it does cost is a line in the logs —
-      `[ClickPesa Webhook] Refused: no checksum key or webhook token is configured` —
+      `[SonicPesa Webhook] Refused: no checksum key or webhook token is configured` —
       which is not an attack and should be read as a configuration fault.
 - [ ] Check `GET /api/payments/health` (as admin). It reports sandbox state, the
       client id, the API key, the base URL, which webhook verification is in
       force (checksum vs token), whether `NEXT_PUBLIC_APP_URL` is publicly
       reachable, and the delivery counters. `readyForLive` must be `true`.
-      ClickPesa has **no float or balance API** — collections settle straight
+      SonicPesa has **no float or balance API** — collections settle straight
       into the merchant account — so there is no float to fund.
 - [ ] `gatewayBreaker.open` must be `false`. It is `true` only while this server
-      is deliberately skipping gateway calls because ClickPesa stopped answering
+      is deliberately skipping gateway calls because SonicPesa stopped answering
       — **not** a bad key. See §3.3.
 - [ ] The webhook is only an optimisation: if it never arrives, the client polls
-      `/api/payments/status/<orderId>`, which reconciles against ClickPesa and
+      `/api/payments/status/<orderId>`, which reconciles against SonicPesa and
       settles the transaction anyway. A localhost `NEXT_PUBLIC_APP_URL` therefore
       still works, it is just slower to confirm.
 - [ ] `POST /api/dev/sandbox/complete` is automatically **disabled** once
-      `PAYMENT_SANDBOX=false` + ClickPesa credentials are set, so nobody can fake
+      `PAYMENT_SANDBOX=false` + SonicPesa credentials are set, so nobody can fake
       a purchase.
       It only works in test mode (`src/tests/setup-env.ts` forces it on).
 - [ ] Smoke-test with a real, small amount:
@@ -646,7 +646,7 @@ foreign key — after the user has already been told their account is gone. See
       one atomic transaction — a customer can never be debited without being
       unlocked, and an insufficient balance returns `402 INSUFFICIENT_WALLET`
       having moved nothing.
-- [ ] Only **ClickPesa** may process payments. `npm run build` runs
+- [ ] Only **SonicPesa** may process payments. `npm run build` runs
       `verify:gateway` first and fails if another gateway reappears in the Prisma
       enum, in `src/lib/payments`, or anywhere in shipped source. The runtime lock
       lives in `src/lib/payments/gateway.ts`.
@@ -660,13 +660,13 @@ here:**
 
 ```bash
 node scripts/preflight.mjs --production --gateway
-#   ✓ ClickPesa token minted — credentials work
-#   ! ClickPesa has no float — collections settle straight to the merchant
+#   ✓ SonicPesa token minted — credentials work
+#   ! SonicPesa has no float — collections settle straight to the merchant
 #     account, so a silent push points at the account or the number, not at a
 #     balance to top up.
 ```
 
-ClickPesa has **no float and no balance API**, so there is nothing on our side
+SonicPesa has **no float and no balance API**, so there is nothing on our side
 to fund. A silent push usually means the merchant account is
 not yet activated for live collections (pre-KYC the account is capped at
 TZS 100,000 in total and 100 API calls a day). Everything below is the longer
@@ -675,7 +675,7 @@ diagnostic. Use `GET /api/payments/health` (admin) as the dashboard:
 1. **Is it really leaving the building?**
 
    ```bash
-   curl -X POST "https://api.clickpesa.com/third-parties/payments/initiate-ussd-push-request" \
+   curl -X POST "https://api.sonicpesa.com/third-parties/payments/initiate-ussd-push-request" \
      -H "Authorization: Bearer <token from /generate-token>" \
      -H "Content-Type: application/json" \
      -d '{"amount":"1000","currency":"TZS","orderReference":"SMOKE0001","phoneNumber":"255712345678"}'
@@ -685,13 +685,13 @@ diagnostic. Use `GET /api/payments/health` (admin) as the dashboard:
    reference (`Order reference … already used`) proves connectivity and key auth
    without moving money. Note the `orderReference` must be our own, alphanumeric
    and at most 20 characters, and unique — the app generates one per checkout.
-2. **Phone format.** ClickPesa wants MSISDN without a `+` or a leading `0`
+2. **Phone format.** SonicPesa wants MSISDN without a `+` or a leading `0`
    (`255712345678`). The app normalises `0712345678`, `255712345678` and
    `+255712345678` to that form, so a silent push points at the account, not the
    format.
-3. **Ask ClickPesa to confirm, in writing:**
+3. **Ask SonicPesa to confirm, in writing:**
    - is the merchant account **activated for live collections** (KYC complete)?
-   - are the `CLICKPESA_CLIENT_ID` / `CLICKPESA_API_KEY` the **production** pair?
+   - are the `SONICPESA_ACCESS_KEY` / `SONICPESA_ACCESS_KEY` the **production** pair?
    - has the account hit its pre-KYC daily or total limit?
    Send the order references and timestamps from `/api/payments/health`
    (`delivery.stuckPending`) as evidence.
@@ -801,20 +801,20 @@ The release job moves matured earnings `pendingBalance → availableBalance`:
 
 ### 3.3 When the gateway stops answering: the local breaker
 
-A ClickPesa that *accepts the connection and then never answers* is worse than
+A SonicPesa that *accepts the connection and then never answers* is worse than
 one that is down, because every call pays the full wait and nothing looks broken.
-`clickpesaStatus` is the worst of them: the reconcile sweep calls it once per
+`sonicpesaStatus` is the worst of them: the reconcile sweep calls it once per
 pending charge, so one hung gateway turned a sweep that should take a second into
 minutes of sequential waits, and the checkout poll into a spinner that never
 moved.
 
 So every gateway call is bounded at **20s** and guarded by a circuit breaker
-(`src/lib/payments/clickpesa.ts`). After **two unanswered calls in a row** — a
+(`src/lib/payments/sonicpesa.ts`). After **two unanswered calls in a row** — a
 timeout, a network failure, or a 5xx — the breaker opens for **30s**, and calls
 during that window are refused at once:
 
 ```
-ClickPesa has not answered its last calls, so this one was not sent.
+SonicPesa has not answered its last calls, so this one was not sent.
 ```
 
 One success closes it, so a recovered gateway resumes immediately.
@@ -823,8 +823,8 @@ One success closes it, so a recovered gateway resumes immediately.
 — a 4xx — and a 4xx is deliberately *not* counted as a fault. If 4xx responses
 counted, one customer typing a bad phone number twice would pause payments for
 everybody. Only "we could not reach the gateway" opens the breaker, so the
-correct response is to wait a moment and retry, or check ClickPesa's status
-page — not to rotate `CLICKPESA_API_KEY`.
+correct response is to wait a moment and retry, or check SonicPesa's status
+page — not to rotate `SONICPESA_ACCESS_KEY`.
 
 Where to see it:
 
@@ -834,8 +834,8 @@ Where to see it:
       nobody can reach right now.
 - [ ] Admin → Overview → System readiness → the **`gatewayBreaker`** row, and the
       same sentence at the top of the warnings list.
-- [ ] The ClickPesa probe (`npm run verify:live`) reports `warn` — "token minted
-      … ClickPesa has not answered its last calls" — when the gateway answers the
+- [ ] The SonicPesa probe (`npm run verify:live`) reports `warn` — "token minted
+      … SonicPesa has not answered its last calls" — when the gateway answers the
       probe but this process has been skipping it.
 
 The breaker is **per process**. A serverless cold start begins with it closed,
@@ -1116,7 +1116,7 @@ notice.
 
 With `CRON_SECRET` set, each watchdog run also asks `GET /api/health/services`,
 which runs the same live probes the admin Setup tab runs: Postgres, Redis, Bunny
-Stream, Bunny CDN, SMTP, ClickPesa and the app URL. The route is guarded by
+Stream, Bunny CDN, SMTP, SonicPesa and the app URL. The route is guarded by
 `CRON_SECRET` and **reads only** — it opens connections and moves nothing.
 
 | Probe state | Watchdog verdict |
@@ -1164,7 +1164,7 @@ failure is unambiguous:
 | Where | What has to be true |
 |---|---|
 | Redis | the data-path breaker tripped (two calls in a row unanswered) |
-| ClickPesa | the breaker tripped, **or** the gateway answered `401`/`403` |
+| SonicPesa | the breaker tripped, **or** the gateway answered `401`/`403` |
 | Bunny Stream | the management API timed out, could not be reached, or answered `401`/`403` |
 | SMTP | nodemailer failed with an auth or connection code (`EAUTH`, `ECONNECTION`, …) |
 
@@ -1569,9 +1569,9 @@ writes nothing.
 - [ ] Confirm it still refuses without the secret (`401`), like every cron route
       (§4.0).
 
-### 4.0.6 No float to watch (ClickPesa)
+### 4.0.6 No float to watch (SonicPesa)
 
-ClickPesa settles collections straight into the merchant account and exposes
+SonicPesa settles collections straight into the merchant account and exposes
 **no float or balance API**, so there is no prepaid-float alarm to run here. There is nothing on our side to fund and nothing to page an operator
 about. A silent USSD push is therefore an account issue, not a balance — see §3.1
 for the diagnostic (activation/KYC, pre-KYC limits, phone format).
@@ -1614,7 +1614,7 @@ customer cannot accidentally buy it twice from the video page either.
 
 | Action | Use when | Effect |
 |---|---|---|
-| **Re-check gateway** | always, first | asks ClickPesa again; settles it if there is a verdict, changes nothing if it still says `processing` |
+| **Re-check gateway** | always, first | asks SonicPesa again; settles it if there is a verdict, changes nothing if it still says `processing` |
 | **Customer paid** | the operator confirms the debit | settles through the normal webhook path: 70/30 split, creator credited to *pending*, purchase unlocked |
 | **Never paid** | the operator confirms no debit | releases the charge and tells the customer it is safe to retry |
 
@@ -1643,7 +1643,7 @@ on any `UNDER_INVESTIGATION` or `SUCCESS` charge — a customer can ask weeks
 later). The transaction becomes `REFUNDED` and drops out of platform revenue
 automatically, because every revenue figure sums `status = 'SUCCESS'`.
 
-#### ClickPesa has no reversal API wired in
+#### SonicPesa has no reversal API wired in
 
 Our integration uses three endpoints — `POST /generate-token`,
 `POST /payments/initiate-ussd-push-request` and `GET /payments/{orderReference}`
@@ -1653,9 +1653,9 @@ automated.** That is why the refund has two destinations:
 | Destination | Who moves the money | Customer gets |
 |---|---|---|
 | **Wallet credit** | us, atomically, instantly | spendable balance now |
-| **Back to their phone** | **you, in the ClickPesa dashboard** | money on their handset in up to 48h; the wallet is not touched |
+| **Back to their phone** | **you, in the SonicPesa dashboard** | money on their handset in up to 48h; the wallet is not touched |
 
-For a network reversal the integration **requires the ClickPesa reference**
+For a network reversal the integration **requires the SonicPesa reference**
 (`gatewayReversalRef`). We cannot verify it, so it is recorded as the evidence
 that the money went back — never inferred. A reversal to the customer's phone
 must never be recorded from memory.
@@ -1708,7 +1708,7 @@ membership enters the renewal window **24 hours before `expiresAt`**, then:
    instantly. Debit, 70/30 split, and the extended `expiresAt` commit in one
    transaction (`grantSubscription` in `lib/services/subscription.service.ts`).
 2. **USSD push** — otherwise a normal `SUBSCRIPTION` checkout is created and
-   ClickPesa pushes to `renewPhone` (the number the fan last paid with). It
+   SonicPesa pushes to `renewPhone` (the number the fan last paid with). It
    settles through the usual webhook / status poll / sweeper.
 3. **Failure** — the reason is stored on the subscription and the fan is
    notified. Retries are spaced 6 hours apart, at most 4 per period; after that
@@ -2057,10 +2057,10 @@ Manual checks:
   on its *Allowed Referrers* list gets a 403 for the manifest **and** for every
   segment — the player only spins, on every video, while the CDN reports healthy
   to a server-side probe. See §8.0.1.
-- Run `npm run smoke:clickpesa` from your machine against the live key.
+- Run `npm run smoke:sonicpesa` from your machine against the live key.
 
 
-Automated gates: `npm run typecheck` · `npm test` (incl. the ClickPesa live-mode E2E
+Automated gates: `npm run typecheck` · `npm test` (incl. the SonicPesa live-mode E2E
 against a DB) · `npm run verify:lockfile` · `npm run preflight:prod` · `npm run build`.
 
 No test counts are quoted here on purpose: a number in a launch checklist is
@@ -2070,7 +2070,7 @@ than a short one.
 ## 8. Operations
 
 - [ ] Uptime monitor on `GET /api/health` (503 = degraded, check `checks.database`).
-- [ ] Log aggregation for `[ClickPesa …]`, `[Webhook]`, `[Cron …]` prefixes.
+- [ ] Log aggregation for `[SonicPesa …]`, `[Webhook]`, `[Cron …]` prefixes.
 - [ ] Rate limits verified (Redis-backed; without Redis they fail **open**, so
       Redis must be up in production).
 

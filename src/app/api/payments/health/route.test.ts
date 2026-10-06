@@ -1,7 +1,7 @@
 // =============================================================================
-// GENHUB - GET /api/payments/health (ClickPesa)
+// GENHUB - GET /api/payments/health (SonicPesa)
 //
-// ClickPesa exposes no balance/float endpoint, so this route answers a different
+// SonicPesa exposes no balance/float endpoint, so this route answers a different
 // question than it used to: are the credentials and the webhook verification in
 // place, and are recent charges settling? These tests pin the two states that
 // matter to an operator — ready for live, and not ready with a reason.
@@ -10,10 +10,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const state = vi.hoisted(() => ({
-  checksumKey: "" as string,
+  secretKey: "" as string,
   webhookToken: "" as string,
-  clientId: "IDF5OPn" as string,
-  apiKey: "SKGkey" as string,
+  accessKey: "sk_live_test" as string,
   sandbox: false,
 }));
 
@@ -22,13 +21,13 @@ vi.mock("@/lib/config", () => ({
     appUrl: "https://genhub.test",
     appUrlSource: "NEXT_PUBLIC_APP_URL",
     nodeEnv: "test",
-    get clickPesa() {
+    get sonicPesa() {
       return {
-        clientId: state.clientId,
-        apiKey: state.apiKey,
-        baseUrl: "https://api.clickpesa.com/third-parties",
+        accessKey: state.accessKey,
+        secretKey: state.secretKey,
+        baseUrl: "https://api.sonicpesa.com/api/v1",
         webhookToken: state.webhookToken,
-        checksumKey: state.checksumKey,
+        fallbackEmail: "payments@genhub.app",
         sandbox: state.sandbox,
       };
     },
@@ -54,9 +53,9 @@ vi.mock("@/lib/auth", () => ({
   },
 }));
 
-vi.mock("@/lib/payments/clickpesa", () => ({
-  clickpesaGatewayState: () => ({ open: false, openUntil: 0, failures: 0, skipped: 0 }),
-  clickpesaBreakerNotice: () => null,
+vi.mock("@/lib/payments/sonicpesa", () => ({
+  sonicpesaGatewayState: () => ({ open: false, openUntil: 0, failures: 0, skipped: 0 }),
+  sonicpesaBreakerNotice: () => null,
 }));
 
 import { GET } from "@/app/api/payments/health/route";
@@ -70,23 +69,22 @@ async function body() {
 }
 
 beforeEach(() => {
-  state.checksumKey = "";
+  state.secretKey = "";
   state.webhookToken = "";
-  state.clientId = "IDF5OPn";
-  state.apiKey = "SKGkey";
+  state.accessKey = "sk_live_test";
   state.sandbox = false;
 });
 
-describe("GET /api/payments/health — ClickPesa readiness", () => {
-  it("is ready for live with credentials and a checksum key", async () => {
-    state.checksumKey = "checksum-secret";
+describe("GET /api/payments/health — SonicPesa readiness", () => {
+  it("is ready for live with credentials and a secret key", async () => {
+    state.secretKey = "secret-key-value";
 
     const data = await body();
 
-    expect(data.gateway).toBe("CLICKPESA");
+    expect(data.gateway).toBe("SONICPESA");
     expect(data.readyForLive).toBe(true);
-    expect(data.checks.apiKey!.ok).toBe(true);
-    expect(data.checks.webhookVerification!.value).toContain("checksum");
+    expect(data.checks.accessKey!.ok).toBe(true);
+    expect(data.checks.webhookVerification!.value).toContain("signature");
   });
 
   it("accepts a shared webhook token as webhook verification", async () => {
@@ -99,13 +97,13 @@ describe("GET /api/payments/health — ClickPesa readiness", () => {
   });
 
   it("is NOT ready when the credentials are missing", async () => {
-    state.checksumKey = "checksum-secret";
-    state.apiKey = "";
+    state.secretKey = "secret-key-value";
+    state.accessKey = "";
 
     const data = await body();
 
     expect(data.readyForLive).toBe(false);
-    expect(data.checks.apiKey!.ok).toBe(false);
+    expect(data.checks.accessKey!.ok).toBe(false);
   });
 
   it("is NOT ready when no webhook secret is configured", async () => {
@@ -116,7 +114,7 @@ describe("GET /api/payments/health — ClickPesa readiness", () => {
   });
 
   it("is NOT ready in sandbox mode, whatever else is set", async () => {
-    state.checksumKey = "checksum-secret";
+    state.secretKey = "secret-key-value";
     state.sandbox = true;
 
     const data = await body();

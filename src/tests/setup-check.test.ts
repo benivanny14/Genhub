@@ -65,7 +65,7 @@ describe("checklist integrity", () => {
     expect(SETUP_GROUPS.length).toBeGreaterThan(0);
     expect(itemsWithKeys.length).toBe(21);
     // Three steps are work in someone else's dashboard, not a variable: the
-    // ClickPesa account activation, the Bunny pull zone's Allowed Referrers list — which
+    // SonicPesa account activation, the Bunny pull zone's Allowed Referrers list — which
     // refuses the manifest and every segment of any host it does not name, so a
     // missing entry there is a video that only spins (see probeSignedPlayback) —
     // and the library's Webhook URL, which is what makes a finished encode go

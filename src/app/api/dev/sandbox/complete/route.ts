@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
   // route minted free purchases for anyone who found it.
   const sandboxMode =
     developmentOnlyEnabled() &&
-    (!config.clickPesa.apiKey || config.clickPesa.sandbox);
+    (!config.sonicPesa.accessKey || config.sonicPesa.sandbox);
 
   if (!sandboxMode) {
     return api.error(
@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Only the payer may complete their own sandbox order.
-    // Accepts both our internal id and the hp_sbx_* providerRef that
+    // Accepts both our internal id and the sp_sbx_* providerRef that
     // /payments/purchase returns to the client.
     const transaction = await prisma.transaction.findFirst({
       where: { OR: [{ id: orderId }, { providerRef: orderId }] },

@@ -1,7 +1,7 @@
 // =============================================================================
 // GENHUB - App URL resolution
 //
-// The app URL feeds the ClickPesa `webhook_url`, SEO tags, referral links and
+// The app URL feeds the SonicPesa `webhook_url`, SEO tags, referral links and
 // password-reset emails. Getting it wrong is silent: payments still settle
 // because the client polls the status endpoint, so nobody notices the gateway
 // was never able to call us back.

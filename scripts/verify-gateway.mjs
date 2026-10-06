@@ -3,7 +3,7 @@
 // GENHUB - Gateway lock (build-time guard)
 // Run:  node scripts/verify-gateway.mjs   (also wired as `prebuild`)
 //
-// ClickPesa is the only payment gateway. Exits 1 the moment a second gateway
+// SonicPesa is the only payment gateway. Exits 1 the moment a second gateway
 // reappears in src/lib/payments or anywhere in shipped source — so a legacy
 // integration can never slip back in unnoticed. A retired gateway may remain
 // in the Prisma enum as a historical label for old transactions, but it is
@@ -54,9 +54,9 @@ const enumValues = block
   : [];
 
 check(
-  enumValues.includes("CLICKPESA"),
-  "Prisma PaymentGateway enum contains CLICKPESA",
-  `Prisma PaymentGateway enum is [${enumValues.join(", ") || "not found"}] — expected CLICKPESA to be present`
+  enumValues.includes("SONICPESA"),
+  "Prisma PaymentGateway enum contains SONICPESA",
+  `Prisma PaymentGateway enum is [${enumValues.join(", ") || "not found"}] — expected SONICPESA to be present`
 );
 
 // 2) Integration modules
@@ -68,9 +68,9 @@ const modules = existsSync(paymentsDir)
   : [];
 
 check(
-  JSON.stringify(modules) === JSON.stringify(["clickpesa.ts", "gateway.ts"]),
-  "src/lib/payments holds gateway.ts + clickpesa.ts only",
-  `src/lib/payments holds [${modules.join(", ") || "nothing"}] — expected [clickpesa.ts, gateway.ts]`
+  JSON.stringify(modules) === JSON.stringify(["gateway.ts", "sonicpesa.ts"]),
+  "src/lib/payments holds gateway.ts + sonicpesa.ts only",
+  `src/lib/payments holds [${modules.join(", ") || "nothing"}] — expected [gateway.ts, sonicpesa.ts]`
 );
 
 // 3) No reference to a decommissioned gateway in shipped source
@@ -91,6 +91,6 @@ check(
 
 console.log(`\n=== ${failures === 0 ? "PASS" : `${failures} FAILURE(S)`} ===\n`);
 if (failures > 0) {
-  console.log("Only ClickPesa may process payments. Remove the gateway above.\n");
+  console.log("Only SonicPesa may process payments. Remove the gateway above.\n");
   process.exit(1);
 }

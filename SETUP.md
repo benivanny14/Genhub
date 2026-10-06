@@ -24,11 +24,11 @@ Inafanya vitu vinne kwa niaba yako:
 
 1. Inaunda `.env.local` kutoka template kama haipo.
 2. **Inazalisha siri tatu** (`JWT_SECRET`, `CRON_SECRET`,
-   `CLICKPESA_WEBHOOK_TOKEN`) — hivi ndivyo vinavyochanganya zaidi, na sasa
+   `SONICPESA_WEBHOOK_TOKEN`) — hivi ndivyo vinavyochanganya zaidi, na sasa
    huhitaji kuzalisha mwenyewe. Hatuonyeshi hapa; ziko kwenye faili pekee.
 3. **Haitogusi** value iliyopo tayari na nzuri. Hii ni muhimu: kubadilisha
    `CRON_SECRET` kunavunja scheduler, na kubadilisha
-   `CLICKPESA_WEBHOOK_TOKEN` kunavunja webhook iliyosajiliwa. Inatumia kanuni
+   `SONICPESA_WEBHOOK_TOKEN` kunavunja webhook iliyosajiliwa. Inatumia kanuni
    ile ile ya `assessSecret` ambayo `preflight` na `verify:live` zinatumia,
    kwa hivyo script tatu haziwezi kutofautiana.
 4. Inafungua faili kwenye Notepad, na inakuonyesha **kila kitu kilichobaki**
@@ -86,7 +86,7 @@ variable:
 |---|---|---|
 | `JWT_SECRET` | Vipindi vya watumiaji (login) | Kila mtu anatolewa — wote wanaingia tena |
 | `CRON_SECRET` | Cron jobs zinazolipa waundaji | Lazima uibadilishe kwenye scheduler pia |
-| `CLICKPESA_WEBHOOK_TOKEN` | Kwamba webhook ya malipo ni yetu | Lazima ilingane na ile iliyopo kwenye URL ya webhook (au tumia `CLICKPESA_CHECKSUM_KEY`) |
+| `SONICPESA_WEBHOOK_TOKEN` | Kwamba webhook ya malipo ni yetu | Lazima ilingane na ile iliyopo kwenye URL ya webhook (au tumia `SONICPESA_SECRET_KEY`) |
 
 > ⚠️ **Muhimu:** `.env.local` yako ya sasa ina `JWT_SECRET=dev-freebuff-...`,
 > ambayo ni **placeholder** — neno la kibinadamu linaloweza kukisiwa, na
@@ -302,43 +302,43 @@ Hatua hizi zinafanya kazi ikiwa utaihitaji siku moja:
 
 ---
 
-## Hatua 7 — ClickPesa (dakika 15, inahitaji akaunti)
+## Hatua 7 — SonicPesa (dakika 15, inahitaji akaunti)
 
-ClickPesa ndiyo gateway pekee. **ClickPesa haina float**: kila collection
+SonicPesa ndiyo gateway pekee. **SonicPesa haina float**: kila collection
 inaingia moja kwa moja kwenye akaunti yako ya merchant, kwa hivyo
 hakuna salio la kuweka. Kinachohitajika ni vitambulisho vitatu, vyote kutoka
-*Settings → Developers* kwenye dashboard yako ya ClickPesa:
+*Settings → Developers* kwenye dashboard yako ya SonicPesa:
 
 | Variable | Inalinda nini |
 |---|---|
-| `CLICKPESA_CLIENT_ID` | Kutambulisha akaunti yako kwa ClickPesa |
-| `CLICKPESA_API_KEY` | Siri ya kuzalisha token |
-| `CLICKPESA_CHECKSUM_KEY` | Kuhakikisha kila callback ni ya ClickPesa (hiari lakini inashauriwa) |
+| `SONICPESA_ACCESS_KEY` | Kutambulisha akaunti yako kwa SonicPesa |
+| `SONICPESA_ACCESS_KEY` | Siri ya kuzalisha token |
+| `SONICPESA_SECRET_KEY` | Kuhakikisha kila callback ni ya SonicPesa (hiari lakini inashauriwa) |
 
 1. **Weka vitambulisho.** Nakili `CLIENT_ID` na `API_KEY` kwenye `.env.local`.
-   `CLICKPESA_BASE_URL` si lazima — default ni
-   `https://api.clickpesa.com/third-parties`.
+   `SONICPESA_BASE_URL` si lazima — default ni
+   `https://api.sonicpesa.com/third-parties`.
 
 2. **Sajili webhook.** Kwenye dashboard: *Settings → Developers → application
    yako → Application Webhooks*. Weka URL:
 
-   `https://<domain yako>/api/webhooks/clickpesa`
+   `https://<domain yako>/api/webhooks/sonicpesa`
 
-   Kwa usalama wa ziada weka `CLICKPESA_CHECKSUM_KEY` ili kila callback
+   Kwa usalama wa ziada weka `SONICPESA_SECRET_KEY` ili kila callback
    ithibitishwe kwa HMAC-SHA256. Bila key hiyo, mfumo unatumia token
-   (`CLICKPESA_WEBHOOK_TOKEN`, unaozalishwa na `npm run setup`) — na token hiyo
+   (`SONICPESA_WEBHOOK_TOKEN`, unaozalishwa na `npm run setup`) — na token hiyo
    inatakiwa iwe kwenye URL iliyosajiliwa.
 
 3. **Thibitisha kwa simu yako mwenyewe:**
 
 ```bash
-npm run smoke:clickpesa -- --collect 1000 0XXXXXXXXX
+npm run smoke:sonicpesa -- --collect 1000 0XXXXXXXXX
 ```
 
 Ingiza PIN. Kisha `npm run verify:live` inatakiwa kuonyesha
-`✓ ClickPesa  token minted`.
+`✓ SonicPesa  token minted`.
 
-> **ClickPesa haina sandbox** — kila ombi ni la live. Kabla ya KYC, kikomo ni
+> **SonicPesa haina sandbox** — kila ombi ni la live. Kabla ya KYC, kikomo ni
 > TZS 100,000 kwa jumla na miito 100 kwa siku (pamoja na kutengeneza token).
 >
 > Mfumo **haukuruhusu** mteja kulipa mara mbili kwa bahati mbaya: charge inayobaki
@@ -430,9 +430,9 @@ npm run preflight:prod
 | `DATABASE_URL` | Neon (pooled) | ✅ **Ndiyo** |
 | `JWT_SECRET` | `openssl rand -hex 32` | ✅ **Ndiyo** |
 | `CRON_SECRET` | `openssl rand -hex 32` | ✅ Ndiyo |
-| `CLICKPESA_CLIENT_ID` | ClickPesa → Settings → Developers | ✅ Ndiyo |
-| `CLICKPESA_API_KEY` | ClickPesa → Settings → Developers | ✅ Ndiyo |
-| `CLICKPESA_CHECKSUM_KEY` | ClickPesa → Settings → Developers | ✅ Ndiyo |
+| `SONICPESA_ACCESS_KEY` | SonicPesa → Settings → Developers | ✅ Ndiyo |
+| `SONICPESA_ACCESS_KEY` | SonicPesa → Settings → Developers | ✅ Ndiyo |
+| `SONICPESA_SECRET_KEY` | SonicPesa → Settings → Developers | ✅ Ndiyo |
 | `PAYMENT_SANDBOX` | `false` kwa malipo halisi | ✅ Ndiyo |
 | `BUNNY_STREAM_API_KEY` | Bunny → Stream → API | ⬜ Kwa upload |
 | `BUNNY_STREAM_LIBRARY_ID` | Bunny → Stream → API | ⬜ Kwa upload |

@@ -3,7 +3,7 @@
 //
 // `reconcileStalePayments` asks the gateway about every pending charge, one at a
 // time. Once the gateway has stopped answering, the breaker in
-// lib/payments/clickpesa refuses further calls instantly — so the sweep would
+// lib/payments/sonicpesa refuses further calls instantly — so the sweep would
 // race through the remaining rows doing nothing but inflating `errors`, and
 // report a `checked` count that looks like work.
 //
@@ -38,25 +38,25 @@ vi.mock("@/lib/config", async (importOriginal) => {
     ...actual,
     default: {
       ...actual.default,
-      clickPesa: {
-        clientId: "test-client",
-        apiKey: "test-key",
-        baseUrl: "https://clickpesa.test/third-parties",
+      sonicPesa: {
+        accessKey: "test-key",
+        secretKey: "test-secret",
+        baseUrl: "https://sonicpesa.test/api/v1",
         webhookToken: "test-webhook-token",
-        checksumKey: "",
+        fallbackEmail: "payments@test.local",
         sandbox: false,
       },
     },
   };
 });
 
-vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/payments/clickpesa")>();
+vi.mock("@/lib/payments/sonicpesa", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments/sonicpesa")>();
   return {
     ...actual,
-    clickpesaStatus: gw.status,
+    sonicpesaStatus: gw.status,
     // Stands in for the breaker: the sweep only reads `open`.
-    clickpesaGatewayState: () => ({
+    sonicpesaGatewayState: () => ({
       open: gw.open,
       openUntil: 0,
       failures: 0,
@@ -96,7 +96,7 @@ describe("reconcile sweep and the gateway breaker", () => {
       calls += 1;
       // Two failures in a row is what opens the real breaker.
       if (calls >= 2) gw.open = true;
-      throw new Error("ClickPesa /payments/HP timed out after 20s");
+      throw new Error("SonicPesa /payments/HP timed out after 20s");
     });
 
     const result = await reconcileStalePayments();

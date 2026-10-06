@@ -879,7 +879,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           videoId: video.id,
-          gateway: "CLICKPESA",
+          gateway: "SONICPESA",
           phoneNumber,
           couponCode: couponCode.trim() || undefined,
         }),
@@ -904,7 +904,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           toast("error", doneData.error || "Sandbox payment failed");
         }
       } else if (data.success) {
-        // Live ClickPesa: USSD push sent — poll until the gateway confirms
+        // Live SonicPesa: USSD push sent — poll until the gateway confirms
         setShowPurchaseModal(false);
         setPaymentOutcome(outcomeForStatus("PENDING"));
         toast("info", "USSD push sent to your phone — enter your PIN to confirm.");
@@ -925,7 +925,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     }
   }
 
-  // Poll the transaction until ClickPesa completes/fails it (webhook or reconcile)
+  // Poll the transaction until SonicPesa completes/fails it (webhook or reconcile)
   function pollPaymentStatus(transactionId: string, attempt = 0) {    // ~2 minutes: entering a USSD PIN can easily take a minute on a slow network.
     if (attempt >= 40) {
       toast(

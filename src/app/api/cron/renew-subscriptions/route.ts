@@ -2,7 +2,7 @@
 // GENHUB - Cron: Renew Subscriptions
 // GET/POST /api/cron/renew-subscriptions
 //
-// Charges memberships that are about to expire (wallet first, then a ClickPesa
+// Charges memberships that are about to expire (wallet first, then a SonicPesa
 // USSD push), retries failures with a gap, and notifies the fan. Schedule this
 // every hour (Vercel Cron, GitHub Actions, or any external scheduler) with
 // header `x-cron-secret: $CRON_SECRET`.

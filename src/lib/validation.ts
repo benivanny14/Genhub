@@ -178,7 +178,7 @@ export const createVideoSchema = z.object({
   title: z.string().min(3, "Title must be at least 3 characters").max(200),
   description: z.string().max(5000).optional(),
   // The floor is TZS 500. A price under it is not worth the mobile-money fee
-  // that settles it — ClickPesa's cut on a TZS 100 collect is a large fraction
+  // that settles it — SonicPesa's cut on a TZS 100 collect is a large fraction
   // of the sale — and the amount a buyer sees has to be a price a creator would
   // actually charge, not a number that cannot pay for itself.
   price: z
@@ -296,15 +296,15 @@ export const updateVideoSchema = z.object({
 
 // =============================================================================
 // Payment Schemas
-// ClickPesa is the only gateway: checkout is a USSD push to the customer's
+// SonicPesa is the only gateway: checkout is a USSD push to the customer's
 // phone number, so the mobile network is resolved from the number itself.
 // =============================================================================
 
 export const initiatePaymentSchema = z
   .object({
     videoId: z.string().min(1),
-    gateway: z.enum(["CLICKPESA"]).default("CLICKPESA"),
-    // PHONE = ClickPesa USSD push (default). WALLET = spend the existing balance.
+    gateway: z.enum(["SONICPESA"]).default("SONICPESA"),
+    // PHONE = SonicPesa USSD push (default). WALLET = spend the existing balance.
     method: z.enum(["PHONE", "WALLET"]).default("PHONE"),
     phoneNumber: z
       .string()
@@ -327,7 +327,7 @@ export const initiatePaymentSchema = z
 
 export const topUpWalletSchema = z.object({
   amount: z.number().int().min(500, "The minimum amount is TZS 500").max(5000000),
-  gateway: z.enum(["CLICKPESA"]).default("CLICKPESA"),
+  gateway: z.enum(["SONICPESA"]).default("SONICPESA"),
   phoneNumber: z
     .string()
     .regex(/^(\+255|0)[67]\d{8}$/, "Enter a valid phone number (for example 0712345678)"),

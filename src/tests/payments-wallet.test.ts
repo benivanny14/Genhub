@@ -2,7 +2,7 @@
 // GENHUB - Payments: wallet fallback, notifications, admin force-expire
 //
 // Real database. Covers the three safety-critical paths added for failed
-// ClickPesa charges:
+// SonicPesa charges:
 //   1. paying from the wallet balance is atomic (charge + 70/30 split + access)
 //   2. a settled/failed charge always notifies the customer
 //   3. an admin can force-expire ONE stuck charge, and only a PENDING one
@@ -217,7 +217,7 @@ describeE2E("Payments: wallet fallback, notifications, admin expire", () => {
         amount: 2_000,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         providerRef: `hp_test_${Date.now()}`,
       },
     });

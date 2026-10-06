@@ -1,16 +1,16 @@
 // =============================================================================
-// GENHUB - ClickPesa LIVE mode (PAYMENT_SANDBOX=false)
+// GENHUB - SonicPesa LIVE mode (PAYMENT_SANDBOX=false)
 //
 // This suite locks in the fix for the "no USSD push ever reaches the phone"
 // bug: while the sandbox flag was on, the app never called the gateway at all.
 // Here the gateway module is replaced with a spy, so we can assert exactly what
 // the server sends and how it reacts — without charging anyone.
 //
-//   1. a live top-up calls clickpesaCollect with our order reference and stores
+//   1. a live top-up calls sonicpesaCollect with our order reference and stores
 //      it as providerRef (so the webhook / status poll can map it back)
 //   2. a gateway rejection surfaces the gateway's own reason and fails the row
 //   3. money reaches the customer's account even when no webhook arrives,
-//      because /payments/status reconciles with ClickPesa
+//      because /payments/status reconciles with SonicPesa
 //   4. stale orders are swept: settled ones settle, and anything the gateway
 //      still calls "PROCESSING" past the TTL becomes UNDER_INVESTIGATION —
 //      never FAILED, because the customer may already have paid
@@ -45,30 +45,30 @@ vi.mock("@/lib/config", async (importOriginal) => {
       ...actual.default,
       nodeEnv: "test",
       appUrl: "https://genhub.test",
-      clickPesa: {
-        clientId: "test-client",
-        apiKey: "test-key",
-        baseUrl: "https://clickpesa.test/third-parties",
+      sonicPesa: {
+        accessKey: "test-key",
+        secretKey: "test-secret",
+        baseUrl: "https://sonicpesa.test/api/v1",
         webhookToken: "test-webhook-token",
-        checksumKey: "",
+        fallbackEmail: "payments@test.local",
         sandbox: false,
       },
     },
   };
 });
 
-// Spy on the gateway itself — clickpesaErrorReason stays real
-vi.mock("@/lib/payments/clickpesa", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/payments/clickpesa")>();
+// Spy on the gateway itself — sonicpesaErrorReason stays real
+vi.mock("@/lib/payments/sonicpesa", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/payments/sonicpesa")>();
   return {
     ...actual,
-    clickpesaCollect: vi.fn(),
-    clickpesaStatus: vi.fn(),
+    sonicpesaCollect: vi.fn(),
+    sonicpesaStatus: vi.fn(),
   };
 });
 
 import prisma from "@/lib/db";
-import { clickpesaCollect, clickpesaStatus } from "@/lib/payments/clickpesa";
+import { sonicpesaCollect, sonicpesaStatus } from "@/lib/payments/sonicpesa";
 import { POST as topupPost } from "@/app/api/payments/topup/route";
 import { GET as statusGet } from "@/app/api/payments/status/[orderId]/route";
 import { POST as completePost } from "@/app/api/dev/sandbox/complete/route";
@@ -89,8 +89,8 @@ const db = prisma as unknown as {
   user: { findUnique: (a: unknown) => Promise<{ walletBalance: number } | null> };
 };
 
-const collect = vi.mocked(clickpesaCollect);
-const status = vi.mocked(clickpesaStatus);
+const collect = vi.mocked(sonicpesaCollect);
+const status = vi.mocked(sonicpesaStatus);
 
 const describeLive = process.env.DATABASE_URL ? describe : describe.skip;
 
@@ -106,21 +106,24 @@ function get(url: string): NextRequest {
   return new NextRequest(`http://localhost${url}`);
 }
 
-/** What `clickpesaStatus` returns: a normalized single-payment envelope. */
+/** SonicPesa's own order id for a collect request (it assigns one). */
+function gatewayOrderId(request: { orderReference: string }): string {
+  return `sp_${request.orderReference}`;
+}
+
+/** What `sonicpesaStatus` returns: a normalized single-payment envelope. */
 function gatewayPayment(orderReference: string, gatewayStatus: string, amount = 0) {
   return {
     success: true,
     payment: {
-      orderReference,
       status: gatewayStatus,
-      collectedAmount: amount,
-      collectedCurrency: "TZS",
-      updatedAt: new Date().toISOString(),
+      orderId: orderReference,
+      amount,
     },
   };
 }
 
-describeLive("ClickPesa live mode (sandbox off)", () => {
+describeLive("SonicPesa live mode (sandbox off)", () => {
   const PHONE = "0712345678";
 
   beforeAll(async () => {
@@ -145,11 +148,11 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
   beforeEach(() => {
     collect.mockReset();
     status.mockReset();
-    // The gateway echoes the reference we sent — which is what makes the stored
-    // providerRef the value the webhook and the poll match on.
+    // SonicPesa ASSIGNS its own order id; that value is what the route stores as
+    // providerRef, so the webhook and the status poll match on it.
     collect.mockImplementation(async (request) => ({
       success: true,
-      orderReference: request.orderReference,
+      orderReference: gatewayOrderId(request),
       message: "USSD push sent — approve it on your phone",
     }));
     // Default: every order is still unfinished, so the sweeper never invents a
@@ -159,11 +162,11 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
     );
   });
 
-  it("calls ClickPesa collect and stores its order reference", async () => {
+  it("calls SonicPesa collect and stores the gateway's order id", async () => {
     const res = await topupPost(
       post("/api/payments/topup", {
         amount: 3_000,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         phoneNumber: PHONE,
       })
     );
@@ -178,12 +181,16 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
     // Normalized to the MSISDN form the gateway requires.
     expect(sent.phone).toBe("255712345678");
     expect(sent.amount).toBe(3_000);
+    // Our own trace reference is alphanumeric and bounded.
     expect(sent.orderReference).toMatch(/^[A-Z0-9]{1,20}$/);
-    expect(body.data.orderId).toBe(sent.orderReference);
+    // The client is handed the GATEWAY's order id, which is what it polls with.
+    const orderId = gatewayOrderId(sent);
+    expect(body.data.orderId).toBe(orderId);
 
-    // The order reference is persisted so the webhook can find this row
+    // The gateway order id is persisted as providerRef so the webhook can find
+    // this row.
     const tx = await prisma.transaction.findFirst({
-      where: { userId: ctx.viewerId, providerRef: sent.orderReference },
+      where: { userId: ctx.viewerId, providerRef: orderId },
       select: { status: true, type: true, amount: true },
     });
     expect(tx).not.toBeNull();
@@ -201,7 +208,7 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
     const res = await topupPost(
       post("/api/payments/topup", {
         amount: 2_000,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         phoneNumber: PHONE,
       })
     );
@@ -222,7 +229,7 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
     const res = await topupPost(
       post("/api/payments/topup", {
         amount: 4_000,
-        gateway: "CLICKPESA",
+        gateway: "SONICPESA",
         phoneNumber: PHONE,
       })
     );
@@ -259,15 +266,15 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 2_500,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "CLICKPESA",
-        providerRef: "cp_sweep_settle",
+        gateway: "SONICPESA",
+        providerRef: "sp_sweep_settle",
         // older than the freshness window, younger than the hard TTL
         createdAt: new Date(Date.now() - 20 * 60_000),
       },
     });
 
     status.mockImplementation(async (orderReference: string) =>
-      orderReference === "cp_sweep_settle"
+      orderReference === "sp_sweep_settle"
         ? gatewayPayment(orderReference, "SUCCESS", 2_500)
         : gatewayPayment(orderReference, "PROCESSING")
     );
@@ -292,8 +299,8 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 1_500,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "CLICKPESA",
-        providerRef: "cp_sweep_investigate",
+        gateway: "SONICPESA",
+        providerRef: "sp_sweep_investigate",
         createdAt: new Date(Date.now() - 3 * 60 * 60_000), // 3h > 1h TTL
       },
     });
@@ -332,8 +339,8 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 1_200,
         type: "WALLET_TOPUP",
         status: "PENDING",
-        gateway: "CLICKPESA",
-        providerRef: "cp_sweep_fresh",
+        gateway: "SONICPESA",
+        providerRef: "sp_sweep_fresh",
         createdAt: new Date(Date.now() - 12 * 60_000),
       },
     });
@@ -405,8 +412,8 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 1_800,
         type: "WALLET_TOPUP",
         status: "FAILED", // soft-expired by the sweeper
-        gateway: "CLICKPESA",
-        providerRef: "cp_late_settle",
+        gateway: "SONICPESA",
+        providerRef: "sp_late_settle",
         metadata: { expired: true, reason: "gateway_never_settled" },
       },
     });
@@ -415,10 +422,10 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
 
     const outcome = await processPaymentWebhook({
       orderId: tx.id,
-      transactionId: "cp_late_settle",
+      transactionId: "sp_late_settle",
       amount: 1_800,
       status: "SUCCESS",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
     });
 
     expect(outcome.processed).toBe(true);
@@ -439,18 +446,18 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 900,
         type: "WALLET_TOPUP",
         status: "FAILED",
-        gateway: "CLICKPESA",
-        providerRef: "cp_real_fail",
+        gateway: "SONICPESA",
+        providerRef: "sp_real_fail",
         metadata: { gatewayError: "insufficient balance" },
       },
     });
 
     const outcome = await processPaymentWebhook({
       orderId: tx.id,
-      transactionId: "cp_real_fail",
+      transactionId: "sp_real_fail",
       amount: 900,
       status: "SUCCESS",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
     });
 
     expect(outcome.processed).toBe(false);
@@ -473,18 +480,18 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 3_000,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "CLICKPESA",
-        providerRef: "cp_inv_late",
+        gateway: "SONICPESA",
+        providerRef: "sp_inv_late",
         metadata: { investigation: true, reason: "gateway_never_settled" },
       },
     });
 
     const outcome = await processPaymentWebhook({
       orderId: tx.id,
-      transactionId: "cp_inv_late",
+      transactionId: "sp_inv_late",
       amount: 3_000,
       status: "SUCCESS",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
     });
 
     expect(outcome.processed).toBe(true);
@@ -505,8 +512,8 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 2_000,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "CLICKPESA",
-        providerRef: "cp_inv_grant",
+        gateway: "SONICPESA",
+        providerRef: "sp_inv_grant",
         metadata: { investigation: true, reason: "gateway_never_settled" },
       },
     });
@@ -537,8 +544,8 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 1_100,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "CLICKPESA",
-        providerRef: "cp_inv_unpaid",
+        gateway: "SONICPESA",
+        providerRef: "sp_inv_unpaid",
         metadata: { investigation: true, reason: "gateway_never_settled" },
       },
     });
@@ -569,10 +576,10 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
     // the network turns out to have taken it after all.
     const late = await processPaymentWebhook({
       orderId: tx.id,
-      transactionId: "cp_inv_unpaid",
+      transactionId: "sp_inv_unpaid",
       amount: 1_100,
       status: "SUCCESS",
-      provider: "CLICKPESA",
+      provider: "SONICPESA",
     });
     expect(late.processed).toBe(true);
 
@@ -587,8 +594,8 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 700,
         type: "WALLET_TOPUP",
         status: "SUCCESS",
-        gateway: "CLICKPESA",
-        providerRef: "cp_already_paid",
+        gateway: "SONICPESA",
+        providerRef: "sp_already_paid",
       },
     });
 
@@ -612,8 +619,8 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 1_400,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "CLICKPESA",
-        providerRef: "cp_inv_recheck",
+        gateway: "SONICPESA",
+        providerRef: "sp_inv_recheck",
         metadata: { investigation: true },
       },
     });
@@ -638,8 +645,8 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
         amount: 1_600,
         type: "WALLET_TOPUP",
         status: "UNDER_INVESTIGATION",
-        gateway: "CLICKPESA",
-        providerRef: "cp_inv_recheck_ok",
+        gateway: "SONICPESA",
+        providerRef: "sp_inv_recheck_ok",
         metadata: { investigation: true },
       },
     });
@@ -658,7 +665,7 @@ describeLive("ClickPesa live mode (sandbox off)", () => {
 
   it("refuses sandbox completion once live charges are enabled", async () => {
     const res = await completePost(
-      post("/api/dev/sandbox/complete", { orderId: "cp_live_abc123" })
+      post("/api/dev/sandbox/complete", { orderId: "sp_live_abc123" })
     );
     const body = await res.json();
 

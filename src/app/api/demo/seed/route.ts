@@ -451,7 +451,7 @@ export async function POST(request: NextRequest) {
     // Without this, the admin reconciliation view (Admin → Payments → Being
     // checked) is empty until a real customer's payment goes wrong, so nobody
     // can see or practise the flow. This is the honest shape of the state: a
-    // USSD prompt ClickPesa accepted and never settled, so the customer may
+    // USSD prompt SonicPesa accepted and never settled, so the customer may
     // already have paid. It is deliberately NOT a failure — see the migration
     // comment on UNDER_INVESTIGATION.
     const stuckId = "demo-tx-investigation";
@@ -465,7 +465,7 @@ export async function POST(request: NextRequest) {
           amount: 1000,
           type: "PPV_PURCHASE",
           status: "UNDER_INVESTIGATION",
-          gateway: "CLICKPESA",
+          gateway: "SONICPESA",
           providerRef: "CPDEMONEVERSETTLED0",
           metadata: {
             investigation: true,

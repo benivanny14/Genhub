@@ -124,7 +124,7 @@ describe("summarizeRemoteServices", () => {
         data: {
           verdict: "degraded",
           failing: [
-            { id: "clickpesa", name: "ClickPesa", detail: "account not activated" },
+            { id: "sonicpesa", name: "SonicPesa", detail: "account not activated" },
             { id: "bunny", name: "Bunny Stream", detail: "401" },
           ],
           skipped: [],
@@ -133,12 +133,12 @@ describe("summarizeRemoteServices", () => {
       200
     );
     expect(verdict.ok).toBe(false);
-    expect(verdict.detail).toBe("2 service(s) failing — ClickPesa, Bunny Stream");
+    expect(verdict.detail).toBe("2 service(s) failing — SonicPesa, Bunny Stream");
   });
 
   it("says the secret is wrong rather than blaming the services", () => {
     // A 401 here means the check could not ask, not that the gateway is down.
-    // Sending someone to look at ClickPesa because CRON_SECRET drifted is the
+    // Sending someone to look at SonicPesa because CRON_SECRET drifted is the
     // expensive kind of wrong.
     expect(summarizeRemoteServices(null, 401).detail).toContain("CRON_SECRET");
   });
@@ -183,8 +183,8 @@ describe("renderMarkdown", () => {
     url: "https://genhub.co.tz",
     steps: [
       { name: "deployed /api/health", ok: true, detail: "database up · background jobs on-time" },
-      { name: "deployed live credentials", ok: false, detail: "1 service(s) failing — ClickPesa" },
-      { name: "ClickPesa collect", ok: true, skipped: true, detail: "SKIPPED" },
+      { name: "deployed live credentials", ok: false, detail: "1 service(s) failing — SonicPesa" },
+      { name: "SonicPesa collect", ok: true, skipped: true, detail: "SKIPPED" },
     ],
   };
 
@@ -196,7 +196,7 @@ describe("renderMarkdown", () => {
     expect(markdown).toContain("| ✅ | deployed /api/health |");
     // A skipped step must not render as a pass: it is the one line saying what
     // the run did not prove.
-    expect(markdown).toContain("| ! | ClickPesa collect |");
+    expect(markdown).toContain("| ! | SonicPesa collect |");
   });
 
   it("says READY, and what was not proven, on a green run", () => {
@@ -223,7 +223,7 @@ describe("the real USSD push stays opt-in", () => {
     // written (--wait never collects). What must not change is that the collect
     // is still gated on both arguments actually being there.
     const guard = source.indexOf("if (collectAmount && collectPhone");
-    const smoke = source.indexOf('"scripts/clickpesa-smoke.mjs"');
+    const smoke = source.indexOf('"scripts/sonicpesa-smoke.mjs"');
     expect(guard).toBeGreaterThan(-1);
     expect(smoke).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(smoke);

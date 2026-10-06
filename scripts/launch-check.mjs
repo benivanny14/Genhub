@@ -546,7 +546,7 @@ async function main() {
   // Never while waiting: --wait is about reaching READY, and a step that charged
   // somebody on its second pass would be a genuinely bad surprise.
   if (collectAmount && collectPhone && !wait.enabled) {
-    banner(`3/3  ClickPesa collect  ->  TZS ${collectAmount} to ${collectPhone}`, json);
+    banner(`3/3  SonicPesa collect  ->  TZS ${collectAmount} to ${collectPhone}`, json);
     if (!json) {
       console.log(
         "  ! This sends a REAL USSD push. Money moves and the handset rings —\n" +
@@ -555,7 +555,7 @@ async function main() {
     }
     const collect = runStep(
       [
-        "scripts/clickpesa-smoke.mjs",
+        "scripts/sonicpesa-smoke.mjs",
         "--collect",
         collectAmount,
         collectPhone,
@@ -563,13 +563,13 @@ async function main() {
       json
     );
     results.push({
-      name: `ClickPesa collect (TZS ${collectAmount} -> ${collectPhone})`,
+      name: `SonicPesa collect (TZS ${collectAmount} -> ${collectPhone})`,
       ok: collect.status === 0,
       detail: collect.status === 0 ? "the push was accepted" : "the collect smoke failed",
     });
   } else {
     results.push({
-      name: "ClickPesa collect",
+      name: "SonicPesa collect",
       ok: true,
       skipped: true,
       detail:

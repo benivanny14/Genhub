@@ -238,12 +238,12 @@ export default function SystemReference() {
       <Section icon={CreditCard} title="Payments">
         <ul className="list-disc pl-5 space-y-1.5">
           <li>
-            Checkout is a USSD push to the customer&apos;s phone via ClickPesa; the
+            Checkout is a USSD push to the customer&apos;s phone via SonicPesa; the
             charge is always the amount on the video row, never a number from the
             client.
           </li>
           <li>
-            Settlement arrives at <Code>POST /api/webhooks/clickpesa</Code> (HMAC
+            Settlement arrives at <Code>POST /api/webhooks/sonicpesa</Code> (HMAC
             checksum or a shared token in <Code>?t=</Code>, fail-closed in
             production) and through{" "}
             <Code>/api/payments/status/&lt;orderId&gt;</Code>, which reconciles with

@@ -58,7 +58,7 @@ export default function WalletPage() {
   // the card can say so instead of taking a customer into a failing checkout.
   const { availability: paymentAvailability } = usePaymentAvailability();
 
-  // Live ClickPesa pushes a USSD prompt to the phone; the payment only settles
+  // Live SonicPesa pushes a USSD prompt to the phone; the payment only settles
   // when the webhook (or our reconcile poll) marks the transaction SUCCESS. Poll
   // /api/payments/status until then so the wallet balance updates by itself.
   // ~2 minutes: entering a USSD PIN can easily take a minute on a slow network.
@@ -188,7 +188,7 @@ export default function WalletPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           amount: topUpAmount,
-          gateway: "CLICKPESA",
+          gateway: "SONICPESA",
           phoneNumber,
           couponCode: couponCode.trim() || undefined,
         }),
@@ -218,7 +218,7 @@ export default function WalletPage() {
         fetchUserData();
         fetchTransactions();
       } else if (data.success) {
-        // Live ClickPesa: USSD push sent — poll until the payment settles.
+        // Live SonicPesa: USSD push sent — poll until the payment settles.
         const orderId: string | undefined = data.data?.orderId;
         setShowTopUp(false);
         setCouponCode("");

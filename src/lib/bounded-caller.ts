@@ -2,7 +2,7 @@
 // GENHUB - A caller that gives up, and then stops trying for a while
 //
 // Extracted from lib/redis.ts, which needed it first, now that a second
-// provider does: the ClickPesa gateway. Nothing here is Redis-specific — the
+// provider does: the SonicPesa gateway. Nothing here is Redis-specific — the
 // shape it tames is any dependency that accepts the connection and then never
 // answers, and the two things a caller needs from it are the same everywhere:
 //
@@ -12,7 +12,7 @@
 //     call for the rest of the process's life, each paying the wait again.
 //
 // Pure: no clock, no network, no globals — so every branch is covered in
-// src/tests/bounded-caller.test.ts and src/tests/clickpesa-bounded.test.ts
+// src/tests/bounded-caller.test.ts and src/tests/sonicpesa-bounded.test.ts
 // without waiting on real time.
 // =============================================================================
 
