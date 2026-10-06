@@ -555,7 +555,7 @@ async function renewFromWallet(params: {
         title: "Membership renewed ⭐",
         message: `A fan's ${formatTZS(price)} membership auto-renewed. You earned ${formatTZS(
           granted.creatorCut
-        )} (held for ${config.business.holdingPeriodDays} days).`,
+        )}, available to withdraw.`,
         type: "success",
         link: "/creator",
       },
@@ -580,7 +580,7 @@ async function renewFromWallet(params: {
       title: "Membership renewed ⭐",
       message: `A fan's ${formatTZS(price)} membership auto-renewed. You earned ${formatTZS(
         outcome.creatorCut
-      )} (held for ${config.business.holdingPeriodDays} days).`,
+      )}, available to withdraw.`,
       link: "/creator",
     });
   }

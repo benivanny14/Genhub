@@ -1,22 +1,18 @@
 // =============================================================================
-// GENHUB - The 14-day holding, across every source of creator income
+// GENHUB - Selling and withdrawing, across every source of creator income
 //
-// `releaseMatureEarnings` moves a creator's money out of the holding period. It
-// does not know what a video sale is: it reads the ledger — SUCCESS charges with
-// a `creatorCut`, older than the holding window — which is exactly why all four
-// ways to pay a creator have to write the same shape. Tips and paid messages
-// were the ones that did not (they paid 100% and wrote a different cut), and no
-// test would have noticed, because nothing checked the four together.
+// There is NO holding period: a sale is withdrawable the moment it settles, and
+// every paying path credits `availableBalance` directly. `releaseMatureEarnings`
+// survives only as the cleanup for money that was credited before that rule
+// changed — it drains whatever is left in the legacy `pendingBalance` bucket.
 //
 // This suite runs the four real routes — a video purchase, a membership, a tip
-// and a paid message — and then works the holding clock:
+// and a paid message — and then pins the two things that matter about the money:
 //
-//   1. nothing is payable while every charge is inside the window;
-//   2. each charge matures on its OWN clock. Three aged rows release together
-//      while a young one stays held, so the job is not "this creator is ready";
-//   3. the last charge releases when its own window closes, and the balance
-//      settles: pending + available === totalEarned, released once and only once;
-//   4. a checkout that never settled is not income and is never released.
+//   1. all four credit the withdrawable balance immediately, and nothing at all
+//      is left in the held bucket;
+//   2. a legacy held balance is released in full, once and only once, and a
+//      checkout that never settled is not income and never becomes withdrawable.
 //
 // DB-backed: needs TEST_DATABASE_URL (or a local DATABASE_URL) and skips itself
 // otherwise, like every other suite that moves money.
@@ -24,7 +20,6 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { NextRequest } from "next/server";
-import type { Transaction } from "@prisma/client";
 
 const ctx = vi.hoisted(() => ({
   viewerId: "",
@@ -51,13 +46,14 @@ import { POST as messagesPost } from "@/app/api/messages/route";
 
 const describeDb = process.env.DATABASE_URL ? describe : describe.skip;
 
-const DAY = 86_400_000;
-
 const VIDEO_PRICE = 5_000;
 const SUB_PRICE = 1_234;
 const TIP_AMOUNT = 777;
 const MESSAGE_AMOUNT = 333;
 const WALLET_START = 20_000;
+
+/** A balance some earlier version left in the held bucket. */
+const LEGACY_HELD = 2_500;
 
 /** The creator's 70%, as every route writes it. */
 const cutOf = (amount: number) =>
@@ -78,33 +74,11 @@ function post(url: string, body: unknown): NextRequest {
   });
 }
 
-/** The transaction a path wrote, identified by the amount it charged. */
-async function ledgerRow(amount: number): Promise<Transaction> {
-  const row = await prisma.transaction.findFirst({
-    where: {
-      userId: ctx.viewerId,
-      creatorId: ctx.creatorId,
-      amount,
-      status: "SUCCESS",
-    },
-  });
-  expect(row).not.toBeNull();
-  return row!;
-}
-
-/** Move one charge back past the holding window, the way time would. */
-async function age(row: Transaction, days = config.business.holdingPeriodDays + 1) {
-  await prisma.transaction.update({
-    where: { id: row.id },
-    data: { createdAt: new Date(Date.now() - days * DAY) },
-  });
-}
-
 async function balance() {
   return prisma.creatorBalance.findUnique({ where: { creatorId: ctx.creatorId } });
 }
 
-describeDb("the 14-day holding releases every source the same way", () => {
+describeDb("creator earnings are withdrawable the moment they settle", () => {
   beforeAll(async () => {
     const stamp = Date.now();
     ctx.creatorId = `holdcreator${stamp}`;
@@ -164,9 +138,7 @@ describeDb("the 14-day holding releases every source the same way", () => {
     await prisma.$disconnect();
   });
 
-  // The four cases below share state and run in order: each one moves the clock
-  // a little further forward.
-  it("earns from all four paths, and pays out none of it yet", async () => {
+  it("earns from all four paths, and every shilling is withdrawable at once", async () => {
     expect(
       (await purchasePost(post("/api/payments/purchase", { videoId: ctx.videoId, method: "WALLET" }))).status
     ).toBe(200);
@@ -188,63 +160,44 @@ describeDb("the 14-day holding releases every source the same way", () => {
       ).status
     ).toBe(201);
 
-    const held = await balance();
-    expect(held!.pendingBalance).toBe(ALL_CUTS);
-    expect(held!.totalEarned).toBe(ALL_CUTS);
-    expect(held!.availableBalance).toBe(0);
+    const earned = await balance();
+    // Nothing is parked: all four paths credit the withdrawable balance.
+    expect(earned!.availableBalance).toBe(ALL_CUTS);
+    expect(earned!.pendingBalance).toBe(0);
+    expect(earned!.totalEarned).toBe(ALL_CUTS);
 
-    // Every charge is inside the window, so there is nothing to release —
-    // regardless of which of the four paths wrote it.
-    const early = await releaseMatureEarnings(ctx.creatorId);
-    expect(early.released).toBe(0);
-    const after = await balance();
-    expect(after!.pendingBalance).toBe(ALL_CUTS);
-    expect(after!.availableBalance).toBe(0);
+    // And so there is nothing for the release job to move.
+    const release = await releaseMatureEarnings(ctx.creatorId);
+    expect(release.released).toBe(0);
   });
 
-  it("releases each charge on its own clock, not the creator's", async () => {
-    // Three sources age past the window; the paid message does not.
-    await age(await ledgerRow(VIDEO_PRICE));
-    await age(await ledgerRow(SUB_PRICE));
-    await age(await ledgerRow(TIP_AMOUNT));
+  it("releases a legacy held balance in full, once and only once", async () => {
+    // What a balance credited before the holding period was removed looks like.
+    await prisma.creatorBalance.update({
+      where: { creatorId: ctx.creatorId },
+      data: { pendingBalance: LEGACY_HELD },
+    });
 
     const result = await releaseMatureEarnings(ctx.creatorId);
 
-    const matured = CUTS.video + CUTS.subscription + CUTS.tip;
-    expect(result.released).toBe(matured);
+    expect(result.released).toBe(LEGACY_HELD);
     expect(result.creators).toBe(1);
 
-    const held = await balance();
-    expect(held!.availableBalance).toBe(matured);
-    expect(held!.pendingBalance).toBe(CUTS.message);
-    expect(held!.releasedTotal).toBe(matured);
-    // Releasing is not earning: the two buckets still add up to the lifetime.
-    expect(held!.pendingBalance + held!.availableBalance).toBe(held!.totalEarned);
-  });
-
-  it("releases the last source when its own window closes, and only once", async () => {
-    await age(await ledgerRow(MESSAGE_AMOUNT));
-
-    const result = await releaseMatureEarnings(ctx.creatorId);
-
-    expect(result.released).toBe(CUTS.message);
-    const settled = await balance();
-    expect(settled!.availableBalance).toBe(ALL_CUTS);
-    expect(settled!.pendingBalance).toBe(0);
-    expect(settled!.releasedTotal).toBe(ALL_CUTS);
-    expect(settled!.pendingBalance + settled!.availableBalance).toBe(settled!.totalEarned);
+    const after = await balance();
+    expect(after!.pendingBalance).toBe(0);
+    expect(after!.availableBalance).toBe(ALL_CUTS + LEGACY_HELD);
+    expect(after!.releasedTotal).toBe(LEGACY_HELD);
 
     // A second run has nothing left to move, and must not pay the creator twice.
     const again = await releaseMatureEarnings(ctx.creatorId);
     expect(again.released).toBe(0);
-    const after = await balance();
-    expect(after!.availableBalance).toBe(ALL_CUTS);
+    expect((await balance())!.availableBalance).toBe(ALL_CUTS + LEGACY_HELD);
   });
 
-  it("never releases a charge that has not settled", async () => {
+  it("never credits a charge that has not settled", async () => {
     // What a checkout in progress looks like: PENDING, no creator cut, no
-    // creator balance movement. If the release job counted it, a creator would
-    // be paid for money that was never collected.
+    // creator balance movement. If any of it were counted, a creator would be
+    // paid for money that was never collected.
     await prisma.transaction.create({
       data: {
         userId: ctx.viewerId,
@@ -258,17 +211,12 @@ describeDb("the 14-day holding releases every source the same way", () => {
         metadata: { orderId: "holding-unsettled" },
       },
     });
-    // Old enough to mature by date alone — the status is the only thing stopping it.
-    await prisma.transaction.updateMany({
-      where: { providerRef: "hp_holding_unsettled" },
-      data: { createdAt: new Date(Date.now() - 30 * DAY) },
-    });
 
     const result = await releaseMatureEarnings(ctx.creatorId);
 
     expect(result.released).toBe(0);
     const after = await balance();
-    expect(after!.availableBalance).toBe(ALL_CUTS);
+    expect(after!.availableBalance).toBe(ALL_CUTS + LEGACY_HELD);
     expect(after!.pendingBalance).toBe(0);
   });
 });

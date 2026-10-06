@@ -890,7 +890,7 @@ describeDb("getCronHealth", () => {
     const health = await getCronHealth();
     const worker = health.workers.find((w) => w.id === "release-earnings")!;
 
-    expect(worker.consequence).toContain("holding period");
+    expect(worker.consequence).toContain("held bucket");
     expect(worker.schedule.length).toBeGreaterThan(0);
   });
 

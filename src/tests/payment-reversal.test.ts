@@ -479,7 +479,7 @@ describeDb("Reversing a collected charge", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 3. The books must still balance for the 14-day release job
+  // 3. The books must still balance for the release job
   // ---------------------------------------------------------------------------
 
   it("stops the creator's future earnings from double-paying a reversed sale", async () => {
@@ -504,27 +504,27 @@ describeDb("Reversing a collected charge", () => {
     balance = await prisma.creatorBalance.findUnique({ where: { creatorId } });
     expect(balance!.availableBalance).toBe(0);
 
-    // The release job recomputes matured earnings as SUM(creatorCut) WHERE
-    // SUCCESS — so the REFUNDED row simply vanished from the sum, and the job
-    // must not pay the creator again for money that was returned.
+    // The reversal has already taken the money back out of the balance, so the
+    // release job has nothing left of that sale to move — it can only ever drain
+    // what is actually held, which is the whole reason it needs no debt ledger.
     expect((await prisma.transaction.findUnique({ where: { id: old.id } }))!.status).toBe(
       "REFUNDED"
     );
     const replay = await releaseMatureEarnings(creatorId);
     expect(replay.released).toBe(0);
 
-    // Two fresh matured sales: the reversal is absorbed before anything is
-    // released again, so the creator cannot keep both the refund and the money.
+    // Two fresh sales. The refunded one was absorbed by the clawback, so the
+    // creator holds exactly these two — the creator cannot keep both the refund
+    // and the money.
     await settledPurchase({ daysAgo: 30 });
     await settledPurchase({ daysAgo: 30 });
 
     const afterRefund = await releaseMatureEarnings(creatorId);
-    // Matured 700 x 2 = 1,400, releasedTotal still 700 -> exactly 700 releases.
-    expect(afterRefund.released).toBe(700);
+    expect(afterRefund.released).toBe(1_400);
 
     balance = await prisma.creatorBalance.findUnique({ where: { creatorId } });
-    expect(balance!.pendingBalance).toBe(700);
-    expect(balance!.availableBalance).toBe(700);
+    expect(balance!.pendingBalance).toBe(0);
+    expect(balance!.availableBalance).toBe(1_400);
   });
 
   it("drops a reversed charge out of platform revenue", async () => {

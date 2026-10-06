@@ -428,18 +428,21 @@ interface EarningsCreator {
   avatarUrl: string | null;
   isVerified: boolean;
   kycStatus: string;
+  /**
+   * LEGACY bucket. There is no holding period any more, so this only ever holds
+   * money credited before that rule changed; it is releasable in full.
+   */
   pendingBalance: number;
   availableBalance: number;
   releasedTotal: number;
   totalEarned: number;
-  maturedTotal: number;
+  /** What the release button would move for this creator: all of the above. */
   readyToRelease: number;
 }
 
 interface EarningsData {
   creators: EarningsCreator[];
   totals: { pending: number; available: number; released: number; ready: number };
-  holdingPeriodDays: number;
 }
 
 /**
@@ -3157,9 +3160,9 @@ export default function AdminDashboard() {
 
             {/* Chat revenue — every message is paid, so the inbox is a revenue line
                 and this is the only place the platform sees what it is worth per
-                creator. The held column is the part still inside the 14-day
-                holding, so an earned total that cannot be paid out yet is not
-                read as spendable. */}
+                creator. Messages are credited straight to the withdrawable
+                balance, so the “held” column now reports zero: nothing a fan
+                sends today is withheld from the creator. */}
             {stats?.chatRevenue && (
               <div className="glass-card p-5">
                 <div className="flex items-center gap-3 mb-4">
@@ -4309,7 +4312,7 @@ export default function AdminDashboard() {
                 <Clock className={`w-4 h-4 ${releasing === "all" ? "animate-spin" : ""}`} />
                 {releasing === "all"
                   ? "Releasing…"
-                  : `Release matured — TZS ${(earnings?.totals.ready ?? 0).toLocaleString()}`}
+                  : `Release held — TZS ${(earnings?.totals.ready ?? 0).toLocaleString()}`}
               </button>
             </div>
 
@@ -4317,7 +4320,7 @@ export default function AdminDashboard() {
               <>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                   <div className="glass-card p-4">
-                    <p className="text-xs text-white/50">In holding (pending)</p>
+                    <p className="text-xs text-white/50">Held (legacy)</p>
                     <p className="text-xl font-bold mt-1">TZS {earnings.totals.pending.toLocaleString()}</p>
                   </div>
                   <div className="glass-card p-4">
@@ -4329,14 +4332,17 @@ export default function AdminDashboard() {
                     <p className="text-xl font-bold mt-1 text-brand-300">TZS {earnings.totals.released.toLocaleString()}</p>
                   </div>
                   <div className="glass-card p-4 border border-amber-500/30">
-                    <p className="text-xs text-amber-300/80">Matured — ready now</p>
+                    <p className="text-xs text-amber-300/80">Ready to release</p>
                     <p className="text-xl font-bold mt-1 text-amber-400">TZS {earnings.totals.ready.toLocaleString()}</p>
                   </div>
                 </div>
 
                 <p className="text-xs text-white/40">
-                  Automatic release runs after the {earnings.holdingPeriodDays}-day holding period
-                  (cron: <code className="text-brand-300">/api/cron/release-earnings</code>). Manual release moves any matured funds immediately.
+                  There is no holding period — a sale is withdrawable the moment it
+                  settles, so a creator only appears in the held column if the money
+                  was earned before that changed. Release moves all of it to their
+                  withdrawable balance immediately (cron:{" "}
+                  <code className="text-brand-300">/api/cron/release-earnings</code>).
                 </p>
 
                 {earnings.creators.length === 0 ? (
@@ -4358,7 +4364,7 @@ export default function AdminDashboard() {
                           </div>
                           <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-5 gap-y-1 text-xs">
                             <div>
-                              <p className="text-white/40">Holding</p>
+                              <p className="text-white/40">Held (legacy)</p>
                               <p className="font-semibold">TZS {c.pendingBalance.toLocaleString()}</p>
                             </div>
                             <div>
@@ -4370,7 +4376,7 @@ export default function AdminDashboard() {
                               <p className="font-semibold text-brand-300">TZS {c.releasedTotal.toLocaleString()}</p>
                             </div>
                             <div>
-                              <p className="text-white/40">Ready now</p>
+                              <p className="text-white/40">Ready to release</p>
                               <p className="font-semibold text-amber-400">TZS {c.readyToRelease.toLocaleString()}</p>
                             </div>
                           </div>

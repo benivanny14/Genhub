@@ -1,7 +1,12 @@
 // =============================================================================
 // GENHUB - Admin Earnings Dashboard API
-// GET  /api/admin/earnings - Creator balances with maturity breakdown
-// POST /api/admin/earnings - Run the 14-day release job (all creators or one)
+// GET  /api/admin/earnings - Creator balances, and what is still held
+// POST /api/admin/earnings - Release held balances (all creators or one)
+//
+// There is no holding period: a sale is withdrawable the moment it settles, so
+// `availableBalance` is the money a creator can ask for right now. Anything
+// still in `pendingBalance` is a leftover from before that rule changed, and is
+// releasable in full — that is what POST does.
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -9,16 +14,11 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
-import config from "@/lib/config";
 import { releaseMatureEarnings } from "@/lib/services/earning-release.service";
 
 export async function GET(_request: NextRequest) {
   try {
     await requireRole("ADMIN");
-
-    const cutoff = new Date(
-      Date.now() - config.business.holdingPeriodDays * 86_400_000
-    );
 
     const balances = await prisma.creatorBalance.findMany({
       include: {
@@ -37,38 +37,24 @@ export async function GET(_request: NextRequest) {
       take: 100,
     });
 
-    const rows = await Promise.all(
-      balances.map(async (b) => {
-        const matured = await prisma.transaction.aggregate({
-          where: {
-            creatorId: b.creatorId,
-            status: "SUCCESS",
-            creatorCut: { not: null },
-            createdAt: { lte: cutoff },
-          },
-          _sum: { creatorCut: true },
-        });
-        const maturedTotal = matured._sum.creatorCut ?? 0;
-        const ready = Math.min(
-          Math.max(0, maturedTotal - b.releasedTotal),
-          b.pendingBalance
-        );
-        return {
-          creatorId: b.creatorId,
-          displayName: b.creator.displayName,
-          email: b.creator.email,
-          avatarUrl: b.creator.avatarUrl,
-          isVerified: b.creator.isVerified,
-          kycStatus: b.creator.kycStatus,
-          pendingBalance: b.pendingBalance,
-          availableBalance: b.availableBalance,
-          releasedTotal: b.releasedTotal,
-          totalEarned: b.totalEarned,
-          maturedTotal,
-          readyToRelease: ready,
-        };
-      })
-    );
+    // One row per creator, with no second query per creator: what is held IS the
+    // ready amount. The old version recomputed matured earnings per row (an
+    // aggregate per creator) to decide how much of the bucket could move, which
+    // is both slower and, as it turned out, wrong for any credit without a
+    // backing transaction.
+    const rows = balances.map((b) => ({
+      creatorId: b.creatorId,
+      displayName: b.creator.displayName,
+      email: b.creator.email,
+      avatarUrl: b.creator.avatarUrl,
+      isVerified: b.creator.isVerified,
+      kycStatus: b.creator.kycStatus,
+      pendingBalance: b.pendingBalance,
+      availableBalance: b.availableBalance,
+      releasedTotal: b.releasedTotal,
+      totalEarned: b.totalEarned,
+      readyToRelease: b.pendingBalance,
+    }));
 
     const totals = rows.reduce(
       (acc, r) => ({
@@ -80,11 +66,7 @@ export async function GET(_request: NextRequest) {
       { pending: 0, available: 0, released: 0, ready: 0 }
     );
 
-    return api.success({
-      creators: rows,
-      totals,
-      holdingPeriodDays: config.business.holdingPeriodDays,
-    });
+    return api.success({ creators: rows, totals });
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);

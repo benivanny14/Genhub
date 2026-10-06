@@ -35,8 +35,12 @@ const describeE2E = process.env.DATABASE_URL ? describe : describe.skip;
 
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
-/** Older than the 14-day holding period, so it can be released. */
-const MATURED_AGO = new Date(Date.now() - (config.business.holdingPeriodDays + 3) * DAY);
+/**
+ * A settled sale's timestamp. Nothing turns on the date any more — there is no
+ * holding period — so the tests seed the held balance directly; the row exists
+ * so the ledger behind a credit is real.
+ */
+const SETTLED_AGO = new Date(Date.now() - (config.business.holdingPeriodDays + 3) * DAY);
 
 const stamp = Date.now();
 const CREATOR = `ccreator${stamp}`;
@@ -133,8 +137,11 @@ describeE2E("Balance concurrency", () => {
     await prisma.user.update({ where: { id: VIEWER }, data: { walletBalance: 0 } });
   });
 
-  /** Give the creator earnings that are already past the holding period. */
-  async function maturedEarnings(amount: number) {
+  /**
+   * Give the creator a held balance — the leftover a version before the
+   * no-holding change would have left behind — plus the sale that backs it.
+   */
+  async function heldEarnings(amount: number) {
     await prisma.creatorBalance.create({
       data: {
         creatorId: CREATOR,
@@ -152,7 +159,7 @@ describeE2E("Balance concurrency", () => {
         type: "PPV_PURCHASE",
         status: "SUCCESS",
         creatorCut: amount,
-        createdAt: MATURED_AGO,
+        createdAt: SETTLED_AGO,
       },
     });
   }
@@ -170,10 +177,10 @@ describeE2E("Balance concurrency", () => {
   // 1. The pair this file exists for: earnings release vs subscription renewal
   // ---------------------------------------------------------------------------
 
-  it("releases matured earnings exactly once when six runs start together", async () => {
+  it("releases a held balance exactly once when six runs start together", async () => {
     // Six concurrent releases of the same creator. Only one may move the money:
-    // the rest must find `releasedTotal` already advanced and do nothing.
-    await maturedEarnings(12_000);
+    // the rest must find the bucket already empty and do nothing.
+    await heldEarnings(12_000);
 
     const results = await Promise.all(
       Array.from({ length: 6 }, () => releaseMatureEarnings(CREATOR))
@@ -189,7 +196,7 @@ describeE2E("Balance concurrency", () => {
     // while the release worker drains it into `availableBalance`, both for the
     // same creator, both starting now. A credit is a relative update and the
     // release is guarded, so the sum must still reconcile afterwards.
-    await maturedEarnings(12_000);
+    await heldEarnings(12_000);
     await prisma.user.update({ where: { id: VIEWER }, data: { walletBalance: PRICE } });
     await prisma.creatorSubscription.create({
       data: {
@@ -223,22 +230,23 @@ describeE2E("Balance concurrency", () => {
     });
     expect(charges).toBe(1);
 
-    // Everything ever credited to this creator: the matured 12,000 plus the
+    // Everything ever credited to this creator: the released 12,000 plus the
     // renewal's share. Nothing paid out, so pending + available must equal it.
     const after = await balance();
-    expect(after.releasedTotal).toBe(12_000);
     expect(after.pending + after.available).toBe(12_000 + CUT * charges);
     expect(after.pending).toBeGreaterThanOrEqual(0);
     expect(after.available).toBeGreaterThanOrEqual(0);
-    // And the release did move the matured part across.
-    expect(after.available).toBe(12_000);
+    // The release moved the held 12,000 across, and the renewal's share landed
+    // in the withdrawable balance directly — so available is both.
+    expect(after.available).toBe(12_000 + CUT * charges);
+    expect(after.pending).toBe(0);
     expect(release.released).toBe(12_000);
   });
 
   it("does not release another creator's earnings while one release runs", async () => {
     // The release claims per creator, so a slow run for creator A must not stop
     // or duplicate a run for creator B.
-    await maturedEarnings(12_000);
+    await heldEarnings(12_000);
     const [a, b] = await Promise.all([
       releaseMatureEarnings(CREATOR),
       releaseMatureEarnings(CREATOR),
@@ -280,7 +288,8 @@ describeE2E("Balance concurrency", () => {
       where: { creatorId: CREATOR, type: "PPV_PURCHASE", status: "SUCCESS" },
     });
     expect(charges).toBe(1);
-    expect((await balance()).pending).toBe(CUT);
+    // Credited straight to the withdrawable balance: no holding period.
+    expect((await balance()).available).toBe(CUT);
   });
 
   it("lets both purchases through when the balance covers both", async () => {
@@ -309,7 +318,7 @@ describeE2E("Balance concurrency", () => {
     expect(second.success).toBe(true);
     const viewer = await prisma.user.findUnique({ where: { id: VIEWER } });
     expect(viewer?.walletBalance).toBe(0);
-    expect((await balance()).pending).toBe(CUT * 2);
+    expect((await balance()).available).toBe(CUT * 2);
   });
 
   // ---------------------------------------------------------------------------
@@ -346,7 +355,7 @@ describeE2E("Balance concurrency", () => {
     );
 
     expect(charges).toHaveLength(4);
-    expect((await balance()).pending).toBe(CUT * 4);
+    expect((await balance()).available).toBe(CUT * 4);
   });
 
   // ---------------------------------------------------------------------------

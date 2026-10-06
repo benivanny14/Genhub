@@ -1,11 +1,10 @@
 // =============================================================================
-// GENHUB - Telling a creator their money left the 14-day holding
+// GENHUB - Telling a creator their held money became withdrawable
 //
-// `releaseMatureEarnings` moves pending -> available. To the creator this is
-// invisible: the number on their dashboard simply changes, and if it does not
-// (because nothing has matured yet) it looks like the platform is sitting on the
-// money. A notification at the exact moment of release is what makes the 14-day
-// rule legible instead of a silent wait.
+// `releaseMatureEarnings` moves any leftover held balance -> available. There is
+// no holding period any more, so this is a cleanup for money credited before
+// that rule changed; to the creator it is otherwise invisible, and if it does
+// not fire they never learn an old balance moved.
 //
 // Pinned here: a release notifies ONCE with the amount that actually moved, and
 // a run that moves nothing notifies nobody — otherwise a job that runs on every
@@ -18,7 +17,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   balanceFindMany: vi.fn(),
-  txAggregate: vi.fn(),
   balanceUpdateMany: vi.fn(),
   notificationCreate: vi.fn(),
 }));
@@ -29,7 +27,6 @@ vi.mock("@/lib/db", () => ({
       findMany: (...a: unknown[]) => mocks.balanceFindMany(...a),
       updateMany: (...a: unknown[]) => mocks.balanceUpdateMany(...a),
     },
-    transaction: { aggregate: (...a: unknown[]) => mocks.txAggregate(...a) },
     notification: { create: (...a: unknown[]) => mocks.notificationCreate(...a) },
   },
 }));
@@ -44,13 +41,12 @@ beforeEach(() => {
   mocks.balanceFindMany.mockResolvedValue([
     { creatorId: CREATOR, pendingBalance: 5000, releasedTotal: 0, availableBalance: 0 },
   ]);
-  mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 5000 } });
   mocks.balanceUpdateMany.mockResolvedValue({ count: 1 });
   mocks.notificationCreate.mockResolvedValue({});
 });
 
 describe("releaseMatureEarnings notification", () => {
-  it("notifies the creator with the amount that just cleared", async () => {
+  it("notifies the creator with the amount that just became withdrawable", async () => {
     const result = await releaseMatureEarnings();
 
     expect(result.released).toBe(5000);
@@ -61,13 +57,15 @@ describe("releaseMatureEarnings notification", () => {
     expect(data.link).toBe("/creator");
   });
 
-  it("says nothing when nothing matured", async () => {
-    // delta <= 0: every charge is still inside the window.
-    mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 0 } });
+  it("says nothing when no creator is holding anything", async () => {
+    // The bucket is empty, so there is nothing to move and nobody to tell. This
+    // is the normal case now: nothing is credited to the held bucket any more.
+    mocks.balanceFindMany.mockResolvedValue([]);
 
     const result = await releaseMatureEarnings();
 
     expect(result.released).toBe(0);
+    expect(mocks.balanceUpdateMany).not.toHaveBeenCalled();
     expect(mocks.notificationCreate).not.toHaveBeenCalled();
   });
 

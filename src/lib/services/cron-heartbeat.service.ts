@@ -131,9 +131,9 @@ const POKES_STOPPED_AFTER_MINUTES = 360;
 export const CRON_WORKERS: readonly CronWorkerDef[] = [
   {
     id: "release-earnings",
-    name: "Release matured earnings",
+    name: "Release held balances",
     consequence:
-      "Creator earnings stay inside the 14-day holding period and creators cannot withdraw.",
+      "Money left in the legacy held bucket never reaches a creator's withdrawable balance, and nothing else can move it.",
     everyMinutes: 60,
     staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     inFlightGraceMinutes: 10,
@@ -170,7 +170,7 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     id: "earnings-digest",
     name: "Weekly earnings digest",
     consequence:
-      "Creators stop being told when their money clears the 14-day hold, so pending reads as money the platform is withholding.",
+      "Creators stop being told when their balance crosses the withdrawal floor, so money they could already take out goes unnoticed.",
     // The worker itself decides who is due a digest (at most once every seven
     // days, per creator), so it is safe — and useful — to poke it hourly: most
     // runs send nothing and just keep the schedule warm. `everyMinutes` is

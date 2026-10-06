@@ -15,8 +15,8 @@ export async function GET(request: NextRequest) {
   try {
     const auth = await requireRole("CREATOR");
 
-    // Release any earnings that just passed the 14-day holding period so the
-    // dashboard always shows current numbers (idempotent + cheap: 1-2 queries).
+    // Release any balance still sitting in the legacy held bucket, so the
+    // dashboard always shows current numbers (idempotent + cheap).
     try {
       await releaseMatureEarnings(auth.userId);
     } catch (releaseError) {
@@ -35,10 +35,6 @@ export async function GET(request: NextRequest) {
       where: { id: auth.userId },
       select: { payoutMinimumWaived: true },
     });
-
-    // The holding window, in one place: every sale matures on its OWN clock,
-    // so this is used both to date each row below and to find the next clear.
-    const holdingMs = config.business.holdingPeriodDays * 86_400_000;
 
     // Get video performance stats
     const videoStats = await prisma.video.findMany({
@@ -137,8 +133,9 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Chat income, on the same 14-day clock as everything else. Its own service
-    // because the release job and this card have to agree about what is held.
+    // Chat income: credited to the withdrawable balance the moment a message is
+    // paid, so nothing is held. Its own service because the release job and this
+    // card have to agree about what is held.
     //
     // Null, not zeroes, if the read fails: an empty card would tell a creator
     // nobody has messaged them, which is a different statement from "we could not
@@ -154,42 +151,6 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // When the money currently held starts to unlock. Every charge matures on
-    // its OWN clock, so this is the oldest still-held one plus the holding
-    // window — and it answers the question a creator actually asks ("when do I
-    // get paid?") without making them count days from a sale they cannot date.
-    const oldestHeld = await prisma.transaction.findFirst({
-      where: {
-        creatorId: auth.userId,
-        status: "SUCCESS",
-        creatorCut: { not: null },
-        createdAt: { gt: new Date(Date.now() - holdingMs) },
-      },
-      orderBy: { createdAt: "asc" },
-      select: { createdAt: true },
-    });
-    const nextReleaseAt = oldestHeld
-      ? new Date(oldestHeld.createdAt.getTime() + holdingMs).toISOString()
-      : null;
-
-    // What finished its holding period in the last seven days. Same window the
-    // weekly digest reports, so the email and the dashboard cannot disagree
-    // about how much cleared this week.
-    const weekMs = 7 * 86_400_000;
-    const clearedAgg = await prisma.transaction.aggregate({
-      where: {
-        creatorId: auth.userId,
-        status: "SUCCESS",
-        creatorCut: { not: null },
-        createdAt: {
-          gt: new Date(Date.now() - holdingMs - weekMs),
-          lte: new Date(Date.now() - holdingMs),
-        },
-      },
-      _sum: { creatorCut: true },
-    });
-    const releasedThisWeek = clearedAgg._sum.creatorCut ?? 0;
-
     return api.success({
       balance: balance || {
         pendingBalance: 0,
@@ -201,9 +162,12 @@ export async function GET(request: NextRequest) {
       // screen and the payout service cannot disagree.
       minimumPayout: config.business.minPayoutAmount,
       payoutMinimumWaived: creatorFlags?.payoutMinimumWaived === true,
-      holdingPeriodDays: config.business.holdingPeriodDays,
-      nextReleaseAt,
-      releasedThisWeek,
+      // Kept so the payload keeps one shape, but there is nothing held and
+      // nothing left to clear: a sale is withdrawable the moment it settles.
+      // Null/0 rather than a date, so an old client cannot render a release date
+      // that will never arrive.
+      nextReleaseAt: null,
+      releasedThisWeek: 0,
       todayEarnings: todayTransactions._sum.creatorCut || 0,
       totalViews,
       videoStats: enrichedVideos,

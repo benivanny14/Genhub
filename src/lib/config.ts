@@ -167,7 +167,12 @@ const config = {
   business: {
     platformFeePercent: 30,    // 30% platform cut
     creatorFeePercent: 70,     // 70% creator cut
-    holdingPeriodDays: 14,     // 14-day holding period
+    // LEGACY. Creator earnings used to be held for 14 days before they could be
+    // withdrawn; there is no holding period any more (a sale is withdrawable the
+    // moment it settles). The number stays only so the release job and old
+    // payloads that still carry the field have something to read; nothing new
+    // should branch on it.
+    holdingPeriodDays: 14,
     minPayoutAmount: 30000,    // Minimum 30,000 TZS payout
     // The blue tick is bought, not earned. Priced per month, and the number is
     // here rather than in the service so the creator's screen, the admin's

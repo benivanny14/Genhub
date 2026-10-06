@@ -155,40 +155,27 @@ describe("GET /api/creator/balance", () => {
     });
   });
 
-  it("tells the creator when the held money starts to clear", async () => {
-    // The pending figure is useless on its own — the creator's question is
-    // "when do I get paid?". The route answers it from the OLDEST still-held
-    // charge plus the holding window, so it is a real date, not a fixed guess.
-    const soldAt = new Date(Date.now() - 3 * 86_400_000);
-    mocks.txFindFirst.mockResolvedValue({ createdAt: soldAt });
-
+  it("reports no release date, because nothing is held", async () => {
+    // There is no holding period: a sale is withdrawable the moment it settles,
+    // so there is no date to count down to. The field stays in the payload as
+    // null rather than disappearing, so an older client cannot render a release
+    // date that will never arrive.
     const res = await get();
     const body = await res.json();
 
     expect(res.status).toBe(200);
-    expect(body.data.holdingPeriodDays).toBeGreaterThan(0);
-    const expected = new Date(
-      soldAt.getTime() + body.data.holdingPeriodDays * 86_400_000
-    ).toISOString();
-    expect(body.data.nextReleaseAt).toBe(expected);
-  });
-
-  it("reports what cleared the holding period this week", async () => {
-    mocks.txAggregate.mockResolvedValue({ _sum: { creatorCut: 4_321 } });
-
-    const res = await get();
-    const body = await res.json();
-
-    expect(body.data.releasedThisWeek).toBe(4_321);
-  });
-
-  it("says nothing is clearing when no charge is still held", async () => {
-    mocks.txFindFirst.mockResolvedValue(null);
-
-    const res = await get();
-    const body = await res.json();
-
     expect(body.data.nextReleaseAt).toBeNull();
+  });
+
+  it("reports nothing cleared this week, because nothing is held", async () => {
+    // `releasedThisWeek` used to mean "money that finished its holding window".
+    // Nothing is held now, so the honest answer is zero — and the field stays a
+    // number so a client reading it does not get undefined.
+    const res = await get();
+    const body = await res.json();
+
+    expect(body.data.releasedThisWeek).toBe(0);
+    expect(typeof body.data.releasedThisWeek).toBe("number");
   });
 
   it("carries the receipt number for a paid withdrawal", async () => {
