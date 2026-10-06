@@ -29,6 +29,7 @@ import {
   ReceiptText,
   History,
   ArrowRight,
+  Banknote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
@@ -53,6 +54,17 @@ interface UserData {
   avatarUrl: string | null;
   role: "VIEWER" | "CREATOR" | "ADMIN";
   walletBalance: number;
+  /**
+   * The creator's own withdrawable balance, from the same session answer as
+   * everything else on this interface. It is null for a viewer or an admin, and
+   * nothing but the signed-in account's row is ever returned by /api/auth/me —
+   * so this number can only ever be the reader's own.
+   */
+  creatorBalance?: {
+    pendingBalance: number;
+    availableBalance: number;
+    totalEarned: number;
+  } | null;
 }
 
 interface SuggestVideo {
@@ -160,6 +172,18 @@ export default function Header() {
       // Not logged in
     }
   }
+
+  /**
+   * What the signed-in creator can withdraw right now, for the top bar.
+   *
+   * A creator's money was nowhere on the interface they land on: the top bar's
+   * figure is the VIEWER wallet (what the account can spend), so a creator who
+   * has earned TZS 2,450 and never topped up read "TZS 0" at the top of every
+   * page while their dashboard said otherwise. Null for everybody else, so the
+   * bar does not grow a number that means nothing to them.
+   */
+  const creatorAvailable =
+    user?.role === "CREATOR" ? user.creatorBalance?.availableBalance ?? 0 : null;
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -382,7 +406,19 @@ export default function Header() {
                 <Link href="/payments" className="btn-ghost flex items-center gap-2" title="My payments">
                   <ReceiptText className="w-4 h-4" />
                 </Link>
-                <Link href="/wallet" className="btn-ghost flex items-center gap-2">
+                {creatorAvailable !== null && (
+                  <Link
+                    href="/creator"
+                    className="btn-ghost flex items-center gap-2"
+                    title="Your withdrawable earnings — visible to you only"
+                  >
+                    <Banknote className="w-4 h-4 text-emerald-400" />
+                    <span className="text-sm font-medium">
+                      {format(creatorAvailable)}
+                    </span>
+                  </Link>
+                )}
+                <Link href="/wallet" className="btn-ghost flex items-center gap-2" title="Wallet balance — what you can spend">
                   <Wallet className="w-4 h-4" />
                   <span className="text-sm font-medium">
                     {format(user.walletBalance)}
@@ -551,6 +587,18 @@ export default function Header() {
                 wallet link all along; on a phone it was hidden inside the menu,
                 which is exactly where a person checking their money does not
                 want to look. */}
+            {user && creatorAvailable !== null && (
+              <Link
+                href="/creator"
+                className="flex items-center gap-1 px-2 py-1.5 rounded-xl hover:bg-white/10"
+                title="Your withdrawable earnings — visible to you only"
+              >
+                <Banknote className="w-4 h-4 text-emerald-400" />
+                <span className="text-[11px] font-semibold">
+                  {format(creatorAvailable)}
+                </span>
+              </Link>
+            )}
             {user && (
               <Link
                 href="/wallet"

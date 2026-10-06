@@ -207,6 +207,13 @@ interface CreatorItem {
   walletBalance: number;
   /** An admin opened this account to watch everything free. */
   freeAccess: boolean;
+  /**
+   * The withdrawal floor for this account, and whether an admin has lifted it.
+   * Both come back on every row (see the users route) so the list can show the
+   * state and offer the other direction of the switch without a second read.
+   */
+  payoutMinimumWaived: boolean;
+  payoutFrozenUntil: string | null;
   createdAt: string;
   _count: { videos: number };
   /**
@@ -446,10 +453,11 @@ interface EarningsData {
 }
 
 /**
- * One creator on the "Ready to withdraw" tab: their available balance has
- * reached the TZS 30,000 floor (or an admin has waived it), so the money is
- * theirs to ask for. The list is a watchlist — the actions live on the user
- * route, so nothing here can move money by itself.
+ * One creator on the "Withdrawals" tab: they hold money in their withdrawable
+ * balance. Everyone holding anything is listed — the ones at the TZS 30,000
+ * floor (`atMinimum`) and the ones under it (`belowFloor`), who cannot take it
+ * out until an admin allows a smaller withdrawal. The list is a watchlist — the
+ * actions live on the user route, so nothing here can move money by itself.
  */
 interface PayoutReadyCreator {
   creatorId: string;
@@ -463,6 +471,12 @@ interface PayoutReadyCreator {
   totalEarned: number;
   /** True when they reached the floor the ordinary way. */
   atMinimum: boolean;
+  /**
+   * Under the floor and not waived: held until they grow or an admin allows it.
+   * Optional because the endpoint answers it as a derived field — an old payload
+   * without it falls back to the same rule in underWithdrawalFloor().
+   */
+  belowFloor?: boolean;
   payoutMinimumWaived: boolean;
   frozen: boolean;
   payoutFrozenUntil: string | null;
@@ -477,8 +491,11 @@ interface PayoutReadyData {
   totals: {
     readyCount: number;
     readyAmount: number;
+    belowFloorCount: number;
+    belowFloorAmount: number;
     totalCount: number;
     totalAmount: number;
+    frozenCount: number;
   };
 }
 
@@ -839,6 +856,9 @@ interface ViewAsOverview {
     kycStatus: string;
     strikes: number;
     walletBalance: number;
+    /** Both withdrawal switches, so the panel can state the rule on this account. */
+    payoutMinimumWaived: boolean;
+    payoutFrozenUntil: string | null;
     createdAt: string;
     lastLoginAt: string | null;
     _count: { videos: number; videoAccess: number; subscriptions: number };
@@ -863,6 +883,141 @@ interface ViewAsOverview {
   }[];
   unlocks: { createdAt: string; video: { title: string } }[];
   readOnly: boolean;
+}
+
+/**
+ * Under the withdrawal floor with no waiver on the account: the money is theirs
+ * but it cannot leave yet, which is the whole reason the admin is looking at the
+ * row. Derived rather than read straight off `belowFloor` so a payload written
+ * before that field existed still sorts into the right section.
+ */
+function underWithdrawalFloor(c: PayoutReadyCreator): boolean {
+  return c.belowFloor ?? (!c.atMinimum && !c.payoutMinimumWaived);
+}
+
+/**
+ * One row on the Withdrawals tab: who the platform is holding money for, and the
+ * two switches that decide whether they can take it out — whether the TZS
+ * 30,000 floor still applies to this account, and whether withdrawals are paused
+ * at all.
+ *
+ * A row under the floor belongs here for the same reason a row at it does: the
+ * money exists and it is theirs. What it cannot do is leave, until an admin
+ * allows a smaller withdrawal or the balance grows on its own — which is the
+ * decision this row exists to offer.
+ *
+ * Its own component rather than a map body so that a re-render of the tab (a
+ * badge refresh, a toast) does not rebuild every row's identity and throw away
+ * the button the operator is aiming at.
+ */
+function PayoutReadyRow({
+  creator: c,
+  minimum,
+  busy,
+  onFloorAction,
+  onFreezeAction,
+}: {
+  creator: PayoutReadyCreator;
+  minimum: number;
+  busy: string | null;
+  onFloorAction: (
+    creatorId: string,
+    action: "WAIVE_PAYOUT_MINIMUM" | "RESTORE_PAYOUT_MINIMUM"
+  ) => void;
+  onFreezeAction: (
+    creatorId: string,
+    action: "FREEZE_PAYOUTS" | "UNFREEZE_PAYOUTS"
+  ) => void;
+}) {
+  return (
+    <div className="glass-card p-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="font-medium flex items-center gap-1.5">
+            {c.displayName || "Creator"}
+            {c.isVerified && <VerifiedBadge className="h-5 w-5" />}
+          </p>
+          <p className="text-xs text-white/40 truncate">{c.email || c.creatorId}</p>
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/50">
+              KYC: {c.kycStatus}
+            </span>
+            {c.belowFloor && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/50">
+                Below TZS {minimum.toLocaleString()}
+              </span>
+            )}
+            {c.payoutMinimumWaived && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">
+                Below floor allowed
+              </span>
+            )}
+            {c.frozen && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
+                Withdrawals frozen
+              </span>
+            )}
+            {c.openRequests > 0 && (
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-brand-500/15 text-brand-300">
+                {c.openRequests} open request{c.openRequests === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs shrink-0">
+          <div>
+            <p className="text-white/40">Available</p>
+            <p className="font-semibold text-emerald-400">
+              TZS {c.availableBalance.toLocaleString()}
+            </p>
+          </div>
+          <div>
+            <p className="text-white/40">Lifetime earned</p>
+            <p className="font-semibold">TZS {c.totalEarned.toLocaleString()}</p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 shrink-0">
+          {c.payoutMinimumWaived ? (
+            <button
+              onClick={() => onFloorAction(c.creatorId, "RESTORE_PAYOUT_MINIMUM")}
+              disabled={busy !== null}
+              className="bg-white/5 text-white/70 hover:bg-white/10 disabled:opacity-40 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+              title={`Put the TZS ${minimum.toLocaleString()} floor back for this account`}
+            >
+              {busy === c.creatorId ? "Working…" : `Require ${minimum.toLocaleString()} again`}
+            </button>
+          ) : (
+            <button
+              onClick={() => onFloorAction(c.creatorId, "WAIVE_PAYOUT_MINIMUM")}
+              disabled={busy !== null}
+              className="bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 disabled:opacity-40 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+              title={`Let this account withdraw any amount, including below TZS ${minimum.toLocaleString()}`}
+            >
+              {busy === c.creatorId ? "Working…" : "Allow below 30,000"}
+            </button>
+          )}
+          {c.frozen ? (
+            <button
+              onClick={() => onFreezeAction(c.creatorId, "UNFREEZE_PAYOUTS")}
+              className="bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+            >
+              Resume withdrawals
+            </button>
+          ) : (
+            <button
+              onClick={() => onFreezeAction(c.creatorId, "FREEZE_PAYOUTS")}
+              className="bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+              title="Stop this account withdrawing at all, whatever its balance"
+            >
+              Pause withdrawals
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function AdminDashboard() {
@@ -2373,14 +2528,16 @@ export default function AdminDashboard() {
     { id: "system" as const, label: "System", icon: Activity },
     { id: "earnings" as const, label: "Earnings", icon: Wallet },
     {
-      // The money side of the creator list: who has reached the withdrawal
-      // floor and can ask for a payout. A creator lands here automatically —
-      // there is nothing to add by hand — which is the point: the queue an
-      // operator has to watch should not be one they also have to build.
+      // The money side of the creator list: everyone the platform is holding
+      // money for. A creator lands here the moment their balance is above zero
+      // — there is nothing to add by hand — which is the point: the queue an
+      // operator has to watch should not be one they also have to build. The
+      // badge counts everyone holding money, not only the ones at the floor,
+      // because a creator stranded at TZS 2,450 is exactly who this tab is for.
       id: "payoutReady" as const,
-      label: "Ready to withdraw",
+      label: "Withdrawals",
       icon: Banknote,
-      badge: payoutReady?.totals.readyCount,
+      badge: payoutReady?.totals.totalCount,
     },
     {
       id: "payments" as const,
@@ -4049,18 +4206,69 @@ export default function AdminDashboard() {
                       >
                         <Gavel className="w-3 h-3" /> Warn
                       </button>
+                      {/* The withdrawal floor for this ONE account. Above the
+                          floor a creator withdraws on their own; below it this
+                          is the switch that lets them take out what they have,
+                          and the same switch puts the rule back. It lives on
+                          the creator's row as well as on the Withdrawals tab,
+                          because "where do I allow a small withdrawal?" is a
+                          question about a creator, not about a queue. */}
                       <button
-                        onClick={() => handleCreatorAction(creator.id, "FREEZE_PAYOUTS")}
-                        className="bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                        onClick={() =>
+                          handleCreatorAction(
+                            creator.id,
+                            creator.payoutMinimumWaived
+                              ? "RESTORE_PAYOUT_MINIMUM"
+                              : "WAIVE_PAYOUT_MINIMUM"
+                          )
+                        }
+                        className={
+                          creator.payoutMinimumWaived
+                            ? "bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                            : "bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                        }
+                        title={
+                          creator.payoutMinimumWaived
+                            ? "Put the TZS 30,000 withdrawal floor back for this account"
+                            : "Let this creator withdraw any amount they hold, even below TZS 30,000"
+                        }
                       >
-                        <Snowflake className="w-3 h-3" /> Pause withdrawals
+                        <Banknote className="w-3 h-3" />
+                        {creator.payoutMinimumWaived
+                          ? "Require 30,000"
+                          : "Allow below 30,000"}
                       </button>
-                      <button
-                        onClick={() => handleCreatorAction(creator.id, "UNFREEZE_PAYOUTS")}
-                        className="btn-ghost text-xs flex items-center gap-1"
-                      >
-                        <RotateCcw className="w-3 h-3" /> Resume withdrawals
-                      </button>
+                      {creator.payoutMinimumWaived && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">
+                          Below floor allowed
+                        </span>
+                      )}
+                      {creator.payoutFrozenUntil &&
+                      new Date(creator.payoutFrozenUntil) > new Date() ? (
+                        <>
+                          <button
+                            onClick={() => handleCreatorAction(creator.id, "UNFREEZE_PAYOUTS")}
+                            className="bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                            title={`Withdrawals paused until ${new Date(
+                              creator.payoutFrozenUntil
+                            ).toLocaleDateString("en-GB")}`}
+                          >
+                            <RotateCcw className="w-3 h-3" /> Resume withdrawals
+                          </button>
+                          <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
+                            Withdrawals paused until{" "}
+                            {new Date(creator.payoutFrozenUntil).toLocaleDateString("en-GB")}
+                          </span>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => handleCreatorAction(creator.id, "FREEZE_PAYOUTS")}
+                          className="bg-sky-500/20 text-sky-400 hover:bg-sky-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          title="Stop this creator withdrawing at all, whatever their balance"
+                        >
+                          <Snowflake className="w-3 h-3" /> Pause withdrawals
+                        </button>
+                      )}
                       <button
                         onClick={() =>
                           handleCreatorAction(
@@ -4407,11 +4615,13 @@ export default function AdminDashboard() {
           <div className="space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
-                <h2 className="font-display font-bold">Ready to withdraw</h2>
+                <h2 className="font-display font-bold">Withdrawals</h2>
                 <p className="text-xs text-white/40">
-                  Creators whose available balance has reached TZS{" "}
-                  {(payoutReady?.minimum ?? 30000).toLocaleString()}. Each row can be
-                  allowed to withdraw below that floor, or have withdrawals frozen.
+                  Everyone the platform is holding money for. A creator lands here
+                  the moment their withdrawable balance is above zero — including
+                  the ones under the TZS {(payoutReady?.minimum ?? 30000).toLocaleString()}{' '}
+                  floor, whose row can allow a smaller withdrawal or pause
+                  withdrawals altogether.
                 </p>
               </div>
               <button
@@ -4426,27 +4636,44 @@ export default function AdminDashboard() {
               <>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
                   <div className="glass-card p-4">
-                    <p className="text-xs text-white/50">Creators ready</p>
-                    <p className="text-xl font-bold mt-1">
-                      {payoutReady.totals.readyCount.toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="glass-card p-4">
-                    <p className="text-xs text-white/50">Ready to withdraw</p>
-                    <p className="text-xl font-bold mt-1 text-emerald-400">
-                      TZS {payoutReady.totals.readyAmount.toLocaleString()}
-                    </p>
-                  </div>
-                  <div className="glass-card p-4">
-                    <p className="text-xs text-white/50">On this list</p>
+                    <p className="text-xs text-white/50">Creators holding money</p>
                     <p className="text-xl font-bold mt-1">
                       {payoutReady.totals.totalCount.toLocaleString()}
                     </p>
+                    <p className="text-xs text-white/40 mt-0.5">
+                      {payoutReady.totals.readyCount.toLocaleString()} at the floor
+                    </p>
+                  </div>
+                  <div className="glass-card p-4">
+                    <p className="text-xs text-white/50">Can withdraw now</p>
+                    <p className="text-xl font-bold mt-1 text-emerald-400">
+                      TZS {payoutReady.totals.readyAmount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-white/40 mt-0.5">
+                      from {payoutReady.totals.readyCount.toLocaleString()} creator
+                      {payoutReady.totals.readyCount === 1 ? "" : "s"}
+                    </p>
                   </div>
                   <div className="glass-card p-4 border border-amber-500/30">
-                    <p className="text-xs text-amber-300/80">Total held by them</p>
+                    <p className="text-xs text-amber-300/80">Held below the floor</p>
                     <p className="text-xl font-bold mt-1 text-amber-400">
+                      TZS {payoutReady.totals.belowFloorAmount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-white/40 mt-0.5">
+                      {payoutReady.totals.belowFloorCount.toLocaleString()} creator
+                      {payoutReady.totals.belowFloorCount === 1 ? "" : "s"} under TZS{" "}
+                      {payoutReady.minimum.toLocaleString()} — allow them below it
+                    </p>
+                  </div>
+                  <div className="glass-card p-4">
+                    <p className="text-xs text-white/50">Total held by creators</p>
+                    <p className="text-xl font-bold mt-1">
                       TZS {payoutReady.totals.totalAmount.toLocaleString()}
+                    </p>
+                    <p className="text-xs text-white/40 mt-0.5">
+                      {payoutReady.totals.frozenCount.toLocaleString()} account
+                      {payoutReady.totals.frozenCount === 1 ? "" : "s"} with
+                      withdrawals paused
                     </p>
                   </div>
                 </div>
@@ -4455,96 +4682,91 @@ export default function AdminDashboard() {
                   <div className="glass-card p-12 text-center">
                     <Banknote className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
                     <p className="text-white/50">
-                      No creator has reached the withdrawal floor yet
+                      Nobody is holding money in a creator balance yet
                     </p>
                   </div>
                 ) : (
-                  <div className="grid gap-3">
-                    {payoutReady.creators.map((c) => (
-                      <div key={c.creatorId} className="glass-card p-4">
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                          <div className="min-w-0">
-                            <p className="font-medium flex items-center gap-1.5">
-                              {c.displayName || "Creator"}
-                              {c.isVerified && <VerifiedBadge className="h-5 w-5" />}
-                            </p>
-                            <p className="text-xs text-white/40 truncate">
-                              {c.email || c.creatorId}
-                            </p>
-                            <div className="flex flex-wrap gap-1.5 mt-1.5">
-                              <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/50">
-                                KYC: {c.kycStatus}
-                              </span>
-                              {c.payoutMinimumWaived && (
-                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">
-                                  Below floor allowed
-                                </span>
-                              )}
-                              {c.frozen && (
-                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
-                                  Withdrawals frozen
-                                </span>
-                              )}
-                              {c.openRequests > 0 && (
-                                <span className="text-[11px] px-2 py-0.5 rounded-full bg-brand-500/15 text-brand-300">
-                                  {c.openRequests} open request{c.openRequests === 1 ? "" : "s"}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs shrink-0">
-                            <div>
-                              <p className="text-white/40">Available</p>
-                              <p className="font-semibold text-emerald-400">
-                                TZS {c.availableBalance.toLocaleString()}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-white/40">Lifetime earned</p>
-                              <p className="font-semibold">
-                                TZS {c.totalEarned.toLocaleString()}
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="flex flex-wrap gap-2 shrink-0">
-                            {c.payoutMinimumWaived ? (
-                              <button
-                                onClick={() => handlePayoutReadyAction(c.creatorId, "RESTORE_PAYOUT_MINIMUM")}
-                                disabled={busyPayoutReady !== null}
-                                className="bg-white/5 text-white/70 hover:bg-white/10 disabled:opacity-40 px-3 py-1.5 rounded-lg text-xs font-medium transition"
-                              >
-                                {busyPayoutReady === c.creatorId ? "Working…" : "Require 30,000 again"}
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handlePayoutReadyAction(c.creatorId, "WAIVE_PAYOUT_MINIMUM")}
-                                disabled={busyPayoutReady !== null}
-                                className="bg-sky-500/15 text-sky-300 hover:bg-sky-500/25 disabled:opacity-40 px-3 py-1.5 rounded-lg text-xs font-medium transition"
-                              >
-                                {busyPayoutReady === c.creatorId ? "Working…" : "Allow below 30,000"}
-                              </button>
-                            )}
-                            {c.frozen ? (
-                              <button
-                                onClick={() => handleCreatorAction(c.creatorId, "UNFREEZE_PAYOUTS")}
-                                className="bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 px-3 py-1.5 rounded-lg text-xs font-medium transition"
-                              >
-                                Unfreeze
-                              </button>
-                            ) : (
-                              <button
-                                onClick={() => handleCreatorAction(c.creatorId, "FREEZE_PAYOUTS")}
-                                className="bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 px-3 py-1.5 rounded-lg text-xs font-medium transition"
-                              >
-                                Freeze withdrawals
-                              </button>
-                            )}
-                          </div>
-                        </div>
+                  <div className="space-y-6">
+                    {/* The money that can leave without a decision. Anyone an
+                        admin has already allowed below the floor belongs here
+                        too: their row can withdraw now, whatever the floor says. */}
+                    <section className="space-y-3">
+                      <div>
+                        <h3 className="font-display font-bold flex items-center gap-2">
+                          <CheckCircle className="w-4 h-4 text-emerald-400" />
+                          Can withdraw now
+                        </h3>
+                        <p className="text-xs text-white/40 mt-0.5">
+                          TZS {payoutReady.minimum.toLocaleString()} or more, or a
+                          smaller amount for an account you have already allowed
+                          below the floor. Nothing has to be decided before they
+                          can ask for this money.
+                        </p>
                       </div>
-                    ))}
+                      {payoutReady.creators.filter((c) => !underWithdrawalFloor(c)).length === 0 ? (
+                        <p className="text-xs text-white/40">
+                          Nobody has reached the floor yet.
+                        </p>
+                      ) : (
+                        <div className="grid gap-3">
+                          {payoutReady.creators
+                            .filter((c) => !underWithdrawalFloor(c))
+                            .map((c) => (
+                              <PayoutReadyRow
+                                key={c.creatorId}
+                                creator={c}
+                                minimum={payoutReady.minimum}
+                                busy={busyPayoutReady}
+                                onFloorAction={handlePayoutReadyAction}
+                                onFreezeAction={handleCreatorAction}
+                              />
+                            ))}
+                        </div>
+                      )}
+                    </section>
+
+                    {/* The creators this tab used to hide. Their money is here,
+                        it is theirs, and the floor is the only thing between
+                        them and it — so the row that lets an admin lift it for
+                        one account is on the money they can see. */}
+                    <section className="space-y-3">
+                      <div>
+                        <h3 className="font-display font-bold flex items-center gap-2">
+                          <Banknote className="w-4 h-4 text-amber-400" />
+                          Below the floor — allow them to withdraw anyway
+                        </h3>
+                        <p className="text-xs text-white/40 mt-0.5">
+                          Holding less than TZS {payoutReady.minimum.toLocaleString()}{' '}
+                          with the floor still on, so they cannot withdraw it on
+                          their own. “Allow below 30,000” lets that one account
+                          take out any amount it holds, and “Require 30,000 again”
+                          puts the rule back.
+                        </p>
+                      </div>
+                      {payoutReady.creators.filter(underWithdrawalFloor).length === 0 ? (
+                        <p className="text-xs text-white/40">
+                          Nobody is stuck under the floor. A creator appears here
+                          the moment they hold less than TZS{" "}
+                          {payoutReady.minimum.toLocaleString()} and the floor still
+                          applies to them.
+                        </p>
+                      ) : (
+                        <div className="grid gap-3">
+                          {payoutReady.creators
+                            .filter(underWithdrawalFloor)
+                            .map((c) => (
+                              <PayoutReadyRow
+                                key={c.creatorId}
+                                creator={c}
+                                minimum={payoutReady.minimum}
+                                busy={busyPayoutReady}
+                                onFloorAction={handlePayoutReadyAction}
+                                onFreezeAction={handleCreatorAction}
+                              />
+                            ))}
+                        </div>
+                      )}
+                    </section>
                   </div>
                 )}
               </>
@@ -6011,6 +6233,27 @@ export default function AdminDashboard() {
                 </p>
 
                 <div className="grid grid-cols-2 gap-2 text-sm mb-4">
+                  {/* The creator's own money first when there is any. The
+                      wallet below is what a VIEWER can spend; a creator who has
+                      earned TZS 2,450 and never topped up has a wallet of zero,
+                      and showing only that made this panel say "TZS 0" about an
+                      account the platform owes money to. */}
+                  {viewAsUser.user.creatorBalance && (
+                    <>
+                      <div className="rounded-lg bg-white/5 p-2">
+                        Available to withdraw
+                        <div className="font-bold text-emerald-400">
+                          TZS {viewAsUser.user.creatorBalance.availableBalance.toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="rounded-lg bg-white/5 p-2">
+                        Lifetime earned
+                        <div className="font-bold">
+                          TZS {viewAsUser.user.creatorBalance.totalEarned.toLocaleString()}
+                        </div>
+                      </div>
+                    </>
+                  )}
                   <div className="rounded-lg bg-white/5 p-2">
                     Wallet
                     <div className="font-bold">TZS {viewAsUser.user.walletBalance.toLocaleString()}</div>
@@ -6028,6 +6271,31 @@ export default function AdminDashboard() {
                     <div className="font-bold">{viewAsUser.user.strikes}</div>
                   </div>
                 </div>
+
+                {/* The two switches that decide whether that money can leave,
+                    stated where the money is. The Withdrawals tab has the
+                    buttons; this is the same answer on the account an admin is
+                    already looking at. */}
+                {viewAsUser.user.creatorBalance && (
+                  <div className="flex flex-wrap gap-1.5 -mt-2 mb-4">
+                    {viewAsUser.user.payoutMinimumWaived ? (
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">
+                        Below 30,000 allowed
+                      </span>
+                    ) : (
+                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/50">
+                        Withdraws from TZS 30,000
+                      </span>
+                    )}
+                    {viewAsUser.user.payoutFrozenUntil &&
+                      new Date(viewAsUser.user.payoutFrozenUntil) > new Date() && (
+                        <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300">
+                          Withdrawals paused until{" "}
+                          {new Date(viewAsUser.user.payoutFrozenUntil).toLocaleDateString("en-GB")}
+                        </span>
+                      )}
+                  </div>
+                )}
 
                 <p className="text-xs text-white/40 mb-1">Recent money</p>
                 <ul className="space-y-1 mb-4">

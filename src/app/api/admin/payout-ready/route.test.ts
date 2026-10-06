@@ -1,13 +1,15 @@
 // =============================================================================
 // GENHUB - GET /api/admin/payout-ready
 //
-// The list the admins are pushed to when a creator can withdraw. Two things must
-// hold or the page lies:
+// The list the admins are pushed to when a creator holds money. Three things
+// must hold or the page lies:
 //
-//   1. A creator who reached the TZS 30,000 floor appears, and nobody below it
-//      does — unless an admin has waived the floor for them, in which case they
-//      can withdraw and must be listed too.
-//   2. A frozen account reads as unable to withdraw, so an operator does not
+//   1. A creator who reached the TZS 30,000 floor appears and reads as ready.
+//   2. A creator BELOW the floor appears too — separately counted, marked
+//      `belowFloor` and unable to withdraw — because an empty list and a total of
+//      zero is not the truth about money the platform is holding for them. That
+//      row is where the admin allows a smaller withdrawal.
+//   3. A frozen account reads as unable to withdraw, so an operator does not
 //      approve a payout the platform has paused.
 //
 // Prisma and auth are mocked; no database.
@@ -86,18 +88,65 @@ describe("GET /api/admin/payout-ready", () => {
     expect(body.data.totals.readyAmount).toBe(40_000);
   });
 
-  it("asks for the threshold, and for a waived account below it", async () => {
+  it("lists everyone holding money — below the floor included", async () => {
     await get();
 
     const where = mocks.balanceFindMany.mock.calls[0][0].where;
-    // Both branches are the reason the list can be trusted: someone at the floor
-    // and nobody else — except a creator an admin let withdraw below it.
-    expect(where.OR).toHaveLength(2);
-    expect(where.OR[0]).toEqual({ availableBalance: { gte: 30_000 } });
-    expect(where.OR[1]).toMatchObject({
-      availableBalance: { gt: 0 },
-      creator: { payoutMinimumWaived: true },
-    });
+    // One condition, and it is the only honest one: a balance above zero. The
+    // old TZS 30,000 cut is applied when the row is built (atMinimum /
+    // belowFloor) so the list can report both groups instead of hiding one.
+    expect(where).toEqual({ availableBalance: { gt: 0 } });
+  });
+
+  it("shows a creator below the floor as money held, not as absent", async () => {
+    mocks.balanceFindMany.mockResolvedValue([
+      row({ availableBalance: 2_450, totalEarned: 2_450 }),
+    ]);
+
+    const body = await (await get()).json();
+
+    const creator = body.data.creators[0];
+    expect(creator.atMinimum).toBe(false);
+    expect(creator.belowFloor).toBe(true);
+    expect(creator.canWithdraw).toBe(false);
+    // The totals have to agree with the row: nothing is "ready", but the
+    // platform is still holding TZS 2,450 for somebody.
+    expect(body.data.totals.readyCount).toBe(0);
+    expect(body.data.totals.readyAmount).toBe(0);
+    expect(body.data.totals.belowFloorCount).toBe(1);
+    expect(body.data.totals.belowFloorAmount).toBe(2_450);
+    expect(body.data.totals.totalCount).toBe(1);
+    expect(body.data.totals.totalAmount).toBe(2_450);
+  });
+
+  it("stops calling a waived account below the floor \"below floor\"", async () => {
+    mocks.balanceFindMany.mockResolvedValue([
+      row({
+        availableBalance: 2_450,
+        creator: { ...row().creator, payoutMinimumWaived: true },
+      }),
+    ]);
+
+    const body = await (await get()).json();
+
+    expect(body.data.creators[0].belowFloor).toBe(false);
+    expect(body.data.creators[0].canWithdraw).toBe(true);
+    expect(body.data.totals.belowFloorCount).toBe(0);
+  });
+
+  it("counts the frozen accounts it is holding money for", async () => {
+    mocks.balanceFindMany.mockResolvedValue([
+      row({
+        creator: {
+          ...row().creator,
+          payoutFrozenUntil: new Date(Date.now() + 86_400_000),
+        },
+      }),
+    ]);
+
+    const body = await (await get()).json();
+
+    expect(body.data.totals.frozenCount).toBe(1);
   });
 
   it("marks a frozen creator as unable to withdraw", async () => {

@@ -73,6 +73,15 @@ interface CreatorData {
    * account, so they may withdraw any amount. Optional for old payloads.
    */
   payoutMinimumWaived?: boolean;
+  /**
+   * Withdrawals paused for this account by an admin, with the date they resume
+   * and the reason they were paused. Read so the dashboard can refuse the form
+   * itself — a creator should not be able to fill in an account number and then
+   * have the request bounced with a rule they were never shown.
+   */
+  payoutFrozen?: boolean;
+  payoutFrozenUntil?: string | null;
+  payoutFrozenReason?: string | null;
   todayEarnings: number;
   totalViews: number;
   videoStats: {
@@ -908,12 +917,21 @@ export default function CreatorDashboard() {
   // the dashboard and the payout service cannot disagree.
   const payoutFloorWaived = creatorData?.payoutMinimumWaived === true;
   const meetsPayoutFloor = (balance?.availableBalance || 0) >= CREATOR_MIN_WITHDRAWAL_TZS;
+  // An admin can also stop withdrawals altogether for one account. That is a
+  // different switch from the floor: it does not matter how much is held.
+  const payoutFrozen = creatorData?.payoutFrozen === true;
+  // The day a pause ends, written once and said the same way wherever the pause
+  // is explained (the blocker, the instructions card).
+  const payoutFrozenUntilLabel = creatorData?.payoutFrozenUntil
+    ? new Date(creatorData.payoutFrozenUntil).toLocaleDateString("en-GB")
+    : null;
   const canWithdrawNow = meetsPayoutFloor || payoutFloorWaived;
   // Null when the endpoint could not read the ledger, which is a different
   // statement from "nobody has messaged you": a failed read renders zeros that
   // look like the truth, so it renders an apology instead.
   const paidMessages = creatorData?.paidMessages ?? null;
-  const canRequestPayout = canWithdrawNow && user?.kycStatus === "APPROVED";
+  const canRequestPayout =
+    canWithdrawNow && !payoutFrozen && user?.kycStatus === "APPROVED";
 
   // Where the money goes: read from the payout history, so the form asks once.
   const savedPayoutAccount = lastPayoutAccount(creatorData?.payouts);
@@ -932,6 +950,21 @@ export default function CreatorDashboard() {
   // missing, with a link to the page that fixes it, costs nothing and answers
   // the question the disabled button raises.
   const withdrawalBlockers: { text: string; href?: string; linkLabel?: string }[] = [];
+  if (payoutFrozen) {
+    // First, because it is the answer to "why can I not withdraw?" whatever the
+    // balance says — and because the money is still theirs, which is the part a
+    // creator worries about. Said with the date and the reason the admin typed.
+    withdrawalBlockers.push({
+      text:
+        "Withdrawals are paused on your account" +
+        (payoutFrozenUntilLabel ? ` until ${payoutFrozenUntilLabel}` : "") +
+        (creatorData?.payoutFrozenReason ? `: ${creatorData.payoutFrozenReason}.` : ".") +
+        " Your balance stays yours and keeps growing — it can be withdrawn again" +
+        (payoutFrozenUntilLabel
+          ? " after that date, or sooner if an admin lifts the pause."
+          : " as soon as the pause is lifted."),
+    });
+  }
   if (user?.kycStatus !== "APPROVED") {
     withdrawalBlockers.push({
       text: "Your identity check (KYC) must be approved before money can leave — it is what protects your payout account from being changed by somebody else.",
@@ -1089,16 +1122,18 @@ export default function CreatorDashboard() {
               <span className="text-sm text-white/60">Ready to withdraw</span>
             </div>
             <p className="text-2xl font-bold text-amber-400">
-              {canWithdrawNow ? "Yes" : "Not yet"}
+              {payoutFrozen ? "Paused" : canWithdrawNow ? "Yes" : "Not yet"}
             </p>
             <p className="text-xs text-white/45 mt-1">
-              {payoutFloorWaived
-                ? "An admin allows you to withdraw any amount"
-                : meetsPayoutFloor
-                  ? `You have reached the TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()} minimum`
-                  : `${formatTZS(
-                      Math.max(0, CREATOR_MIN_WITHDRAWAL_TZS - (balance?.availableBalance || 0))
-                    )} to reach TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}`}
+              {payoutFrozen
+                ? "An admin has paused withdrawals on your account"
+                : payoutFloorWaived
+                  ? "An admin allows you to withdraw any amount"
+                  : meetsPayoutFloor
+                    ? `You have reached the TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()} minimum`
+                    : `${formatTZS(
+                        Math.max(0, CREATOR_MIN_WITHDRAWAL_TZS - (balance?.availableBalance || 0))
+                      )} to reach TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}`}
             </p>
           </div>
 
@@ -1153,6 +1188,16 @@ export default function CreatorDashboard() {
                     Admin amekuruhusu kutoa kiasi chochote ulichonacho.
                   </li>
                 )}
+                {payoutFrozen && (
+                  <li>
+                    <span className="text-amber-300 font-medium">
+                      Utoaji umesimamishwa kwa akaunti yako
+                      {payoutFrozenUntilLabel ? ` hadi ${payoutFrozenUntilLabel}` : ""}.
+                    </span>{" "}
+                    Salio lako linabaki kuwa lako na linaendelea kukua; utaweza
+                    kutoa tena pause inapokwisha au admin akiiondoa.
+                  </li>
+                )}
               </ul>
               <p className="text-xs text-white/40">
                 Withdraw any amount in your available balance once it reaches TZS{" "}
@@ -1160,6 +1205,8 @@ export default function CreatorDashboard() {
                 withdraw — unless an admin has allowed a smaller withdrawal for
                 your account. Payouts go to M-Pesa, Tigo Pesa, Airtel Money or a
                 bank account.
+                {payoutFrozen &&
+                  " Withdrawals are paused on your account right now, so the button stays closed until the pause ends or an admin lifts it."}
               </p>
             </div>
           </div>
@@ -1364,7 +1411,9 @@ export default function CreatorDashboard() {
               </button>
               {!canRequestPayout && (
                 <span className="text-[11px] text-white/45">
-                  Min TZS 30,000 + verified ID
+                  {payoutFrozen
+                    ? "Withdrawals paused by an admin"
+                    : `Min TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()} + verified ID`}
                 </span>
               )}
             </div>
@@ -1385,7 +1434,15 @@ export default function CreatorDashboard() {
             </div>
             <div className="rounded-xl bg-surface-300/30 p-3">
               <p className="text-xs text-white/50">Minimum per withdrawal</p>
-              <p className="font-bold">TZS 30,000</p>
+              {/* The rule, as it applies to THIS account: the floor is TZS
+                  30,000 unless an admin has lifted it, in which case saying
+                  "TZS 30,000" next to an enabled Withdraw button would be a
+                  contradiction on the same card. */}
+              <p className="font-bold">
+                {payoutFloorWaived
+                  ? "Any amount"
+                  : `TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}`}
+              </p>
             </div>
           </div>
 
@@ -2123,8 +2180,10 @@ export default function CreatorDashboard() {
           <div className="glass-card w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-2">Withdraw money</h2>
             <p className="text-sm text-white/50 mb-4">
-              Available balance: {formatTZS(balance?.availableBalance || 0)} · minimum
-              TZS 30,000 per request.
+              Available balance: {formatTZS(balance?.availableBalance || 0)} ·{" "}
+              {payoutFloorWaived
+                ? "an admin allows you to withdraw any amount you hold."
+                : `minimum TZS ${CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()} per request.`}
             </p>
 
             {savedPayoutAccount && (
@@ -2152,10 +2211,19 @@ export default function CreatorDashboard() {
                   type="number"
                   value={payoutAmount}
                   onChange={(e) => setPayoutAmount(parseInt(e.target.value) || 0)}
-                  min={30000}
+                  // The floor as it applies to THIS account, so the box's own
+                  // validation agrees with the button underneath it.
+                  min={payoutFloorWaived ? 1 : CREATOR_MIN_WITHDRAWAL_TZS}
                   max={balance?.availableBalance || 0}
                   className="input-field"
                 />
+                {payoutFloorWaived && (
+                  <p className="text-xs text-emerald-300/80 mt-1">
+                    An admin has allowed smaller withdrawals for your account, so the
+                    usual TZS {CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()} minimum
+                    does not apply — you can ask for any part of your balance.
+                  </p>
+                )}
               </div>
 
               <div>
@@ -2217,7 +2285,14 @@ export default function CreatorDashboard() {
                   disabled={
                     requestingPayout ||
                     !canRequestPayout ||
-                    payoutAmount < 30000 ||
+                    // The TZS 30,000 floor, unless an admin waived it for this
+                    // account — the rule the payout route enforces, read from
+                    // the same payload. This used to be a bare `< 30000`, so a
+                    // waived creator saw a form the server would have accepted
+                    // and a button that would not send it.
+                    (payoutFloorWaived
+                      ? payoutAmount <= 0
+                      : payoutAmount < CREATOR_MIN_WITHDRAWAL_TZS) ||
                     !payoutAccount ||
                     (isBankPayout(payoutMethod) && !payoutBankName.trim())
                   }

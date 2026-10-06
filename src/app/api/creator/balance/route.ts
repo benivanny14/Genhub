@@ -30,11 +30,23 @@ export async function GET(request: NextRequest) {
 
     // Whether an admin has waived the TZS 30,000 withdrawal floor for this
     // account, so the dashboard can say "you can withdraw any amount" instead of
-    // showing a rule that no longer applies to them.
+    // showing a rule that no longer applies to them. The paused-withdrawals date
+    // comes along because it is the same kind of fact about the same account —
+    // and because a creator whose withdrawals are paused must be told that, not
+    // walked into a form the payout route will refuse.
     const creatorFlags = await prisma.user.findUnique({
       where: { id: auth.userId },
-      select: { payoutMinimumWaived: true },
+      select: {
+        payoutMinimumWaived: true,
+        payoutFrozenUntil: true,
+        payoutFrozenReason: true,
+      },
     });
+    // A date, not a flag: an expired freeze lifts itself, which is why this is
+    // compared against the clock rather than read as a boolean.
+    const payoutFrozen = Boolean(
+      creatorFlags?.payoutFrozenUntil && creatorFlags.payoutFrozenUntil > new Date()
+    );
 
     // Get video performance stats
     const videoStats = await prisma.video.findMany({
@@ -162,6 +174,13 @@ export async function GET(request: NextRequest) {
       // screen and the payout service cannot disagree.
       minimumPayout: config.business.minPayoutAmount,
       payoutMinimumWaived: creatorFlags?.payoutMinimumWaived === true,
+      // Withdrawals paused for this one account by an admin. `payoutFrozen` is
+      // the decision; the date and the reason are what the creator is shown.
+      payoutFrozen,
+      payoutFrozenUntil: payoutFrozen
+        ? creatorFlags?.payoutFrozenUntil?.toISOString() ?? null
+        : null,
+      payoutFrozenReason: payoutFrozen ? creatorFlags?.payoutFrozenReason ?? null : null,
       // Kept so the payload keeps one shape, but there is nothing held and
       // nothing left to clear: a sale is withdrawable the moment it settles.
       // Null/0 rather than a date, so an old client cannot render a release date

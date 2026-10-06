@@ -202,4 +202,46 @@ describe("GET /api/creator/balance", () => {
     // ledger.
     expect(mocks.payoutFindMany.mock.calls[0][0].where).toEqual({ creatorId: CREATOR });
   });
+
+  it("tells the dashboard withdrawals are paused, with the date and the reason", async () => {
+    // Without this the creator fills in an account number and the payout route
+    // refuses the request with a rule the dashboard never showed them.
+    const until = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    mocks.userFindUnique.mockResolvedValue({
+      payoutMinimumWaived: false,
+      payoutFrozenUntil: until,
+      payoutFrozenReason: "Account under review",
+    });
+
+    const body = await (await get()).json();
+
+    expect(body.data.payoutFrozen).toBe(true);
+    expect(body.data.payoutFrozenUntil).toBe(until.toISOString());
+    expect(body.data.payoutFrozenReason).toBe("Account under review");
+  });
+
+  it("lifts an expired pause on its own, date and reason included", async () => {
+    // The pause is a date, not a flag (see the schema), so a forgotten freeze
+    // must not read as paused forever — and the client must not be handed a
+    // date it would render next to an account that can withdraw again.
+    mocks.userFindUnique.mockResolvedValue({
+      payoutMinimumWaived: false,
+      payoutFrozenUntil: new Date(Date.now() - 1000),
+      payoutFrozenReason: "Account under review",
+    });
+
+    const body = await (await get()).json();
+
+    expect(body.data.payoutFrozen).toBe(false);
+    expect(body.data.payoutFrozenUntil).toBeNull();
+    expect(body.data.payoutFrozenReason).toBeNull();
+  });
+
+  it("reads the floor and the pause from one row", async () => {
+    await get();
+
+    const select = mocks.userFindUnique.mock.calls[0][0].select;
+    expect(select.payoutMinimumWaived).toBe(true);
+    expect(select.payoutFrozenUntil).toBe(true);
+  });
 });

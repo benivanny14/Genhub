@@ -3,8 +3,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { fetchCurrentUser } from "@/lib/current-user";
 import Header from "@/components/Header";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Wallet, ArrowUpRight, ArrowDownLeft, Plus, History, Phone, Ticket, ShieldCheck } from "lucide-react";
+import { Wallet, ArrowUpRight, ArrowDownLeft, Plus, History, Phone, Ticket, ShieldCheck, Banknote } from "lucide-react";
 import { formatTZS, formatRelativeTime } from "@/lib/utils";
 import { useCurrency } from "@/lib/currency";
 import { useToast } from "@/components/Toast";
@@ -19,6 +20,17 @@ interface UserData {
   id: string;
   displayName: string | null;
   walletBalance: number;
+  role: string;
+  /**
+   * The creator's own withdrawable balance. The wallet on this page is money
+   * that can be SPENT, which is not the same account, and it is what /api/auth/me
+   * returned for the signed-in session — so it can only be the reader's own.
+   */
+  creatorBalance?: {
+    pendingBalance: number;
+    availableBalance: number;
+    totalEarned: number;
+  } | null;
 }
 
 interface Transaction {
@@ -251,6 +263,11 @@ export default function WalletPage() {
   }
 
   const QUICK_AMOUNTS = [500, 1000, 2000, 5000, 10000, 20000];
+  // A creator reading "payments / wallet" is looking for the money they EARNED,
+  // and the card above answers with the wallet they spend. Shown only when there
+  // is something to show, and never for anybody else's account.
+  const creatorAvailable =
+    user?.role === "CREATOR" ? user.creatorBalance?.availableBalance ?? 0 : 0;
 
   return (
     <div className="min-h-screen page-enter">
@@ -273,6 +290,35 @@ export default function WalletPage() {
             <Plus className="w-4 h-4" /> {t("wallet.addFunds")}
           </button>
         </div>
+
+        {/* What this account has EARNED, next to what it can SPEND. A creator
+            who has been paid for a video and never topped up saw a single, big
+            "TZS 0" on this page — the wrong account, presented as the answer. */}
+        {creatorAvailable > 0 && (
+          <div className="glass-card p-5">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
+                  <Banknote className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <p className="text-sm text-white/60">Creator earnings (to withdraw)</p>
+                  <p className="text-xl font-display font-bold text-emerald-400">
+                    {formatTZS(creatorAvailable)}
+                  </p>
+                </div>
+              </div>
+              <Link href="/creator" className="btn-brand text-sm flex items-center gap-2">
+                Withdraw <ArrowUpRight className="w-4 h-4" />
+              </Link>
+            </div>
+            <p className="text-xs text-white/40 mt-2">
+              Sales, tips and paid messages land here. This is separate from the
+              wallet above, which is the money you top up to buy with — and only
+              you can see it.
+            </p>
+          </div>
+        )}
 
         {/* Mobile money is down or unreachable. Said here, before the form, so
             a customer is not walked into a checkout that cannot start. */}
