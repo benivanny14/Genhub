@@ -5,12 +5,15 @@
 #   * Repository secret    CRON_SECRET  — must match the server's CRON_SECRET
 # The job skips cleanly (green) until both are configured.
 #
-# THIS WORKFLOW IS THE ONLY SCHEDULER for the release job. `vercel.json` ships
-# an empty `crons` array on purpose: Vercel rejects sub-daily cron expressions on
-# the Hobby plan *at deploy time*, and that fails the whole deployment. Do not
-# delete this file without putting another scheduler in its place — nothing else
-# would run the 14-day holding release, and creators would simply stop being
-# paid. See PRODUCTION.md §4.0.1.
+# THIS WORKFLOW IS THE FREQUENT SCHEDULER for the release job. `vercel.json`
+# carries only a single DAILY supervisor cron: Vercel rejects sub-daily cron
+# expressions on the Hobby plan *at deploy time*, and that fails the whole
+# deployment. So the daily run is the floor, not the cadence — it still runs this
+# job when GitHub goes quiet (or disables every schedule after 60 days without
+# activity), but up to a day late. Do not delete this file without putting
+# another frequent scheduler in its place — nothing else would run the 14-day
+# holding release on time, and creators would stop being paid promptly.
+# See PRODUCTION.md §4.0.1.
 # =============================================================================
 
 name: Release matured earnings

@@ -115,11 +115,11 @@ vercel link                              # attach the project
 vercel --prod
 ```
 
-**Nothing is scheduled yet at this point.** `vercel.json` ships an empty `crons`
-array — sub-daily cron expressions fail a Hobby deployment — so the workers run
-from GitHub Actions. Set the two repository values below (`APP_URL`,
-`CRON_SECRET`) or no background job runs at all: earnings stay in holding,
-renewals lapse and uploaded videos never publish. See §4.0.1.
+**Nothing is scheduled yet at this point.** `vercel.json` ships only a single
+DAILY supervisor cron — sub-daily cron expressions fail a Hobby deployment — so
+the workers run from GitHub Actions. Set the two repository values below
+(`APP_URL`, `CRON_SECRET`) or no background job runs on time: earnings stay in
+holding, renewals lapse and uploaded videos never publish. See §4.0.1.
 
 ```
 GitHub → repo → Settings → Secrets and variables → Actions
@@ -722,8 +722,10 @@ per worker, all four in `.github/workflows/`:
 Video publication is deliberately **not** on that list. It is driven by a push
 from Bunny with two on-read fallbacks and no scheduler at all — see §3.2.
 
-`vercel.json` deliberately ships an empty `crons` array: the same schedules
-there fail a **Hobby** deployment outright. On **Pro**, move them back into
+`vercel.json` deliberately ships only a single DAILY cron, pointed at
+`/api/cron/supervisor`: the same sub-daily schedules there fail a **Hobby**
+deployment outright, and one daily poke is the floor that still runs the workers
+when GitHub goes quiet. On **Pro**, move the real schedules back into
 `vercel.json` for tighter timing — the exact JSON is in §4.0.1.
 
 ### 3.2 Video processing (a post is live before its video can play)
@@ -905,9 +907,9 @@ curl -s -o /dev/null -w "wrong:   %{http_code}\n" -X POST $B/api/cron/release-ea
 
 ### 4.0.1 Choosing a scheduler: GitHub Actions (default) or Vercel Cron
 
-**`vercel.json` ships an empty `crons` array on purpose.** Four sub-daily
-schedules used to live there. On a Hobby account that does not merely delay the
-jobs — it **fails the deployment**, so nothing ships at all:
+**`vercel.json` ships only a single DAILY cron on purpose.** Four sub-daily
+schedules used to live there. On a Hobby account a sub-daily expression does not
+merely delay the jobs — it **fails the deployment**, so nothing ships at all:
 
 ```
 Hobby accounts are limited to daily cron jobs.

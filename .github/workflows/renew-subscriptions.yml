@@ -13,10 +13,12 @@
 # MAX_RENEW_ATTEMPTS per period, so a delayed or duplicated run cannot double
 # charge a fan.
 #
-# SCHEDULER: this workflow is the only scheduler for this worker. `vercel.json`
-# ships an empty `crons` array on purpose — Vercel rejects sub-daily cron
-# expressions on the Hobby plan at deploy time, which fails the whole
-# deployment. See PRODUCTION.md §4.0.1.
+# SCHEDULER: this workflow is the ONLY scheduler for this worker, and the daily
+# Vercel cron does not change that: it pokes /api/cron/supervisor, and the
+# supervisor deliberately never starts `renew-subscriptions` on its own (it can
+# send a USSD charge request to a fan's phone — §4.0.4). `vercel.json` carries
+# only that single DAILY cron because sub-daily expressions fail a Hobby
+# deployment at deploy time. See PRODUCTION.md §4.0.1.
 # =============================================================================
 
 name: Renew subscriptions

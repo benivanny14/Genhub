@@ -1,4 +1,6 @@
 {
   "installCommand": "npm ci",
-  "crons": []
+  "crons": [
+    { "path": "/api/cron/supervisor", "schedule": "0 3 * * *" }
+  ]
 }

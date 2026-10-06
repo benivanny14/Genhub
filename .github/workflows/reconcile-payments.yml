@@ -10,10 +10,14 @@
 # one that surfaces "the customer paid but we were never told". It must run
 # reliably: a payment left unresolved is a customer who paid and got nothing.
 #
-# SCHEDULER: this workflow is the only scheduler for this worker. `vercel.json`
-# ships an empty `crons` array on purpose — Vercel rejects sub-daily cron
-# expressions on the Hobby plan at deploy time, which fails the whole
-# deployment. See PRODUCTION.md §4.0.1.
+# SCHEDULER: this workflow is the frequent scheduler for this worker.
+# `vercel.json` carries only a single DAILY supervisor cron — Vercel rejects
+# sub-daily cron expressions on the Hobby plan at deploy time, which fails the
+# whole deployment — so a charge that lands in a gap between GitHub deliveries
+# waits for the next poke and, at the very latest, for that daily one. GitHub
+# measured 137-336 minutes between deliveries of this `*/10` schedule, which is
+# exactly how a paid order sat PENDING for 33 minutes on 2026-10-06.
+# See PRODUCTION.md §4.0.1.
 # =============================================================================
 
 name: Reconcile stale payments
