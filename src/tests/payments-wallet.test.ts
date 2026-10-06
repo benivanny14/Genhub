@@ -174,11 +174,12 @@ describeE2E("Payments: wallet fallback, notifications, admin expire", () => {
     expect(tx!.platformFee).toBe(Math.round(ctx.amount * 0.3));
     expect(tx!.creatorCut).toBe(ctx.amount - Math.round(ctx.amount * 0.3));
 
-    // Creator credited to pending (14-day holding), access granted
+    // Creator credited straight to the withdrawable balance — no holding period.
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: ctx.creatorId },
     });
-    expect(balance!.pendingBalance).toBe(tx!.creatorCut);
+    expect(balance!.availableBalance).toBe(tx!.creatorCut);
+    expect(balance!.pendingBalance).toBe(0);
     expect(
       await prisma.videoAccess.count({
         where: { videoId: ctx.videoId, viewerId: ctx.viewerId },

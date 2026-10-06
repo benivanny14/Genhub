@@ -2,19 +2,20 @@
 // GENHUB - The payout cycle: request -> approve -> paid
 //
 // This is the only flow where money leaves the platform, and every step moves
-// something the creator is watching: their available balance, their held
-// balance, or a request that has been accepted but not yet sent. Three things
-// have to stay true the whole way:
+// something the creator is watching: their available balance, or a request that
+// has been accepted but not yet sent. Two things have to stay true the whole way:
 //
 //   1. A request EARMARKS money on acceptance — the available balance drops when
 //      the request is made, not when it is approved, so the same shilling cannot
 //      be requested twice;
-//   2. the held balance is never touched. Payouts pay out matured earnings;
-//      money still inside the 14-day holding is not the creator's to withdraw;
-//   3. the identity holds at every step:
-//        available + held + open requests + paid out === lifetime earned.
+//   2. the identity holds at every step:
+//        available + open requests + paid out === lifetime earned.
 //      A payout moves money between those buckets. If the sum ever grows, the
 //      platform paid out money nobody earned; if it shrinks, a creator lost some.
+//
+// There used to be a third bucket — money held for 14 days before it could be
+// withdrawn. That holding period is gone: a sale is withdrawable the moment it
+// settles, so nothing is ever held and `pendingBalance` is always zero.
 //
 // The APPROVED -> PAID arrow is the one under test: approving said "we will send
 // this" and the route then refused every later action, so an approved request
@@ -54,9 +55,8 @@ import { POST as reviewPayoutPost } from "@/app/api/admin/payouts/route";
 
 const describeDb = process.env.DATABASE_URL ? describe : describe.skip;
 
-const OPENING_AVAILABLE = 250_000;
-const HELD = 40_000;
-const TOTAL_EARNED = OPENING_AVAILABLE + HELD;
+const OPENING_AVAILABLE = 290_000;
+const TOTAL_EARNED = OPENING_AVAILABLE;
 const MIN_PAYOUT = 30_000;
 
 const FIRST_REQUEST = 100_000;
@@ -93,8 +93,9 @@ const RECEIPT = "QGR7X8Y2Z1";
 
 /**
  * The identity the whole cycle has to keep, asserted after every step:
- * everything the creator earned is either withdrawable, still held, earmarked in
- * an open request, or already paid out.
+ * everything the creator earned is either withdrawable, earmarked in an open
+ * request, or already paid out. `pendingBalance` stays in the sum for ledger
+ * completeness; there is no holding period, so it is always zero.
  */
 async function balanceAndCheckIdentity() {
   const [balance, payouts] = await Promise.all([
@@ -147,10 +148,8 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     await prisma.creatorBalance.create({
       data: {
         creatorId: ctx.creatorId,
-        // Matured money, ready to be withdrawn.
+        // Everything they have earned, withdrawable right now.
         availableBalance: OPENING_AVAILABLE,
-        // Still inside the 14-day holding, and not payable.
-        pendingBalance: HELD,
         totalEarned: TOTAL_EARNED,
       },
     });
@@ -174,7 +173,9 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     const res = await requestPayout(MIN_PAYOUT - 1_000);
     const body = await res.json();
 
-    expect(res.status).toBe(422);
+    // 400: a refusal about what was asked for, not a validation of a field that
+    // is missing or malformed.
+    expect(res.status).toBe(400);
     expect(body.error).toContain("30,000");
 
     const balance = await balanceAndCheckIdentity();
@@ -194,8 +195,8 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     // Out of the withdrawable balance immediately — a pending request is money
     // that is spoken for, and this is what stops it being requested twice.
     expect(balance.availableBalance).toBe(OPENING_AVAILABLE - FIRST_REQUEST);
-    // The holding is untouched: matured earnings are what a payout draws on.
-    expect(balance.pendingBalance).toBe(HELD);
+    // Nothing is held: a payout draws on the withdrawable balance only.
+    expect(balance.pendingBalance).toBe(0);
     // A payout is money leaving, not income. It is recorded as a request and an
     // audit line, never as an earnings row — a receipt here would inflate the
     // creator's revenue with their own withdrawal.
@@ -222,7 +223,7 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     // Approving is a promise, not a payment: nothing moves yet, and the money
     // does not go back to being withdrawable either.
     expect(balance.availableBalance).toBe(OPENING_AVAILABLE - FIRST_REQUEST);
-    expect(balance.pendingBalance).toBe(HELD);
+    expect(balance.pendingBalance).toBe(0);
   });
 
   it("completes an approved request, recording the receipt", async () => {
@@ -237,9 +238,10 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     expect(payout!.paymentReference).toBe(RECEIPT);
 
     const balance = await balanceAndCheckIdentity();
-    // The money is gone from both buckets, and only the paid-out total grew.
+    // Nothing moved here — the money was earmarked when the request was made —
+    // and only the paid-out total grew.
     expect(balance.availableBalance).toBe(OPENING_AVAILABLE - FIRST_REQUEST);
-    expect(balance.pendingBalance).toBe(HELD);
+    expect(balance.pendingBalance).toBe(0);
   });
 
   it("refuses a second decision on a settled request", async () => {
@@ -293,5 +295,6 @@ describeDb("the payout cycle: request -> approve -> paid", () => {
     expect(open._sum.amount ?? 0).toBe(0);
     expect(paid._sum.amount).toBe(FIRST_REQUEST);
     expect(balance.availableBalance + balance.pendingBalance + FIRST_REQUEST).toBe(TOTAL_EARNED);
+    expect(balance.pendingBalance).toBe(0);
   });
 });

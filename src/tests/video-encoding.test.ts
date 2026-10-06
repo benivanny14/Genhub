@@ -220,8 +220,9 @@ describeDB("refreshVideoEncoding (real database)", () => {
   });
 
   it("publishes and notifies the moment Bunny reports finished", async () => {
-    // 8 minutes (480s) — the creator-guidelines floor. A shorter scene is held
-    // back by the rule below, so the "happy path" fixture must clear it.
+    // 8 minutes (480s) — the length the guidelines RECOMMEND. Nothing enforces
+    // it any more, so this fixture is chosen for realism rather than to clear a
+    // floor.
     //
     // `length` is what Bunny really sends: SECONDS. This fixture used to say
     // 480_000, which only worked because the reader divided by 1000 — so the
@@ -258,64 +259,56 @@ describeDB("refreshVideoEncoding (real database)", () => {
     expect(video.isPublished).toBe(true);
   });
 
-  it("holds back a ready video shorter than the 8-minute guidelines floor", async () => {
+  it("publishes a short video: the lifecycle has no length rule", async () => {
+    // An eight-minute floor used to hold a short scene back — and take down one
+    // that was already live. That is a publishing decision about CONTENT, not
+    // encoding, and it was removed: the recommendation lives on the guidelines
+    // screen, and this service publishes anything playable.
     bunnyState.details = { status: 4, encodeProgress: 100, length: 90 };
 
     const result = await refreshVideoEncoding(videoId);
 
-    expect(result?.published).toBe(false);
+    expect(result?.published).toBe(true);
 
     const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
-    expect(video.isPublished).toBe(false);
+    expect(video.isPublished).toBe(true);
     expect(video.duration).toBe(90);
 
-    // The creator is told why — a silent unpublished video is indistinguishable
-    // from a bug from their side of the screen.
+    // Nothing is refused, so the only notice is the ready one.
     const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
     expect(notifications).toHaveLength(1);
-    expect(notifications[0].type).toBe("error");
-    expect(notifications[0].title).toMatch(/too short/i);
+    expect(notifications[0].type).toBe("success");
   });
 
-  it("reads Bunny's `length` as seconds, so the 8-minute floor actually fires", async () => {
+  it("reads Bunny's `length` as seconds, and records the shortest clip", async () => {
     // The live library's own answer for a 5-second upload: `length: 5`. Read as
-    // milliseconds that rounded to 0, and 0 failed the `> 0` guard below — so
-    // the shortest possible file sailed past a published "8 minutes minimum"
-    // rule and landed on a paid feed, with `duration` left NULL as well.
+    // milliseconds that rounded to 0, and 0 failed the `> 0` guard — so the
+    // shortest possible file was published with `duration` left NULL as well.
+    // Five seconds is absurd, but the point is that the number is read correctly
+    // and recorded, not that it is refused.
     bunnyState.details = { status: 4, encodeProgress: 100, length: 5 };
 
     const result = await refreshVideoEncoding(videoId);
 
-    expect(result?.published).toBe(false);
+    expect(result?.published).toBe(true);
 
     const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
     expect(video.duration).toBe(5);
-    expect(video.isPublished).toBe(false);
-
-    const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
-    expect(notifications).toHaveLength(1);
-    expect(notifications[0].title).toMatch(/too short/i);
+    expect(video.isPublished).toBe(true);
   });
 
-  it("takes down a video that was already live when the length was learned", async () => {
-    // Posts are published the moment they are uploaded, so a too-short scene is
-    // public for the minutes Bunny needs to report its length. Without this the
-    // "8 minutes minimum" rule would stop existing: the upload would be live and
-    // playable, and the guideline would be a sentence on a form.
+  it("leaves an already-live video live when its length is learned", async () => {
+    // Posts are published the moment they are uploaded. There is no length rule
+    // to take one down again, so learning the length must not unpublish a scene
+    // the creator already has live.
     await prisma.video.update({ where: { id: videoId }, data: { isPublished: true } });
     bunnyState.details = { status: 4, encodeProgress: 100, length: 120 };
 
     await refreshVideoEncoding(videoId);
 
     const video = await prisma.video.findUniqueOrThrow({ where: { id: videoId } });
-    expect(video.isPublished).toBe(false);
-
-    // And the creator is told what happened to the post, not that it "stays"
-    // unpublished — it was up.
-    const notifications = await prisma.notification.findMany({ where: { userId: creatorId } });
-    expect(notifications).toHaveLength(1);
-    expect(notifications[0].type).toBe("error");
-    expect(notifications[0].title).toMatch(/too short/i);
+    expect(video.isPublished).toBe(true);
+    expect(video.duration).toBe(120);
   });
 
   it("notifies exactly once, no matter how often it polls", async () => {

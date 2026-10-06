@@ -207,6 +207,7 @@ describeDb("Payment under investigation", () => {
     const earning = await prisma.videoEarning.findUnique({ where: { videoId } });
     expect(earning?.totalEarned ?? 0).toBe(0);
     const balance = await prisma.creatorBalance.findUnique({ where: { creatorId } });
+    expect(balance?.availableBalance ?? 0).toBe(0);
     expect(balance?.pendingBalance ?? 0).toBe(0);
   });
 
@@ -273,15 +274,15 @@ describeDb("Payment under investigation", () => {
     const settled = await prisma.transaction.findUnique({ where: { id: tx.id } });
     expect(settled!.status).toBe("SUCCESS");
 
-    // 70/30: the creator gets their share, and it lands in *pending* (subject to
-    // the 14-day holding period), never straight into the withdrawable balance.
+    // 70/30: the creator gets their share, and it is withdrawable immediately —
+    // there is no holding period to sit through.
     const earning = await prisma.videoEarning.findUnique({ where: { videoId } });
     expect(earning!.totalEarned).toBe(1_400);
     expect(earning!.totalPurchases).toBe(1);
 
     const balance = await prisma.creatorBalance.findUnique({ where: { creatorId } });
-    expect(balance!.pendingBalance).toBe(1_400);
-    expect(balance!.availableBalance).toBe(0);
+    expect(balance!.availableBalance).toBe(1_400);
+    expect(balance!.pendingBalance).toBe(0);
   });
 
   it("MARK_UNPAID releases the charge and licenses a retry", async () => {
@@ -315,6 +316,7 @@ describeDb("Payment under investigation", () => {
     // Releasing must not pay the creator for money that never arrived.
     const balance = await prisma.creatorBalance.findUnique({ where: { creatorId } });
     expect(balance?.pendingBalance ?? 0).toBe(0);
+    expect(balance?.availableBalance ?? 0).toBe(0);
 
     const notice = await latestNotice();
     expect(notice!.message.toLowerCase()).toContain("safe");
@@ -402,7 +404,8 @@ describeDb("Payment under investigation", () => {
     expect(settled!.status).toBe("SUCCESS");
 
     const balance = await prisma.creatorBalance.findUnique({ where: { creatorId } });
-    expect(balance!.pendingBalance).toBe(1_400);
+    expect(balance!.availableBalance).toBe(1_400);
+    expect(balance!.pendingBalance).toBe(0);
 
     // Still exactly one access row.
     const accesses = await prisma.videoAccess.count({ where: { viewerId, videoId } });

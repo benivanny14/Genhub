@@ -118,13 +118,21 @@ describeDb("Reversing a collected charge", () => {
     await prisma.video.update({ where: { id: videoId }, data: { purchaseCount: 0 } });
   }
 
-  /** A settled 70/30 purchase: TZS 1,000 paid, TZS 700 to the creator. */
+  /**
+   * A settled 70/30 purchase: TZS 1,000 paid, TZS 700 to the creator.
+   *
+   * The 700 goes into the HELD bucket on purpose: that is the shape of a row
+   * written before the holding period was removed, and the only way a balance
+   * reaches that bucket now. A fresh sale credits the withdrawable balance
+   * directly (see the no-holding suites), but the reversal still has to claw a
+   * held balance back before it can touch what is withdrawable — so that is the
+   * path this suite walks. Every purchase seeds its own 700: a helper that only
+   * recorded the FIRST one would hide any clawback bug that depends on how much
+   * is held.
+   */
   async function settledPurchase(opts?: { daysAgo?: number }) {
     const createdAt = new Date(Date.now() - (opts?.daysAgo ?? 0) * 86_400_000);
 
-    // Mirror exactly what the settlement path does for each sale: +700 into the
-    // holding period. A helper that only seeded the FIRST purchase would hide
-    // any clawback bug that depends on how much is held.
     await prisma.creatorBalance.upsert({
       where: { creatorId },
       create: {
@@ -302,11 +310,11 @@ describeDb("Reversing a collected charge", () => {
   // 2. Where the clawback comes from
   // ---------------------------------------------------------------------------
 
-  it("takes from the available balance when the holding period already ended", async () => {
+  it("takes from the available balance when the held money was already released", async () => {
     await reset();
     const tx = await settledPurchase();
 
-    // The 700 has already matured out of holding.
+    // The 700 has already been released out of the held bucket.
     await prisma.creatorBalance.update({
       where: { creatorId },
       data: { pendingBalance: 0, availableBalance: 700 },

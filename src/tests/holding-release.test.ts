@@ -43,13 +43,15 @@ import { POST as purchasePost } from "@/app/api/payments/purchase/route";
 import { POST as subscribePost } from "@/app/api/subscriptions/route";
 import { POST as tipsPost } from "@/app/api/tips/route";
 import { POST as messagesPost } from "@/app/api/messages/route";
+import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 
 const describeDb = process.env.DATABASE_URL ? describe : describe.skip;
 
 const VIDEO_PRICE = 5_000;
 const SUB_PRICE = 1_234;
 const TIP_AMOUNT = 777;
-const MESSAGE_AMOUNT = 333;
+// A paid message is a fixed price (PAID_MESSAGE_PRICE), never the sender's number.
+const MESSAGE_AMOUNT = PAID_MESSAGE_PRICE;
 const WALLET_START = 20_000;
 
 /** A balance some earlier version left in the held bucket. */

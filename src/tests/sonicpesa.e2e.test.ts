@@ -223,13 +223,13 @@ describeE2E("SonicPesa E2E: purchase -> webhook -> status -> DB", () => {
     });
     expect(access).not.toBeNull();
 
-    // Creator balance: 70% in the 14-day holding, nothing released yet
+    // Creator balance: the 70% is withdrawable the moment the charge settles
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: ctx.creatorId },
     });
     expect(balance).not.toBeNull();
-    expect(balance!.pendingBalance).toBe(expectedCreatorCut);
-    expect(balance!.availableBalance).toBe(0);
+    expect(balance!.availableBalance).toBe(expectedCreatorCut);
+    expect(balance!.pendingBalance).toBe(0);
     expect(balance!.releasedTotal).toBe(0);
     expect(balance!.totalEarned).toBe(expectedCreatorCut);
 
@@ -283,7 +283,7 @@ describeE2E("SonicPesa E2E: purchase -> webhook -> status -> DB", () => {
     });
     const expectedCreatorCut =
       ctx.amount - Math.round(ctx.amount * (config.business.platformFeePercent / 100));
-    expect(balance!.pendingBalance).toBe(expectedCreatorCut); // unchanged
+    expect(balance!.availableBalance).toBe(expectedCreatorCut); // unchanged
     expect(balance!.totalEarned).toBe(expectedCreatorCut);
   });
 
@@ -336,40 +336,28 @@ describeE2E("SonicPesa E2E: purchase -> webhook -> status -> DB", () => {
     expect(user!.walletBalance).toBe(topUpAmount);
   });
 
-  it("releases earnings only after the 14-day holding period (idempotent)", async () => {
+  it("leaves a settled sale withdrawable, and the release job a no-op (idempotent)", async () => {
     const expectedCreatorCut =
       ctx.amount - Math.round(ctx.amount * (config.business.platformFeePercent / 100));
 
-    // Fresh earnings are NOT mature yet
-    const early = await releaseMatureEarnings(ctx.creatorId);
-    expect(early.released).toBe(0);
-
-    // Age the successful purchase past the holding window
-    const cutoff = new Date(
-      Date.now() - (config.business.holdingPeriodDays + 1) * 86_400_000
-    );
-    await prisma.transaction.update({
-      where: { id: transactionId },
-      data: { createdAt: cutoff },
-    });
-
-    const result = await releaseMatureEarnings(ctx.creatorId);
-    expect(result.released).toBe(expectedCreatorCut);
-    expect(result.creators).toBe(1);
-
+    // The sale above already settled, so the creator's share is withdrawable
+    // now — there is no holding period to wait out.
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: ctx.creatorId },
     });
-    expect(balance!.pendingBalance).toBe(0);
     expect(balance!.availableBalance).toBe(expectedCreatorCut);
-    expect(balance!.releasedTotal).toBe(expectedCreatorCut);
+    expect(balance!.pendingBalance).toBe(0);
 
-    // Running again must be a no-op
-    const again = await releaseMatureEarnings(ctx.creatorId);
-    expect(again.released).toBe(0);
+    // The release job only clears a LEGACY held balance, so it moves nothing
+    // here — and running it twice changes nothing either.
+    const noop = await releaseMatureEarnings(ctx.creatorId);
+    expect(noop.released).toBe(0);
+
     const after = await prisma.creatorBalance.findUnique({
       where: { creatorId: ctx.creatorId },
-    });    expect(after!.availableBalance).toBe(expectedCreatorCut);
+    });
+    expect(after!.availableBalance).toBe(expectedCreatorCut);
+    expect(after!.pendingBalance).toBe(0);
   });
 });
 
@@ -513,12 +501,12 @@ describeE2E("SonicPesa E2E: subscription by phone", () => {
     expect(tx!.creatorCut).toBe(SUBSCRIPTION_PRICE_TZS - platformFee);
     expect(tx!.providerRef).toBeTruthy();
 
-    // Creator credited into the 14-day holding (nothing available yet)
+    // Creator credited straight to the withdrawable balance
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: creatorA },
     });
-    expect(balance!.pendingBalance).toBe(SUBSCRIPTION_PRICE_TZS - platformFee);
-    expect(balance!.availableBalance).toBe(0);
+    expect(balance!.availableBalance).toBe(SUBSCRIPTION_PRICE_TZS - platformFee);
+    expect(balance!.pendingBalance).toBe(0);
     expect(balance!.totalEarned).toBe(SUBSCRIPTION_PRICE_TZS - platformFee);
 
     // Public subscriber counter resynced from real rows
@@ -565,7 +553,7 @@ describeE2E("SonicPesa E2E: subscription by phone", () => {
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: creatorA },
     });
-    expect(balance!.pendingBalance).toBe(SUBSCRIPTION_PRICE_TZS - platformFee); // unchanged
+    expect(balance!.availableBalance).toBe(SUBSCRIPTION_PRICE_TZS - platformFee); // unchanged
 
     const profile = await prisma.creatorProfile.findUnique({
       where: { userId: creatorA },

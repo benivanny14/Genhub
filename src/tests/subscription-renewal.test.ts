@@ -177,7 +177,7 @@ describeE2E("Subscription auto-renewal", () => {
     });
     expect(viewer!.walletBalance).toBe(ctx.amount * 3 - ctx.amount);
 
-    // 70/30 split, held for the 14-day window
+    // 70/30 split, credited straight to the withdrawable balance
     const tx = await prisma.transaction.findFirst({
       where: { userId: ctx.viewerId, creatorId: ctx.creatorId, type: "SUBSCRIPTION" },
       orderBy: { createdAt: "desc" },
@@ -190,7 +190,8 @@ describeE2E("Subscription auto-renewal", () => {
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: ctx.creatorId },
     });
-    expect(balance?.pendingBalance).toBe(3_500);
+    expect(balance?.availableBalance).toBe(3_500);
+    expect(balance?.pendingBalance).toBe(0);
 
     // Extended from the OLD expiry, not from now
     const sub = await prisma.creatorSubscription.findUnique({

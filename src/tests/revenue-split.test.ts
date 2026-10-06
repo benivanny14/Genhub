@@ -14,7 +14,7 @@
 //
 //   1. every path records `platformFee` + `creatorCut`, both non-null, summing
 //      back to the amount the customer actually paid;
-//   2. the creator's 14-day holding receives the cuts and nothing else;
+//   2. the creator's withdrawable balance receives the cuts and nothing else;
 //   3. the customer's wallet is debited the gross, so the ledger closes —
 //      cuts + fees === what left the wallet.
 //
@@ -46,6 +46,7 @@ import { POST as purchasePost } from "@/app/api/payments/purchase/route";
 import { POST as subscribePost } from "@/app/api/subscriptions/route";
 import { POST as tipsPost } from "@/app/api/tips/route";
 import { POST as messagesPost } from "@/app/api/messages/route";
+import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
 
 const describeDb = process.env.DATABASE_URL ? describe : describe.skip;
 
@@ -61,7 +62,13 @@ const cutOf = (amount: number) => amount - feeOf(amount);
 const VIDEO_PRICE = 5_000;
 const SUB_PRICE = 1_234; // not a multiple of 10: the rounding has to land somewhere
 const TIP_AMOUNT = 777;
-const MESSAGE_AMOUNT = 333;
+/**
+ * A paid message is a FIXED price, not an amount the sender picks: the route
+ * always charges PAID_MESSAGE_PRICE, whatever the request body says. Reading the
+ * constant rather than writing a number here is what keeps the ledger assertion
+ * about what was charged instead of about a price nobody uses.
+ */
+const MESSAGE_AMOUNT = PAID_MESSAGE_PRICE;
 const WALLET_START = 20_000;
 const GROSS = VIDEO_PRICE + SUB_PRICE + TIP_AMOUNT + MESSAGE_AMOUNT;
 
@@ -219,7 +226,7 @@ describeDb("every payment path writes the same 70/30 split", () => {
 
   // Runs last on purpose: it reads the state the four paths above left behind,
   // which is the whole point — the four credits have to add up as one balance.
-  it("leaves the creator holding exactly the four cuts, and closes the ledger", async () => {
+  it("leaves the creator with exactly the four cuts, and closes the ledger", async () => {
     const balance = await prisma.creatorBalance.findUnique({
       where: { creatorId: ctx.creatorId },
     });
@@ -228,10 +235,11 @@ describeDb("every payment path writes the same 70/30 split", () => {
     const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
 
     expect(balance).not.toBeNull();
-    expect(balance!.pendingBalance).toBe(sum(cuts));
+    // All four paths credit the withdrawable balance directly: there is no
+    // holding period, so every cut is payable the moment it is earned.
+    expect(balance!.availableBalance).toBe(sum(cuts));
+    expect(balance!.pendingBalance).toBe(0);
     expect(balance!.totalEarned).toBe(sum(cuts));
-    // Nothing has matured yet, so none of it is payable.
-    expect(balance!.availableBalance).toBe(0);
 
     // The ledger closes: every shilling the customer paid is either the creator's
     // cut or the platform's fee, and the wallet is short by exactly the gross.
