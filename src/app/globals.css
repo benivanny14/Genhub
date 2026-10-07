@@ -19,11 +19,25 @@
 
   html {
     scroll-behavior: smooth;
+    /*
+      No page may be dragged sideways on a phone.
+
+      A single too-wide row (the header, most often) used to make every screen
+      scroll left and right — the layout looked like it "moved" and content
+      could be slid off-centre. `clip` is used rather than `hidden` because
+      `hidden` turns the element into a scroll container and breaks the sticky
+      header; `clip` simply refuses the overflow. Fixing the offending rows is
+      still the real fix — this is the net under it.
+    */
+    overflow-x: clip;
   }
 
   body {
     @apply antialiased;
     font-feature-settings: "kern" 1, "liga" 1;
+    overflow-x: clip;
+    /* Nothing may be wider than the viewport without saying so. */
+    max-width: 100%;
   }
 
   /* True dark theme (default) — Brazzers-style near-black.

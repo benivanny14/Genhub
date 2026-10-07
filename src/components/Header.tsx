@@ -214,11 +214,15 @@ export default function Header() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
         <div className="flex items-center justify-between h-16">
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2 group">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center group-hover:scale-105 transition-transform glow-brand">
+          <Link href="/" className="flex items-center gap-2 group shrink-0 min-w-0">
+            <div className="w-8 h-8 shrink-0 rounded-lg bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center group-hover:scale-105 transition-transform glow-brand">
               <Play className="w-4 h-4 text-white fill-white" />
             </div>
-            <span className="text-xl font-display font-bold text-gradient">
+            {/* The wordmark is the first thing to give way on a very narrow
+                phone. The mark alone still says Genhub, and dropping the text
+                here is what keeps the row (and therefore the page) from
+                overflowing to the right. */}
+            <span className="text-xl font-display font-bold text-gradient hidden min-[380px]:inline">
               Genhub
             </span>
           </Link>
@@ -581,20 +585,25 @@ export default function Header() {
           </nav>
 
           {/* Mobile Menu Toggle */}
-          <div className="md:hidden flex items-center gap-1">
-            {/* The wallet, at the very top next to the currency sign, on the
-                phone layout too. The desktop bar has shown the balance in its
-                wallet link all along; on a phone it was hidden inside the menu,
-                which is exactly where a person checking their money does not
-                want to look. */}
+          {/*
+            The phone row is deliberately thin: the two money chips and the
+            menu button, and nothing else. Theme, currency and language used to
+            sit here as well — three more controls on a row that already carried
+            a wallet figure and an earnings figure once the user signed in. Six
+            controls plus the logo is wider than a phone, so the row pushed the
+            whole page sideways and every screen could be dragged left and
+            right. They now live inside the menu they belong to (see the mobile
+            panel below), and the chips truncate rather than grow.
+          */}
+          <div className="md:hidden flex items-center gap-1 min-w-0">
             {user && creatorAvailable !== null && (
               <Link
                 href="/creator"
-                className="flex items-center gap-1 px-2 py-1.5 rounded-xl hover:bg-white/10"
+                className="flex items-center gap-1 px-1.5 py-1.5 rounded-xl hover:bg-white/10 min-w-0"
                 title="Your withdrawable earnings — visible to you only"
               >
-                <Banknote className="w-4 h-4 text-emerald-400" />
-                <span className="text-[11px] font-semibold">
+                <Banknote className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span className="text-[11px] font-semibold truncate max-w-[4.5rem]">
                   {format(creatorAvailable)}
                 </span>
               </Link>
@@ -602,35 +611,19 @@ export default function Header() {
             {user && (
               <Link
                 href="/wallet"
-                className="flex items-center gap-1 px-2 py-1.5 rounded-xl hover:bg-white/10"
+                className="flex items-center gap-1 px-1.5 py-1.5 rounded-xl hover:bg-white/10 min-w-0"
                 title="Your wallet balance"
               >
-                <Wallet className="w-4 h-4 text-brand-400" />
-                <span className="text-[11px] font-semibold">
+                <Wallet className="w-4 h-4 text-brand-400 shrink-0" />
+                <span className="text-[11px] font-semibold truncate max-w-[4.5rem]">
                   {format(user.walletBalance)}
                 </span>
               </Link>
             )}
-            <button onClick={toggleTheme} className="p-2 rounded-xl hover:bg-white/10">
-              {isLight ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
-            </button>
-            <button
-              onClick={toggleCurrency}
-              className="p-2 rounded-xl hover:bg-white/10 flex items-center gap-0.5"
-              title="Switch currency"
-            >
-              <DollarSign className="w-4 h-4" />
-              <span className="text-[10px] font-bold">{currency}</span>
-            </button>
-            <button
-              onClick={() => setLocale(locale === "en" ? "sw" : "en")}
-              className="p-2 rounded-xl hover:bg-white/10"
-            >
-              <Globe className="w-5 h-5" />
-            </button>
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="p-2 rounded-xl hover:bg-white/10"
+              className="p-2 rounded-xl hover:bg-white/10 shrink-0"
+              aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
             >
               {mobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
             </button>
@@ -657,6 +650,35 @@ export default function Header() {
                 placeholder={t("nav.search")}
                 className="input-field rounded-2xl py-3.5 pl-12 pr-4 text-base"
               />
+            </div>
+
+            {/* The appearance / currency / language controls, moved off the
+                top row so it fits any phone. They are the same three buttons,
+                now with labels, in the panel that opens from the menu icon. */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={toggleTheme}
+                className="flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10 text-sm"
+              >
+                {isLight ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+                {isLight ? "Dark" : "Light"}
+              </button>
+              <button
+                onClick={toggleCurrency}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10 text-sm"
+                title="Switch currency"
+              >
+                <DollarSign className="w-4 h-4" />
+                <span className="font-bold">{currency}</span>
+              </button>
+              <button
+                onClick={() => setLocale(locale === "en" ? "sw" : "en")}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border border-white/10 hover:bg-white/10 text-sm"
+                title="Switch language"
+              >
+                <Globe className="w-4 h-4" />
+                <span className="font-bold uppercase">{locale}</span>
+              </button>
             </div>
 
             {user ? (
