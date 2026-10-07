@@ -21,8 +21,10 @@ const mocks = vi.hoisted(() => ({
   balanceFindUnique: vi.fn(),
   balanceFindMany: vi.fn(),
   balanceUpdateMany: vi.fn(),
-  userFindMany: vi.fn(),
-  createNotification: vi.fn(),
+  // The shared admin fan-out. Which admins exist, and that a removed one stops
+  // being told, is notify.service.ts's job and is pinned in notify-admins.test.ts;
+  // here only "was the crossing announced" matters.
+  notifyAdmins: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -32,12 +34,11 @@ vi.mock("@/lib/db", () => ({
       findMany: (...a: unknown[]) => mocks.balanceFindMany(...a),
       updateMany: (...a: unknown[]) => mocks.balanceUpdateMany(...a),
     },
-    user: { findMany: (...a: unknown[]) => mocks.userFindMany(...a) },
   },
 }));
 
 vi.mock("@/lib/services/notify.service", () => ({
-  createNotification: (...a: unknown[]) => mocks.createNotification(...a),
+  notifyAdmins: (...a: unknown[]) => mocks.notifyAdmins(...a),
 }));
 
 import {
@@ -49,10 +50,9 @@ const FLOOR = 30_000;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.userFindMany.mockResolvedValue([{ id: "admin-1" }]);
   mocks.balanceFindMany.mockResolvedValue([]);
   mocks.balanceUpdateMany.mockResolvedValue({ count: 1 });
-  mocks.createNotification.mockResolvedValue(undefined);
+  mocks.notifyAdmins.mockResolvedValue(1);
 });
 
 describe("maybeNotifyAdminsPayoutReady", () => {
@@ -69,10 +69,10 @@ describe("maybeNotifyAdminsPayoutReady", () => {
     // The claim happens before the send, so a concurrent credit cannot also
     // announce this crossing.
     expect(mocks.balanceUpdateMany).toHaveBeenCalledTimes(1);
-    expect(mocks.createNotification).toHaveBeenCalledTimes(1);
-    expect(mocks.createNotification.mock.calls[0][0]).toMatchObject({
-      userId: "admin-1",
+    expect(mocks.notifyAdmins).toHaveBeenCalledTimes(1);
+    expect(mocks.notifyAdmins.mock.calls[0][0]).toMatchObject({
       title: expect.stringContaining("withdraw"),
+      link: "/admin",
     });
   });
 
@@ -86,7 +86,7 @@ describe("maybeNotifyAdminsPayoutReady", () => {
     const announced = await maybeNotifyAdminsPayoutReady("creator-1");
 
     expect(announced).toBe(false);
-    expect(mocks.createNotification).not.toHaveBeenCalled();
+    expect(mocks.notifyAdmins).not.toHaveBeenCalled();
     expect(mocks.balanceUpdateMany).not.toHaveBeenCalled();
   });
 
@@ -100,7 +100,7 @@ describe("maybeNotifyAdminsPayoutReady", () => {
     const announced = await maybeNotifyAdminsPayoutReady("creator-1");
 
     expect(announced).toBe(false);
-    expect(mocks.createNotification).not.toHaveBeenCalled();
+    expect(mocks.notifyAdmins).not.toHaveBeenCalled();
   });
 
   it("clears the marker once a payout drops them back below the floor", async () => {
@@ -131,7 +131,7 @@ describe("maybeNotifyAdminsPayoutReady", () => {
     const announced = await maybeNotifyAdminsPayoutReady("creator-1");
 
     expect(announced).toBe(false);
-    expect(mocks.createNotification).not.toHaveBeenCalled();
+    expect(mocks.notifyAdmins).not.toHaveBeenCalled();
   });
 
   it("never throws, even when the read fails", async () => {

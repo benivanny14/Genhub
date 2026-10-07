@@ -9,6 +9,10 @@ import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import VerifiedBadge from "@/components/VerifiedBadge";
 import { formatTZS } from "@/lib/utils";
+// How long a withdrawal has waited and what it needs next. The rule lives in
+// one place so this screen and the API cannot describe the same row two
+// different ways.
+import type { PayoutAttention } from "@/lib/payout-attention";
 import {
   Shield,
   HelpCircle,
@@ -192,6 +196,12 @@ interface PayoutItem {
   providerFee?: number | null;
   providerNetAmount?: number | null;
   providerStatus?: string | null;
+  /**
+   * How long this has waited and what to do about it, derived by the API. Absent
+   * on a payload from an older server, which the row falls back from gracefully
+   * (it then shows the request date and no advice, rather than a guess).
+   */
+  attention?: PayoutAttention | null;
   createdAt: string;
   creator: {
     id: string;
@@ -200,6 +210,17 @@ interface PayoutItem {
     email: string | null;
     kycStatus: string;
   };
+}
+
+/**
+ * The payout queue in one line: what is open on this page, how much of it has
+ * stopped moving, and which row has waited longest.
+ */
+interface PayoutSummary {
+  open: number;
+  stuck: number;
+  waitingAmount: number;
+  oldestAgeLabel: string | null;
 }
 
 interface CreatorItem {
@@ -1068,6 +1089,10 @@ export default function AdminDashboard() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [reportList, setReportList] = useState<ReportItem[]>([]);
   const [payoutList, setPayoutList] = useState<PayoutItem[]>([]);
+  /** The queue in one line, from the server — never re-derived here. */
+  const [payoutSummary, setPayoutSummary] = useState<PayoutSummary | null>(null);
+  /** Show only the rows that have stopped moving, when an admin is triaging. */
+  const [stuckPayoutsOnly, setStuckPayoutsOnly] = useState(false);
   const [creatorList, setCreatorList] = useState<CreatorItem[]>([]);
   // Per-creator video management: which creator's videos are expanded, the
   // videos themselves, and which row is mid-action so its buttons lock.
@@ -1652,12 +1677,25 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (data.success) {
         setPayoutList(data.data.payouts);
+        setPayoutSummary(data.data.summary ?? null);
         if (typeof data.data.gatewayMinimum === "number") {
           setGatewayFloor(data.data.gatewayMinimum);
         }
       }
     } catch {}
   }
+
+  /**
+   * The rows the queue is showing right now: everything open, or — with the
+   * toggle on — only the ones that have waited past the point of being normal.
+   *
+   * Filtering in the client is deliberate: the list is already the open queue
+   * (PENDING + APPROVED), so this is a view of the same read rather than a second
+   * request that could answer differently from the count beside it.
+   */
+  const visiblePayouts = stuckPayoutsOnly
+    ? payoutList.filter((p) => p.attention?.stuck)
+    : payoutList;
 
   async function fetchCreators() {
     try {
@@ -3695,7 +3733,34 @@ export default function AdminDashboard() {
         {/* Payouts Tab */}
         {activeTab === "payouts" && (
           <div className="space-y-4">
-            <h2 className="font-display font-bold">Payout Requests</h2>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="font-display font-bold">Payout Requests</h2>
+                {/* The queue in one line, counted by the server: what is open,
+                    how much money it holds, and how much of it has stopped
+                    moving. The last number is the only one that means somebody
+                    has to do something today. */}
+                <p className="text-xs text-white/40 mt-0.5">
+                  {payoutSummary
+                    ? `${payoutSummary.open} open · TZS ${payoutSummary.waitingAmount.toLocaleString()} waiting` +
+                      (payoutSummary.stuck > 0 ? ` · ${payoutSummary.stuck} stuck` : "") +
+                      (payoutSummary.oldestAgeLabel
+                        ? ` · oldest ${payoutSummary.oldestAgeLabel}`
+                        : "")
+                    : "Every open request — pending and approved"}
+                </p>
+              </div>
+              {(payoutSummary?.stuck ?? 0) > 0 && (
+                <label className="flex items-center gap-2 text-xs text-white/60 shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={stuckPayoutsOnly}
+                    onChange={(e) => setStuckPayoutsOnly(e.target.checked)}
+                  />
+                  Stuck only ({payoutSummary?.stuck})
+                </label>
+              )}
+            </div>
             {payoutList.length === 0 ? (
               <div className="glass-card p-12 text-center">
                 <CheckCircle className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
@@ -3703,9 +3768,16 @@ export default function AdminDashboard() {
                   No open payout requests — nothing is waiting to be paid or refused.
                 </p>
               </div>
+            ) : visiblePayouts.length === 0 ? (
+              <div className="glass-card p-8 text-center">
+                <p className="text-sm text-white/50">
+                  Nothing has stopped moving — every open request is inside its normal
+                  waiting time. Turn the filter off to see them all.
+                </p>
+              </div>
             ) : (
               <div className="grid gap-4">
-                {payoutList.map((payout) => (
+                {visiblePayouts.map((payout) => (
                   <div key={payout.id} className="glass-card p-5">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                       <div>
@@ -3745,8 +3817,30 @@ export default function AdminDashboard() {
                             transaction code.
                           </p>
                         )}
+                        {/* What this row needs next, and how long it has waited.
+                            Amber when it has stopped moving: in a list of
+                            amounts the stuck ones look exactly like the rest,
+                            and they are the ones somebody has to deal with. */}
+                        {payout.attention && (
+                          <p
+                            className={
+                              payout.attention.stuck
+                                ? "text-xs text-amber-300/90 mt-1 flex items-start gap-1"
+                                : "text-xs text-white/45 mt-1"
+                            }
+                          >
+                            {payout.attention.stuck && (
+                              <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
+                            )}
+                            <span>{payout.attention.action}</span>
+                          </p>
+                        )}
                         <p className="text-xs text-white/40">
-                          Requested: {new Date(payout.createdAt).toLocaleDateString("en-US")}
+                          {payout.attention?.ageLabel
+                            ? `Requested ${payout.attention.ageLabel} (${new Date(
+                                payout.createdAt
+                              ).toLocaleDateString("en-US")})`
+                            : `Requested: ${new Date(payout.createdAt).toLocaleDateString("en-US")}`}
                         </p>
                         {payout.providerWithdrawalId && (
                           <p className="text-xs text-blue-300/80 mt-1">

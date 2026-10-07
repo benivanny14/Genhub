@@ -153,6 +153,86 @@ describe("GET /api/admin/payouts", () => {
     expect(mocks.count.mock.calls[0][0].where).toEqual(whereOf());
   });
 
+  /**
+   * A queue row as Prisma returns one: only the fields the attention rule reads.
+   * The times are relative to now, because what is under test is the waiting.
+   */
+  function row(over: Record<string, unknown>) {
+    return {
+      id: "payout-1",
+      amount: 100_000,
+      status: "PENDING",
+      paymentMethod: "MPESA",
+      accountDetails: "0682642219",
+      bankName: null,
+      createdAt: new Date(Date.now() - 5 * 60_000),
+      providerWithdrawalId: null,
+      providerStatus: null,
+      ...over,
+    };
+  }
+
+  it("tells the queue how long each request has waited and what it needs next", async () => {
+    mocks.findMany.mockResolvedValue([
+      row({ id: "payout-1", createdAt: new Date(Date.now() - 5 * 60_000) }),
+      row({
+        id: "payout-2",
+        amount: 1_000,
+        status: "APPROVED",
+        // Approved nine hours ago and never sent: the creator believes they have
+        // been paid, and nobody is going to send it by accident.
+        createdAt: new Date(Date.now() - 9 * 60 * 60_000),
+      }),
+    ]);
+
+    const body = await (await get("?status=PENDING,APPROVED")).json();
+
+    expect(body.data.payouts[0].attention).toMatchObject({
+      nextAction: "APPROVE",
+      ageLabel: "5m ago",
+      stuck: false,
+    });
+    expect(body.data.payouts[1].attention).toMatchObject({
+      nextAction: "SEND_BY_HAND",
+      ageLabel: "9h ago",
+      stuck: true,
+    });
+    // The one line that says whether anybody needs to stop what they are doing.
+    expect(body.data.summary).toEqual({
+      open: 2,
+      stuck: 1,
+      waitingAmount: 101_000,
+      oldestAgeLabel: "9h ago",
+    });
+  });
+
+  it("says a below-floor request has to be paid by hand before it is approved", async () => {
+    mocks.findMany.mockResolvedValue([row({ amount: 1_000 })]);
+
+    const body = await (await get("?status=PENDING")).json();
+
+    // The action names the gateway's floor, not Genhub's, because that is the
+    // one that makes approving this a hand payment rather than a send.
+    expect(body.data.payouts[0].attention.action).toContain("30,000");
+    expect(body.data.payouts[0].attention.action).toMatch(/your phone/);
+  });
+
+  it("tells the admin to wait, not to send again, once the gateway has it", async () => {
+    mocks.findMany.mockResolvedValue([
+      row({
+        status: "APPROVED",
+        providerWithdrawalId: "84213",
+        providerStatus: "processing",
+      }),
+    ]);
+
+    const body = await (await get("?status=APPROVED")).json();
+
+    expect(body.data.payouts[0].attention.nextAction).toBe("WAIT_FOR_GATEWAY");
+    expect(body.data.payouts[0].attention.action).toContain("84213");
+    expect(body.data.summary.stuck).toBe(0);
+  });
+
   it("reports the gateway's own floor, so a small withdrawal can be called one", async () => {
     // The queue has to say "this one will have to be sent by hand" next to an
     // amount the gateway refuses. It quotes the gateway's number, read from the

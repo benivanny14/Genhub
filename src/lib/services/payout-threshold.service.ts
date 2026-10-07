@@ -19,7 +19,7 @@
 
 import prisma from "../db";
 import config from "../config";
-import { createNotification } from "./notify.service";
+import { notifyAdmins } from "./notify.service";
 
 export interface PayoutReadyAlertResult {
   /** Creators whose crossing was announced in this run. */
@@ -75,26 +75,19 @@ export async function maybeNotifyAdminsPayoutReady(creatorId: string): Promise<b
     const name =
       balance.creator?.displayName || balance.creator?.email || "A creator";
 
-    const admins = await prisma.user.findMany({
-      where: { role: "ADMIN" },
-      select: { id: true },
+    // The crossing itself, not the request: a creator who has just reached the
+    // floor can withdraw, and this is the alert that says a decision is coming.
+    // The request alert is separate, and fires when they actually ask.
+    await notifyAdmins({
+      title: "Creator ready to withdraw 💸",
+      message:
+        `${name}'s available balance reached TZS ${minimum.toLocaleString("en-US")}. ` +
+        "Open Admin → Ready to withdraw to review the request, allow a smaller " +
+        "withdrawal, or freeze the account.",
+      type: "info",
+      link: "/admin",
+      pushTag: "payout-ready",
     });
-
-    await Promise.all(
-      admins.map((admin) =>
-        createNotification({
-          userId: admin.id,
-          title: "Creator ready to withdraw 💸",
-          message:
-            `${name}'s available balance reached TZS ${minimum.toLocaleString("en-US")}. ` +
-            "Open Admin → Ready to withdraw to review the request, allow a smaller " +
-            "withdrawal, or freeze the account.",
-          type: "info",
-          link: "/admin",
-          pushTag: "payout-ready",
-        }).catch(() => {})
-      )
-    );
 
     return true;
   } catch (error) {

@@ -53,7 +53,10 @@ import {
 // The withdrawal floor, from the same constant the creator guidelines quote, so
 // the number a creator reads on this page is the number the payout service
 // enforces.
-import { CREATOR_MIN_WITHDRAWAL_TZS } from "@/lib/creator-guidelines";
+import {
+  CREATOR_MIN_WITHDRAWAL_TZS,
+  CREATOR_REVENUE_SHARE_PERCENT,
+} from "@/lib/creator-guidelines";
 import { formatTZS, formatRelativeTime, formatCount, cn } from "@/lib/utils";
 // What the video host reports holding, and how to read it beside the encoding
 // state — a stalled transfer is a byte count, not a bar that will not move.
@@ -1412,7 +1415,7 @@ export default function CreatorDashboard() {
           </div>
           <div className="glass-card p-4 text-center">
             <Banknote className="w-5 h-5 text-white/40 mx-auto mb-1" />
-            <p className="text-lg font-bold">70%</p>
+            <p className="text-lg font-bold">{CREATOR_REVENUE_SHARE_PERCENT}%</p>
             <p className="text-xs text-white/40">Your Revenue Share</p>
           </div>
         </div>
@@ -1492,6 +1495,55 @@ export default function CreatorDashboard() {
               </p>
             </div>
           </div>
+
+          {/*
+            How the money is worked out — one tap away rather than in the way.
+
+            There are exactly two things a creator cannot see for themselves from
+            this card: their share of what a fan paid (70%, quoted as text here
+            and applied by splitRevenue() on the server) and the transfer fee. A
+            fee nobody explained is read as money going missing — the creator
+            asked for 30,000, their phone shows 28,200, and nothing on the screen
+            accounts for the difference. So both are stated here, and the row in
+            the history below carries the real numbers once they exist.
+          */}
+          <details className="mt-4 rounded-xl bg-surface-300/20 px-3 py-2">
+            <summary className="text-xs text-white/60 cursor-pointer flex items-center gap-1.5">
+              <Banknote className="w-3.5 h-3.5 text-emerald-400/80 shrink-0" />
+              Pesa yako inahesabiwa vipi? {CREATOR_REVENUE_SHARE_PERCENT}% ni yako, ada ya
+              kutuma, na hesabu kamili
+            </summary>
+            <ul className="mt-2 space-y-1.5 text-xs text-white/55 list-disc pl-4 leading-relaxed">
+              <li>
+                <span className="text-white/80 font-medium">
+                  Kila mtu anayelipa, wewe unapata {CREATOR_REVENUE_SHARE_PERCENT}%.
+                </span>{" "}
+                Video, tip, subscription au message — kile anacholipa mtu
+                tunagawanya hivi: {CREATOR_REVENUE_SHARE_PERCENT}% inaingia kwenye salio
+                lako hapo juu, na {100 - CREATOR_REVENUE_SHARE_PERCENT}% inabaki kwa
+                gharama za Genhub (kuhifadhi video, malipo, uendeshaji). Hakuna
+                kusubiri: inaonekana kwenye salio lako papo hapo.
+              </li>
+              <li>
+                <span className="text-white/80 font-medium">
+                  Ada ya kutuma inatolewa kwenye kiasi unachotuma.
+                </span>{" "}
+                M-Pesa, Tigo Pesa, Airtel Money na benki hukata ada yao wenyewe,
+                hivyo unaweza kupokea kidogo chini ya ulichoomba — mfano ukaomba TZS{" "}
+                {CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString()}, ukapata 28,200. Kiasi
+                halisi ulichopokea na ada yenyewe vinaonekana kwenye mstari wa ombi
+                lako chini, mara linapotumwa.
+              </li>
+              <li>
+                <span className="text-white/80 font-medium">
+                  Pesa inaenda kwenye namba uliyoandika — si mahali pengine.
+                </span>{" "}
+                Tunatuma kwa namba au akaunti uliyoweka kwenye ombi. Namba
+                isiyo sahihi haiwezi kurudishwa, kwa hiyo angalia mara mbili kabla
+                ya kutuma ombi lako.
+              </li>
+            </ul>
+          </details>
 
           {withdrawalBlockers.length > 0 && (
             <ul className="mt-4 space-y-2">

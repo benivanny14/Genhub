@@ -15,6 +15,7 @@ import {
   disbursePayout,
   gatewayMinPayout,
 } from "@/lib/services/payout-disbursement.service";
+import { payoutAttention, summarizePayoutAttention } from "@/lib/payout-attention";
 import { z } from "zod";
 import { intParam } from "@/lib/utils";
 
@@ -62,15 +63,38 @@ export async function GET(request: NextRequest) {
       prisma.payoutRequest.count({ where: { status: { in: statuses } } }),
     ]);
 
+    const gatewayMinimum = gatewayMinPayout();
+    const now = Date.now();
+
+    /*
+     * How long each request has waited, and what it needs next — derived here so
+     * the screen does not have to re-implement the rule (see
+     * lib/payout-attention.ts for why the three states look alike and mean
+     * different things).
+     *
+     * Sent with every row rather than as a separate endpoint: an admin looking
+     * for "what is stuck" is looking at exactly this list, and a second read
+     * would be a second answer that can disagree with it.
+     */
+    const rows = payouts.map((payout) => ({
+      ...payout,
+      attention: payoutAttention(payout, { now, gatewayMinimum }),
+    }));
+
     return api.success({
-      payouts,
+      payouts: rows,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       // The floor the GATEWAY will send, so the queue can say "this one is a hand
       // payment" next to the amount instead of repeating the number in the
       // client, where it would go stale the day SonicPesa changes theirs. Not
       // `config.business.minPayoutAmount`: that one an admin can waive, this one
       // nobody can.
-      gatewayMinimum: gatewayMinPayout(),
+      gatewayMinimum,
+      // One line about the page being read: how much is open, how much of it has
+      // stopped moving, and which row has waited longest. `total` above is the
+      // whole queue in the database; this is what is on screen. They differ only
+      // when the queue is paginated past one page, which is why both are here.
+      summary: summarizePayoutAttention(rows),
     });
   } catch (error) {
     if (error instanceof AuthError) {

@@ -18,11 +18,13 @@ import {
   CREATOR_GUIDELINES,
   CREATOR_GUIDELINES_VERSION,
   CREATOR_MIN_WITHDRAWAL_TZS,
+  CREATOR_REVENUE_SHARE_PERCENT,
   GUIDELINE_ACK_LABEL_EN,
   GUIDELINE_ACK_LABEL_SW,
   MIN_VIDEO_DURATION_SECONDS,
   needsGuidelineAcceptance,
 } from "@/lib/creator-guidelines";
+import config from "@/lib/config";
 
 describe("creator guidelines", () => {
   it("has a unique id for every rule, because the id is the receipt", () => {
@@ -71,6 +73,16 @@ describe("creator guidelines", () => {
 
     expect(duration?.sw).toContain(String(MIN_VIDEO_DURATION_SECONDS));
     expect(withdrawal?.sw).toContain(CREATOR_MIN_WITHDRAWAL_TZS.toLocaleString());
+  });
+
+  it("quotes the same revenue share the settlement actually pays", () => {
+    // 70% is the platform's public promise, and it is quoted as text on the
+    // dashboard. The number that decides what a creator is PAID lives in config
+    // and is applied by splitRevenue(); if those two ever disagree, the screen
+    // is promising something the ledger does not do.
+    expect(CREATOR_REVENUE_SHARE_PERCENT).toBe(config.business.creatorFeePercent);
+    // ...and the two halves are a whole, so neither side can be moved alone.
+    expect(CREATOR_REVENUE_SHARE_PERCENT + config.business.platformFeePercent).toBe(100);
   });
 
   it("asks for the same acknowledgement in both languages", () => {

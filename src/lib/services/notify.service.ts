@@ -59,6 +59,58 @@ export async function createNotification(input: NotificationInput) {
 }
 
 /**
+ * Tell every admin about something that needs a decision.
+ *
+ * The same alert, to every admin account, as one call — because the version of
+ * this that gets written per feature is the version that forgets one of them:
+ * `role: "ADMIN"` is asked once here, and a removed admin stops being told.
+ *
+ * Returns how many admins were told (0 when there are none). Never throws: a
+ * missed alert must not fail the thing that already happened — the payout
+ * request is on the record whether or not the bell rings. When nobody can be
+ * told, that is logged loudly, because a queue with no reader is the failure
+ * this exists to prevent.
+ */
+export async function notifyAdmins(input: {
+  title: string;
+  message: string;
+  type?: string;
+  link?: string | null;
+  pushTag?: string;
+}): Promise<number> {
+  try {
+    const admins = await prisma.user.findMany({
+      where: { role: "ADMIN", isBanned: false },
+      select: { id: true },
+    });
+
+    if (admins.length === 0) {
+      console.error(
+        `[Notify] no ADMIN account can be told: "${input.title}" — it exists only in the database now.`
+      );
+      return 0;
+    }
+
+    await Promise.all(
+      admins.map((admin) =>
+        createNotification({ ...input, userId: admin.id }).catch((error) => {
+          console.warn(
+            `[Notify] could not tell admin ${admin.id}:`,
+            (error as Error)?.message
+          );
+          return null;
+        })
+      )
+    );
+
+    return admins.length;
+  } catch (error) {
+    console.warn("[Notify] admin alert failed:", (error as Error)?.message);
+    return 0;
+  }
+}
+
+/**
  * Mirror an existing notification to the device.
  *
  * Use this after a transaction commits when the row was written with

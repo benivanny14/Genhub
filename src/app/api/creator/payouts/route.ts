@@ -11,6 +11,8 @@ import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { requestPayoutSchema } from "@/lib/validation";
 import { requestPayout } from "@/lib/services/payout.service";
+import { notifyAdmins } from "@/lib/services/notify.service";
+import { describePayoutAccount } from "@/lib/payout-account";
 
 export async function POST(request: NextRequest) {
   try {
@@ -35,6 +37,10 @@ export async function POST(request: NextRequest) {
         payoutFrozenUntil: true,
         payoutFrozenReason: true,
         payoutMinimumWaived: true,
+        // Read here rather than in a second query: the admin's alert names who
+        // asked, and a cuid is not a name.
+        displayName: true,
+        email: true,
       },
     });
 
@@ -92,6 +98,38 @@ export async function POST(request: NextRequest) {
         400
       );
     }
+
+    /*
+     * Tell the admins, because THIS is the event their queue exists for.
+     *
+     * The crossing alert (payout-threshold.service.ts) fires when a creator's
+     * balance passes Genhub's floor — which can be days before they ask, and
+     * never at all for an account an admin has allowed to withdraw below the
+     * floor. A request nobody is told about waits until somebody happens to open
+     * the tab, so the request itself is announced, with where the money is going:
+     * that number is the one thing an admin cannot read off the queue without
+     * opening the row.
+     *
+     * Best effort by design — `notifyAdmins` never throws. The request is on the
+     * record whether or not the bell rings, and a creator must not see a failure
+     * for a withdrawal that was, in fact, accepted.
+     */
+    await notifyAdmins({
+      title: "Withdrawal request 💸",
+      message:
+        `${user.displayName || user.email || "A creator"} asked to withdraw ` +
+        `TZS ${outcome.amount.toLocaleString("en-US")} to ${describePayoutAccount({
+          paymentMethod,
+          accountDetails,
+          bankName,
+        })}. Open Admin → Payouts to approve it or send it by hand.`,
+      type: "info",
+      link: "/admin",
+      pushTag: "payout-request",
+      // Belt and braces on a side effect: `notifyAdmins` does not throw today,
+      // and this is the one place where it throwing would tell a creator their
+      // accepted withdrawal failed. The money is already earmarked by now.
+    }).catch(() => 0);
 
     return api.success(
       {

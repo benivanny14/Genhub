@@ -36,6 +36,18 @@ export const MIN_VIDEO_DURATION_SECONDS = 8 * 60;
  */
 export const CREATOR_MIN_WITHDRAWAL_TZS = 30_000;
 
+/**
+ * The creator's share of everything a viewer pays, as a percentage.
+ *
+ * The same promise as config.business.creatorFeePercent — the server's split
+ * point, used by splitRevenue() in balance.service.ts — repeated here because
+ * the dashboard and these guidelines draw it as text, and a screen that says
+ * "70%" beside a settlement running at 60 is a lie with a number in it. Pinned
+ * against config in src/tests/creator-guidelines.test.ts, so the two cannot
+ * drift apart in silence.
+ */
+export const CREATOR_REVENUE_SHARE_PERCENT = 70;
+
 export interface CreatorGuideline {
   /** Stable id — used as the React key and the acknowledgement receipt. */
   id: string;
