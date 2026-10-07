@@ -11,6 +11,13 @@ import path from "node:path";
 
 const envPath = path.resolve(process.cwd(), ".env.local");
 
+/**
+ * NEXT_PUBLIC_APP_URL as the SHELL had it, captured before .env.local is read,
+ * so the rail at the bottom of this file can tell a developer's live URL from one
+ * a test deliberately set.
+ */
+const appUrlFromEnvironment = process.env.NEXT_PUBLIC_APP_URL;
+
 if (fs.existsSync(envPath)) {
   const lines = fs.readFileSync(envPath, "utf8").split(/\r?\n/);
   for (const line of lines) {
@@ -145,4 +152,25 @@ if (testDatabaseUrl && !force) {
       "(a Neon branch works), or set ALLOW_TESTS_ON_EXTERNAL_DB=1 to accept " +
       "that the suite will rewrite whatever DATABASE_URL names.",
   );
+}
+
+// =============================================================================
+// Safety rail: a test run is not a deployment
+//
+// Three routes only exist when config.appUrl is a localhost URL (lib/dev-only.ts)
+// — the demo login, the sandbox payment completion, and the seed script. The
+// payment suites buy and settle through the sandbox one.
+//
+// `.env.local` on a developer's machine can name the live site, and then
+// config.appUrl is `https://…`, the gate closes, and the suites that need it fail
+// with a 403 that has nothing to do with the code under test. Measured before
+// this line existed: two sonicpesa.e2e cases answered 403 where they assert 409,
+// and the sandbox top-up credited nothing to the wallet.
+//
+// So the run gets a laptop URL. A value in the ENVIRONMENT still wins — the same
+// convention as PAYMENT_SANDBOX above — so a test that genuinely needs another
+// URL sets it on the command line and keeps it.
+// =============================================================================
+if (!appUrlFromEnvironment && !isLocal(process.env.NEXT_PUBLIC_APP_URL ?? "")) {
+  process.env.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
 }

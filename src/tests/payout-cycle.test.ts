@@ -298,8 +298,15 @@ describeDb("the payout cycle: sale -> request -> approve -> paid", () => {
     expect(balance.pendingBalance).toBe(0);
     // A payout is money leaving, not income. It is recorded as a request and an
     // audit line, never as an earnings row — a receipt here would inflate the
-    // creator's revenue with their own withdrawal.
-    expect(await prisma.transaction.count({ where: { creatorId: ctx.creatorId } })).toBe(0);
+    // creator's revenue with their own withdrawal. The only transaction on this
+    // account is therefore still the sale from the first step, which is what
+    // makes the count a measurement of the payout rather than of the fixture.
+    const rows = await prisma.transaction.findMany({
+      where: { creatorId: ctx.creatorId },
+      select: { type: true },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].type).toBe("PPV_PURCHASE");
   });
 
   it("refuses a second request while one is still open", async () => {
