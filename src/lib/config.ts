@@ -173,6 +173,20 @@ const config = {
     payoutsEnabled: process.env.SONICPESA_PAYOUTS_ENABLED === "true",
     baseUrl:
       process.env.SONICPESA_BASE_URL || "https://api.sonicpesa.com/api/v1",
+    /*
+     * The smallest payout the gateway will SEND, in TZS.
+     *
+     * This is not `business.minPayoutAmount` (TZS 30,000), which is Genhub's own
+     * withdrawal rule — one an admin can waive for a single creator. This one is
+     * the gateway's: asked to send less, SonicPesa answers "The amount field must
+     * be at least 30000" and moves nothing, and no permission on our side changes
+     * that. It lives here, in config, so the payout service and every screen that
+     * mentions the limit read the same number instead of three copies of 30000.
+     *
+     * The gateway still wins whenever it names a different floor in a reply —
+     * see lib/services/payout-disbursement.service.ts.
+     */
+    minPayoutAmount: Number(process.env.SONICPESA_MIN_PAYOUT || 30000),
     // Shared secret the operator appends to the dashboard webhook URL (?t=…).
     webhookToken: process.env.SONICPESA_WEBHOOK_TOKEN || "",
     // The API requires a buyer email on create_order; this is the address used

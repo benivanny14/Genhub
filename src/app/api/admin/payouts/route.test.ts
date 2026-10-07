@@ -33,6 +33,19 @@ const mocks = vi.hoisted(() => ({
   transaction: vi.fn(),
   notification: vi.fn(),
   audit: vi.fn(),
+  disburse: vi.fn(),
+  // The floor the GATEWAY enforces, which the route reports to the queue. Mocked
+  // with the other half of the service so this file stays a test of the route's
+  // decisions, not of the gateway.
+  gatewayFloor: vi.fn(() => 30_000),
+}));
+
+// The gateway half is exercised in src/tests/payout-disbursement.test.ts. Here
+// only its VERDICT matters, because the decision this route makes about a
+// verdict is the thing under test.
+vi.mock("@/lib/services/payout-disbursement.service", () => ({
+  disbursePayout: (...a: unknown[]) => mocks.disburse(...a),
+  gatewayMinPayout: () => mocks.gatewayFloor(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -138,6 +151,18 @@ describe("GET /api/admin/payouts", () => {
     await get("?status=PENDING,APPROVED");
 
     expect(mocks.count.mock.calls[0][0].where).toEqual(whereOf());
+  });
+
+  it("reports the gateway's own floor, so a small withdrawal can be called one", async () => {
+    // The queue has to say "this one will have to be sent by hand" next to an
+    // amount the gateway refuses. It quotes the gateway's number, read from the
+    // service here rather than written into the admin screen — and the gateway's
+    // floor is not Genhub's waivable one, which is why it travels separately.
+    mocks.gatewayFloor.mockReturnValue(45_000);
+
+    const body = await (await get("?status=PENDING,APPROVED")).json();
+
+    expect(body.data.gatewayMinimum).toBe(45_000);
   });
 });
 
@@ -271,6 +296,49 @@ describe("POST /api/admin/payouts", () => {
     const res = await review({ payoutId: "payout-1", action: "APPROVED" });
 
     expect(res.status).toBe(409);
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it("approves a below-floor withdrawal the gateway will not send, instead of erroring", async () => {
+    // The real case: an admin waives Genhub's TZS 30,000 floor for one creator,
+    // who then asks for the TZS 1,000 they hold. Approving it cannot be sent
+    // automatically — the gateway's own limit is TZS 30,000 — but the money is
+    // perfectly payable by hand, so the decision is recorded and the admin is
+    // told what to do. Answering with an error made it look impossible.
+    existing("PENDING");
+    mocks.disburse.mockResolvedValue({
+      ok: false,
+      reason: "BELOW_GATEWAY_MINIMUM",
+      message:
+        "Automatic payouts cannot send less than TZS 30,000 — that is the payment gateway's own limit, not Genhub's, and it cannot be lifted from here.",
+    });
+
+    const res = await review({ payoutId: "payout-1", action: "APPROVED" });
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(mocks.update.mock.calls[0][0].data.status).toBe("APPROVED");
+    // The admin's only confirmation, so it says why nothing was sent and what to
+    // do instead.
+    expect(body.message).toContain("30,000");
+    expect(body.message).toMatch(/send it yourself/i);
+    // Approving does not move money: the amount stays earmarked.
+    expect(mocks.balanceUpdate).not.toHaveBeenCalled();
+  });
+
+  it("still errors when the gateway refuses for a reason a human cannot fix by paying", async () => {
+    // The distinction that keeps the fallback honest: only a reason that leaves
+    // the money payable by hand is treated as one.
+    existing("PENDING");
+    mocks.disburse.mockResolvedValue({
+      ok: false,
+      reason: "GATEWAY",
+      message: "Invalid account",
+    });
+
+    const res = await review({ payoutId: "payout-1", action: "APPROVED" });
+
+    expect(res.status).toBe(502);
     expect(mocks.update).not.toHaveBeenCalled();
   });
 });

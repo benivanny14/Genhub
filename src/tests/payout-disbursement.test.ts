@@ -39,6 +39,9 @@ const mocks = vi.hoisted(() => ({
       secretKey: "test-webhook-secret",
       webhookToken: "test-webhook-token",
       payoutsEnabled: true,
+      // The gateway's own floor, as configured. Replaced wholesale below, so it
+      // has to be here or every compare against it is against `undefined`.
+      minPayoutAmount: 30_000,
       sandbox: false,
     },
     nodeEnv: "test",
@@ -89,6 +92,9 @@ import {
   disbursePayout,
   settlePayoutFromGateway,
   gatewayPayoutReference,
+  isBelowGatewayMinimum,
+  gatewayFloorFromMessage,
+  gatewayMinPayout,
 } from "@/lib/services/payout-disbursement.service";
 import {
   sonicpesaPayout,
@@ -347,6 +353,96 @@ describe("sending a withdrawal", () => {
     if (!outcome.ok) expect(outcome.reason).toBe("UNSUPPORTED_METHOD");
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  /*
+   * The gateway's own floor, which is not the same thing as ours.
+   *
+   * An admin can waive Genhub's TZS 30,000 withdrawal minimum for one creator
+   * (User.payoutMinimumWaived), and the creator can then request whatever they
+   * hold — but the gateway refuses to SEND less than TZS 30,000. It answered a
+   * real one with "The amount field must be at least 30000". Returning that as a
+   * failure made a perfectly payable withdrawal look impossible; it is a reason
+   * to pay by hand instead.
+   */
+  it("recognises a 'that amount is too small' complaint in the gateway's words", () => {
+    expect(
+      isBelowGatewayMinimum(
+        "Internal server error: The amount field must be at least 30000."
+      )
+    ).toBe(true);
+    expect(isBelowGatewayMinimum("minimum amount for this channel is 1000")).toBe(true);
+    // A real refusal is not a floor complaint and must keep its own handling.
+    expect(isBelowGatewayMinimum("Invalid account")).toBe(false);
+  });
+
+  it("reads the floor out of the gateway's own sentence", () => {
+    // The reply is the current truth about the gateway's limit, so the number in
+    // it is what the admin is told — not the one this deployment happens to carry.
+    expect(
+      gatewayFloorFromMessage(
+        "Internal server error: The amount field must be at least 45000."
+      )
+    ).toBe(45_000);
+    expect(gatewayFloorFromMessage("must be at least 30,000")).toBe(30_000);
+    // A floor complaint with no number must not become one: the caller keeps what
+    // it already had rather than recording a figure invented out of nothing.
+    expect(gatewayFloorFromMessage("amount must be at least the minimum")).toBeNull();
+    expect(gatewayFloorFromMessage("Invalid account")).toBeNull();
+  });
+
+  it("starts from the configured floor", () => {
+    expect(gatewayMinPayout()).toBe(30_000);
+  });
+
+  it("refuses a below-floor payout without asking the gateway at all", async () => {
+    request({ amount: 1_000 }); // the real case: a TZS 1,000 Airtel withdrawal
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const outcome = await disbursePayout({ payoutId: "payout-1", actorId: "admin-1" });
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.reason).toBe("BELOW_GATEWAY_MINIMUM");
+      // The sentence has to name the limit, or the admin cannot tell the
+      // gateway's rule apart from the one an admin is allowed to waive.
+      expect(outcome.message).toContain("30,000");
+    }
+    // Nothing was sent and nothing was written: the request is untouched, so the
+    // admin can approve it and record the receipt from their own phone.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.updateMany).not.toHaveBeenCalled();
+    expect(mocks.balanceUpdate).not.toHaveBeenCalled();
+  });
+
+  it("answers the same way when the gateway itself is the one that says so", async () => {
+    // The floor can move at the gateway; the reply still has to become an
+    // instruction rather than an error.
+    request();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          json(
+            { status: "error", message: "Internal server error: The amount field must be at least 30000." },
+            400
+          )
+        )
+      )
+    );
+
+    const outcome = await disbursePayout({ payoutId: "payout-1", actorId: "admin-1" });
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.reason).toBe("BELOW_GATEWAY_MINIMUM");
+    // The claim is handed back, so a corrected or re-approved request is not
+    // left stuck as "sending".
+    expect(mocks.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { providerStatus: null } })
+    );
+    expect(mocks.balanceUpdate).not.toHaveBeenCalled();
   });
 
   it("hands the claim back when the gateway refuses, so it can be retried", async () => {

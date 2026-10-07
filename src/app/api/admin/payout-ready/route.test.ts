@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   requireRole: vi.fn(),
   balanceFindMany: vi.fn(),
   payoutGroupBy: vi.fn(),
+  gatewayFloor: vi.fn(() => 30_000),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -36,6 +37,12 @@ vi.mock("@/lib/auth", () => ({
   AuthError: class AuthError extends Error {
     statusCode = 403;
   },
+}));
+
+// The only thing this route needs from the payout service is the number the
+// gateway will actually send, so the gateway itself stays out of this file.
+vi.mock("@/lib/services/payout-disbursement.service", () => ({
+  gatewayMinPayout: () => mocks.gatewayFloor(),
 }));
 
 import { GET } from "./route";
@@ -117,6 +124,20 @@ describe("GET /api/admin/payout-ready", () => {
     expect(body.data.totals.belowFloorAmount).toBe(2_450);
     expect(body.data.totals.totalCount).toBe(1);
     expect(body.data.totals.totalAmount).toBe(2_450);
+  });
+
+  it("sends the gateway's floor too, which no waiver can lift", async () => {
+    // Two different limits travel with this list. `minimum` is Genhub's, the one
+    // WAIVE_PAYOUT_MINIMUM lets an admin lift for one creator; `gatewayMinimum`
+    // is the gateway's own, and allowing a small withdrawal does not make it
+    // sendable. The tab that offers the waiver quotes the second one, so it has
+    // to arrive from the server rather than be repeated in the screen.
+    mocks.gatewayFloor.mockReturnValue(45_000);
+
+    const body = await (await get()).json();
+
+    expect(body.data.minimum).toBe(30_000);
+    expect(body.data.gatewayMinimum).toBe(45_000);
   });
 
   it("stops calling a waived account below the floor \"below floor\"", async () => {

@@ -497,6 +497,12 @@ interface PayoutReadyCreator {
 interface PayoutReadyData {
   creators: PayoutReadyCreator[];
   minimum: number;
+  /**
+   * The floor the GATEWAY will send — its own limit, not Genhub's. Optional so a
+   * payload from an older server still renders; the fallback is the number the
+   * gateway has used so far.
+   */
+  gatewayMinimum?: number;
   totals: {
     readyCount: number;
     readyAmount: number;
@@ -1106,6 +1112,14 @@ export default function AdminDashboard() {
   // Creators whose withdrawable balance has reached the floor — the list the
   // admins are pushed to when it changes.
   const [payoutReady, setPayoutReady] = useState<PayoutReadyData | null>(null);
+  /**
+   * The smallest amount the gateway will actually SEND, read from the server
+   * (`/api/admin/payouts` and `/api/admin/payout-ready` both report it) instead of
+   * being written into this screen. Genhub's own withdrawal floor can be waived
+   * for one creator; this one cannot, so every sentence about "you will have to
+   * send this one by hand" has to quote the gateway's number, not a copy of it.
+   */
+  const [gatewayFloor, setGatewayFloor] = useState(30000);
   const [busyPayoutReady, setBusyPayoutReady] = useState<string | null>(null);
   const [paymentList, setPaymentList] = useState<AdminPayment[]>([]);
   // One charge's journey, opened from a row. Read on demand: it is a diagnostic,
@@ -1636,7 +1650,12 @@ export default function AdminDashboard() {
       // again — so the creator's money stayed earmarked indefinitely.
       const res = await adminFetch("/api/admin/payouts?status=PENDING,APPROVED");
       const data = await res.json();
-      if (data.success) setPayoutList(data.data.payouts);
+      if (data.success) {
+        setPayoutList(data.data.payouts);
+        if (typeof data.data.gatewayMinimum === "number") {
+          setGatewayFloor(data.data.gatewayMinimum);
+        }
+      }
     } catch {}
   }
 
@@ -2205,6 +2224,13 @@ export default function AdminDashboard() {
       });
       const data = await res.json();
       if (data.success) {
+        // The server's sentence, shown. It is the only place the admin is told
+        // which of the three things happened — the gateway sent it, the gateway
+        // could not (so a person must, with the receipt), or a decision was
+        // recorded — and the list refreshing on its own said none of that. An
+        // admin who approves a small withdrawal and sees only a silent refresh
+        // has no way to know the money is still sitting in their phone.
+        toast("success", data.message || "Done");
         fetchPayouts();
       } else {
         toast("error", data.error || "Something went wrong");
@@ -2237,7 +2263,12 @@ export default function AdminDashboard() {
     try {
       const res = await adminFetch("/api/admin/payout-ready");
       const data = await res.json();
-      if (data.success) setPayoutReady(data.data);
+      if (data.success) {
+        setPayoutReady(data.data);
+        if (typeof data.data.gatewayMinimum === "number") {
+          setGatewayFloor(data.data.gatewayMinimum);
+        }
+      }
     } catch {}
   }
 
@@ -3697,6 +3728,23 @@ export default function AdminDashboard() {
                         <p className="text-xs text-white/50 mt-1">
                           Method: {payout.paymentMethod} • Account: {payout.accountDetails}
                         </p>
+                        {/* A withdrawal the gateway will not send, said before the
+                            admin presses a button that cannot work. Genhub's own
+                            floor can be waived for one creator, but the gateway's
+                            cannot: it refuses anything under its own floor, so a
+                            small withdrawal is a hand payment. Without this line
+                            the button looks broken and the reason is invisible.
+                            The number comes from the server (`gatewayFloor`), not
+                            from a copy kept in this screen. */}
+                        {payout.amount < gatewayFloor && (
+                          <p className="text-xs text-amber-300/90 mt-1 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                            Under TZS {gatewayFloor.toLocaleString()} — automatic
+                            sending is not possible (the gateway&apos;s own limit).
+                            Send it from your phone, then Mark Paid with the
+                            transaction code.
+                          </p>
+                        )}
                         <p className="text-xs text-white/40">
                           Requested: {new Date(payout.createdAt).toLocaleDateString("en-US")}
                         </p>
@@ -4779,6 +4827,22 @@ export default function AdminDashboard() {
                           their own. “Allow below 30,000” lets that one account
                           take out any amount it holds, and “Require 30,000 again”
                           puts the rule back.
+                        </p>
+                        {/* The limit the waiver does NOT lift. Allowing a small
+                            withdrawal is a decision about Genhub's rule; the
+                            gateway has a floor of its own and answers a smaller
+                            payout with "the amount must be at least …". Said
+                            here, an admin knows before granting it that a small
+                            withdrawal is theirs to send by hand — and the number
+                            quoted is the one the gateway enforces today, sent by
+                            the server rather than copied into this file. */}
+                        <p className="text-xs text-amber-300/80 mt-1 flex items-start gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                          Note: a withdrawal under TZS{" "}
+                          {gatewayFloor.toLocaleString()} cannot be sent
+                          automatically — the payment gateway will not transfer
+                          less than that. Allow it, then pay it from your own
+                          phone and mark it paid with the transaction code.
                         </p>
                       </div>
                       {payoutReady.creators.filter(underWithdrawalFloor).length === 0 ? (

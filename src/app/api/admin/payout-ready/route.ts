@@ -26,6 +26,7 @@ import prisma from "@/lib/db";
 import config from "@/lib/config";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { gatewayMinPayout } from "@/lib/services/payout-disbursement.service";
 
 export async function GET(_request: NextRequest) {
   try {
@@ -105,7 +106,13 @@ export async function GET(_request: NextRequest) {
 
     return api.success({
       creators,
+      // Genhub's own floor — the one WAIVE_PAYOUT_MINIMUM lifts for one creator.
       minimum,
+      // The gateway's floor, which no waiver reaches: money under this cannot be
+      // sent automatically and is paid by hand. Sent with the list so the screen
+      // that offers the waiver can say so, and keeps saying it correctly if the
+      // gateway moves the number.
+      gatewayMinimum: gatewayMinPayout(),
       totals: {
         // At the floor: the money that can leave without an admin doing
         // anything. Kept separate so "ready" keeps its old meaning.

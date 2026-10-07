@@ -65,9 +65,73 @@ export type DisburseOutcome =
         | "WRONG_STATUS"
         | "UNSUPPORTED_METHOD"
         | "IN_FLIGHT"
+        | "BELOW_GATEWAY_MINIMUM"
         | "GATEWAY";
       message: string;
     };
+
+/*
+ * The gateway's own floor for a payout, in TZS.
+ *
+ * This is NOT our withdrawal rule. `config.business.minPayoutAmount` (TZS
+ * 30,000) is Genhub policy, and an admin can waive it for one creator
+ * (User.payoutMinimumWaived) so they can take out the small amount they hold.
+ * That permission lifts OUR rule and nothing else: asked to send less than the
+ * gateway's floor, SonicPesa answers "The amount field must be at least 30000"
+ * and sends nothing.
+ *
+ * The two numbers happen to be the same size today, which is exactly why this
+ * has its own name and its own config key: an admin who waives the floor is
+ * lifting a policy, and no amount of lifting makes the gateway accept a smaller
+ * transfer. A withdrawal under this floor is a hand payment, and knowing the
+ * number before the call is what says so without wasting a request to discover
+ * it.
+ *
+ * The configured value is the starting point, not the last word.
+ */
+
+/**
+ * A floor the GATEWAY named in a reply, once one has been seen.
+ *
+ * SonicPesa answers a too-small payout with the number in the sentence ("must be
+ * at least 30000"). That reply is the truth about its own limit, so it is kept
+ * for the life of the process: the next small withdrawal is answered from it,
+ * without another call, and the number the admin reads is the number the gateway
+ * actually enforces rather than the one we shipped with. In-memory on purpose —
+ * it is a cache of a fact the next request would re-learn anyway, not state that
+ * needs to survive a restart.
+ */
+let observedGatewayFloor: number | null = null;
+
+/** The floor to apply right now: what the gateway last told us, else config. */
+export function gatewayMinPayout(): number {
+  return observedGatewayFloor ?? config.sonicPesa.minPayoutAmount;
+}
+
+/**
+ * The floor named in a gateway complaint, if it named one.
+ *
+ * Returns null when the message is a floor complaint that carries no number, so
+ * the caller keeps the value it already had instead of recording a nonsense one.
+ */
+export function gatewayFloorFromMessage(message: string): number | null {
+  const match = /at least\s*([\d,\s]+)/i.exec(message);
+  if (!match) return null;
+  const digits = match[1].replace(/[^\d]/g, "");
+  const value = Number(digits);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/**
+ * Does this gateway complaint mean "that amount is too small to send"?
+ *
+ * Recognised from the reply itself, not only from the configured floor, so a
+ * limit that is raised or lowered at the gateway is still answered with the
+ * honest instruction (send it by hand) instead of a bare failure.
+ */
+export function isBelowGatewayMinimum(message: string): boolean {
+  return /must be at least/i.test(message) || /minimum amount/i.test(message);
+}
 
 /**
  * Our payout method -> the gateway's, or a refusal.
@@ -192,6 +256,23 @@ export async function disbursePayout(params: DisburseParams): Promise<DisburseOu
     (payout.creator?.email || "").split("@")[0] ||
     "Genhub creator";
 
+  // Below the gateway's floor. Answered BEFORE the claim and before the call,
+  // because there is nothing to discover: this payout cannot be sent
+  // automatically at any point, and the admin's next move is the same one — pay
+  // it from the phone and record the receipt. Reported as a reason rather than a
+  // failure, so the admin route records the approval and says what to do instead
+  // of showing an error for money that is perfectly payable by hand.
+  const floor = gatewayMinPayout();
+  if (payout.amount < floor) {
+    return {
+      ok: false,
+      reason: "BELOW_GATEWAY_MINIMUM",
+      message:
+        `Automatic payouts cannot send less than TZS ${floor.toLocaleString()} — ` +
+        "that is the payment gateway's own limit, not Genhub's, and it cannot be lifted from here.",
+    };
+  }
+
   // Claim the row BEFORE calling the gateway. Two callers racing here both
   // cannot win: the second sees a row that is no longer claimable and stops
   // without sending anything. `providerStatus: "sending"` is a marker, not a
@@ -220,6 +301,16 @@ export async function disbursePayout(params: DisburseParams): Promise<DisburseOu
     });
   } catch (error) {
     const reason = sonicpesaErrorReason(error);
+    // A "too small to send" complaint is not a failure of this payout: it is a
+    // limit of the gateway, and the request is still payable by hand. Handled
+    // here as well as above, so a minimum that moves at the gateway does not turn
+    // into an error the admin cannot act on.
+    const belowMinimum = isBelowGatewayMinimum(reason);
+    // Believe the number the gateway named over the one we were configured with:
+    // its reply is the current truth about its own limit, and remembering it means
+    // the next small payout is answered here instead of by another doomed call.
+    const namedFloor = belowMinimum ? gatewayFloorFromMessage(reason) : null;
+    if (namedFloor !== null) observedGatewayFloor = namedFloor;
     // Hand the claim back so the admin can correct the number and retry. No
     // money moved and no balance changed: this is a refusal, not a failure.
     await prisma.payoutRequest
@@ -234,16 +325,34 @@ export async function disbursePayout(params: DisburseParams): Promise<DisburseOu
       action: AUDIT_ACTIONS.payoutApprove,
       targetType: "PayoutRequest",
       targetId: payoutId,
-      summary: `Gateway refused the payout of TZS ${payout.amount.toLocaleString()}: ${reason}`,
+      summary: belowMinimum
+        ? `The gateway will not send TZS ${payout.amount.toLocaleString()} automatically (it needs at least TZS ${gatewayMinPayout().toLocaleString()}), so this one has to be paid by hand`
+        : `Gateway refused the payout of TZS ${payout.amount.toLocaleString()}: ${reason}`,
       detail: {
         amount: payout.amount,
         creatorId: payout.creatorId,
         paymentMethod: payout.paymentMethod,
         gatewayMethod: method,
         gatewayError: reason,
+        // "Nothing moved" is true either way: a refused send never reaches the
+        // network, which is what makes a hand payment safe here.
         moneyMoved: false,
+        belowGatewayMinimum: belowMinimum,
+        // Recorded separately so a floor that MOVED is visible in the log rather
+        // than looking like the configured one was always right.
+        gatewayFloor: namedFloor,
       },
     });
+
+    if (belowMinimum) {
+      return {
+        ok: false,
+        reason: "BELOW_GATEWAY_MINIMUM",
+        message:
+          `Automatic payouts cannot send less than TZS ${gatewayMinPayout().toLocaleString()} — ` +
+          "that is the payment gateway's own limit, not Genhub's, and it cannot be lifted from here.",
+      };
+    }
 
     return { ok: false, reason: "GATEWAY", message: reason };
   }

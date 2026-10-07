@@ -11,7 +11,10 @@ import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import { createNotification } from "@/lib/services/notify.service";
-import { disbursePayout } from "@/lib/services/payout-disbursement.service";
+import {
+  disbursePayout,
+  gatewayMinPayout,
+} from "@/lib/services/payout-disbursement.service";
 import { z } from "zod";
 import { intParam } from "@/lib/utils";
 
@@ -62,6 +65,12 @@ export async function GET(request: NextRequest) {
     return api.success({
       payouts,
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+      // The floor the GATEWAY will send, so the queue can say "this one is a hand
+      // payment" next to the amount instead of repeating the number in the
+      // client, where it would go stale the day SonicPesa changes theirs. Not
+      // `config.business.minPayoutAmount`: that one an admin can waive, this one
+      // nobody can.
+      gatewayMinimum: gatewayMinPayout(),
     });
   } catch (error) {
     if (error instanceof AuthError) {
@@ -175,7 +184,20 @@ export async function POST(request: NextRequest) {
     // Reasons the gateway cannot take this payout, which are not failures of the
     // request: the admin sends it by hand exactly as before and says so with the
     // receipt. Everything else is a real refusal and the request stays open.
-    const GATEWAY_CANNOT_TAKE_IT = ["NOT_ENABLED", "NOT_CONFIGURED", "UNSUPPORTED_METHOD"];
+    //
+    // BELOW_GATEWAY_MINIMUM belongs on this list, and the reason it exists is
+    // worth stating: an admin can waive Genhub's own TZS 30,000 withdrawal floor
+    // for one creator, which lets them request a smaller amount — but the
+    // gateway will not SEND less than TZS 30,000, whatever we have agreed to
+    // internally. Returning an error for that made a hand-payable withdrawal look
+    // impossible; approving it records the decision and tells the admin to pay it
+    // from the phone and mark it paid with the receipt.
+    const GATEWAY_CANNOT_TAKE_IT = [
+      "NOT_ENABLED",
+      "NOT_CONFIGURED",
+      "UNSUPPORTED_METHOD",
+      "BELOW_GATEWAY_MINIMUM",
+    ];
     /** Set when the payout was sent automatically, for the response sentence. */
     let sent: { netAmount: number; withdrawalId: number } | null = null;
     /** Set when automated payouts could not be used, so a human must send it. */
