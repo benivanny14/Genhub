@@ -620,6 +620,15 @@ export default function Header() {
                 </span>
               </Link>
             )}
+            {/* The bell, on the phone.
+
+                It lived only in the desktop nav (`hidden md:flex`), so on a
+                handset — which is where most of this platform is read — there
+                was NO notification surface at all: an admin could reject a
+                withdrawal with a reason written out in words and the creator
+                had nothing to open. It sits here, beside the menu button, so
+                the badge is visible on every page without opening anything. */}
+            {user && <NotificationBell />}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 rounded-xl hover:bg-white/10 shrink-0"
@@ -714,6 +723,9 @@ export default function Header() {
                 <Link href="/inbox" className="btn-ghost w-full flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
                   <MessageSquare className="w-5 h-5" /> Inbox
                   <InboxUnreadBadge className="ml-auto" />
+                </Link>
+                <Link href="/notifications" className="btn-ghost w-full flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
+                  <Bell className="w-5 h-5" /> {t("nav.notifications")}
                 </Link>
                 <Link href="/wallet" className="btn-ghost w-full flex items-center gap-3" onClick={() => setMobileMenuOpen(false)}>
                   <Wallet className="w-5 h-5" /> {t("nav.wallet")}

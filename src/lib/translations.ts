@@ -17,6 +17,7 @@ export const translations: Record<string, Record<Locale, string>> = {
   "nav.myProfile": { en: "My Profile", sw: "Wasifu Wangu" },
   "nav.dashboard": { en: "Dashboard", sw: "Dashibodi" },
   "nav.admin": { en: "Admin Panel", sw: "Paneli ya Admin" },
+  "nav.notifications": { en: "Notifications", sw: "Taarifa" },
 
   // Home
   "home.heroTitle": { en: "Videos by Tanzanian Creators", sw: "Video za Creators wa Kitanzania" },

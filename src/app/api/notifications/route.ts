@@ -10,15 +10,23 @@ import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
+import { intParam } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAuth();
 
+    // How many to return. The bell asks for the default (50); the
+    // /notifications page asks for more, because that page IS the history and
+    // stopping it at a drop-down's worth of rows is what keeps a creator from
+    // finding the reason their withdrawal was rejected. Clamped, so a query
+    // string cannot turn this into an unbounded read.
+    const limit = intParam(request.nextUrl.searchParams.get("limit"), 50, 200);
+
     const notifications = await prisma.notification.findMany({
       where: { userId: auth.userId },
       orderBy: { createdAt: "desc" },
-      take: 50,
+      take: limit,
     });
 
     const unreadCount = await prisma.notification.count({

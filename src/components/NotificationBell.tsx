@@ -3,9 +3,13 @@
 import { useState, useEffect, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Bell, CheckCheck, Inbox } from "lucide-react";
+import { Bell, CheckCheck, Inbox, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/lib/ThemeProvider";
+import {
+  formatNotificationAge,
+  notificationHref,
+} from "@/lib/notification-view";
 
 interface Notification {
   id: string;
@@ -129,21 +133,13 @@ export default function NotificationBell() {
       }).catch(() => {});
     }
 
-    if (n.link) {
+    // Only an in-app path is followed — see notificationHref(). A row with no
+    // usable link still marks itself read instead of pretending to be a button.
+    const href = notificationHref(n.link);
+    if (href) {
       setOpen(false);
-      router.push(n.link);
+      router.push(href);
     }
-  }
-
-  function formatTime(dateStr: string) {
-    const diff = Date.now() - new Date(dateStr).getTime();
-    const mins = Math.floor(diff / 60000);
-    if (mins < 1) return "just now";
-    if (mins < 60) return `${mins}m ago`;
-    const hours = Math.floor(mins / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
   }
 
   return (
@@ -207,15 +203,19 @@ export default function NotificationBell() {
                 </p>
               </div>
             ) : (
-              notifications.map((n) => (
+              notifications.map((n) => {
+                // The link the row would actually follow, checked here so the
+                // hover state and the title promise nothing the tap will not do.
+                const href = notificationHref(n.link);
+                return (
                 <button
                   key={n.id}
                   type="button"
                   onClick={() => openNotification(n)}
-                  title={n.link ? `Open ${n.link}` : undefined}
+                  title={href ? `Open ${href}` : undefined}
                   className={cn(
                     "w-full text-left px-4 py-3 border-b last:border-b-0 transition",
-                    n.link ? "cursor-pointer hover:bg-brand-500/10" : "cursor-default",
+                    href ? "cursor-pointer hover:bg-brand-500/10" : "cursor-default",
                     isLight
                       ? `border-gray-50 ${n.isRead ? "bg-white" : "bg-brand-50/50"}`
                       : `border-white/5 ${n.isRead ? "bg-transparent" : "bg-brand-500/5"}`
@@ -233,14 +233,33 @@ export default function NotificationBell() {
                         {n.message}
                       </p>
                       <p className={cn("text-[10px] mt-1", isLight ? "text-gray-400" : "text-white/30")}>
-                        {formatTime(n.createdAt)}
+                        {formatNotificationAge(n.createdAt)}
                       </p>
                     </div>
                   </div>
                 </button>
-              ))
+                );
+              })
             )}
           </div>
+
+          {/* The bell is a glance at the newest few; this is the door to the
+              rest. Without it the 51st notification — which may be the one that
+              says why a withdrawal was rejected — was unreachable, because the
+              drop-down ended and there was no page to open. */}
+          <Link
+            href="/notifications"
+            onClick={() => setOpen(false)}
+            className={cn(
+              "flex items-center justify-between gap-2 px-4 py-3 border-t text-xs font-medium transition hover:text-brand-400",
+              isLight
+                ? "border-gray-100 text-gray-600 bg-gray-50"
+                : "border-white/5 text-white/60 bg-white/[0.02]"
+            )}
+          >
+            See all notifications
+            <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
         </div>
       )}
     </div>

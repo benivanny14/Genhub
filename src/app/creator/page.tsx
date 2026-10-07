@@ -949,6 +949,12 @@ export default function CreatorDashboard() {
   const pendingPayout = (creatorData?.payouts || []).find(
     (p) => p.status === "PENDING" || p.status === "APPROVED"
   );
+  // The most recent refusal, for the notice below. Only the newest one: a
+  // creator with three old rejections needs to read the last decision, not a
+  // pile of history on a card about money they can withdraw now.
+  const lastRejectedPayout = (creatorData?.payouts || []).find(
+    (p) => p.status === "REJECTED"
+  );
   //
   // Why a withdrawal cannot be requested yet, in the creator's own words.
   //
@@ -995,6 +1001,25 @@ export default function CreatorDashboard() {
       text: `A withdrawal of ${formatTZS(pendingPayout.amount)} is ${
         pendingPayout.status === "PENDING" ? "waiting to be reviewed" : "approved and being sent"
       }. One request at a time — it is listed under Withdrawals below.`,
+    });
+  }
+  // A rejection, told here rather than only in the notification the creator may
+  // never have opened. The admin writes a reason when they refuse a withdrawal —
+  // that reason is the whole answer to "why did my money come back?" — and
+  // until now it lived in one notification row (on a phone, in a bell that was
+  // not rendered at all) and a small red line inside the payout list. The
+  // decision is about the money, so it is said on the money card, with a way to
+  // read the full message.
+  if (lastRejectedPayout) {
+    withdrawalBlockers.push({
+      text:
+        `Your withdrawal of ${formatTZS(lastRejectedPayout.amount)} was rejected` +
+        (lastRejectedPayout.adminNote
+          ? `: ${lastRejectedPayout.adminNote}.`
+          : " and an admin did not write a reason.") +
+        " The money went back into your available balance, so it is yours and can be requested again.",
+      href: "/notifications",
+      linkLabel: "Read the message",
     });
   }
 
@@ -1927,9 +1952,12 @@ export default function CreatorDashboard() {
                           .
                         </p>
                       )}
-                    {payout.status === "REJECTED" && payout.adminNote && (
+                    {payout.status === "REJECTED" && (
                       <p className="text-xs text-red-400/80 mt-0.5">
-                        Reason: {payout.adminNote}
+                        {payout.adminNote
+                          ? `Reason: ${payout.adminNote}`
+                          : "No reason was written — ask support if this is unclear."}{" "}
+                        The money is back in your available balance.
                       </p>
                     )}
                   </div>
