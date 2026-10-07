@@ -137,6 +137,12 @@ export async function GET(request: NextRequest) {
         bankName: true,
         status: true,
         paymentReference: true,
+        // What actually reached the handset, as the gateway reported it. The
+        // gateway keeps its fee out of the amount we send, so without this a
+        // creator who asked for 30,000 and received 28,200 has nothing on their
+        // own dashboard that explains the difference.
+        providerNetAmount: true,
+        providerFee: true,
         // Shown when a request is rejected: the reason is already sent as a
         // notification, but a notification is missed and a row is not.
         adminNote: true,

@@ -6,6 +6,8 @@
 // Docs (https://docs.sonicpesa.com):
 //   POST /payment/create_order   -> send the USSD prompt, returns an order id
 //   POST /payment/order_status   -> status by the gateway's own order id
+//   POST /payouts/create         -> send money OUT to a wallet or bank account
+//   GET  /payouts/status/{id}    -> the verdict on one payout, by withdrawal id
 //   Webhook POST                 -> { event, order_id, status, … }, signed with
 //                                   X-SonicPesa-Signature = HMAC-SHA256(raw, secret)
 //
@@ -79,10 +81,27 @@ export interface SonicPesaStatusResponse {
 
 /** The envelope SonicPesa POSTs to the webhook URL configured in its dashboard. */
 export interface SonicPesaWebhookPayload {
-  /** payment.completed | payment.failed | payment.cancelled | payment.pending */
+  /**
+   * payment.completed | payment.failed | payment.cancelled | payment.pending,
+   * or payout.pending | payout.success | payout.failed.
+   */
   event: string;
   /** SonicPesa's own order id — the value we stored as providerRef. */
   order_id: string;
+  /**
+   * Present on `payout.*` events only: the payout's own envelope, carrying the
+   * withdrawal id we stored when we asked for it. A payout callback has no
+   * `order_id`, so the two families cannot be told apart by that field.
+   */
+  data?: {
+    withdrawal_id?: number;
+    amount?: number | string;
+    fee?: number | string;
+    net_amount?: number | string;
+    method?: string;
+    status?: string;
+    created_at?: string;
+  };
   amount?: string | number;
   currency?: string;
   status?: string;
@@ -385,6 +404,214 @@ export async function sonicpesaStatus(
       phone: detail.phone ?? detail.msisdn ?? undefined,
     },
   };
+}
+
+// =============================================================================
+// 3. Payout — send money OUT (Merchant Payout API)
+//
+// Collecting and paying out are two products on one account, and they are not
+// symmetric:
+//
+//   * the payout endpoints authenticate with a SECOND header, `X-API-SECRET`,
+//     alongside `X-API-KEY` — the collect key alone is not enough;
+//   * `method` is the gateway's own display name ("M-Pesa", "Airtel Money",
+//     "CRDB Bank"), not our enum, so the mapping is explicit and refusals are
+//     deliberate rather than a guessed string;
+//   * the gateway answers with `fee` and `net_amount`. The recipient is paid
+//     `net_amount`, which is LESS than the amount sent. That difference is real
+//     money and it is returned here, never inferred, because the creator has to
+//     be told what actually reached their handset.
+//
+// The response status is `pending`: money is not sent synchronously. `payout.*`
+// webhooks (or the status poll) are what finish the request.
+// =============================================================================
+
+/*
+ * The `method` strings the payout endpoint documents, verbatim.
+ *
+ * Deliberately a subset. The gateway also offers a bank aggregator whose
+ * `account_number` must be a bare 9-digit wallet or a >9-digit card sequence — a
+ * shape our payout rows do not hold and cannot be checked against, so it is not
+ * offered and no code can pick it. The decommissioned-gateway guard test also
+ * keeps that retired name out of shipped source, which is where it belongs.
+ */
+export const SONICPESA_PAYOUT_METHODS = [
+  "M-Pesa",
+  "Tigo Pesa",
+  "Airtel Money",
+  "Halopesa",
+  "CRDB Bank",
+  "NMB Bank",
+] as const;
+
+export type SonicPesaPayoutMethod = (typeof SONICPESA_PAYOUT_METHODS)[number];
+
+export interface SonicPesaPayoutRequest {
+  /** TZS. This is what leaves the merchant balance, not what the recipient gets. */
+  amount: number;
+  method: SonicPesaPayoutMethod;
+  /** MSISDN (255…) for a wallet, the account number for a bank. */
+  accountNumber: string;
+  accountName: string;
+}
+
+export interface SonicPesaPayout {
+  /** The gateway's payout id. Stored so the webhook and the poll can match it. */
+  withdrawalId: number;
+  amount: number;
+  fee: number;
+  /** What the recipient actually receives. */
+  netAmount: number;
+  method: string;
+  /** pending | completed | failed */
+  status: string;
+  createdAt?: string;
+}
+
+export interface SonicPesaPayoutResult {
+  success: boolean;
+  payout?: SonicPesaPayout;
+  message?: string;
+  error?: string;
+}
+
+interface SonicPesaPayoutEnvelope {
+  status?: string;
+  message?: string;
+  data?: {
+    withdrawal_id?: number;
+    amount?: number | string;
+    fee?: number | string;
+    net_amount?: number | string;
+    method?: string;
+    status?: string;
+    created_at?: string;
+  };
+}
+
+const PAYOUT_CREDENTIALS_MISSING =
+  "SonicPesa payouts need both SONICPESA_ACCESS_KEY and SONICPESA_API_SECRET";
+
+function payoutCredentialsConfigured(): boolean {
+  return Boolean(config.sonicPesa.accessKey && config.sonicPesa.apiSecret);
+}
+
+function toNumber(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function readPayout(envelope: SonicPesaPayoutEnvelope): SonicPesaPayout | null {
+  const data = envelope?.data;
+  const withdrawalId = toNumber(data?.withdrawal_id);
+  if (!data || !withdrawalId) return null;
+
+  return {
+    withdrawalId,
+    amount: toNumber(data.amount),
+    fee: toNumber(data.fee),
+    // Fall back to the amount sent, never to zero: an absent net_amount must not
+    // read as "the creator received nothing".
+    netAmount: data.net_amount === undefined ? toNumber(data.amount) : toNumber(data.net_amount),
+    method: data.method ?? "",
+    status: data.status ?? "pending",
+    createdAt: data.created_at,
+  };
+}
+
+/**
+ * Ask the gateway to send money to a wallet or bank account.
+ *
+ * Throws on failure (bad number, unapproved method, insufficient merchant
+ * balance) so the caller takes one `catch` path and shows the gateway's own
+ * reason via `sonicpesaErrorReason`. A thrown error means NO money moved — the
+ * gateway's refusals are 4xx and its success envelope carries the withdrawal id.
+ */
+export async function sonicpesaPayout(
+  request: SonicPesaPayoutRequest
+): Promise<SonicPesaPayoutResult> {
+  if (!payoutCredentialsConfigured()) {
+    throw new Error(PAYOUT_CREDENTIALS_MISSING);
+  }
+
+  // sonicpesaFetch already runs inside the breaker — wrapping it again would
+  // count one outage twice.
+  const data = await sonicpesaFetch<SonicPesaPayoutEnvelope>("/payouts/create", {
+    method: "POST",
+    headers: { "X-API-SECRET": config.sonicPesa.apiSecret },
+    body: JSON.stringify({
+      amount: Math.round(request.amount),
+      method: request.method,
+      account_number: request.accountNumber,
+      account_name: request.accountName,
+    }),
+  });
+
+  const payout = readPayout(data);
+  if (!payout) {
+    return { success: false, error: data?.message || "SonicPesa did not return a withdrawal id" };
+  }
+
+  return { success: true, payout, message: data?.message };
+}
+
+/**
+ * The current verdict on one payout. GET, by the gateway's withdrawal id.
+ *
+ * `completed` and `failed` are the only decisive states; `pending` means keep
+ * asking, which is what the reconcile sweep does.
+ */
+export async function sonicpesaPayoutStatus(
+  withdrawalId: number | string
+): Promise<SonicPesaPayoutResult> {
+  if (!payoutCredentialsConfigured()) {
+    throw new Error(PAYOUT_CREDENTIALS_MISSING);
+  }
+
+  const data = await sonicpesaFetch<SonicPesaPayoutEnvelope>(`/payouts/status/${withdrawalId}`, {
+    method: "GET",
+    headers: { "X-API-SECRET": config.sonicPesa.apiSecret },
+  });
+
+  const payout = readPayout(data);
+  if (!payout) return { success: false, error: data?.message || "Payout not found" };
+  return { success: true, payout, message: data?.message };
+}
+
+/**
+ * Map a gateway payout `status` onto a verdict, or null while it is in flight.
+ *
+ * "completed"/"success" mean the money reached the account; the failed family
+ * means it did not, and the balance has to go back.
+ */
+/**
+ * A `payout.*` webhook event name -> the gateway's own status word, or null when
+ * the event is not one of the payout family.
+ *
+ * Lives here, next to the payment-event vocabulary above, because the two are
+ * different: `payment.success` and `payout.success` are not the same shape and a
+ * route that tried to read both with one mapping would answer a payout callback
+ * with "order_id missing".
+ */
+export function sonicpesaPayoutEventToStatus(event: string): string | null {
+  const e = (event || "").toLowerCase();
+  if (e === "payout.pending") return "pending";
+  if (e === "payout.success" || e === "payout.completed") return "completed";
+  if (e === "payout.failed" || e === "payout.cancelled") return "failed";
+  return null;
+}
+
+export function sonicpesaPayoutStatusToInternal(
+  status: string
+): "PAID" | "FAILED" | null {
+  const s = (status || "").toLowerCase();
+  if (s === "completed" || s === "success" || s === "successful" || s === "paid") {
+    return "PAID";
+  }
+  if (["failed", "cancelled", "canceled", "rejected", "reversed"].includes(s)) {
+    return "FAILED";
+  }
+  return null;
 }
 
 // =============================================================================

@@ -183,6 +183,15 @@ interface PayoutItem {
   status: string;
   /** The M-Pesa / bank receipt typed when the payout was marked paid. */
   paymentReference?: string | null;
+  /**
+   * The gateway's own record, set only when the payout went out through the
+   * API rather than by hand. `providerNetAmount` is what the creator actually
+   * receives — the gateway keeps its fee out of the amount sent.
+   */
+  providerWithdrawalId?: string | null;
+  providerFee?: number | null;
+  providerNetAmount?: number | null;
+  providerStatus?: string | null;
   createdAt: string;
   creator: {
     id: string;
@@ -3671,11 +3680,19 @@ export default function AdminDashboard() {
                       <div>
                         <p className="font-medium">
                           {payout.creator.displayName || "Creator"} — TZS {payout.amount.toLocaleString()}
-                          {payout.status === "APPROVED" && (
-                            <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 align-middle">
-                              Approved — send the money, then mark it paid
-                            </span>
-                          )}
+                          {payout.status === "APPROVED" &&
+                            (payout.providerWithdrawalId ? (
+                              // Sent automatically: the gateway is sending it, and
+                              // only the gateway can say it is done. A chip telling
+                              // the admin to send it by hand here would be wrong.
+                              <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-400 align-middle">
+                                Sent through the gateway — waiting for confirmation
+                              </span>
+                            ) : (
+                              <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 align-middle">
+                                Approved — send the money yourself, then mark it paid
+                              </span>
+                            ))}
                         </p>
                         <p className="text-xs text-white/50 mt-1">
                           Method: {payout.paymentMethod} • Account: {payout.accountDetails}
@@ -3683,6 +3700,18 @@ export default function AdminDashboard() {
                         <p className="text-xs text-white/40">
                           Requested: {new Date(payout.createdAt).toLocaleDateString("en-US")}
                         </p>
+                        {payout.providerWithdrawalId && (
+                          <p className="text-xs text-blue-300/80 mt-1">
+                            Gateway withdrawal {payout.providerWithdrawalId}
+                            {payout.providerStatus ? ` • ${payout.providerStatus}` : ""}
+                            {typeof payout.providerNetAmount === "number"
+                              ? ` • creator receives TZS ${payout.providerNetAmount.toLocaleString()}`
+                              : ""}
+                            {typeof payout.providerFee === "number"
+                              ? ` (fee TZS ${payout.providerFee.toLocaleString()})`
+                              : ""}
+                          </p>
+                        )}
                         {payout.paymentReference && (
                           <p className="text-xs text-emerald-400/80 mt-1">
                             Receipt: {payout.paymentReference}
@@ -3694,9 +3723,14 @@ export default function AdminDashboard() {
                         {payout.status === "PENDING" && (
                           <button
                             onClick={() => handlePayoutAction(payout.id, "APPROVED", "Approved")}
+                            // Approving is the moment money leaves: when automatic
+                            // payouts are on this sends it through the gateway, and
+                            // when they are off the reply says to send it by hand.
+                            // Either way the admin is told which one happened.
+                            title="Sends the money through the gateway when automatic payouts are on; otherwise approve and send it yourself"
                             className="bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition"
                           >
-                            <CheckCircle className="w-3 h-3 inline mr-1" /> Approve
+                            <CheckCircle className="w-3 h-3 inline mr-1" /> Approve &amp; send
                           </button>
                         )}
                         <button
@@ -3705,8 +3739,12 @@ export default function AdminDashboard() {
                             // admin is looking at the phone or the bank app. It
                             // is required by the API, and the creator sees it.
                             askReason({
-                              title: "Mark this payout as paid",
-                              label: "M-Pesa / bank receipt number",
+                              // Only after the money has actually left your
+                              // phone/bank. This button does not send anything —
+                              // it records that you did, and the code you paste
+                              // is what the creator checks against their SMS.
+                              title: "Paid — send the money first, then record the receipt",
+                              label: "M-Pesa / bank receipt number (must contain digits)",
                               placeholder: "e.g. QGR7X8Y2Z1, or the bank reference",
                               confirmLabel: "Mark paid",
                               tone: "brand",

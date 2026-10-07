@@ -595,6 +595,20 @@ model PayoutRequest {
   /// without it "PAID" is just an admin's word. Null while a request is PENDING
   /// or APPROVED.
   paymentReference String?
+  /// The gateway's own payout id, from POST /payouts/create. This is the key the
+  /// payout webhook and the status poll match on, so a row that was actually sent
+  /// through SonicPesa is identifiable from a row an admin sent by hand
+  /// (which leaves this null). Also what makes re-sending the same request
+  /// impossible: a second create would mint a second id and pay twice.
+  providerWithdrawalId String?
+  /// The gateway's fee and the amount that reached the creator, copied from its
+  /// own response. The recipient is paid `providerNetAmount`, which is less than
+  /// `amount` — a real difference that has to be a number, not an assumption.
+  providerFee        Int?
+  providerNetAmount  Int?
+  /// The gateway's last word on this payout (pending/completed/failed), kept so
+  /// the admin can see what the network said without leaving the queue.
+  providerStatus     String?
   processedBy    String?
   processedAt    DateTime?
   createdAt      DateTime     @default(now())
@@ -607,6 +621,7 @@ model PayoutRequest {
   @@index([creatorId])
   @@index([status])
   @@index([createdAt])
+  @@index([providerWithdrawalId])
 }
 
 // =============================================================================

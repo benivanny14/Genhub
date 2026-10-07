@@ -29,7 +29,8 @@ import config from "@/lib/config";
 import { readRawBodyCapped, MAX_WEBHOOK_BODY_BYTES } from "@/lib/request-body";
 import { processPaymentWebhook } from "@/lib/services/webhook.service";
 import type { SonicPesaWebhookPayload } from "@/lib/payments/sonicpesa";
-import { sonicpesaStatusToInternal } from "@/lib/payments/sonicpesa";
+import { sonicpesaStatusToInternal, sonicpesaPayoutEventToStatus } from "@/lib/payments/sonicpesa";
+import { settlePayoutFromGateway } from "@/lib/services/payout-disbursement.service";
 import {
   PAYMENT_EVENT,
   recordPaymentEvent,
@@ -46,6 +47,7 @@ function statusFromEvent(event: string, status: string | undefined) {
   if (e === "payment.failed" || e === "payment.cancelled") return "FAILED" as const;
   return null;
 }
+
 
 export async function POST(request: NextRequest) {
   try {
@@ -111,6 +113,34 @@ export async function POST(request: NextRequest) {
 
     if (!payload || typeof payload !== "object") {
       return NextResponse.json({ error: "Empty body" }, { status: 400 });
+    }
+
+    /*
+     * Payouts ride the same endpoint but are a different envelope: no order_id,
+     * and the id we match on is `data.withdrawal_id` — the gateway id we stored
+     * when we asked it to send. Handled before the order_id requirement below,
+     * because a payout callback has none and would otherwise be answered with a
+     * 400 that the gateway would keep retrying.
+     */
+    const payoutStatus = sonicpesaPayoutEventToStatus(payload.event);
+    if (payoutStatus) {
+      const withdrawalId = payload.data?.withdrawal_id;
+      if (!withdrawalId) {
+        console.warn(`[SonicPesa Webhook] Payout event with no withdrawal_id: ${payload.event}`);
+        return NextResponse.json({ status: "ok" });
+      }
+
+      const settlement = await settlePayoutFromGateway({
+        withdrawalId,
+        gatewayStatus: payload.data?.status || payoutStatus,
+        source: "webhook",
+        fee: payload.data?.fee === undefined ? undefined : Number(payload.data.fee),
+        netAmount:
+          payload.data?.net_amount === undefined ? undefined : Number(payload.data.net_amount),
+      });
+
+      console.log(`[SonicPesa Webhook] Payout ${withdrawalId}: ${settlement.detail}`);
+      return NextResponse.json({ status: "ok" });
     }
 
     // SonicPesa names the field `order_id`; accept a camelCase sibling too so a

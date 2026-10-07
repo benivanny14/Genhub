@@ -151,6 +151,26 @@ const config = {
     accessKey: process.env.SONICPESA_ACCESS_KEY || "",
     // Signs every inbound webhook (HMAC-SHA256 over the raw body).
     secretKey: process.env.SONICPESA_SECRET_KEY || "",
+    /*
+     * The second header the PAYOUT endpoints require (`X-API-SECRET`).
+     *
+     * SonicPesa calls this "the API secret" in two places — it is what signs
+     * webhooks (above) and what authenticates a payout — so when its own variable
+     * is not set, the webhook secret is used. That is a deliberate default and
+     * not a silent conflation: paying with an unexpected secret is refused by the
+     * gateway with a 401 BEFORE any money moves, doesn't trip the breaker, and
+     * says so in the admin's reply. Set SONICPESA_API_SECRET if the dashboard
+     * shows a different value for payouts.
+     */
+    apiSecret: process.env.SONICPESA_API_SECRET || process.env.SONICPESA_SECRET_KEY || "",
+    /*
+     * Sending money out is a different product from taking it in, and it has a
+     * different permission on the SonicPesa account. So it is its own switch,
+     * default OFF: with it off nothing in the app can call the payout endpoint,
+     * and an admin who approves a withdrawal gets the honest answer ("send this
+     * by hand") rather than a half-wired automated path that moves money.
+     */
+    payoutsEnabled: process.env.SONICPESA_PAYOUTS_ENABLED === "true",
     baseUrl:
       process.env.SONICPESA_BASE_URL || "https://api.sonicpesa.com/api/v1",
     // Shared secret the operator appends to the dashboard webhook URL (?t=…).
@@ -262,6 +282,11 @@ export function productionConfigWarnings(): string[] {
   if (!config.sonicPesa.secretKey) {
     warnings.push(
       "SONICPESA_SECRET_KEY is empty — payment webhooks would be accepted without proof they came from SonicPesa"
+    );
+  }
+  if (config.sonicPesa.payoutsEnabled && !config.sonicPesa.apiSecret) {
+    warnings.push(
+      "SONICPESA_PAYOUTS_ENABLED=true but SONICPESA_API_SECRET is empty — the payout endpoint needs both headers, so every withdrawal would be refused"
     );
   }
   if (!config.cron.secret) {

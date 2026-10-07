@@ -204,6 +204,40 @@ describe("POST /api/admin/payouts", () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
+  it("refuses a receipt that is not a transaction code", async () => {
+    // A real, observed abuse: a payout was marked PAID with the reference
+    // "moi sasha" — the creator's own name. The balance dropped and the record
+    // said the money had gone, with nothing behind it. A code contains digits;
+    // a name does not.
+    existing("APPROVED");
+
+    const res = await review({
+      payoutId: "payout-1",
+      action: "PAID",
+      paymentReference: "moi sasha",
+    });
+    const body = await res.json();
+
+    expect(res.status).toBe(422);
+    expect(body.error).toMatch(/receipt/i);
+    expect(mocks.update).not.toHaveBeenCalled();
+    // The one thing that must never happen: money recorded as sent without a
+    // way to prove it was.
+    expect(mocks.balanceUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts a normal M-Pesa receipt", async () => {
+    existing("APPROVED");
+
+    const res = await review({
+      payoutId: "payout-1",
+      action: "PAID",
+      paymentReference: "QGR7X8Y2Z1",
+    });
+
+    expect(res.status).toBe(200);
+  });
+
   it("returns the money and nothing else when a request is rejected", async () => {
     existing("PENDING");
 

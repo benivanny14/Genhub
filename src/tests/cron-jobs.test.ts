@@ -59,6 +59,7 @@ describe("worker result summaries", () => {
       errors: 0,
       gatewayUnavailable: false,
       unchecked: 0,
+      payouts: { checked: 0, settled: 0, failed: 0, stillPending: 0, stuckUnconfirmed: 0, errors: 0 },
     });
 
     expect(summary).toContain("4 checked");
@@ -77,6 +78,7 @@ describe("worker result summaries", () => {
       errors: 0,
       gatewayUnavailable: true,
       unchecked: 42,
+      payouts: { checked: 0, settled: 0, failed: 0, stillPending: 0, stuckUnconfirmed: 0, errors: 0 },
     });
 
     expect(summary).toContain("STOPPED EARLY");

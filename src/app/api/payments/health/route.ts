@@ -69,6 +69,28 @@ export async function GET() {
             ? "Callbacks are verified by the ?t= token in the webhook URL. Add SONICPESA_SECRET_KEY for signature verification."
             : "Set SONICPESA_SECRET_KEY (preferred) or SONICPESA_WEBHOOK_TOKEN, or callbacks cannot be verified.",
       },
+      /*
+       * Sending money OUT. Paying a creator is a different permission on the
+       * merchant account from taking a customer's payment, so this is its own
+       * line rather than an assumption: with it off every withdrawal is still
+       * approved and still an admin's job to send by hand, and an operator ought
+       * to be able to see that from here instead of from a support ticket.
+       */
+      payouts: {
+        ok: !config.sonicPesa.payoutsEnabled || !!config.sonicPesa.apiSecret,
+        value: config.sonicPesa.payoutsEnabled
+          ? config.sonicPesa.apiSecret
+            ? "automatic"
+            : "enabled but not configured"
+          : "manual",
+        hint: !config.sonicPesa.payoutsEnabled
+          ? "Automatic payouts are off (SONICPESA_PAYOUTS_ENABLED). Withdrawals are approved and sent by hand, and the payout endpoint is never called."
+          : config.sonicPesa.apiSecret
+            ? config.sonicPesa.apiSecret === config.sonicPesa.secretKey
+              ? "Automatic payouts are on. The payout call is signing with SONICPESA_SECRET_KEY (SONICPESA_API_SECRET is unset) — correct when the dashboard shows one secret for both, otherwise set the payout secret."
+              : "Automatic payouts are on: approving a withdrawal sends it through the gateway, and the fee it reports is shown to the creator."
+            : "SONICPESA_PAYOUTS_ENABLED is true but no payout secret is configured, so the payout endpoint refuses every call. Set SONICPESA_API_SECRET or SONICPESA_SECRET_KEY, or turn payouts off.",
+      },
       appUrl: {
         ok: !isLocal && config.appUrlSource === "NEXT_PUBLIC_APP_URL",
         value: appUrl,

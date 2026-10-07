@@ -57,12 +57,30 @@ export function describeReconcile(result: ReconcileResult): string {
     `${result.awaitingResolution} awaiting resolution, ` +
     `${result.stillProcessing} still processing`;
 
+  // The payout half of the sweep, said out loud. A withdrawal confirmed paid by
+  // this run, and one the network failed (which returned the money), are the two
+  // facts an operator comes to this line for — and a claimed-but-unrecorded send
+  // is the one that needs a human, so it is never left implicit.
+  const p = result.payouts;
+  const payoutParts: string[] = [];
+  if (p) {
+    if (p.checked > 0) {
+      payoutParts.push(
+        `payouts: ${p.checked} checked, ${p.settled} confirmed, ${p.failed} failed, ${p.stillPending} pending`
+      );
+    }
+    if (p.stuckUnconfirmed > 0) {
+      payoutParts.push(`${p.stuckUnconfirmed} send(s) unconfirmed — check the gateway dashboard`);
+    }
+  }
+  const withPayouts = payoutParts.length ? `${base} — ${payoutParts.join(", ")}` : base;
+
   // A cut-short sweep must never read as a quiet one: "4 checked" on its own
   // looks like four charges were examined and found fine, when the truth may be
   // that the gateway stopped answering after four of four hundred.
   return result.gatewayUnavailable
-    ? `${base} — STOPPED EARLY, ${result.unchecked} not checked (the gateway is not answering)`
-    : base;
+    ? `${withPayouts} — STOPPED EARLY, ${result.unchecked} not checked (the gateway is not answering)`
+    : withPayouts;
 }
 
 export function describeRenewals(result: RenewalResult): string {

@@ -42,6 +42,7 @@ import {
 } from "../payments/sonicpesa";
 import { processPaymentWebhook } from "./webhook.service";
 import { notifyPaymentResult } from "./payment-notify.service";
+import { reconcilePayouts, type PayoutReconcileResult } from "./payout-disbursement.service";
 
 // Give up waiting on a prompt this long after checkout.
 export const HARD_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -69,6 +70,13 @@ export interface ReconcileResult {
   gatewayUnavailable: boolean;
   /** Pending charges this run never asked about, because of the above. */
   unchecked: number;
+  /**
+   * The same question asked about money going OUT. A payout is complete only
+   * when the network says so, and a missed `payout.success` webhook leaves a
+   * creator who has their money while our row still says "approved" — the
+   * mirror image of the missed payment webhook this job exists for.
+   */
+  payouts: PayoutReconcileResult;
 }
 
 export async function reconcileStalePayments(options?: {
@@ -91,6 +99,7 @@ export async function reconcileStalePayments(options?: {
     errors: 0,
     gatewayUnavailable: false,
     unchecked: 0,
+    payouts: { checked: 0, settled: 0, failed: 0, stillPending: 0, stuckUnconfirmed: 0, errors: 0 },
   };
 
   // Nothing to reconcile when the gateway is never contacted.
@@ -209,6 +218,16 @@ export async function reconcileStalePayments(options?: {
       break;
     }
   }
+
+  /*
+   * Outbound payouts last, and deliberately outside the early-stop above. That
+   * break exists because one unanswered call means the next one will not be
+   * answered either — but the breaker only skips calls while it is OPEN, and a
+   * payout poll that finds the breaker open already fails fast on its own. So a
+   * payout pass on a bad gateway costs nothing and could still resolve a
+   * withdrawal the charge pass never touched.
+   */
+  result.payouts = await reconcilePayouts({ olderThanMinutes, limit });
 
   return result;
 }

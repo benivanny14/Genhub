@@ -119,8 +119,15 @@ interface CreatorData {
     /** Half of where a bank transfer has to go; null for mobile money. */
     bankName?: string | null;
     status: string;
-    /** The receipt the admin entered when this was marked paid. */
+    /** The receipt entered when this was marked paid / the gateway's reference. */
     paymentReference: string | null;
+    /**
+     * What actually reached the handset, for a withdrawal sent through the
+     * gateway, and the fee it kept. Both null when a human sent it, because then
+     * the platform has no record of either.
+     */
+    providerNetAmount?: number | null;
+    providerFee?: number | null;
     adminNote: string | null;
     createdAt: string;
     processedAt: string | null;
@@ -185,10 +192,14 @@ function PayoutStatus({ status }: { status: string }) {
     PAID: "bg-emerald-500/15 text-emerald-400",
     REJECTED: "bg-red-500/15 text-red-400",
   };
+  // The platform cannot send money to a phone itself — a withdrawal is sent by
+  // hand from the Genhub side, so every label has to say who is still holding
+  // it. "Pending" next to a balance that already dropped reads as "we already
+  // sent it and it is lost"; "waiting for us to send" does not.
   const labels: Record<string, string> = {
-    PENDING: "Pending",
-    APPROVED: "Approved — being sent",
-    PAID: "Paid",
+    PENDING: "Received — we are sending it",
+    APPROVED: "Approved — sending to your number",
+    PAID: "Sent — check your phone",
     REJECTED: "Rejected",
   };
   return (
@@ -1179,6 +1190,17 @@ export default function CreatorDashboard() {
                   unaweza kuomba kutoa. Kama halijafikia kiwango hicho,
                   hauwezi kutoa.
                 </li>
+                <li>
+                  <span className="text-white/80 font-medium">
+                    Timu ya Genhub inatuma pesa kwa mkono.
+                  </span>{" "}
+                  Ukishaomba, ombi lako linatokea chini kwenye orodha ya Withdrawals.
+                  Baada ya muda huo, sisi tunatuma pesa kwenye namba au akaunti
+                  uliyoweka — kama M-Pesa, Tigo Pesa, Airtel Money au benki — kisha
+                  unaona namba ya muamala (receipt) kwenye orodha hiyo. Linganisha
+                  hiyo receipt na SMS kwenye simu yako. Kama namba uliyoweka si
+                  sahihi, pesa haiwezi kurudishwa — hivyo hakikisha ni sahihi.
+                </li>
                 {payoutFloorWaived && (
                   <li>
                     <span className="text-emerald-300 font-medium">
@@ -1845,12 +1867,24 @@ export default function CreatorDashboard() {
           without it is why this section exists.
         */}
         <div className="glass-card p-4">
-          <h2 className="font-display font-bold mb-4">Withdrawals</h2>
+          <h2 className="font-display font-bold mb-1">Withdrawals</h2>
+          {/* The record a creator reads when the money has not arrived. It has
+              to say, in one sentence, that Genhub sends the money by hand and
+              that the receipt below is the proof to check on the phone — and
+              name the number the money was addressed to, because a typo there
+              is the one case where the money really is gone. */}
+          <p className="text-xs text-white/40 mb-4">
+            Genhub sends every withdrawal to the number or account you gave, by hand
+            from our side, so a request stays open until someone has sent it. When it
+            has been sent, the receipt number appears on that row — match it against
+            the SMS on your phone. If the money has not arrived, check the account
+            shown on the row first: a wrong number cannot be recalled.
+          </p>
           {(creatorData?.payouts || []).length === 0 ? (
             <p className="text-sm text-white/40">
               No withdrawal requests yet. Use <strong>Withdraw</strong> above when you
               have at least TZS 30,000 available; the request appears here with its
-              status and, once paid, the receipt number.
+              status and, once sent, the receipt number.
             </p>
           ) : (
             <div className="space-y-3">
@@ -1878,6 +1912,21 @@ export default function CreatorDashboard() {
                         Receipt: {payout.paymentReference}
                       </p>
                     )}
+                    {/* The fee, said out loud. The gateway takes its cut out of
+                        the amount sent, so the phone shows less than the
+                        creator asked for — a difference they must not have to
+                        discover from their own SMS. */}
+                    {payout.status === "PAID" &&
+                      typeof payout.providerNetAmount === "number" &&
+                      payout.providerNetAmount < payout.amount && (
+                        <p className="text-xs text-white/50 mt-0.5">
+                          {formatTZS(payout.providerNetAmount)} reached your account
+                          {typeof payout.providerFee === "number"
+                            ? ` — the transfer fee was ${formatTZS(payout.providerFee)}`
+                            : ""}
+                          .
+                        </p>
+                      )}
                     {payout.status === "REJECTED" && payout.adminNote && (
                       <p className="text-xs text-red-400/80 mt-0.5">
                         Reason: {payout.adminNote}
