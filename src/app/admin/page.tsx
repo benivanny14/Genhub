@@ -11,6 +11,11 @@ import VerifiedBadge from "@/components/VerifiedBadge";
 import { formatTZS } from "@/lib/utils";
 // Sizes on this screen are read at a glance — "437 MB", never a raw number.
 import { formatBytes } from "@/lib/host-bytes";
+// The clip behind every page is read through a module-level cache shared by the
+// whole browser tab (components/BackgroundVideo included). Uploading a new one
+// has to push that answer out, or the page the admin is looking at goes on
+// playing the clip that was just replaced.
+import { refreshSiteStatus } from "@/hooks/useSiteFlags";
 // The rules for the clip that sits behind every page. Shared with the layer
 // that plays it so the button and the route can never disagree about the
 // ceiling or about which containers are accepted.
@@ -1659,6 +1664,10 @@ export default function AdminDashboard() {
 
       if (xhr.status >= 200 && xhr.status < 300 && body?.success) {
         if (body.data?.backgroundVideo) setBackgroundVideo(body.data.backgroundVideo);
+        // The card above redrew from the response, but the LAYER at the back of
+        // the page reads its own cache — publish the new clip to it now rather
+        // than leaving the admin staring at the old footage until a reload.
+        void refreshSiteStatus();
         toast("success", body.message || "Background video updated");
         return;
       }
@@ -1686,6 +1695,9 @@ export default function AdminDashboard() {
       const data = await res.json();
       if (data.success) {
         if (data.data?.backgroundVideo) setBackgroundVideo(data.data.backgroundVideo);
+        // Same as the upload: taking the clip down has to reach the backdrop,
+        // or the footage stays on screen until the next full page load.
+        void refreshSiteStatus();
         toast("success", data.message || "Background video removed");
       } else {
         toast("error", data.error || "Could not remove that.");

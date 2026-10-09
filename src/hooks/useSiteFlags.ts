@@ -23,6 +23,12 @@
 // held in a module-level cache, shared, and only refetched after a short TTL so
 // an admin who flips the switch is seen within seconds without a redeploy.
 //
+// `refreshSiteStatus` is the other half of that, and it exists for one action:
+// the admin replacing the background clip. A TTL is a deadline, and "up to
+// fifteen seconds" is not what an operator who just watched a progress bar
+// reach 100% is owed — they asked for it to change NOW, and a page that keeps
+// playing the old footage until it is reloaded reads as a failed upload.
+//
 // THE THREE STATES of the switch, and why they are not just `true`/`false`:
 //   undefined  the switch has not answered yet — hide the price. A price that
 //              blinks onto a free card is exactly what this is meant to prevent,
@@ -90,6 +96,39 @@ function isFresh(): boolean {
 }
 
 /**
+ * Forget what we hold, ask again, and tell every mounted component.
+ *
+ * Called after an admin replaces or removes the clip, so the backdrop behind
+ * the page they are looking at follows the upload instead of waiting out the
+ * TTL or a reload. Resolves once the new answer has been published (or the read
+ * has failed, which publishes the safe default — see `load`). Never throws: the
+ * caller is a success path in an upload flow, and a failed re-read must not
+ * turn a saved clip into an error toast.
+ */
+export async function refreshSiteStatus(): Promise<void> {
+  cached = undefined;
+  cachedAt = 0;
+
+  // Wait out any read already on the wire. It was started before whatever the
+  // caller just changed, so its answer is the one being replaced — letting it
+  // land last would put the old value back.
+  if (inflight) {
+    try {
+      await inflight;
+    } catch {
+      // `load` swallows its own failures; this is only here so one rejection
+      // cannot skip the fresh read below.
+    }
+  }
+
+  try {
+    await load();
+  } catch {
+    // Already handled inside `load`.
+  }
+}
+
+/**
  * `true` while every video is free to watch, `false` when prices apply, and
  * `undefined` until the first answer arrives.
  *
@@ -100,14 +139,22 @@ export function useAllVideosFree(): boolean | undefined {
   const [value, setValue] = useState<boolean | undefined>(cached?.allVideosFree);
 
   useEffect(() => {
-    if (isFresh() && cached) {
-      setValue(cached.allVideosFree);
-      return;
-    }
-
+    // SUBSCRIBE FIRST, THEN DECIDE WHETHER TO FETCH.
+    //
+    // The order matters more than it looks. This used to return early on a warm
+    // cache — before joining the listener set — so a component that mounted
+    // within the TTL was left permanently deaf: it kept the value it read at
+    // mount, and the later answer (an operator flipping the switch, a clip
+    // being replaced) had nobody to reach. A full reload was the only way out.
     const listener = (next: boolean) => setValue(next);
     freeListeners.add(listener);
-    void load();
+
+    if (isFresh() && cached) {
+      setValue(cached.allVideosFree);
+    } else {
+      void load();
+    }
+
     return () => {
       freeListeners.delete(listener);
     };
@@ -127,14 +174,19 @@ export function useBackgroundVideo(): BackgroundVideo {
   const [value, setValue] = useState<BackgroundVideo>(cached?.backgroundVideo ?? NO_BACKGROUND_VIDEO);
 
   useEffect(() => {
-    if (isFresh() && cached) {
-      setValue(cached.backgroundVideo);
-      return;
-    }
-
+    // Subscribe before the freshness check — see `useAllVideosFree`. This hook
+    // is the one that made the fault visible: the admin uploads a clip, the
+    // server stores it, and the layer behind the page goes on playing the old
+    // one because it was never listening for the new answer.
     const listener = (next: BackgroundVideo) => setValue(next);
     videoListeners.add(listener);
-    void load();
+
+    if (isFresh() && cached) {
+      setValue(cached.backgroundVideo);
+    } else {
+      void load();
+    }
+
     return () => {
       videoListeners.delete(listener);
     };
