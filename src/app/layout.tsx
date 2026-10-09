@@ -107,6 +107,21 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${poppins.variable} font-sans min-h-screen transition-colors duration-300`}
       >
+        {/*
+          The colour the glass frosts.
+
+          A fixed layer of slow colour fields behind every page, painted by the
+          root stacking context at z-index -10 so it sits above the page colour
+          and below all content. <body> is transparent for exactly this reason
+          (see globals.css) — an opaque body background would bury it and every
+          pane on the site would frost a flat black rectangle.
+
+          Without this the frosted panels have nothing to be frosted over, which
+          is what made the old translucent cards read as grey boxes.
+        */}
+        <div aria-hidden className="gh-aurora" />
+        <div aria-hidden className="gh-grid" />
+        <div aria-hidden className="gh-vignette" />
         <ClientProviders>
           {/* The operator's announcement, above every page. Publishes without a
               deploy — see /api/site/status and the admin Overview card. */}

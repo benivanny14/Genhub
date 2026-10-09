@@ -172,7 +172,7 @@ export default function BecomeCreatorPage() {
         </div>
 
         {/* Status-aware CTA card */}
-        <div className={cn("rounded-2xl border p-6 md:p-8 mb-10", isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5")}>
+        <div className={cn("p-6 md:p-8 mb-10", "glass-panel")}>
           {state.kind === "loading" && (
             <div className="flex items-center justify-center gap-3 py-6">
               <Loader2 className="w-5 h-5 animate-spin text-brand-400" />
@@ -276,14 +276,12 @@ export default function BecomeCreatorPage() {
               <div
                 key={step.label}
                 className={cn(
-                  "rounded-xl border p-4",
+                  "glass-panel p-4",
                   done
                     ? "border-emerald-500/30 bg-emerald-500/5"
                     : current
                       ? "border-brand-500/40 bg-brand-500/5"
-                      : isLight
-                        ? "border-gray-200 bg-white"
-                        : "border-white/5 bg-surface-400/30"
+                      : "glass-surface"
                 )}
               >
                 <div className="flex items-center gap-2 mb-2">
@@ -317,7 +315,7 @@ export default function BecomeCreatorPage() {
             return (
               <div
                 key={b.title}
-                className={cn("rounded-2xl border p-6", isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5")}
+                className={cn("p-6", "glass-panel")}
               >
                 <Icon className="w-6 h-6 text-brand-400 mb-3" />
                 <h3 className="font-display font-bold mb-1">{b.title}</h3>

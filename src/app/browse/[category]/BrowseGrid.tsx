@@ -90,7 +90,7 @@ export default function BrowseGrid({
             id="browse-sort"
             value={sort}
             onChange={(e) => setSort(e.target.value)}
-            className="bg-white/5 border border-white/10 rounded-lg text-sm px-3 py-2 text-white focus:border-brand-500 focus:outline-none"
+            className="glass-surface text-sm px-3 py-2 text-white focus:border-brand-500 focus:outline-none"
           >
             {SORT_OPTIONS.map((o) => (
               <option key={o.value} value={o.value} className="bg-gray-900">
@@ -113,7 +113,7 @@ export default function BrowseGrid({
           ))}
         </div>
       ) : error ? (
-        <div className="text-center py-16">
+        <div className="glass-panel text-center px-6 py-14">
           <PlayCircle className="w-12 h-12 mx-auto mb-3 text-white/15" />
           <p className="text-gray-400 text-sm">{error}</p>
           <button onClick={reload} className="btn-ghost mt-4">
@@ -121,7 +121,7 @@ export default function BrowseGrid({
           </button>
         </div>
       ) : videos.length === 0 ? (
-        <div className="text-center py-16">
+        <div className="glass-panel text-center px-6 py-14">
           <SearchX className="w-12 h-12 mx-auto mb-3 text-white/15" />
           <h3 className="text-lg font-medium text-white/70 mb-1">
             No videos in {label} yet

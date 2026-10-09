@@ -274,7 +274,7 @@ export default function ImageCropper({
       aria-modal="true"
       aria-label="Move and zoom your picture"
     >
-      <div className="glass-card w-full max-w-md p-5 animate-slide-up">
+      <div className="glass-overlay w-full max-w-md p-5 animate-slide-up">
         <div className="flex items-start justify-between gap-3 mb-1">
           <h2 className="text-lg font-display font-bold">Choose the framing</h2>
           <button

@@ -18,7 +18,7 @@ export default function WelcomeBanner() {
 
   return (
     <div className="mx-auto max-w-5xl px-4 pt-8 sm:pt-10">
-      <div className="auth-rise relative overflow-hidden rounded-3xl border border-brand-500/20 bg-gradient-to-br from-brand-500/10 via-transparent to-brand-500/5 px-5 py-8 text-center sm:px-8 sm:py-10">
+      <div className="glass-panel auth-rise relative overflow-hidden px-5 py-8 text-center sm:px-8 sm:py-10">
         {/* Soft radial bloom behind the headline */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(139,92,246,0.22),transparent_65%)]" />
 

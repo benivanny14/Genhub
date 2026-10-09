@@ -148,7 +148,7 @@ export default function RowMenu({
                   // panel never paints at the top-left corner first.
                   { top: 0, left: 0, visibility: "hidden" }
             }
-            className="fixed z-40 min-w-[180px] rounded-xl border border-white/10 bg-surface-200 py-1 shadow-xl"
+            className="glass-overlay fixed z-40 min-w-[180px] rounded-xl py-1"
           >
             {children}
           </div>,

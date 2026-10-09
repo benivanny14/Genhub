@@ -124,8 +124,8 @@ export default function SupportPage() {
             <div
               key={c.label}
               className={cn(
-                "rounded-2xl border p-4 text-center",
-                isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+                "p-4 text-center",
+                "glass-panel"
               )}
             >
               <c.icon className="w-5 h-5 text-brand-400 mx-auto mb-2" />
@@ -144,7 +144,7 @@ export default function SupportPage() {
         {/* Ticket form */}
         <form
           onSubmit={handleSubmit}
-          className={cn("rounded-2xl border p-6 space-y-4", isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5")}
+          className={cn("p-6 space-y-4", "glass-panel")}
         >
           <h2 className="font-display font-bold">Open a ticket</h2>
 

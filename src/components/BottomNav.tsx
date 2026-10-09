@@ -53,10 +53,8 @@ export default function BottomNav({ userRole }: BottomNavProps) {
 
   return (
     <nav className={cn(
-      "md:hidden fixed bottom-0 left-0 right-0 z-50 border-t safe-bottom",
-      isLight
-        ? "bg-white/95 border-gray-200/60"
-        : "bg-surface-500/95 border-white/5"
+      "md:hidden fixed bottom-0 left-0 right-0 z-50 border-t safe-bottom glass-chrome",
+      isLight ? "border-gray-200/60" : "border-white/5"
     )}>
       <div className="flex items-center justify-around px-2 py-2">
         {navItems.map((item) => {

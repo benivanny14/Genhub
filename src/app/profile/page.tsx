@@ -384,7 +384,7 @@ export default function ProfilePage() {
 
           {/* Profile picture */}
           <div className="flex items-center gap-4">
-            <div className="relative w-20 h-20 shrink-0 rounded-full overflow-hidden bg-surface-300/50 flex items-center justify-center">
+            <div className="relative w-20 h-20 shrink-0 rounded-full overflow-hidden glass-surface flex items-center justify-center">
               {avatarUrl ? (
                 <Image
                   src={avatarUrl}
@@ -639,13 +639,13 @@ export default function ProfilePage() {
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <div className="bg-surface-300/40 rounded-xl p-3 text-center">
+                <div className="glass-surface rounded-xl p-3 text-center">
                   <p className="text-lg font-bold">{referral.referredCount}</p>
                   <p className="text-xs text-white/50 flex items-center justify-center gap-1">
                     <Users className="w-3 h-3" /> Friends joined
                   </p>
                 </div>
-                <div className="bg-surface-300/40 rounded-xl p-3 text-center">
+                <div className="glass-surface rounded-xl p-3 text-center">
                   <p className="text-lg font-bold text-emerald-400">
                     TZS {referral.referralEarnings.toLocaleString()}
                   </p>
@@ -663,7 +663,7 @@ export default function ProfilePage() {
                     {referral.referrals.map((r) => (
                       <li
                         key={r.id}
-                        className="flex items-center justify-between text-sm bg-surface-300/30 rounded-lg px-3 py-2"
+                        className="flex items-center justify-between text-sm glass-surface rounded-lg px-3 py-2"
                       >
                         <span className="flex items-center gap-2 min-w-0">
                           <span className="w-6 h-6 rounded-full bg-brand-500/20 text-brand-300 flex items-center justify-center text-xs font-bold shrink-0">

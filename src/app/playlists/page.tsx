@@ -206,7 +206,7 @@ export default function PlaylistsPage() {
             <div
               className={cn(
                 "glass-card p-3 space-y-1",
-                isLight && "bg-white/70 border-gray-200/60"
+                isLight && "border-gray-200/60"
               )}
             >
               {loading ? (
@@ -263,10 +263,10 @@ export default function PlaylistsPage() {
                 onKeyDown={(e) => e.key === "Enter" && createPlaylist()}
                 placeholder="New playlist"
                 className={cn(
-                  "flex-1 min-w-0 border rounded-xl px-3 py-2 text-sm outline-none focus:border-brand-500",
+                  "flex-1 min-w-0 border rounded-xl px-3 py-2 text-sm outline-none focus:border-brand-500 glass-surface",
                   isLight
-                    ? "bg-white border-gray-200 text-gray-900"
-                    : "bg-surface-400/60 border-white/10 text-white"
+                    ? "border-gray-200 text-gray-900"
+                    : "border-white/10 text-white"
                 )}
               />
               <button
@@ -343,7 +343,7 @@ export default function PlaylistsPage() {
           <div
             className={cn(
               "w-full max-w-sm rounded-2xl p-6 animate-slide-up",
-              isLight ? "bg-white" : "glass-card"
+              "glass-overlay"
             )}
             onClick={(e) => e.stopPropagation()}
           >

@@ -690,7 +690,7 @@ export default function HomePage() {
           <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-none">
             {history.map((h) => (
               <Link key={h.id} href={`/video/${h.slug || h.id}`} className="group w-56 shrink-0">
-                <div className="relative aspect-video rounded-xl overflow-hidden bg-surface-300/60">
+                <div className="relative aspect-video rounded-xl overflow-hidden glass-surface">
                   {h.thumbnailUrl ? (
                     <Image
                       src={h.thumbnailUrl}
@@ -850,9 +850,9 @@ export default function HomePage() {
                   "whitespace-nowrap px-4 py-2 rounded-full text-sm font-medium transition-all",
                   category === chip.id
                     ? "bg-brand-500 text-white shadow-lg shadow-brand-500/25"
-                    : isLight
-                      ? "bg-white text-gray-500 hover:text-gray-900 hover:bg-brand-50 border border-gray-200"
-                      : "bg-surface-400/60 text-white/60 hover:text-white hover:bg-surface-400"
+                    : cn("glass-surface", isLight
+                      ? "text-gray-500 hover:text-gray-900 hover:bg-brand-50 border border-gray-200"
+                      : "text-white/60 hover:text-white")
                 )}
               >
                 {chip.id === "" ? t("cat.all") : chip.label}
@@ -866,10 +866,10 @@ export default function HomePage() {
               value={duration}
               onChange={(e) => setDuration(e.target.value)}
               className={cn(
-                "rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 border",
+                "glass-surface rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 border",
                 isLight
-                  ? "bg-white border-gray-200 text-gray-700"
-                  : "bg-surface-400/60 border-white/10 text-white"
+                  ? "border-gray-200 text-gray-700"
+                  : "border-white/10 text-white"
               )}
               title="Filter by length"
             >
@@ -881,10 +881,10 @@ export default function HomePage() {
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value)}
               className={cn(
-                "rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 border",
+                "glass-surface rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 border",
                 isLight
-                  ? "bg-white border-gray-200 text-gray-700"
-                  : "bg-surface-400/60 border-white/10 text-white"
+                  ? "border-gray-200 text-gray-700"
+                  : "border-white/10 text-white"
               )}
               title="Filter by upload date"
             >
@@ -896,10 +896,10 @@ export default function HomePage() {
               value={sort}
               onChange={(e) => setSort(e.target.value)}
               className={cn(
-                "rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 border",
+                "glass-surface rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/50 border",
                 isLight
-                  ? "bg-white border-gray-200 text-gray-700"
-                  : "bg-surface-400/60 border-white/10 text-white"
+                  ? "border-gray-200 text-gray-700"
+                  : "border-white/10 text-white"
               )}
             >
               {SORT_VALUES.map((val, i) => (
@@ -925,7 +925,7 @@ export default function HomePage() {
             ))}
           </div>
         ) : videos.length === 0 ? (
-          <div className="text-center py-20">
+          <div className="glass-panel text-center px-6 py-16">
             <Play className={cn("w-16 h-16 mx-auto mb-4", isLight ? "text-gray-300" : "text-white/10")} />
             <h3 className={cn("text-lg font-medium mb-2", isLight ? "text-gray-500" : "text-white/60")}>
               {t("home.noVideos")}

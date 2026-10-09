@@ -75,7 +75,7 @@ export default function FavoritesPage() {
             ))}
           </div>
         ) : favorites.length === 0 ? (
-          <div className="text-center py-20">
+          <div className="glass-panel text-center px-6 py-16">
             <Play className={cn("w-16 h-16 mx-auto mb-4", isLight ? "text-gray-300" : "text-white/10")} />
             <h3 className={cn("text-lg font-medium mb-2", isLight ? "text-gray-500" : "text-white/60")}>No saved videos</h3>
             <p className={cn("text-sm", isLight ? "text-gray-400" : "text-white/40")}>Tap the bookmark icon on any video to save it here.</p>

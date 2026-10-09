@@ -75,7 +75,7 @@ export default function Section2257Page() {
           Last updated: {new Date().getFullYear()} · Applies to all content published on Genhub
         </p>
 
-        <div className="glass-card p-4 mb-8 flex gap-3">
+        <div className="glass-panel p-4 mb-8 flex gap-3">
           <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
           <p className="text-sm text-white/70">
             Genhub is strictly for adults. Every uploader confirms that all performers are 18+ and

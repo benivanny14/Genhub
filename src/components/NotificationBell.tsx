@@ -155,12 +155,7 @@ export default function NotificationBell() {
 
       {open && (
         <div
-          className={cn(
-            "absolute right-0 top-full mt-2 w-80 max-w-[90vw] rounded-2xl shadow-2xl border animate-fade-in overflow-hidden z-50",
-            isLight
-              ? "bg-white border-gray-200"
-              : "bg-surface-400 border-white/10"
-          )}
+          className="glass-overlay absolute right-0 top-full z-50 mt-2 w-80 max-w-[90vw] animate-fade-in overflow-hidden"
         >
           <div
             className={cn(
@@ -190,8 +185,8 @@ export default function NotificationBell() {
               <div className="p-4 space-y-3">
                 {[0, 1, 2].map((i) => (
                   <div key={i} className="animate-pulse space-y-2">
-                    <div className={cn("h-3 rounded w-3/4", isLight ? "bg-gray-100" : "bg-white/10")} />
-                    <div className={cn("h-3 rounded w-1/2", isLight ? "bg-gray-100" : "bg-white/5")} />
+                    <div className="h-3 rounded w-3/4 glass-surface" />
+                    <div className="h-3 rounded w-1/2 glass-surface" />
                   </div>
                 ))}
               </div>
@@ -214,11 +209,11 @@ export default function NotificationBell() {
                   onClick={() => openNotification(n)}
                   title={href ? `Open ${href}` : undefined}
                   className={cn(
-                    "w-full text-left px-4 py-3 border-b last:border-b-0 transition",
+                    "glass-surface w-full text-left px-4 py-3 border-b last:border-b-0 transition",
                     href ? "cursor-pointer hover:bg-brand-500/10" : "cursor-default",
                     isLight
-                      ? `border-gray-50 ${n.isRead ? "bg-white" : "bg-brand-50/50"}`
-                      : `border-white/5 ${n.isRead ? "bg-transparent" : "bg-brand-500/5"}`
+                      ? `border-gray-50 ${n.isRead ? "" : "bg-brand-50/50"}`
+                      : `border-white/5 ${n.isRead ? "" : "bg-brand-500/5"}`
                   )}
                 >
                   <div className="flex items-start gap-2">
@@ -253,8 +248,8 @@ export default function NotificationBell() {
             className={cn(
               "flex items-center justify-between gap-2 px-4 py-3 border-t text-xs font-medium transition hover:text-brand-400",
               isLight
-                ? "border-gray-100 text-gray-600 bg-gray-50"
-                : "border-white/5 text-white/60 bg-white/[0.02]"
+                ? "border-gray-100 text-gray-600"
+                : "border-white/5 text-white/60"
             )}
           >
             See all notifications

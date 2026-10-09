@@ -721,7 +721,7 @@ function SetupGroupCard({
 
       <div className="mt-4 space-y-3">
         {pending.map((item) => (
-          <div key={item.id} className="rounded-xl border border-white/5 bg-white/[0.02] p-4">
+          <div key={item.id} className="glass-surface p-4">
             <div className="flex items-start gap-3">
               <SetupStateIcon state={item.state} />
               <div className="min-w-0 flex-1">
@@ -730,7 +730,7 @@ function SetupGroupCard({
                   {item.key ? (
                     <code className="text-xs text-brand-300/80">{item.key}</code>
                   ) : (
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-white/50">
+                    <span className="text-xs px-2 py-0.5 rounded-full glass-surface text-white/50">
                       dashboard, not a file
                     </span>
                   )}
@@ -750,7 +750,7 @@ function SetupGroupCard({
                       className={`text-xs px-2 py-0.5 rounded-full ${
                         item.sensitive
                           ? "bg-emerald-500/10 text-emerald-300/80"
-                          : "bg-white/5 text-white/50"
+                          : "glass-surface text-white/50"
                       }`}
                     >
                       {item.display}
@@ -975,11 +975,11 @@ function PayoutReadyRow({
           </p>
           <p className="text-xs text-white/40 truncate">{c.email || c.creatorId}</p>
           <div className="flex flex-wrap gap-1.5 mt-1.5">
-            <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/50">
+            <span className="text-[11px] px-2 py-0.5 rounded-full glass-surface text-white/50">
               KYC: {c.kycStatus}
             </span>
             {c.belowFloor && (
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/50">
+              <span className="text-[11px] px-2 py-0.5 rounded-full glass-surface text-white/50">
                 Below TZS {minimum.toLocaleString()}
               </span>
             )}
@@ -1019,7 +1019,7 @@ function PayoutReadyRow({
             <button
               onClick={() => onFloorAction(c.creatorId, "RESTORE_PAYOUT_MINIMUM")}
               disabled={busy !== null}
-              className="bg-white/5 text-white/70 hover:bg-white/10 disabled:opacity-40 px-3 py-1.5 rounded-lg text-xs font-medium transition"
+              className="glass-surface text-white/70 hover:bg-white/10 disabled:opacity-40 px-3 py-1.5 rounded-lg text-xs font-medium transition"
               title={`Put the TZS ${minimum.toLocaleString()} floor back for this account`}
             >
               {busy === c.creatorId ? "Working…" : `Require ${minimum.toLocaleString()} again`}
@@ -2683,7 +2683,7 @@ export default function AdminDashboard() {
               className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap transition ${
                 activeTab === tab.id
                   ? "bg-brand-500 text-white shadow-lg shadow-brand-500/25"
-                  : "bg-surface-400/60 text-white/60 hover:text-white hover:bg-surface-400"
+                  : "glass-surface text-white/60 hover:text-white"
               }`}
             >
               <tab.icon className="w-4 h-4" />
@@ -2712,7 +2712,7 @@ export default function AdminDashboard() {
                 <div className="flex items-center gap-3">
                   <div
                     className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                      allVideosFree ? "bg-emerald-500/20" : "bg-white/5"
+                      allVideosFree ? "bg-emerald-500/20" : "glass-surface"
                     }`}
                   >
                     <DollarSign
@@ -2750,7 +2750,7 @@ export default function AdminDashboard() {
               {/* The other operator kill switches. Both pause something that
                   costs money or causes support load, without a deploy. */}
               <div className="mt-4 pt-4 border-t border-white/5 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-white/5 px-3 py-2">
+                <div className="flex items-center justify-between gap-3 glass-surface px-3 py-2">
                   <div>
                     <p className="text-sm font-medium">Uploads</p>
                     <p className="text-xs text-white/50">
@@ -2773,7 +2773,7 @@ export default function AdminDashboard() {
                     {flagBusy ? "Working…" : flagUploads ? "Pause uploads" : "Resume uploads"}
                   </button>
                 </div>
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-white/5 px-3 py-2">
+                <div className="flex items-center justify-between gap-3 glass-surface px-3 py-2">
                   <div>
                     <p className="text-sm font-medium">Mobile-money checkout</p>
                     <p className="text-xs text-white/50">
@@ -2799,7 +2799,7 @@ export default function AdminDashboard() {
               </div>
 
               {/* Announcement banner */}
-              <div className="mt-3 rounded-xl border border-white/5 p-3">
+              <div className="mt-3 glass-surface p-3">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <p className="text-sm font-medium">Announcement banner</p>
@@ -2867,7 +2867,7 @@ export default function AdminDashboard() {
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="glass-card p-5">
+              <div className="glass-panel p-5">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
                     <Users className="w-5 h-5 text-brand-400" />
@@ -2881,7 +2881,7 @@ export default function AdminDashboard() {
                     : "Loading…"}
                 </p>
               </div>
-              <div className="glass-card p-5">
+              <div className="glass-panel p-5">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
                     <DollarSign className="w-5 h-5 text-emerald-400" />
@@ -2895,7 +2895,7 @@ export default function AdminDashboard() {
                   {stats ? `Creators earned TZS ${stats.overview.creatorEarnings.toLocaleString()}` : "Loading…"}
                 </p>
               </div>
-              <div className="glass-card p-5">
+              <div className="glass-panel p-5">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
                     <Clock className="w-5 h-5 text-amber-400" />
@@ -2906,7 +2906,7 @@ export default function AdminDashboard() {
                   {stats ? stats.kyc.pending : kycList.length || "…"}
                 </p>
               </div>
-              <div className="glass-card p-5">
+              <div className="glass-panel p-5">
                 <div className="flex items-center gap-3 mb-3">
                   <div className="w-10 h-10 rounded-xl bg-red-500/20 flex items-center justify-center">
                     <AlertTriangle className="w-5 h-5 text-red-400" />
@@ -2918,7 +2918,7 @@ export default function AdminDashboard() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div className="glass-card p-5 text-center">
+              <div className="glass-panel p-5 text-center">
                 <Activity className="w-6 h-6 text-brand-400 mx-auto mb-2" />
                 <p className="text-sm text-white/60">Total Views</p>
                 <p className="text-lg font-bold mt-1">
@@ -2928,7 +2928,7 @@ export default function AdminDashboard() {
                   {stats ? `${stats.engagement.activeSubscriptions} active subscriptions` : ""}
                 </p>
               </div>
-              <div className="glass-card p-5 text-center">
+              <div className="glass-panel p-5 text-center">
                 <HardDrive className="w-6 h-6 text-purple-400 mx-auto mb-2" />
                 <p className="text-sm text-white/60">Published Videos</p>
                 <p className="text-lg font-bold mt-1">
@@ -2938,7 +2938,7 @@ export default function AdminDashboard() {
                   {stats && stats.videos.flagged > 0 ? `${stats.videos.flagged} flagged` : "No flagged videos"}
                 </p>
               </div>
-              <div className="glass-card p-5 text-center">
+              <div className="glass-panel p-5 text-center">
                 <TrendingUp className="w-6 h-6 text-emerald-400 mx-auto mb-2" />
                 <p className="text-sm text-white/60">Gross Volume</p>
                 <p className="text-lg font-bold mt-1">
@@ -3032,7 +3032,7 @@ export default function AdminDashboard() {
                 {(system?.checks || []).map((c) => (
                   <div
                     key={c.key}
-                    className="flex items-start gap-2 rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2"
+                    className="flex items-start gap-2 glass-surface px-3 py-2"
                     title={c.hint}
                   >
                     {c.ok ? (
@@ -3063,7 +3063,7 @@ export default function AdminDashboard() {
               {/* LIVE CHECKS — what the services actually answered, not what
                   their variables say. The gateway probe mints a real token, so
                   a revoked key reads "rejected", not "configured". */}
-              <div className="mt-4 rounded-xl border border-white/5 bg-white/[0.02] p-3">
+              <div className="mt-4 glass-surface p-3">
                 <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
                   <div>
                     <p className="text-sm font-medium">Live checks</p>
@@ -3097,7 +3097,7 @@ export default function AdminDashboard() {
                       migrations.failed.length ||
                       (migrations.known && migrations.pending.length)
                         ? "border border-amber-500/30 bg-amber-500/5"
-                        : "border border-white/5"
+                        : "glass-surface"
                     }`}
                   >
                     {migrations.failed.length ||
@@ -3220,7 +3220,7 @@ export default function AdminDashboard() {
                 {(jobs ? orderForAttention(jobs) : []).map((w) => (
                   <div
                     key={w.id}
-                    className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2"
+                    className="glass-surface px-3 py-2"
                   >
                     <div className="flex items-start gap-2">
                     <JobStateIcon state={w.state} />
@@ -3367,7 +3367,7 @@ export default function AdminDashboard() {
                       className="flex items-center justify-between gap-3 text-sm"
                     >
                       <div className="flex items-center gap-3 min-w-0">
-                        <span className="w-6 h-6 rounded-lg bg-surface-400 flex items-center justify-center text-xs font-bold text-white/60 shrink-0">
+                        <span className="w-6 h-6 rounded-lg glass-surface flex items-center justify-center text-xs font-bold text-white/60 shrink-0">
                           {index + 1}
                         </span>
                         <span className="truncate">
@@ -3413,7 +3413,7 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
-                  <div className="rounded-xl bg-surface-300/30 p-3">
+                  <div className="rounded-xl glass-surface p-3">
                     <p className="text-xs text-white/40">Messages paid</p>
                     <p className="text-lg font-bold">
                       {stats.chatRevenue.totals.messages.toLocaleString()}
@@ -3423,14 +3423,14 @@ export default function AdminDashboard() {
                       {stats.chatRevenue.totals.creators === 1 ? "" : "s"}
                     </p>
                   </div>
-                  <div className="rounded-xl bg-surface-300/30 p-3">
+                  <div className="rounded-xl glass-surface p-3">
                     <p className="text-xs text-white/40">Fans paid</p>
                     <p className="text-lg font-bold">
                       TZS {stats.chatRevenue.totals.gross.toLocaleString()}
                     </p>
                     <p className="text-[11px] text-white/35 mt-0.5">before the split</p>
                   </div>
-                  <div className="rounded-xl bg-surface-300/30 p-3">
+                  <div className="rounded-xl glass-surface p-3">
                     <p className="text-xs text-white/40">To creators (70%)</p>
                     <p className="text-lg font-bold text-emerald-400">
                       TZS {stats.chatRevenue.totals.earned.toLocaleString()}
@@ -3441,7 +3441,7 @@ export default function AdminDashboard() {
                       {stats.chatRevenue.totals.heldMessages === 1 ? "" : "s"})
                     </p>
                   </div>
-                  <div className="rounded-xl bg-surface-300/30 p-3">
+                  <div className="rounded-xl glass-surface p-3">
                     <p className="text-xs text-white/40">Platform cut (30%)</p>
                     <p className="text-lg font-bold text-brand-400">
                       TZS {stats.chatRevenue.totals.platformFee.toLocaleString()}
@@ -3464,7 +3464,7 @@ export default function AdminDashboard() {
                         key={c.creatorId}
                         className="flex items-center gap-3 text-sm"
                       >
-                        <span className="w-6 h-6 rounded-lg bg-surface-400 flex items-center justify-center text-xs font-bold text-white/60 shrink-0">
+                        <span className="w-6 h-6 rounded-lg glass-surface flex items-center justify-center text-xs font-bold text-white/60 shrink-0">
                           {index + 1}
                         </span>
                         <span className="truncate flex-1 min-w-0">
@@ -3551,7 +3551,7 @@ export default function AdminDashboard() {
             )}
 
             {kycList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <CheckCircle className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
                 <p className="text-white/50">No pending KYC submissions</p>
               </div>
@@ -3598,7 +3598,7 @@ export default function AdminDashboard() {
                           target="_blank"
                           rel="noopener noreferrer"
                           title="Open the ID document full size"
-                          className="group relative block w-16 h-12 rounded-lg overflow-hidden bg-surface-300/40 border border-white/10"
+                          className="group relative block w-16 h-12 rounded-lg overflow-hidden glass-surface"
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
@@ -3616,7 +3616,7 @@ export default function AdminDashboard() {
                           target="_blank"
                           rel="noopener noreferrer"
                           title="Open the selfie full size"
-                          className="group relative block w-16 h-12 rounded-lg overflow-hidden bg-surface-300/40 border border-white/10"
+                          className="group relative block w-16 h-12 rounded-lg overflow-hidden glass-surface"
                         >
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
@@ -3665,7 +3665,7 @@ export default function AdminDashboard() {
           <div className="space-y-4">
             <h2 className="font-display font-bold">Video Reports</h2>
             {reportList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <CheckCircle className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
                 <p className="text-white/50">No new reports</p>
               </div>
@@ -3685,7 +3685,7 @@ export default function AdminDashboard() {
                       </div>
 
                       {report.description && (
-                        <p className="text-sm text-white/60 bg-surface-300/40 rounded-lg p-3">
+                        <p className="text-sm text-white/60 glass-surface rounded-lg p-3">
                           {report.description}
                         </p>
                       )}
@@ -3762,14 +3762,14 @@ export default function AdminDashboard() {
               )}
             </div>
             {payoutList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <CheckCircle className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
                 <p className="text-white/50">
                   No open payout requests — nothing is waiting to be paid or refused.
                 </p>
               </div>
             ) : visiblePayouts.length === 0 ? (
-              <div className="glass-card p-8 text-center">
+              <div className="glass-panel p-8 text-center">
                 <p className="text-sm text-white/50">
                   Nothing has stopped moving — every open request is inside its normal
                   waiting time. Turn the filter off to see them all.
@@ -3984,7 +3984,7 @@ export default function AdminDashboard() {
             )}
 
             {viewerList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <Users className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
                 <p className="text-white/50">
                   {viewerQuery ? "No account matches that search" : "No viewers found"}
@@ -4085,7 +4085,7 @@ export default function AdminDashboard() {
                         )}
                         <button
                           onClick={() => openViewAs(viewer.id)}
-                          className="bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          className="glass-surface text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
                           title="See this account read-only — what they hold and their recent activity"
                         >
                           <Eye className="w-3 h-3" /> View as user
@@ -4100,7 +4100,7 @@ export default function AdminDashboard() {
                           className={
                             viewer.freeAccess
                               ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
-                              : "bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                              : "glass-surface text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
                           }
                           title={
                             viewer.freeAccess
@@ -4113,7 +4113,7 @@ export default function AdminDashboard() {
                         </button>
                         <button
                           onClick={() => handleViewerAction(viewer.id, "SEND_RESET_LINK")}
-                          className="bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          className="glass-surface text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
                           title="Email this user a password-reset link"
                         >
                           <Mail className="w-3 h-3" /> Reset link
@@ -4186,7 +4186,7 @@ export default function AdminDashboard() {
             )}
 
             {commentList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <MessageSquare className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
                 <p className="text-white/50">
                   {commentQuery ? "No comment matches that search" : "No comments yet"}
@@ -4270,7 +4270,7 @@ export default function AdminDashboard() {
           <div className="space-y-4">
             <h2 className="font-display font-bold">Creators</h2>
             {creatorList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <Users className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
                 <p className="text-white/50">No creators found</p>
               </div>
@@ -4356,7 +4356,7 @@ export default function AdminDashboard() {
                         )}
                         <button
                           onClick={() => handleCreatorAction(creator.id, "SEND_RESET_LINK")}
-                          className="bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                          className="glass-surface text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
                           title="Email this creator a password-reset link"
                         >
                           <Mail className="w-3 h-3" /> Reset link
@@ -4405,7 +4405,7 @@ export default function AdminDashboard() {
                         className={
                           creator.payoutMinimumWaived
                             ? "bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
-                            : "bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                            : "glass-surface text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
                         }
                         title={
                           creator.payoutMinimumWaived
@@ -4459,7 +4459,7 @@ export default function AdminDashboard() {
                         className={
                           creator.freeAccess
                             ? "bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
-                            : "bg-white/5 text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
+                            : "glass-surface text-white/70 hover:bg-white/10 px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1"
                         }
                         title={
                           creator.freeAccess
@@ -4493,7 +4493,7 @@ export default function AdminDashboard() {
                           creatorVideos.map((video) => (
                             <div
                               key={video.id}
-                              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 rounded-xl border border-white/5 bg-black/20 p-3"
+                              className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 glass-surface p-3"
                             >
                               <div className="min-w-0">
                                 <p className="text-sm font-medium truncate flex items-center gap-2">
@@ -4612,7 +4612,7 @@ export default function AdminDashboard() {
                   {blueTickPending.map((row) => (
                     <div
                       key={row.id}
-                      className="rounded-xl border border-white/10 bg-white/5 p-3 flex flex-wrap items-center gap-3"
+                      className="glass-surface p-3 flex flex-wrap items-center gap-3"
                     >
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium truncate">
@@ -4707,19 +4707,19 @@ export default function AdminDashboard() {
             {earnings ? (
               <>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="glass-card p-4">
+                  <div className="glass-panel p-4">
                     <p className="text-xs text-white/50">Held (legacy)</p>
                     <p className="text-xl font-bold mt-1">TZS {earnings.totals.pending.toLocaleString()}</p>
                   </div>
-                  <div className="glass-card p-4">
+                  <div className="glass-panel p-4">
                     <p className="text-xs text-white/50">Available for payout</p>
                     <p className="text-xl font-bold mt-1 text-emerald-400">TZS {earnings.totals.available.toLocaleString()}</p>
                   </div>
-                  <div className="glass-card p-4">
+                  <div className="glass-panel p-4">
                     <p className="text-xs text-white/50">Released (lifetime)</p>
                     <p className="text-xl font-bold mt-1 text-brand-300">TZS {earnings.totals.released.toLocaleString()}</p>
                   </div>
-                  <div className="glass-card p-4 border border-amber-500/30">
+                  <div className="glass-panel p-4 border border-amber-500/30">
                     <p className="text-xs text-amber-300/80">Ready to release</p>
                     <p className="text-xl font-bold mt-1 text-amber-400">TZS {earnings.totals.ready.toLocaleString()}</p>
                   </div>
@@ -4734,7 +4734,7 @@ export default function AdminDashboard() {
                 </p>
 
                 {earnings.creators.length === 0 ? (
-                  <div className="glass-card p-12 text-center">
+                  <div className="glass-panel p-12 text-center">
                     <Wallet className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
                     <p className="text-white/50">No creators with balances yet</p>
                   </div>
@@ -4815,7 +4815,7 @@ export default function AdminDashboard() {
             {payoutReady ? (
               <>
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                  <div className="glass-card p-4">
+                  <div className="glass-panel p-4">
                     <p className="text-xs text-white/50">Creators holding money</p>
                     <p className="text-xl font-bold mt-1">
                       {payoutReady.totals.totalCount.toLocaleString()}
@@ -4824,7 +4824,7 @@ export default function AdminDashboard() {
                       {payoutReady.totals.readyCount.toLocaleString()} at the floor
                     </p>
                   </div>
-                  <div className="glass-card p-4">
+                  <div className="glass-panel p-4">
                     <p className="text-xs text-white/50">Can withdraw now</p>
                     <p className="text-xl font-bold mt-1 text-emerald-400">
                       TZS {payoutReady.totals.readyAmount.toLocaleString()}
@@ -4834,7 +4834,7 @@ export default function AdminDashboard() {
                       {payoutReady.totals.readyCount === 1 ? "" : "s"}
                     </p>
                   </div>
-                  <div className="glass-card p-4 border border-amber-500/30">
+                  <div className="glass-panel p-4 border border-amber-500/30">
                     <p className="text-xs text-amber-300/80">Held below the floor</p>
                     <p className="text-xl font-bold mt-1 text-amber-400">
                       TZS {payoutReady.totals.belowFloorAmount.toLocaleString()}
@@ -4845,7 +4845,7 @@ export default function AdminDashboard() {
                       {payoutReady.minimum.toLocaleString()} — allow them below it
                     </p>
                   </div>
-                  <div className="glass-card p-4">
+                  <div className="glass-panel p-4">
                     <p className="text-xs text-white/50">Total held by creators</p>
                     <p className="text-xl font-bold mt-1">
                       TZS {payoutReady.totals.totalAmount.toLocaleString()}
@@ -4859,7 +4859,7 @@ export default function AdminDashboard() {
                 </div>
 
                 {payoutReady.creators.length === 0 ? (
-                  <div className="glass-card p-12 text-center">
+                  <div className="glass-panel p-12 text-center">
                     <Banknote className="w-12 h-12 text-emerald-400/30 mx-auto mb-3" />
                     <p className="text-white/50">
                       Nobody is holding money in a creator balance yet
@@ -5034,7 +5034,7 @@ export default function AdminDashboard() {
 
             {/* Coupon list */}
             {couponList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <Ticket className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
                 <p className="text-white/50">No coupons yet — create your first one above.</p>
               </div>
@@ -5104,11 +5104,11 @@ export default function AdminDashboard() {
 
             {paymentSummary && (
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="glass-card p-4">
+                <div className="glass-panel p-4">
                   <p className="text-xs text-white/50">Pending charges</p>
                   <p className="text-2xl font-bold">{paymentSummary.pending}</p>
                 </div>
-                <div className="glass-card p-4">
+                <div className="glass-panel p-4">
                   <p className="text-xs text-white/50">
                     Stuck &gt;{paymentSummary.stuckAfterMinutes} min
                   </p>
@@ -5124,7 +5124,7 @@ export default function AdminDashboard() {
                   className={`p-4 rounded-xl border ${
                     (paymentSummary.investigating || 0) > 0
                       ? "border-amber-500/40 bg-amber-500/10"
-                      : "glass-card"
+                      : "glass-panel"
                   }`}
                 >
                   <p className="text-xs text-white/50">Being checked with networks</p>
@@ -5173,7 +5173,7 @@ export default function AdminDashboard() {
             </div>
 
             {paymentList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <ReceiptText className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
                 <p className="text-white/50">
                   No {paymentStatus.toLowerCase().replace("_", " ")} charges.
@@ -5333,7 +5333,7 @@ export default function AdminDashboard() {
               ) : (
                 <div className="space-y-3">
                   {appealList.map((appeal) => (
-                    <div key={appeal.id} className="rounded-xl border border-white/10 p-3">
+                    <div key={appeal.id} className="glass-surface p-3">
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-sm font-medium">
                           {appeal.user.displayName ||
@@ -5388,7 +5388,7 @@ export default function AdminDashboard() {
                         ? "border-amber-500/40 bg-amber-500/10"
                         : entry.severity === "notice"
                         ? "border-sky-500/30 bg-sky-500/5"
-                        : "border-white/5 bg-white/[0.02]";
+                        : "glass-surface";
                     return (
                       <li key={entry.id} className={`rounded-lg border p-2.5 ${tone}`}>
                         <div className="flex items-center justify-between gap-3 text-xs text-white/40">
@@ -5472,7 +5472,7 @@ export default function AdminDashboard() {
             </div>
 
             {auditList.length === 0 ? (
-              <div className="glass-card p-12 text-center">
+              <div className="glass-panel p-12 text-center">
                 <ScrollText className="w-12 h-12 text-brand-400/30 mx-auto mb-3" />
                 <p className="text-white/50">
                   No entries yet — decisions appear here as they are made.
@@ -5569,7 +5569,7 @@ export default function AdminDashboard() {
                 {uploadFailures.map((failure, index) => (
                   <div
                     key={`${failure.at}-${index}`}
-                    className="rounded-xl border border-white/10 p-4 space-y-2"
+                    className="glass-surface p-4 space-y-2"
                   >
                     <div className="flex items-start justify-between gap-3 flex-wrap">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -5703,7 +5703,7 @@ export default function AdminDashboard() {
                       </>
                     )}
                   </div>
-                  <div className="h-2 rounded-full bg-white/5 mt-3 overflow-hidden">
+                  <div className="h-2 rounded-full glass-surface mt-3 overflow-hidden">
                     <div
                       className="h-full bg-brand-500 transition-all"
                       style={{
@@ -5750,7 +5750,7 @@ export default function AdminDashboard() {
                   {setup.probes.map((probe) => (
                     <div
                       key={probe.id}
-                      className="flex items-start gap-2 rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2"
+                      className="flex items-start gap-2 glass-surface px-3 py-2"
                     >
                       <SetupProbeIcon state={probe.state} />
                       <div className="min-w-0">
@@ -5927,7 +5927,7 @@ export default function AdminDashboard() {
           onClick={() => setReasonDialog(null)}
         >
           <div
-            className="glass-card w-full max-w-md p-6 animate-slide-up"
+            className="glass-overlay w-full max-w-md p-6 animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2">
@@ -6000,7 +6000,7 @@ export default function AdminDashboard() {
           onClick={() => setPendingRefund(null)}
         >
           <div
-            className="glass-card w-full max-w-lg p-6 animate-slide-up my-8"
+            className="glass-overlay w-full max-w-lg p-6 animate-slide-up my-8"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2">
@@ -6109,7 +6109,7 @@ export default function AdminDashboard() {
             />
 
             {/* What this does to both sides, stated before it happens. */}
-            <div className="mt-4 rounded-xl border border-white/10 bg-surface-300/30 p-3 text-xs space-y-1">
+            <div className="mt-4 glass-surface p-3 text-xs space-y-1">
               <p className="text-white/60">
                 <span className="text-white/80">Customer:</span>{" "}
                 {refundDestination === "WALLET"
@@ -6171,7 +6171,7 @@ export default function AdminDashboard() {
           onClick={() => setJourney(null)}
         >
           <div
-            className="glass-card w-full max-w-2xl p-5 max-h-[85vh] overflow-y-auto"
+            className="glass-overlay w-full max-w-2xl p-5 max-h-[85vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-start justify-between gap-3">
@@ -6198,15 +6198,15 @@ export default function AdminDashboard() {
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4 text-xs">
-              <div className="rounded-lg border border-white/5 p-2">
+              <div className="glass-surface p-2">
                 <p className="text-white/40">Status</p>
                 <p className="font-medium">{journey.transaction.status}</p>
               </div>
-              <div className="rounded-lg border border-white/5 p-2">
+              <div className="glass-surface p-2">
                 <p className="text-white/40">Collect attempts</p>
                 <p className="font-medium">{journey.summary.attempts}</p>
               </div>
-              <div className="rounded-lg border border-white/5 p-2">
+              <div className="glass-surface p-2">
                 <p className="text-white/40">Webhook</p>
                 <p className="font-medium">
                   {journey.summary.webhookArrived
@@ -6214,13 +6214,13 @@ export default function AdminDashboard() {
                     : "never arrived"}
                 </p>
               </div>
-              <div className="rounded-lg border border-white/5 p-2">
+              <div className="glass-surface p-2">
                 <p className="text-white/40">Age</p>
                 <p className="font-medium">{journey.summary.ageMinutes} min</p>
               </div>
             </div>
 
-            <div className="mt-3 rounded-lg border border-white/5 bg-white/[0.02] p-3">
+            <div className="mt-3 glass-surface p-3">
               <p className="text-xs text-white/40">What the customer was shown</p>
               <p className="text-sm text-white/80 mt-1">{journey.summary.customerSaw}</p>
             </div>
@@ -6270,7 +6270,7 @@ export default function AdminDashboard() {
           onClick={() => setPendingResolve(null)}
         >
           <div
-            className="glass-card w-full max-w-md p-6 animate-slide-up"
+            className="glass-overlay w-full max-w-md p-6 animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2">
@@ -6368,7 +6368,7 @@ export default function AdminDashboard() {
           onClick={() => setPendingExpire(null)}
         >
           <div
-            className="glass-card w-full max-w-sm p-6 animate-slide-up"
+            className="glass-overlay w-full max-w-sm p-6 animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center gap-2">
@@ -6406,7 +6406,7 @@ export default function AdminDashboard() {
           onClick={() => !viewAsLoading && setViewAsUser(null)}
         >
           <div
-            className="glass-card w-full max-w-lg p-6 max-h-[85vh] overflow-y-auto"
+            className="glass-overlay w-full max-w-lg p-6 max-h-[85vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             {viewAsLoading || !viewAsUser ? (
@@ -6436,13 +6436,13 @@ export default function AdminDashboard() {
                       account the platform owes money to. */}
                   {viewAsUser.user.creatorBalance && (
                     <>
-                      <div className="rounded-lg bg-white/5 p-2">
+                      <div className="glass-surface p-2">
                         Available to withdraw
                         <div className="font-bold text-emerald-400">
                           TZS {viewAsUser.user.creatorBalance.availableBalance.toLocaleString()}
                         </div>
                       </div>
-                      <div className="rounded-lg bg-white/5 p-2">
+                      <div className="glass-surface p-2">
                         Lifetime earned
                         <div className="font-bold">
                           TZS {viewAsUser.user.creatorBalance.totalEarned.toLocaleString()}
@@ -6450,19 +6450,19 @@ export default function AdminDashboard() {
                       </div>
                     </>
                   )}
-                  <div className="rounded-lg bg-white/5 p-2">
+                  <div className="glass-surface p-2">
                     Wallet
                     <div className="font-bold">TZS {viewAsUser.user.walletBalance.toLocaleString()}</div>
                   </div>
-                  <div className="rounded-lg bg-white/5 p-2">
+                  <div className="glass-surface p-2">
                     Unlocked videos
                     <div className="font-bold">{viewAsUser.user._count.videoAccess}</div>
                   </div>
-                  <div className="rounded-lg bg-white/5 p-2">
+                  <div className="glass-surface p-2">
                     KYC
                     <div className="font-bold">{viewAsUser.user.kycStatus}</div>
                   </div>
-                  <div className="rounded-lg bg-white/5 p-2">
+                  <div className="glass-surface p-2">
                     Strikes
                     <div className="font-bold">{viewAsUser.user.strikes}</div>
                   </div>
@@ -6479,7 +6479,7 @@ export default function AdminDashboard() {
                         Below 30,000 allowed
                       </span>
                     ) : (
-                      <span className="text-[11px] px-2 py-0.5 rounded-full bg-white/5 text-white/50">
+                      <span className="text-[11px] px-2 py-0.5 rounded-full glass-surface text-white/50">
                         Withdraws from TZS 30,000
                       </span>
                     )}

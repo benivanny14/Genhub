@@ -26,16 +26,16 @@ export default function PageLoading({ label = "Loading" }: { label?: string }) {
       <span className="sr-only">{label}…</span>
 
       {/* Title bar */}
-      <div className="mx-auto mb-8 h-7 w-48 animate-pulse rounded-lg bg-white/10" />
+      <div className="skeleton mx-auto mb-8 h-7 w-48 rounded-lg" />
 
       {/* Card grid — the same rhythm the feed and browse pages use, so the real
           content lands where the placeholder already was. */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
         {Array.from({ length: 10 }).map((_, i) => (
           <div key={i} className="space-y-3">
-            <div className="aspect-video w-full animate-pulse rounded-xl bg-white/10" />
-            <div className="h-4 w-4/5 animate-pulse rounded bg-white/10" />
-            <div className="h-3 w-2/5 animate-pulse rounded bg-white/10" />
+            <div className="skeleton aspect-video w-full" />
+            <div className="skeleton h-4 w-4/5" />
+            <div className="skeleton h-3 w-2/5" />
           </div>
         ))}
       </div>

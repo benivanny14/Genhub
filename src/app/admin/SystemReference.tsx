@@ -60,7 +60,7 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
 
 function Code({ children }: { children: React.ReactNode }) {
   return (
-    <code className="rounded bg-surface-300/50 px-1.5 py-0.5 text-xs text-brand-200">
+    <code className="rounded glass-surface px-1.5 py-0.5 text-xs text-brand-200">
       {children}
     </code>
   );
@@ -166,9 +166,9 @@ export default function SystemReference() {
             the first callback that appears in the check.
           </li>
         </ul>
-        <div className="mt-2 rounded-xl border border-white/10 overflow-hidden">
+        <div className="mt-2 glass-surface overflow-hidden">
           <table className="w-full text-xs">
-            <thead className="bg-white/5 text-white/50">
+            <thead className="glass-surface text-white/50">
               <tr>
                 <th className="text-left px-3 py-2">Webhook Status</th>
                 <th className="text-left px-3 py-2">Meaning</th>

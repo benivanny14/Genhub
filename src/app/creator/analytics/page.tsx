@@ -184,7 +184,7 @@ export default function CreatorAnalyticsPage() {
       <div className="min-h-screen page-enter">
         <Header />
         <main className="max-w-3xl mx-auto px-4 sm:px-6 py-16">
-          <div className="glass-card p-8 text-center">
+          <div className="glass-panel p-8 text-center">
             <BarChart3 className="w-10 h-10 text-amber-400 mx-auto mb-4" />
             <h1 className="text-xl font-display font-bold mb-2">
               Your numbers did not load
@@ -276,7 +276,7 @@ export default function CreatorAnalyticsPage() {
         </div>
 
         {demoMode && (
-          <div className="rounded-xl px-4 py-3 text-sm border bg-amber-500/10 text-amber-400 border-amber-500/20">
+          <div className="glass-panel px-4 py-3 text-sm border border-amber-500/20 bg-amber-500/10 text-amber-400">
             Sample data is showing — these are NOT your numbers. Development only.
           </div>
         )}
@@ -284,7 +284,7 @@ export default function CreatorAnalyticsPage() {
         {/* Stat cards */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {statCards.map((card) => (
-            <div key={card.label} className="glass-card p-4">
+            <div key={card.label} className="glass-panel p-4">
               <div className="flex items-center gap-2 mb-2">
                 <div className={`w-8 h-8 rounded-lg ${card.bg} flex items-center justify-center`}>
                   <card.icon className={`w-4 h-4 ${card.color}`} />
@@ -338,7 +338,7 @@ export default function CreatorAnalyticsPage() {
                       <span className="text-white/60">{m.label}</span>
                       <span className="font-medium">{formatTZS(m.value)}</span>
                     </div>
-                    <div className="h-2.5 bg-black/30 rounded-full overflow-hidden">
+                    <div className="h-2.5 glass-surface rounded-full overflow-hidden">
                       <div
                         className={`h-full ${m.color} rounded-full transition-all`}
                         style={{ width: `${pct}%` }}

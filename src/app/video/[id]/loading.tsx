@@ -17,19 +17,19 @@ export default function LoadingVideo() {
     >
       <span className="sr-only">Loading video…</span>
 
-      <div className="aspect-video w-full animate-pulse rounded-2xl bg-white/10" />
+      <div className="skeleton aspect-video w-full rounded-2xl" />
 
-      <div className="mt-6 h-7 w-3/5 animate-pulse rounded-lg bg-white/10" />
+      <div className="skeleton mt-6 h-7 w-3/5" />
 
       <div className="mt-4 flex items-center gap-3">
-        <div className="h-10 w-10 animate-pulse rounded-full bg-white/10" />
-        <div className="h-4 w-40 animate-pulse rounded bg-white/10" />
+        <div className="skeleton h-10 w-10 rounded-full" />
+        <div className="skeleton h-4 w-40" />
       </div>
 
       <div className="mt-6 space-y-3">
-        <div className="h-4 w-full animate-pulse rounded bg-white/10" />
-        <div className="h-4 w-11/12 animate-pulse rounded bg-white/10" />
-        <div className="h-4 w-2/3 animate-pulse rounded bg-white/10" />
+        <div className="skeleton h-4 w-full" />
+        <div className="skeleton h-4 w-11/12" />
+        <div className="skeleton h-4 w-2/3" />
       </div>
     </div>
   );

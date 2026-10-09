@@ -971,7 +971,7 @@ export default function VideoPlayer({
             brandMark === "off" ? "opacity-0" : "opacity-100"
           }`}
         >
-          <div className="flex items-center gap-2.5 rounded-2xl bg-black/30 px-4 py-2.5 backdrop-blur-sm">
+          <div className="flex items-center gap-2.5 rounded-2xl bg-black/40 px-4 py-2.5 backdrop-blur-xl ring-1 ring-white/15">
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-brand-400 to-brand-600">
               <Play className="h-4 w-4 fill-white text-white" />
             </div>
@@ -1046,7 +1046,7 @@ export default function VideoPlayer({
       <div
         // z-30: the side tap zones below are z-20, and without this the bottom
         // strip of the picture would swallow clicks meant for these buttons.
-        className={`absolute bottom-0 left-0 right-0 z-30 bg-gradient-to-t from-black/90 via-black/50 to-transparent transition-opacity duration-300 ${
+        className={`absolute bottom-0 left-0 right-0 z-30 backdrop-blur-xl bg-gradient-to-t from-black/90 via-black/60 to-transparent transition-opacity duration-300 ${
           showControls || !isPlaying ? "opacity-100" : "opacity-0"
         }`}
       >
@@ -1192,7 +1192,7 @@ export default function VideoPlayer({
               </button>
 
               {showQuality && (
-                <div className="absolute bottom-12 right-0 z-20 min-w-[196px] rounded-xl border border-white/10 bg-black/95 py-2 shadow-xl backdrop-blur">
+                <div className="glass-overlay absolute bottom-12 right-0 z-20 min-w-[196px] py-2">
                   <p className="px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-white/40">
                     Speed
                   </p>

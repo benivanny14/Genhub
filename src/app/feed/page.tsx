@@ -177,7 +177,7 @@ export default function FeedPage() {
         {!user ? (
           <div className={cn(
             "rounded-2xl p-10 text-center border",
-            isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+            "glass-panel"
           )}>
             <UserPlus className={cn("w-12 h-12 mx-auto mb-4", isLight ? "text-gray-300" : "text-white/20")} />
             <h2 className={cn("text-xl font-display font-bold mb-2", isLight ? "text-gray-900" : "text-white")}>
@@ -201,10 +201,10 @@ export default function FeedPage() {
                     key={c.id}
                     href={`/creator/${c.id}`}
                     className={cn(
-                      "flex items-center gap-2 px-3 py-2 rounded-full border whitespace-nowrap transition",
+                      "flex items-center gap-2 px-3 py-2 rounded-full border whitespace-nowrap transition glass-surface",
                       isLight
-                        ? "bg-white border-gray-200 hover:border-brand-300"
-                        : "bg-surface-400/60 border-white/10 hover:border-brand-500/40"
+                        ? "border-gray-200 hover:border-brand-300"
+                        : "border-white/10 hover:border-brand-500/40"
                     )}
                   >
                     <div className="w-6 h-6 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 text-xs font-bold">
@@ -222,7 +222,7 @@ export default function FeedPage() {
             {userRole === "CREATOR" && (
               <div className={cn(
                 "rounded-2xl p-4 border",
-                isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+                "glass-panel"
               )}>
                 <textarea
                   value={newPost}
@@ -255,7 +255,7 @@ export default function FeedPage() {
                     key={post.id}
                     className={cn(
                       "rounded-2xl p-5 border",
-                      isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+                      "glass-panel"
                     )}
                   >
                     <div className="flex items-center gap-3 mb-3">
@@ -306,7 +306,7 @@ export default function FeedPage() {
             {!demoMode && videos.length === 0 && (
               <div className={cn(
                 "rounded-2xl p-10 text-center border",
-                isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+                "glass-panel"
               )}>
                 <Sparkles className={cn("w-12 h-12 mx-auto mb-4", isLight ? "text-gray-300" : "text-white/20")} />
                 <h2 className={cn("text-xl font-display font-bold mb-2", isLight ? "text-gray-900" : "text-white")}>

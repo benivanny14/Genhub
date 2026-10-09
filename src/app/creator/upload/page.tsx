@@ -596,7 +596,7 @@ export default function UploadPage() {
             <div><h1 className="text-2xl font-bold">Creator guidelines</h1><p className="text-white/60 mt-2">Soma na ukubali masharti haya kabla ya ku-upload.</p></div>
             <div className="space-y-3">
               {CREATOR_GUIDELINES.map((item) => (
-                <label key={item.id} className="flex gap-3 rounded-xl border border-white/10 p-4 cursor-pointer">
+                <label key={item.id} className="flex gap-3 glass-surface p-4 cursor-pointer">
                   <input type="checkbox" checked={Boolean(checks[item.id])} onChange={(e) => setChecks((current) => ({ ...current, [item.id]: e.target.checked }))} className="mt-1" />
                   <span><span className="block text-white/90">{item.sw}</span><span className="block text-sm text-white/50 mt-1">{item.en}</span></span>
                 </label>
@@ -616,7 +616,7 @@ export default function UploadPage() {
       <div className="min-h-screen">
         <Header />
         <main className="max-w-xl mx-auto px-4 py-20 text-center">
-          <div className="glass-card p-10">
+          <div className="glass-panel p-10">
             <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-500/15 ring-1 ring-emerald-400/30">
               <CheckCircle className="w-9 h-9 text-emerald-400" />
             </div>
@@ -684,7 +684,7 @@ export default function UploadPage() {
                 actionable, because "move it to Downloads" needs the picker that
                 can see Downloads to be one tap away. */}
             {blocked && (
-              <div className="rounded-2xl border border-amber-400/30 bg-amber-400/5 p-4 space-y-3">
+              <div className="glass-panel border border-amber-400/30 bg-amber-400/5 p-4 space-y-3">
                 <p className="text-sm text-amber-100">{blocked.message}</p>
                 <button type="button" className="btn-ghost text-sm inline-flex items-center gap-2 border border-white/10" onClick={() => openPicker(blocked.target)}>
                   <FolderOpen className="w-4 h-4" />
@@ -731,7 +731,7 @@ export default function UploadPage() {
                 </div>
 
                 {mainFile && (
-                  <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm">
+                  <div className="flex items-center justify-between gap-3 glass-surface px-4 py-3 text-sm">
                     <span className="flex items-center gap-2 min-w-0">
                       <FileVideo className="w-4 h-4 text-brand-400 shrink-0" />
                       <span className="truncate">{mainFile.name}</span>
@@ -812,7 +812,7 @@ export default function UploadPage() {
                   </label>
                 </div>
 
-                <div className="rounded-xl border border-white/10 p-4">
+                <div className="glass-surface p-4">
                   <span className="flex items-center gap-2 text-sm text-white/60 mb-2">
                     <Clock className="w-4 h-4 text-brand-400" /> Publishing
                   </span>
@@ -930,7 +930,7 @@ export default function UploadPage() {
                 <ReadinessRow done={complianceAttested} label="18+ records confirmed" />
               </ul>
 
-              <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-sm">
+              <div className="flex items-center justify-between glass-surface px-3.5 py-3 text-sm">
                 <span className="text-white/50">Price</span>
                 <span className="font-semibold">TZS {price.toLocaleString()}</span>
               </div>
@@ -972,7 +972,7 @@ function ProgressBar({ percent: value, label }: { percent: number; label: string
         <span>{label}</span>
         <span className="tabular-nums">{clamped}%</span>
       </div>
-      <div className="h-2 rounded-full bg-white/10 overflow-hidden">
+      <div className="h-2 rounded-full glass-surface overflow-hidden">
         <div
           className="h-full rounded-full bg-gradient-to-r from-brand-400 to-brand-600 transition-all duration-300"
           style={{ width: `${clamped}%` }}

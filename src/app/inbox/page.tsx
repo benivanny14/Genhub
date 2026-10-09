@@ -434,7 +434,7 @@ export default function InboxPage() {
           <div
             className={cn(
               "rounded-2xl border p-4 flex items-center justify-between gap-4",
-              isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+              "glass-panel"
             )}
           >
             <div>
@@ -470,7 +470,7 @@ export default function InboxPage() {
         {!user ? (
           <div className={cn(
             "rounded-2xl p-10 text-center border",
-            isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+            "glass-panel"
           )}>
             <MessageSquare className={cn("w-12 h-12 mx-auto mb-4", isLight ? "text-gray-300" : "text-white/20")} />
             <h2 className={cn("text-xl font-display font-bold mb-2", isLight ? "text-gray-900" : "text-white")}>
@@ -501,7 +501,7 @@ export default function InboxPage() {
               {/* Conversation list */}
               <div className={cn(
                 "rounded-2xl border overflow-hidden",
-                isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+                "glass-panel"
               )}>
                 <div className={cn(
                   "px-4 py-3 border-b font-medium text-sm flex items-center justify-between gap-2",
@@ -577,7 +577,7 @@ export default function InboxPage() {
               {/* Thread */}
               <div className={cn(
                 "lg:col-span-2 rounded-2xl border flex flex-col min-h-[420px] overflow-hidden",
-                isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+                "glass-panel"
               )}>
                 {!activePartner ? (
                   <div className="flex-1 flex items-center justify-center p-8 text-center">
@@ -601,7 +601,7 @@ export default function InboxPage() {
                       <span className={cn("font-medium text-sm", isLight ? "text-gray-900" : "text-white")}>
                         {displayHandle(activePartner, "User")}
                       </span>
-                      <span className={cn("text-[10px] px-1.5 py-0.5 rounded", isLight ? "bg-gray-100 text-gray-500" : "bg-white/10 text-white/50")}>
+                      <span className={cn("text-[10px] px-1.5 py-0.5 rounded", cn("glass-surface", isLight ? "text-gray-500" : "text-white/50"))}>
                         {activePartner.role}
                       </span>
                     </div>
@@ -611,7 +611,7 @@ export default function InboxPage() {
                       {threadLoading ? (
                         <div className="space-y-3">
                           {[0, 1, 2].map((i) => (
-                            <div key={i} className={cn("h-12 rounded-xl w-2/3 animate-pulse", isLight ? "bg-gray-100" : "bg-white/5")} />
+                            <div key={i} className={cn("h-12 rounded-xl w-2/3 animate-pulse", "glass-surface")} />
                           ))}
                         </div>
                       ) : messages.length === 0 ? (
@@ -627,7 +627,7 @@ export default function InboxPage() {
                                 "max-w-[80%] rounded-2xl px-4 py-2.5",
                                 mine
                                   ? "bg-brand-500 text-white rounded-br-md"
-                                  : isLight ? "bg-gray-100 text-gray-800 rounded-bl-md" : "bg-surface-300/60 text-white/90 rounded-bl-md"
+                                  : cn("glass-surface rounded-bl-md", isLight ? "text-gray-800" : "text-white/90")
                               )}>
                                 {m.amount > 0 && (
                                   <span className={cn(

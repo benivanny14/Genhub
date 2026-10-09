@@ -220,7 +220,7 @@ export default function RegisterPage() {
               )}
             >
               {phase === "success" && (
-                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-surface-500/95 backdrop-blur">
+                <div className="glass-chrome absolute inset-0 z-20 flex flex-col items-center justify-center gap-3">
                   <div className="auth-pop flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/20 ring-2 ring-emerald-400/60">
                     <Check className="h-8 w-8 text-emerald-400" />
                   </div>
@@ -335,7 +335,7 @@ export default function RegisterPage() {
                         key={i}
                         className={cn(
                           "h-1.5 flex-1 rounded-full transition-all duration-300",
-                          i < strength ? strengthStyle.color : isLight ? "bg-gray-200" : "bg-white/10"
+                          i < strength ? strengthStyle.color : "glass-surface"
                         )}
                       />
                     ))}
@@ -360,7 +360,7 @@ export default function RegisterPage() {
               {/* Creator guidelines — read and ticked as part of signing up, so
                   the conditions are known before any video is made. */}
               {role === "CREATOR" && (
-                <div className="space-y-3 rounded-xl border border-white/10 p-4">
+                <div className="space-y-3 glass-surface p-4">
                   <div className="flex items-start gap-2">
                     <ScrollText className="mt-0.5 h-5 w-5 shrink-0 text-brand-400" />
                     <div>

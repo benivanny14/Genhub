@@ -191,7 +191,7 @@ export default function BillingPage() {
         </div>
 
         {/* Wallet */}
-        <section className="glass-card p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <section className="glass-panel p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-brand-500/20 flex items-center justify-center">
               <Wallet className="w-5 h-5 text-brand-400" />
@@ -224,7 +224,7 @@ export default function BillingPage() {
               ))}
             </div>
           ) : subscriptions.length === 0 ? (
-            <div className="glass-card p-8 text-center">
+            <div className="glass-panel p-8 text-center">
               <CreditCard className={cn("w-10 h-10 mx-auto mb-3", isLight ? "text-gray-300" : "text-white/15")} />
               <p className={cn("text-sm", muted)}>
                 No active memberships — subscribe to a creator to unlock their full library.
@@ -397,7 +397,7 @@ export default function BillingPage() {
           <div
             className={cn(
               "w-full max-w-sm rounded-2xl p-6 animate-slide-up",
-              isLight ? "bg-white" : "glass-card"
+              "glass-overlay"
             )}
             onClick={(e) => e.stopPropagation()}
           >

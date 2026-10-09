@@ -174,17 +174,10 @@ export default function NotificationsPage() {
         onClick={() => open(n)}
         title={href ? `Open ${href}` : undefined}
         className={cn(
-          "w-full text-left rounded-2xl border p-4 flex items-start gap-3 transition",
+          "w-full text-left p-4 flex items-start gap-3 transition",
           href ? "cursor-pointer" : "cursor-default",
-          isLight
-            ? cn(
-                "border-gray-200 bg-white",
-                href && "hover:border-brand-300 hover:bg-gray-50"
-              )
-            : cn(
-                "border-white/10 bg-surface-400/60",
-                href && "hover:border-brand-500/40 hover:bg-surface-400"
-              )
+          "glass-panel",
+          href && "hover:border-brand-500/40"
         )}
       >
         <span
@@ -292,7 +285,7 @@ export default function NotificationsPage() {
             ))}
           </div>
         ) : notifications.length === 0 ? (
-          <div className="text-center py-20">
+          <div className="glass-panel text-center px-6 py-16">
             <Inbox
               className={cn(
                 "w-16 h-16 mx-auto mb-4",

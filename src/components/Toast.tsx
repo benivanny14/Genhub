@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { CheckCircle, XCircle, AlertTriangle, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTheme } from "@/lib/ThemeProvider";
 
 // =============================================================================
 // Toast Context
@@ -148,6 +149,8 @@ interface ToastVariant {
   tile: string;
   /** The title's colour. */
   heading: string;
+  /** The title's colour on the light theme, where the pastel above is too pale. */
+  headingLight: string;
   /** The bar under a progress toast. */
   bar: string;
   /** The dismiss button's hover colour. */
@@ -162,11 +165,12 @@ const VARIANTS: Record<Toast["type"], ToastVariant> = {
   success: {
     Icon: CheckCircle,
     title: "Success",
-    shell: "rounded-2xl border-emerald-400/35 bg-surface-400/95 shadow-xl shadow-emerald-500/25",
+    shell: "rounded-2xl border-emerald-400/35 shadow-xl shadow-emerald-500/25",
     wash: "bg-gradient-to-br from-emerald-500/25 via-transparent to-transparent",
     rail: "w-1.5 bg-gradient-to-b from-emerald-300 via-emerald-400 to-emerald-600",
     tile: "rounded-full bg-emerald-400/15 text-emerald-300 ring-emerald-400/30",
     heading: "text-emerald-300",
+    headingLight: "text-emerald-700",
     bar: "bg-gradient-to-r from-emerald-300 to-emerald-500",
     close: "hover:text-emerald-200",
     motion: "animate-toast-success",
@@ -175,11 +179,12 @@ const VARIANTS: Record<Toast["type"], ToastVariant> = {
   error: {
     Icon: XCircle,
     title: "Error",
-    shell: "rounded-lg border-red-400/40 bg-surface-400/95 shadow-xl shadow-red-500/25",
+    shell: "rounded-lg border-red-400/40 shadow-xl shadow-red-500/25",
     wash: "bg-gradient-to-tr from-red-600/30 via-transparent to-transparent",
     rail: "w-1.5 bg-gradient-to-b from-red-300 via-red-500 to-red-700",
     tile: "rounded-md bg-red-500/20 text-red-300 ring-red-400/40",
     heading: "text-red-300",
+    headingLight: "text-red-700",
     bar: "bg-gradient-to-r from-red-300 to-red-600",
     close: "hover:text-red-200",
     motion: "animate-toast-error",
@@ -188,11 +193,12 @@ const VARIANTS: Record<Toast["type"], ToastVariant> = {
   warning: {
     Icon: AlertTriangle,
     title: "Warning",
-    shell: "rounded-2xl border-amber-400/45 bg-surface-400/95 shadow-xl shadow-amber-500/25",
+    shell: "rounded-2xl border-amber-400/45 shadow-xl shadow-amber-500/25",
     wash: "bg-gradient-to-b from-amber-500/25 via-transparent to-transparent",
     rail: "w-2 bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600",
     tile: "rounded-lg bg-amber-400/15 text-amber-300 ring-amber-400/30",
     heading: "text-amber-300",
+    headingLight: "text-amber-700",
     bar: "bg-gradient-to-r from-amber-300 to-amber-500",
     close: "hover:text-amber-200",
     motion: "animate-toast-warning",
@@ -201,11 +207,12 @@ const VARIANTS: Record<Toast["type"], ToastVariant> = {
   info: {
     Icon: Info,
     title: "Info",
-    shell: "rounded-xl border-sky-400/30 bg-surface-400/95 shadow-xl shadow-sky-500/20",
+    shell: "rounded-xl border-sky-400/30 shadow-xl shadow-sky-500/20",
     wash: "bg-gradient-to-bl from-sky-500/20 via-brand-500/10 to-transparent",
     rail: "w-1.5 bg-gradient-to-b from-sky-300 via-sky-400 to-brand-500",
     tile: "rounded-full bg-sky-400/15 text-sky-300 ring-sky-400/30",
     heading: "text-sky-300",
+    headingLight: "text-sky-700",
     bar: "bg-gradient-to-r from-sky-300 to-brand-400",
     close: "hover:text-sky-200",
     motion: "animate-toast-info",
@@ -220,6 +227,9 @@ function ToastItem({
   toast: Toast;
   onRemove: (id: string) => void;
 }) {
+  const { theme } = useTheme();
+  const isLight = theme === "light";
+
   useEffect(() => {
     // No duration = sticky. A progress toast is rewritten on every chunk, and a
     // timer on each of those rewrites is how a toast disappears mid-upload.
@@ -235,7 +245,7 @@ function ToastItem({
     <div
       role={variant.role}
       className={cn(
-        "pointer-events-auto relative overflow-hidden border px-4 py-3.5 pl-5 backdrop-blur-xl",
+        "glass-overlay pointer-events-auto relative overflow-hidden px-4 py-3.5 pl-5",
         variant.shell,
         variant.motion
       )}
@@ -254,12 +264,29 @@ function ToastItem({
           <Icon className="h-4 w-4" />
         </span>
         <div className="flex-1 min-w-0">
-          <p className={cn("text-[11px] font-semibold uppercase tracking-[0.14em]", variant.heading)}>
+          <p
+            className={cn(
+              "text-[11px] font-semibold uppercase tracking-[0.14em]",
+              isLight ? variant.headingLight : variant.heading
+            )}
+          >
             {variant.title}
           </p>
-          <p className="mt-0.5 text-sm leading-snug break-words text-white/90">{toast.message}</p>
+          <p
+            className={cn(
+              "mt-0.5 text-sm leading-snug break-words",
+              isLight ? "text-gray-800" : "text-white/90"
+            )}
+          >
+            {toast.message}
+          </p>
           {toast.progress !== undefined && (
-            <div className="mt-2 h-1.5 rounded-full bg-white/10 overflow-hidden">
+            <div
+              className={cn(
+                "mt-2 h-1.5 rounded-full overflow-hidden",
+                isLight ? "bg-black/10" : "bg-white/10"
+              )}
+            >
               <div
                 className={cn("h-full rounded-full transition-all duration-200", variant.bar)}
                 style={{ width: `${Math.min(100, Math.max(0, toast.progress))}%` }}
@@ -274,7 +301,11 @@ function ToastItem({
         <button
           onClick={() => onRemove(toast.id)}
           aria-label="Dismiss"
-          className={cn("-mr-1 -mt-1 shrink-0 rounded-lg p-1 text-white/35 transition", variant.close)}
+          className={cn(
+            "-mr-1 -mt-1 shrink-0 rounded-lg p-1 transition",
+            isLight ? "text-gray-400" : "text-white/35",
+            variant.close
+          )}
         >
           <X className="w-4 h-4" />
         </button>

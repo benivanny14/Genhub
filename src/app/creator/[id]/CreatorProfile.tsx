@@ -325,7 +325,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
         <div className="flex flex-col sm:flex-row items-start gap-4 mb-8">
           {/* Avatar */}
           <div className="relative">
-            <div className="w-24 h-24 rounded-full bg-surface-300 border-4 border-surface-500 flex items-center justify-center text-3xl font-bold text-brand-400 overflow-hidden">
+            <div className="w-24 h-24 rounded-full glass-surface border-4 border-white/10 flex items-center justify-center text-3xl font-bold text-brand-400 overflow-hidden">
               {creator.avatarUrl ? (
                 <Image
                   src={creator.avatarUrl}
@@ -347,7 +347,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
             {creator.isVerified && (
               <span
                 title="Verified creator"
-                className="absolute -bottom-0.5 -right-0.5 w-8 h-8 rounded-full bg-surface-500 border-2 border-surface-500 flex items-center justify-center"
+                className="absolute -bottom-0.5 -right-0.5 w-8 h-8 rounded-full glass-panel border-2 border-white/10 flex items-center justify-center"
               >
                 <VerifiedBadge className="h-7 w-7" />
               </span>
@@ -453,7 +453,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
           </p>
         )}
         {videos.length === 0 ? (
-          <div className="text-center py-16">
+          <div className="glass-panel text-center py-16">
             <Play className="w-12 h-12 text-white/10 mx-auto mb-3" />
             <p className="text-white/40">No videos yet</p>
           </div>
@@ -479,7 +479,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
       {/* Subscribe checkout modal — phone (USSD push) primary, wallet fallback */}
       {showSubModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-card w-full max-w-md p-6 animate-slide-up">
+          <div className="glass-overlay w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-2">Subscribe</h2>
             <p className="text-white/60 text-sm mb-4">
               {displayHandle(creator, "This creator")} — choose a period. Cancel anytime.
@@ -530,7 +530,7 @@ export default function CreatorProfileClient({ params }: { params: { id: string 
                 />
               </div>
 
-              <div className="bg-surface-300/40 rounded-xl p-4 flex justify-between text-sm">
+              <div className="glass-surface rounded-xl p-4 flex justify-between text-sm">
                 <span className="text-white/60">Total for {selectedPlan.label.toLowerCase()}</span>
                 <span className="font-bold text-brand-400">
                   TZS {selectedPrice.toLocaleString()}

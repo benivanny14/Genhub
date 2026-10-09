@@ -1039,7 +1039,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       <div className="min-h-screen">
         <Header />
         <div className="flex items-center justify-center h-[60vh]">
-          <div className="text-center">
+          <div className="glass-panel w-full max-w-md px-8 py-10 text-center">
             <h2 className="text-xl font-medium mb-2">Video not found</h2>
             <Link href="/" className="text-brand-400 hover:underline">
               Go home
@@ -1278,7 +1278,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             effect), so this branch is replaced by the real player in place —
             no reload, no lost scroll position — the moment the host finishes.
           */
-          <div className="relative aspect-video overflow-hidden rounded-2xl bg-surface-400/40">
+          <div className="relative aspect-video overflow-hidden rounded-2xl glass-panel">
             {video.thumbnailUrl && !processingFailed && (
               <Image
                 src={video.thumbnailUrl}
@@ -1369,9 +1369,9 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 </p>
                 <Link
                   href={`/video/${upNext.slug || upNext.id}`}
-                  className="group flex w-full max-w-sm items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-2 text-left transition hover:border-brand-500/60"
+                  className="group flex w-full max-w-sm items-center gap-3 glass-surface p-2 text-left transition hover:border-brand-500/60"
                 >
-                  <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg bg-surface-300/60">
+                  <div className="relative h-16 w-28 shrink-0 overflow-hidden rounded-lg glass-surface">
                     {upNext.thumbnailUrl ? (
                       <Image
                         src={upNext.thumbnailUrl}
@@ -1599,7 +1599,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             its light, the play badge invites the click, and the offer sits over
             it. A black rectangle reads as a broken site and sells nothing.
           */
-          <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-surface-400/40 ring-1 ring-white/10">
+          <div className="relative aspect-video w-full overflow-hidden rounded-2xl glass-panel ring-1 ring-white/10">
             {video.thumbnailUrl ? (
               <Image
                 src={video.thumbnailUrl}
@@ -1705,7 +1705,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 {formatRelativeTime(new Date(video.createdAt))}
               </span>
               {video.category && (
-                <span className="bg-surface-400/60 px-2.5 py-0.5 rounded-full text-xs">
+                <span className="glass-surface px-2.5 py-0.5 rounded-full text-xs">
                   {video.category}
                 </span>
               )}
@@ -1729,7 +1729,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                  gets a video that fails when they open it, which is the worst
                  possible first impression — and the creator is not at fault, so
                  blaming them helps nobody. */
-              <div className="max-w-md rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="max-w-md glass-surface p-3">
                 <p className="text-sm font-medium text-white/80">
                   {processingFailed ? "Not available for purchase" : "Available soon"}
                 </p>
@@ -1851,7 +1851,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           {video.tags.length > 0 && (
             <div className="flex flex-wrap gap-2">
               {video.tags.map((tag) => (
-                <span key={tag} className="bg-surface-400/60 px-3 py-1 rounded-full text-xs text-white/50">
+                <span key={tag} className="glass-surface px-3 py-1 rounded-full text-xs text-white/50">
                   #{tag}
                 </span>
               ))}
@@ -1861,7 +1861,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           {/* Action Buttons */}
           <div className="flex items-center gap-3 border-t border-white/10 pt-4 flex-wrap">
             {/* Like / Dislike rating */}
-            <div className="flex items-center gap-1 bg-surface-400/60 rounded-full px-2 py-1.5">
+            <div className="flex items-center gap-1 glass-surface rounded-full px-2 py-1.5">
               <button
                 onClick={() => handleRate("like")}
                 className={`p-1 rounded-full transition ${liked ? "text-emerald-400 bg-emerald-500/20" : "text-white/60 hover:text-emerald-400"}`}
@@ -2027,7 +2027,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               onClick={() => setShowPlaylistModal(false)}
             >
               <div
-                className="w-full max-w-md glass-card p-5 space-y-4"
+                className="w-full max-w-md glass-overlay p-5 space-y-4"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="flex items-center justify-between">
@@ -2070,7 +2070,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                     value={newPlaylistName}
                     onChange={(e) => setNewPlaylistName(e.target.value)}
                     placeholder="New playlist name"
-                    className="flex-1 bg-surface-400/60 border border-white/10 rounded-xl px-3 py-2 text-sm outline-none focus:border-brand-500"
+                    className="flex-1 glass-surface rounded-xl px-3 py-2 text-sm outline-none focus:border-brand-500"
                   />
                   <button
                     onClick={createPlaylist}
@@ -2136,7 +2136,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             </h2>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
               {related.length === 0 ? (
-                <p className="text-sm text-white/40">No related scenes yet.</p>
+                <p className="glass-panel px-6 py-10 text-sm text-white/40">No related scenes yet.</p>
               ) : (
                 related.map((r) => {
                   // Ids are stored by lib/categories; an unknown id shows no tag
@@ -2144,7 +2144,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                   const tag = r.category ? getCategory(r.category) ?? null : null;
                   return (
                     <Link key={r.id} href={`/video/${r.slug || r.id}`} className="group block">
-                      <div className="relative aspect-video overflow-hidden rounded-xl bg-surface-300/60 ring-1 ring-white/10 transition group-hover:ring-brand-500/40">
+                      <div className="relative aspect-video overflow-hidden rounded-xl glass-surface ring-1 ring-white/10 transition group-hover:ring-brand-500/40">
                         {r.thumbnailUrl ? (
                           <Image
                             src={r.thumbnailUrl}
@@ -2206,7 +2206,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       {/* Tip Modal */}
       {showTipModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-card w-full max-w-md p-6 animate-slide-up">
+          <div className="glass-overlay w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-2 flex items-center gap-2">
               <Gift className="w-5 h-5 text-amber-400" /> Send a Tip
             </h2>
@@ -2274,7 +2274,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           onClick={() => setShowReportModal(false)}
         >
           <div
-            className="glass-card w-full max-w-md p-6 animate-slide-up"
+            className="glass-overlay w-full max-w-md p-6 animate-slide-up"
             onClick={(e) => e.stopPropagation()}
           >
             <h2 className="text-xl font-display font-bold mb-2">Report this video</h2>
@@ -2342,7 +2342,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
       {/* Purchase Modal */}
       {showPurchaseModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-card w-full max-w-md p-6 animate-slide-up">
+          <div className="glass-overlay w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-2">Buy Video</h2>
             <p className="text-white/60 text-sm mb-6">
               Choose your payment method and enter your details.
@@ -2380,7 +2380,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
               </div>
 
               {/* Price Summary + coupon */}
-              <div className="bg-surface-300/40 rounded-xl p-4 space-y-2">
+              <div className="glass-surface rounded-xl p-4 space-y-2">
                 <div className="flex justify-between text-sm">
                   <span className="text-white/60">Video price</span>
                   <span className="font-bold">{formatTZS(video.price)}</span>

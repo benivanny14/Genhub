@@ -24,7 +24,7 @@ export default function PrivacyPage() {
           <h1 className="text-3xl font-display font-bold">Privacy Policy</h1>
         </div>
 
-        <div className={cn("glass-card p-8 space-y-6", isLight && "bg-white")}>
+        <div className={cn("glass-card p-8 space-y-6")}>
           <section>
             <h2 className="text-lg font-display font-bold mb-3">1. Information We Collect</h2>
             <p className={cn("text-sm leading-relaxed", isLight ? "text-gray-600" : "text-white/60")}>

@@ -117,7 +117,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
 
       {pending && (
         <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4 backdrop-blur-md"
           onClick={() => answer(false)}
         >
           <div
@@ -125,7 +125,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             aria-modal="true"
             aria-labelledby="confirm-title"
             aria-describedby="confirm-message"
-            className="w-full max-w-md rounded-2xl border border-white/10 bg-[#15151f] p-6 shadow-2xl"
+            className="glass-overlay w-full max-w-md p-6"
             onClick={(event) => event.stopPropagation()}
           >
             <h2 id="confirm-title" className="text-lg font-semibold text-white">

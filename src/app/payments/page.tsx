@@ -398,6 +398,7 @@ export default function PaymentsPage() {
           <div
             className={cn(
               "rounded-xl border p-4 flex items-start gap-3",
+              "glass-panel",
               isLight
                 ? "border-amber-300 bg-amber-50"
                 : "border-amber-500/30 bg-amber-500/10"
@@ -449,7 +450,7 @@ export default function PaymentsPage() {
             ))}
           </div>
         ) : visible.length === 0 ? (
-          <div className="glass-card p-10 text-center">
+          <div className="glass-panel p-10 text-center">
             <CreditCard
               className={cn("w-10 h-10 mx-auto mb-3", isLight ? "text-gray-300" : "text-white/15")}
             />
@@ -685,7 +686,7 @@ export default function PaymentsPage() {
           <div
             className={cn(
               "w-full max-w-sm rounded-2xl p-6 animate-slide-up",
-              isLight ? "bg-white" : "glass-card"
+              "glass-overlay"
             )}
             onClick={(e) => e.stopPropagation()}
           >

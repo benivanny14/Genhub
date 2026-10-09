@@ -64,7 +64,7 @@ export default function DiscoveryPage({
       <Header />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
         {/* Hero */}
-        <div className="relative overflow-hidden rounded-2xl border border-white/10 mb-8">
+        <div className="glass-card relative overflow-hidden mb-8">
           <Image
             src={`https://picsum.photos/seed/${imageSeed}/1280/360`}
             alt={title}
@@ -73,7 +73,7 @@ export default function DiscoveryPage({
             sizes="(max-width: 1280px) 100vw, 1200px"
             className="object-cover opacity-40"
           />
-          <div className={`absolute inset-0 bg-gradient-to-r ${colors.badge} via-black/80 to-black`} />
+          <div className={`absolute inset-0 bg-gradient-to-r ${colors.badge} via-black/70 to-black/80`} />
           <div className="relative p-6 sm:p-9">
             <span
               className={`inline-flex items-center gap-1.5 text-xs font-semibold border rounded-full px-3 py-1 mb-3 ${colors.chip}`}
@@ -90,14 +90,14 @@ export default function DiscoveryPage({
         <SortGrid sort={sort} emptyMessage={emptyMessage} />
 
         {/* Siblings */}
-        <nav aria-label="More discovery" className="mt-14 pt-8 border-t border-white/10">
+        <nav aria-label="More discovery" className="glass-surface mt-14 px-5 py-6 sm:px-7">
           <h2 className="font-display font-bold text-lg text-white mb-4">Keep exploring</h2>
           <div className="flex flex-wrap gap-2">
             {siblings.map((s) => (
               <Link
                 key={s.href}
                 href={s.href}
-                className="group inline-flex items-center gap-2 text-sm px-4 py-2 rounded-full border border-white/10 bg-white/5 text-gray-300 hover:border-brand-500 hover:text-white transition"
+                className="glass-surface group inline-flex items-center gap-2 text-sm px-4 py-2 rounded-full text-gray-300 hover:border-brand-500 hover:text-white backdrop-blur-md transition"
               >
                 <s.icon className="w-4 h-4" />
                 {s.label}

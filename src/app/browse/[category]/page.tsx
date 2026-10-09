@@ -137,7 +137,7 @@ export default async function BrowseCategoryPage({ params }: Props) {
               <Link
                 key={c.id}
                 href={categoryHref(c.id)}
-                className="group inline-flex items-center gap-1.5 text-sm px-4 py-2 rounded-full border border-white/10 bg-white/5 text-gray-300 hover:border-brand-500 hover:text-white transition"
+                className="group inline-flex items-center gap-1.5 text-sm px-4 py-2 rounded-full glass-surface text-gray-300 hover:border-brand-500 hover:text-white transition"
               >
                 {c.label}
                 <ArrowRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition" />

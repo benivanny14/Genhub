@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { fetchCurrentUser, forgetCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
@@ -107,6 +107,10 @@ export default function Header() {
   const [query, setQuery] = useState("");
   const [suggest, setSuggest] = useState<SuggestData | null>(null);
   const [showSuggest, setShowSuggest] = useState(false);
+  // The whole header, so the hamburger inside the bar counts as "inside" the
+  // menu it closes. See the dismissal effect below.
+  const headerRef = useRef<HTMLElement>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   // Debounced search autocomplete
   useEffect(() => {
@@ -196,8 +200,55 @@ export default function Header() {
 
   const isLight = theme === "light";
 
+  /**
+   * A menu must not outlive the gesture that opened it.
+   *
+   * Neither of these is a modal, so neither of them traps a press: a click
+   * anywhere outside closes it, Escape closes it, and so does a navigation —
+   * the account menu used to stay open across a route change and float over
+   * whatever page the visitor had just landed on.
+   *
+   * The phone panel is measured against the WHOLE header rather than against
+   * the panel itself, because the button that closes it lives in the bar above
+   * the panel. Measuring the panel would make that button an "outside" press:
+   * the handler closed the menu, the click then toggled it back open, and the
+   * hamburger appeared to do nothing.
+   */
+  useEffect(() => {
+    setMobileMenuOpen(false);
+    setUserMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen && !userMenuOpen) return;
+
+    function onPointerDown(event: MouseEvent) {
+      const target = event.target as Node | null;
+      if (!target) return;
+      if (userMenuOpen && userMenuRef.current && !userMenuRef.current.contains(target)) {
+        setUserMenuOpen(false);
+      }
+      if (mobileMenuOpen && headerRef.current && !headerRef.current.contains(target)) {
+        setMobileMenuOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      setMobileMenuOpen(false);
+      setUserMenuOpen(false);
+    }
+
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [mobileMenuOpen, userMenuOpen]);
+
   return (
     <header
+      ref={headerRef}
       // `top` is not 0: the announcement banner (SiteBanner) is sticky above this
       // header and is taller than one line when its message wraps, so it
       // publishes its measured height as a CSS variable and the header parks
@@ -205,10 +256,8 @@ export default function Header() {
       // exactly the old `top-0`.
       style={{ top: "var(--site-banner-height, 0px)" }}
       className={cn(
-        "sticky z-50 backdrop-blur-xl border-b safe-top transition-colors duration-300",
-        isLight
-          ? "bg-white/80 border-gray-200/50"
-          : "bg-surface-500/80 border-white/5"
+        "sticky z-50 glass-chrome border-b safe-top",
+        isLight ? "border-gray-200/70" : "border-white/5"
       )}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
@@ -254,7 +303,7 @@ export default function Header() {
                   actually read, the creator under it and the price on the
                   right — the way a media search shelf looks. */}
               {showSuggest && suggest && (
-                <div className="absolute left-1/2 top-full z-50 mt-2 max-h-[70vh] w-[min(92vw,44rem)] -translate-x-1/2 overflow-y-auto rounded-2xl border border-white/10 bg-surface-400/95 p-3 shadow-2xl shadow-black/50 backdrop-blur-xl animate-fade-in">
+                <div className="glass-overlay absolute left-1/2 top-full z-50 mt-2 max-h-[70vh] w-[min(92vw,44rem)] -translate-x-1/2 overflow-y-auto p-3 animate-fade-in">
                   {suggest.videos.length > 0 && (
                     <div className="mb-2">
                       <p className="px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-white/40">Videos</p>
@@ -457,7 +506,7 @@ export default function Header() {
                 <NotificationBell />
 
                 {/* User Dropdown */}
-                <div className="relative">
+                <div className="relative" ref={userMenuRef}>
                   <button
                     onClick={() => setUserMenuOpen(!userMenuOpen)}
                     className="flex items-center gap-2 px-3 py-2 rounded-xl hover:bg-white/10 transition"
@@ -486,7 +535,10 @@ export default function Header() {
                   </button>
 
                   {userMenuOpen && (
-                    <div className="absolute right-0 top-full mt-2 w-56 glass-card p-2 animate-fade-in">
+                    // Nine rows plus a header: on a short window the list ran
+                    // past the bottom of the screen with nowhere to go, because
+                    // an absolutely-positioned panel has no ceiling of its own.
+                    <div className="absolute right-0 top-full mt-2 w-56 glass-overlay p-2 animate-fade-in max-h-[70vh] overflow-y-auto overscroll-contain">
                       <div className="px-3 py-2 border-b border-white/10 mb-2">
                         <p className="font-medium text-sm">{displayHandle(user)}</p>
                         <p className="text-xs text-white/50">{user.email || user.phone}</p>
@@ -643,8 +695,13 @@ export default function Header() {
       {/* Mobile Menu */}
       {mobileMenuOpen && (
         <div className={cn(
-          "md:hidden border-t backdrop-blur-xl animate-slide-down transition-colors",
-          isLight ? "border-gray-200 bg-white/95" : "border-white/5 bg-surface-500/95"
+          // `menu-scroll` gives the panel the height the viewport has left and
+          // makes it its own scroll container — see globals.css. Without it the
+          // panel was as tall as its list, the sticky header could not be
+          // scrolled to reach the rows at the bottom, and the only thing a thumb
+          // could move was the page underneath.
+          "menu-scroll md:hidden glass-chrome border-t animate-slide-down",
+          isLight ? "border-gray-200/70" : "border-white/5"
         )}>
           <div className="px-4 py-4 space-y-2">
             <div className="relative">

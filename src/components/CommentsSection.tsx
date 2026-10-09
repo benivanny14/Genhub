@@ -212,7 +212,7 @@ export default function CommentsSection({ videoId, user }: CommentsSectionProps)
             "w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium shrink-0",
             comment.user.role === "CREATOR"
               ? "bg-brand-500/20 text-brand-400"
-              : isLight ? "bg-gray-100 text-gray-500" : "bg-surface-300/60 text-white/60"
+              : cn("glass-surface", isLight ? "text-gray-500" : "text-white/60")
           )}>
             {(comment.user.username?.[0] || comment.user.displayName?.[0] || "U").toUpperCase()}
           </div>
@@ -353,7 +353,8 @@ export default function CommentsSection({ videoId, user }: CommentsSectionProps)
       ) : (
         <div className={cn(
           "rounded-xl px-4 py-3 mb-6 text-sm flex items-center justify-between gap-3 flex-wrap",
-          isLight ? "bg-gray-50 text-gray-500 border border-gray-100" : "bg-surface-300/40 text-white/50 border border-white/5"
+          "glass-surface",
+          isLight ? "text-gray-500" : "text-white/50"
         )}>
           <span>Sign in to join the conversation.</span>
           <Link href="/login" className="text-brand-400 hover:underline font-medium">
@@ -367,16 +368,16 @@ export default function CommentsSection({ videoId, user }: CommentsSectionProps)
         <div className="space-y-4">
           {[0, 1, 2].map((i) => (
             <div key={i} className="flex items-start gap-3 animate-pulse">
-              <div className={cn("w-8 h-8 rounded-full", isLight ? "bg-gray-100" : "bg-white/10")} />
+              <div className="w-8 h-8 rounded-full glass-surface" />
               <div className="flex-1 space-y-2">
-                <div className={cn("h-3 rounded w-1/4", isLight ? "bg-gray-100" : "bg-white/10")} />
-                <div className={cn("h-3 rounded w-3/4", isLight ? "bg-gray-100" : "bg-white/5")} />
+                <div className="h-3 rounded w-1/4 glass-surface" />
+                <div className="h-3 rounded w-3/4 glass-surface" />
               </div>
             </div>
           ))}
         </div>
       ) : comments.length === 0 ? (
-        <p className={cn("text-sm text-center py-8", isLight ? "text-gray-400" : "text-white/30")}>
+        <p className={cn("glass-panel px-6 py-8 text-sm text-center", isLight ? "text-gray-400" : "text-white/30")}>
           No comments yet. Be the first to comment!
         </p>
       ) : (

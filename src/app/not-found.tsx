@@ -6,7 +6,7 @@ import { Play, Home, ArrowLeft } from "lucide-react";
 export default function NotFound() {
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="text-center max-w-md">
+      <div className="glass-panel w-full max-w-md px-8 py-10 text-center">
         <div className="w-20 h-20 mx-auto rounded-2xl bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center mb-6 glow-brand">
           <Play className="w-10 h-10 text-white fill-white" />
         </div>

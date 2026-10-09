@@ -119,7 +119,7 @@ export default function AccountWarningGate() {
       aria-modal="true"
       aria-labelledby="account-warning-title"
     >
-      <div className="glass-card w-full max-w-lg p-6 animate-slide-up">
+      <div className="glass-overlay w-full max-w-lg p-6 animate-slide-up">
         <div className="flex items-center gap-2">
           <ShieldAlert className="w-6 h-6 text-red-400" />
           <h2 id="account-warning-title" className="text-xl font-display font-bold">

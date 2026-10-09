@@ -102,8 +102,8 @@ export default function CreatorDirectoryPage() {
               letter === ""
                 ? "bg-brand-500 text-white"
                 : isLight
-                ? "bg-white border border-gray-200 text-gray-500 hover:border-brand-300"
-                : "bg-surface-400/60 text-white/50 hover:text-white"
+                ? "glass-surface text-gray-500 hover:border-brand-300"
+                : "glass-surface text-white/50 hover:text-white"
             )}
           >
             All
@@ -123,9 +123,9 @@ export default function CreatorDirectoryPage() {
                     ? "bg-brand-500 text-white"
                     : has
                     ? isLight
-                      ? "bg-white border border-gray-200 text-gray-500 hover:border-brand-300"
-                      : "bg-surface-400/60 text-white/50 hover:text-white"
-                    : "opacity-30 cursor-not-allowed bg-surface-400/30 text-white/30"
+                      ? "glass-surface text-gray-500 hover:border-brand-300"
+                      : "glass-surface text-white/50 hover:text-white"
+                    : "opacity-30 cursor-not-allowed glass-surface text-white/30"
                 )}
               >
                 {l}
@@ -142,7 +142,7 @@ export default function CreatorDirectoryPage() {
             ))}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="text-center py-20">
+          <div className="glass-panel text-center px-6 py-16">
             <UserPlus className={cn("w-16 h-16 mx-auto mb-4", isLight ? "text-gray-300" : "text-white/10")} />
             <h3 className={cn("text-lg font-medium mb-2", isLight ? "text-gray-600" : "text-white/60")}>
               No creators found
@@ -158,10 +158,8 @@ export default function CreatorDirectoryPage() {
                 key={c.id}
                 href={`/creator/${c.id}`}
                 className={cn(
-                  "rounded-2xl p-5 border transition hover:border-brand-500/40 hover:-translate-y-0.5",
-                  isLight
-                    ? "bg-white border-gray-200 hover:shadow-lg hover:shadow-brand-500/10"
-                    : "bg-surface-400/40 border-white/5"
+                  "p-5 transition hover:-translate-y-0.5",
+                  "glass-card hover:border-brand-500/40 hover:shadow-lg hover:shadow-brand-500/10"
                 )}
               >
                 <div className="flex items-center gap-3 mb-3">

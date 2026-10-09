@@ -9,6 +9,55 @@
     --surface-primary: 5 5 6;
     --surface-secondary: 18 18 20;
     --surface-card: 18 18 20;
+
+    /* =======================================================================
+       GLASSMORPHISM TOKENS
+
+       The whole interface is a pane of frosted glass over an aurora (see
+       .gh-aurora at the foot of this file). These are the only numbers that
+       decide what glass looks like: the light mode block further down is a
+       second set of numbers, NOT a second set of rules.
+
+       Every fill is two layers — a diagonal sheen on top of a base tint — so
+       the aurora colours the pane without washing the words off it.
+       ======================================================================= */
+    --glass-fill:
+      linear-gradient(150deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)),
+      linear-gradient(rgba(10, 10, 15, 0.52), rgba(10, 10, 15, 0.52));
+    --glass-fill-strong:
+      linear-gradient(150deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.04)),
+      linear-gradient(rgba(12, 12, 17, 0.62), rgba(12, 12, 17, 0.62));
+    --glass-fill-overlay:
+      linear-gradient(150deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.03)),
+      linear-gradient(rgba(9, 9, 13, 0.84), rgba(9, 9, 13, 0.84));
+    --glass-fill-chrome: linear-gradient(rgba(7, 7, 11, 0.72), rgba(7, 7, 11, 0.72));
+    --glass-fill-soft: rgba(255, 255, 255, 0.045);
+    --glass-edge: rgba(255, 255, 255, 0.13);
+    --glass-edge-strong: rgba(255, 255, 255, 0.26);
+    --glass-edge-soft: rgba(255, 255, 255, 0.07);
+    /* The lit top edge — the line that makes a flat panel read as a pane. */
+    --glass-sheen: rgba(255, 255, 255, 0.14);
+    --glass-blur: 22px;
+    --glass-saturate: 170%;
+    --glass-shadow: 0 12px 36px -16px rgba(0, 0, 0, 0.75);
+    --glass-shadow-hover: 0 24px 56px -20px rgba(0, 0, 0, 0.8);
+  }
+
+  /* Light theme: the same glass, frosted with white and edged in violet
+     instead of rim-lit on black. */
+  .light {
+    --glass-fill: linear-gradient(150deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.66));
+    --glass-fill-strong: linear-gradient(150deg, rgba(255, 255, 255, 0.98), rgba(255, 255, 255, 0.86));
+    --glass-fill-overlay: linear-gradient(150deg, rgba(255, 255, 255, 0.99), rgba(255, 255, 255, 0.93));
+    --glass-fill-chrome: linear-gradient(rgba(255, 255, 255, 0.78), rgba(255, 255, 255, 0.78));
+    --glass-fill-soft: rgba(255, 255, 255, 0.55);
+    --glass-edge: rgba(139, 92, 246, 0.16);
+    --glass-edge-strong: rgba(139, 92, 246, 0.34);
+    --glass-edge-soft: rgba(139, 92, 246, 0.1);
+    --glass-sheen: rgba(255, 255, 255, 0.95);
+    --glass-saturate: 150%;
+    --glass-shadow: 0 14px 34px -18px rgba(76, 29, 149, 0.3);
+    --glass-shadow-hover: 0 22px 48px -20px rgba(76, 29, 149, 0.38);
   }
 
   * {
@@ -42,7 +91,6 @@
 
   /* True dark theme (default) — Brazzers-style near-black.
      color-scheme tells the browser to render native controls dark as well. */
-  html.dark body,
   html.dark {
     color: #ffffff;
     background-color: #050506;
@@ -50,11 +98,33 @@
   }
 
   /* Light theme — soft warm off-white, NOT pure white */
-  html.light body,
   html.light {
     background-color: #f0edf6;
     color: #1a1528;
     color-scheme: light;
+  }
+
+  /*
+    The page colour lives on <html> and the body is left transparent.
+
+    The aurora the glass frosts is a fixed child of <body> painted at
+    z-index -10. In the root stacking context that paints ABOVE the root
+    element's own background but BELOW every in-flow block — and <body> is an
+    in-flow block. So an opaque body background would bury the aurora, and
+    every pane on the site would frost a flat black rectangle. Drawn here once
+    so it can never be re-introduced by a page wrapper.
+  */
+  html.dark body,
+  html.light body {
+    background-color: transparent;
+  }
+
+  html.dark body {
+    color: #ffffff;
+  }
+
+  html.light body {
+    color: #1a1528;
   }
 
   /* Native selects render dark options in dark mode */
@@ -72,42 +142,21 @@
     transition: background-color 9999s ease-out;
   }
 
-  .light .glass-card {
-    background-color: rgba(255, 255, 255, 0.85);
-    border-color: rgba(139, 92, 246, 0.12);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 0 0 1px rgba(139, 92, 246, 0.05);
-  }
-
+  /*
+    Light mode's WORDS only. The surfaces are themed by the glass tokens at the
+    top of this file, so the light theme no longer needs its own copy of the
+    card, button, input and video-card surfaces — those rules are gone, and a
+    surface can no longer drift dark between the two themes.
+  */
   .light .btn-ghost {
     color: #4a4458;
-    background-color: transparent;
   }
   .light .btn-ghost:hover {
     color: #1a1528;
-    background-color: rgba(139, 92, 246, 0.08);
   }
 
-  .light .input-field {
-    background-color: rgba(240, 237, 246, 0.8);
-    border-color: rgba(139, 92, 246, 0.15);
-    color: #1a1528;
-  }
   .light .input-field::placeholder {
     color: #8b82a0;
-  }
-  .light .input-field:focus {
-    border-color: #8b5cf6;
-    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
-  }
-
-  .light .video-card {
-    background-color: rgba(255, 255, 255, 0.85);
-    border-color: rgba(139, 92, 246, 0.08);
-  }
-  .light .video-card:hover {
-    background-color: rgba(255, 255, 255, 0.95);
-    border-color: rgba(139, 92, 246, 0.2);
-    box-shadow: 0 8px 30px rgba(139, 92, 246, 0.08);
   }
 
   .light .badge-success {
@@ -155,32 +204,135 @@
 }
 
 @layer components {
-  /* Glass card effect */
+  /* =========================================================================
+     GLASSMORPHISM
+
+     Four surfaces, deliberately, so a page has a hierarchy instead of one flat
+     tone. They all read the tokens at the top of this file, so both themes are
+     the same rules with different numbers:
+
+       .glass-card     a section / panel that sits ON the page
+       .glass-surface  a quiet well INSIDE a card (was bg-surface-300/30-40)
+       .glass-panel    an emphasised sub-card (was bg-surface-400/40-60)
+       .glass-overlay  a floating menu that must stay readable over anything
+       .glass-chrome   the header / footer / phone bar: edge-to-edge frost
+     ========================================================================= */
+
+  /* The workhorse: a sheet of frosted glass over the aurora. The diagonal
+     sheen catches light in one corner, the inset line is the lit top edge that
+     reads as thickness, and the soft shadow lifts it off the wall. */
   .glass-card {
-    @apply bg-surface-400/80 backdrop-blur-xl border border-white/10 rounded-2xl;
-    transition: background-color 0.3s, border-color 0.3s;
+    @apply rounded-2xl;
+    background-image: var(--glass-fill);
+    border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    box-shadow: inset 0 1px 0 0 var(--glass-sheen), var(--glass-shadow);
+    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+  }
+  .glass-card:hover {
+    border-color: var(--glass-edge-strong);
+    box-shadow: inset 0 1px 0 0 var(--glass-sheen), var(--glass-shadow-hover);
   }
 
-  /* Brand gradient button */
+  /*
+    A quiet well inside a card. Deliberately NO backdrop-filter: the card above
+    it has already frosted the page, so a second blur would cost a compositor
+    layer per row and change nothing anybody can see.
+  */
+  .glass-surface {
+    @apply rounded-xl;
+    background-color: var(--glass-fill-soft);
+    border: 1px solid var(--glass-edge-soft);
+  }
+
+  /* An emphasised sub-panel — a callout, a stat block, an empty state. */
+  .glass-panel {
+    @apply rounded-2xl;
+    background-image: var(--glass-fill-strong);
+    border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: blur(18px) saturate(150%);
+    backdrop-filter: blur(18px) saturate(150%);
+    box-shadow: inset 0 1px 0 0 var(--glass-sheen);
+  }
+
+  /* Something that floats over the page and has to be READ: the search shelf,
+     the bell's list, a row menu. Opaque enough for words, frosted enough to
+     still be glass. */
+  .glass-overlay {
+    @apply rounded-2xl;
+    background-image: var(--glass-fill-overlay);
+    border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: blur(26px) saturate(160%);
+    backdrop-filter: blur(26px) saturate(160%);
+    box-shadow: inset 0 1px 0 0 var(--glass-sheen), 0 26px 60px -22px rgba(0, 0, 0, 0.8);
+  }
+
+  /*
+    The chrome — header, footer, the phone's bottom bar. One step stronger than
+    a card because content scrolls UNDER these and the words on them must stay
+    legible against whatever passes behind.
+  */
+  .glass-chrome {
+    background-image: var(--glass-fill-chrome);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    backdrop-filter: blur(24px) saturate(160%);
+  }
+
+  /* Brand button — a saturated violet capsule rim-lit like the glass, with a
+     highlight sweeping its top-left corner. */
   .btn-brand {
-    @apply bg-gradient-to-r from-brand-500 to-brand-600 text-white font-semibold
-      px-6 py-3 rounded-xl hover:from-brand-600 hover:to-brand-700
-      transition-all duration-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
-      shadow-lg shadow-brand-500/25 hover:shadow-brand-500/40;
+    @apply text-white font-semibold px-6 py-3 rounded-xl active:scale-95
+      disabled:opacity-50 disabled:cursor-not-allowed;
+    background-image:
+      linear-gradient(135deg, rgba(255, 255, 255, 0.32), rgba(255, 255, 255, 0) 46%),
+      linear-gradient(135deg, #a78bfa, #8b5cf6 45%, #7c3aed);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow:
+      0 10px 26px -10px rgba(139, 92, 246, 0.85),
+      inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    transition: transform 0.2s ease, box-shadow 0.25s ease, filter 0.25s ease;
+  }
+  .btn-brand:hover {
+    filter: brightness(1.08);
+    box-shadow:
+      0 16px 34px -10px rgba(139, 92, 246, 0.95),
+      inset 0 1px 0 rgba(255, 255, 255, 0.45);
   }
 
-  /* Ghost button */
+  /* Ghost button — a bare word until you reach for it, then a small pane. The
+     transparent border is there from the start so nothing shifts on hover. */
   .btn-ghost {
-    @apply text-white/70 hover:text-white hover:bg-white/10
-      px-4 py-2 rounded-xl transition-all duration-200;
+    @apply text-white/75 hover:text-white px-4 py-2 rounded-xl transition-all duration-200;
+    border: 1px solid transparent;
+  }
+  .btn-ghost:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.16);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
+  .light .btn-ghost:hover {
+    background-color: rgba(139, 92, 246, 0.1);
+    border-color: rgba(139, 92, 246, 0.22);
   }
 
-  /* Input fields */
+  /* Input fields — a recessed pane of the same glass. */
   .input-field {
-    @apply w-full bg-surface-300/50 border border-white/10 rounded-xl
-      px-4 py-3 text-white placeholder:text-white/40
-      focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500
-      transition-all duration-200;
+    @apply w-full rounded-xl px-4 py-3 placeholder:text-white/40
+      focus:outline-none transition-all duration-200;
+    background-color: var(--glass-fill-soft);
+    border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: blur(16px) saturate(150%);
+    backdrop-filter: blur(16px) saturate(150%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+  .input-field:focus {
+    border-color: rgba(139, 92, 246, 0.85);
+    background-color: rgba(255, 255, 255, 0.05);
+    box-shadow:
+      0 0 0 3px rgba(139, 92, 246, 0.28),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
   }
 
   /* Badge */
@@ -202,20 +354,25 @@
 
   /* Skeleton loading */
   .skeleton {
-    @apply animate-pulse bg-surface-300/50 rounded-xl;
+    @apply animate-pulse rounded-xl;
+    background-color: var(--glass-fill-soft);
   }
 
-  /* Video card hover */
+  /* A video tile: the same pane as a card, with a lit rim and a lift on hover
+     so the grid answers a finger the way the cards do. */
   .video-card {
-    @apply relative overflow-hidden rounded-2xl
-      bg-surface-400/70 hover:bg-surface-400
-      border border-white/10 hover:border-brand-500/30
-      transition-all duration-300 hover:shadow-xl hover:shadow-brand-500/10;
+    @apply relative overflow-hidden rounded-2xl;
+    background-image: var(--glass-fill);
+    border: 1px solid var(--glass-edge);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    backdrop-filter: blur(18px) saturate(160%);
+    box-shadow: inset 0 1px 0 0 var(--glass-sheen), 0 12px 30px -18px rgba(0, 0, 0, 0.7);
+    transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
   }
-
-  /* Dark-mode footer/header readability on true black */
-  .dark .glass-card:hover {
-    border-color: rgba(255, 255, 255, 0.14);
+  .video-card:hover {
+    transform: translateY(-3px);
+    border-color: var(--glass-edge-strong);
+    box-shadow: inset 0 1px 0 0 var(--glass-sheen), 0 22px 46px -18px rgba(139, 92, 246, 0.5);
   }
 }
 
@@ -364,5 +521,148 @@
     .auth-orbit {
       animation: none !important;
     }
+  }
+}
+
+/* ===========================================================================
+   THE MENU PANEL UNDER THE HEADER
+
+   The phone menu is rendered INSIDE the sticky header. Without a ceiling it
+   was a panel as tall as its own list: on a handset the rows ran past the
+   bottom of the screen, the header could not be scrolled because it is
+   sticky, and the only thing a thumb could move was the page behind it —
+   which left the last rows (Sign out, Admin) unreachable.
+
+   So the panel is given exactly the height the viewport has left AFTER the
+   announcement banner and the bar above it, and becomes its own scroll
+   container. `overscroll-behavior: contain` keeps a swipe that reaches the
+   end of the list from dragging the page underneath with it.
+
+   Two max-height declarations: the 100dvh line wins where a browser knows it
+   (the URL bar on a phone shrinks the visible viewport, and a 100vh panel
+   would park its last row under that bar); the 100vh line beneath is the
+   fallback and is simply dropped by any parser that does not know dvh.
+
+   Not a @layer: this is layout behaviour the header depends on, and it must
+   not be purged or out-specified by a stray utility.
+   ========================================================================= */
+
+.menu-scroll {
+  max-height: calc(100vh - var(--site-banner-height, 0px) - 4rem - env(safe-area-inset-top, 0px));
+  max-height: calc(100dvh - var(--site-banner-height, 0px) - 4rem - env(safe-area-inset-top, 0px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ===========================================================================
+   THE AURORA
+
+   Glass has nothing to be glass OVER unless there is colour behind it. The old
+   interface was translucent panels on a flat near-black page, which is why they
+   read as grey boxes rather than frosted glass: there was nothing to see
+   through them.
+
+   This is a fixed layer of four slow colour fields behind every page. It sits
+   at z-index -10 as a child of <body>, so the root stacking context paints it
+   above the page colour and below all content — and <body>'s own background is
+   transparent for exactly that reason (see the base layer).
+
+   Not a @layer: this is paint, not a utility, and nothing should be able to
+   out-specify it by accident.
+   ========================================================================= */
+
+.gh-aurora {
+  position: fixed;
+  /*
+    Only a little larger than the viewport. The blob positions below are
+    percentages of THIS box, so a big bleed does not just add margin — it pushes
+    every blob off-screen (at inset -30vmax the violet field landed a hundred
+    pixels above the top-left corner and the whole aurora was invisible). This
+    is just enough bleed that the drift animation never drags an edge in.
+  */
+  inset: -8vmax;
+  z-index: -10;
+  pointer-events: none;
+  background-image:
+    radial-gradient(32vmax 32vmax at 18% 20%, rgba(139, 92, 246, 0.62), transparent 70%),
+    radial-gradient(28vmax 28vmax at 84% 12%, rgba(236, 72, 153, 0.46), transparent 70%),
+    radial-gradient(30vmax 30vmax at 76% 84%, rgba(56, 189, 248, 0.4), transparent 70%),
+    radial-gradient(26vmax 26vmax at 10% 86%, rgba(16, 185, 129, 0.3), transparent 70%);
+  animation: ghDrift 34s ease-in-out infinite alternate;
+}
+
+@keyframes ghDrift {
+  0% {
+    transform: translate3d(-2%, -1.5%, 0) scale(1.06);
+  }
+  50% {
+    transform: translate3d(1.5%, 1%, 0) scale(1.12);
+  }
+  100% {
+    transform: translate3d(2.5%, -1%, 0) scale(1.08);
+  }
+}
+
+/* Faint graph paper over the aurora. Masked so it fades out toward the bottom
+   of the first screen — texture at the top, calm where the reading happens. */
+.gh-grid {
+  position: fixed;
+  inset: 0;
+  z-index: -9;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 48px 48px;
+  -webkit-mask-image: radial-gradient(120% 80% at 50% 0%, #000 10%, transparent 78%);
+  mask-image: radial-gradient(120% 80% at 50% 0%, #000 10%, transparent 78%);
+}
+
+/* A vignette between the aurora and the page.
+
+   The colour fields are bright enough to sit behind an image but not behind a
+   paragraph, so this darkens the edges and leaves the middle clear — the words
+   keep their contrast on every screen, at every scroll position. */
+.gh-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: -8;
+  pointer-events: none;
+  background-image: radial-gradient(
+    130% 105% at 50% -10%,
+    transparent 45%,
+    rgba(5, 5, 6, 0.62) 100%
+  );
+}
+
+/* Light theme: the same four fields, pastel, over the warm off-white page. */
+.light .gh-aurora {
+  background-image:
+    radial-gradient(34vmax 34vmax at 18% 20%, rgba(167, 139, 250, 0.45), transparent 68%),
+    radial-gradient(30vmax 30vmax at 84% 10%, rgba(244, 114, 182, 0.32), transparent 68%),
+    radial-gradient(32vmax 32vmax at 76% 84%, rgba(56, 189, 248, 0.28), transparent 68%),
+    radial-gradient(28vmax 28vmax at 8% 88%, rgba(52, 211, 153, 0.24), transparent 68%);
+}
+
+.light .gh-grid {
+  opacity: 0.4;
+  background-image:
+    linear-gradient(rgba(76, 29, 149, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(76, 29, 149, 0.06) 1px, transparent 1px);
+}
+
+.light .gh-vignette {
+  background-image: radial-gradient(
+    125% 100% at 50% -10%,
+    transparent 46%,
+    rgba(240, 237, 246, 0.7) 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gh-aurora {
+    animation: none !important;
   }
 }

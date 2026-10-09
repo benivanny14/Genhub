@@ -43,12 +43,18 @@ const BANNER_HEIGHT_VAR = "--site-banner-height";
  */
 const TONES: Record<Announcement["tone"], { wrap: string; icon: typeof Info }> = {
   danger: {
-    wrap: "border-red-700/60 bg-red-600 text-white font-medium",
+    wrap: "border-red-700/60 bg-red-600/90 backdrop-blur-xl text-white font-medium",
     icon: Megaphone,
   },
-  warning: { wrap: "border-amber-500/30 bg-amber-500/10 text-amber-200", icon: AlertTriangle },
-  success: { wrap: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200", icon: CheckCircle },
-  info: { wrap: "border-sky-500/30 bg-sky-500/10 text-sky-200", icon: Info },
+  warning: {
+    wrap: "border-amber-500/30 bg-amber-500/10 text-amber-200 backdrop-blur-xl",
+    icon: AlertTriangle,
+  },
+  success: {
+    wrap: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200 backdrop-blur-xl",
+    icon: CheckCircle,
+  },
+  info: { wrap: "border-sky-500/30 bg-sky-500/10 text-sky-200 backdrop-blur-xl", icon: Info },
 };
 
 export default function SiteBanner() {

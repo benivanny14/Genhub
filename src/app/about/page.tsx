@@ -54,7 +54,7 @@ export default function AboutPage() {
           <h1 className="text-3xl font-display font-bold">About Genhub</h1>
         </div>
 
-        <div className={cn("rounded-2xl border p-8 space-y-6", isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5")}>
+        <div className={cn("p-8 space-y-6", "glass-panel")}>
           <section>
             <p className={cn("text-sm leading-relaxed", isLight ? "text-gray-600" : "text-white/60")}>
               Genhub is a premium video streaming platform built in Tanzania for East African
@@ -79,8 +79,8 @@ export default function AboutPage() {
               <div
                 key={v.title}
                 className={cn(
-                  "rounded-xl p-4 border",
-                  isLight ? "bg-gray-50 border-gray-100" : "bg-surface-300/40 border-white/5"
+                  "p-4",
+                  "glass-surface"
                 )}
               >
                 <v.icon className="w-5 h-5 text-brand-400 mb-2" />

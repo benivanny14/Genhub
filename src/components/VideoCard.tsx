@@ -473,7 +473,7 @@ export default function VideoCard(video: VideoCardProps) {
           >
             <div className={cn(
               "w-6 h-6 rounded-full flex items-center justify-center text-[10px] font-medium",
-              isLight ? "bg-brand-100 text-brand-600" : "bg-surface-300/60 text-white/70"
+              cn("glass-surface", isLight ? "text-brand-600" : "text-white/70")
             )}>
               {(video.creator.username?.[0] || video.creator.displayName?.[0] || "C").toUpperCase()}
             </div>

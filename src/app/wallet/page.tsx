@@ -275,7 +275,7 @@ export default function WalletPage() {
 
       <main className="max-w-lg mx-auto px-4 py-8 space-y-6">
         {/* Balance Card */}
-        <div className="glass-card p-6 text-center">
+        <div className="glass-panel p-6 text-center">
           <div className="w-16 h-16 mx-auto rounded-full bg-brand-500/20 flex items-center justify-center mb-4 glow-brand">
             <Wallet className="w-8 h-8 text-brand-400" />
           </div>
@@ -295,7 +295,7 @@ export default function WalletPage() {
             who has been paid for a video and never topped up saw a single, big
             "TZS 0" on this page — the wrong account, presented as the answer. */}
         {creatorAvailable > 0 && (
-          <div className="glass-card p-5">
+          <div className="glass-panel p-5">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
@@ -323,7 +323,7 @@ export default function WalletPage() {
         {/* Mobile money is down or unreachable. Said here, before the form, so
             a customer is not walked into a checkout that cannot start. */}
         {paymentAvailability && !paymentAvailability.available && (
-          <div className="glass-card p-4 border border-amber-500/30 bg-amber-500/5">
+          <div className="glass-panel p-4 border border-amber-500/30 bg-amber-500/5">
             <p className="text-sm font-semibold text-amber-400">
               {t("wallet.mmUnavailable")}
             </p>
@@ -396,7 +396,7 @@ export default function WalletPage() {
               {transactions.map((tx) => (
                 <div
                   key={tx.id}
-                  className="flex items-center gap-3 p-3 rounded-xl bg-surface-300/30"
+                  className="flex items-center gap-3 p-3 rounded-xl glass-surface"
                 >
                   <div
                     className={`w-10 h-10 rounded-full flex items-center justify-center ${
@@ -465,7 +465,7 @@ export default function WalletPage() {
       {/* Top-Up Modal */}
       {showTopUp && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-card w-full max-w-md p-6 animate-slide-up">
+          <div className="glass-overlay w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-4">Add Funds</h2>
 
             <div className="space-y-4">

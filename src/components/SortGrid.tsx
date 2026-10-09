@@ -64,7 +64,7 @@ export default function SortGrid({
 
   if (error) {
     return (
-      <div className="text-center py-16">
+      <div className="glass-panel text-center px-6 py-14">
         <PlayCircle className="w-12 h-12 mx-auto mb-3 text-white/15" />
         <p className="text-gray-400 text-sm">{error}</p>
         <button onClick={reload} className="btn-ghost mt-4">
@@ -76,7 +76,7 @@ export default function SortGrid({
 
   if (videos.length === 0) {
     return (
-      <div className="text-center py-16">
+      <div className="glass-panel text-center px-6 py-14">
         <PlayCircle className="w-12 h-12 mx-auto mb-3 text-white/15" />
         <p className="text-gray-400 text-sm">{emptyMessage}</p>
       </div>

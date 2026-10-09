@@ -122,7 +122,7 @@ export default function KycPage() {
 
         {/* Status */}
         {kycStatus === "APPROVED" && (
-          <div className="glass-card p-6 text-center">
+          <div className="glass-panel p-6 text-center">
             <CheckCircle className="w-12 h-12 text-emerald-400 mx-auto mb-3" />
             <h2 className="text-lg font-bold text-emerald-400">KYC Verified!</h2>
             <p className="text-sm text-white/60 mt-2">
@@ -135,7 +135,7 @@ export default function KycPage() {
         )}
 
         {kycStatus === "PENDING" && (
-          <div className="glass-card p-6 text-center">
+          <div className="glass-panel p-6 text-center">
             <Clock className="w-12 h-12 text-amber-400 mx-auto mb-3" />
             <h2 className="text-lg font-bold text-amber-400">KYC Under Review</h2>
             <p className="text-sm text-white/60 mt-2">
@@ -145,7 +145,7 @@ export default function KycPage() {
         )}
 
         {kycStatus === "REJECTED" && (
-          <div className="glass-card p-6">
+          <div className="glass-panel p-6">
             <div className="flex items-center gap-3 mb-3">
               <XCircle className="w-8 h-8 text-red-400" />
               <div>
@@ -167,7 +167,7 @@ export default function KycPage() {
             <h3 className="font-display font-bold">Submit KYC</h3>
 
             {/* Instructions */}
-            <div className="bg-surface-300/40 rounded-xl p-4 space-y-2">
+            <div className="glass-surface rounded-xl p-4 space-y-2">
               <p className="text-sm font-medium">Instructions:</p>
               <ol className="text-xs text-white/60 space-y-1 list-decimal list-inside">
                 <li>Take a photo of your government ID (NIDA/Passport)</li>

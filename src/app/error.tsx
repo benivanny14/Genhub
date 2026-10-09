@@ -17,8 +17,8 @@ export default function GlobalError({
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
-      <div className="text-center max-w-md">
-        <div className="w-20 h-20 mx-auto rounded-full bg-red-500/20 flex items-center justify-center mb-6">
+      <div className="glass-panel w-full max-w-md px-8 py-10 text-center">
+        <div className="w-20 h-20 mx-auto rounded-full bg-red-500/20 flex items-center justify-center mb-6 ring-1 ring-red-400/30">
           <AlertTriangle className="w-10 h-10 text-red-400" />
         </div>
         <h1 className="text-2xl font-display font-bold mb-2">Something Went Wrong</h1>

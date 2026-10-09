@@ -388,7 +388,7 @@ function EncodingBadge({
         <Loader2 className="w-3.5 h-3.5 animate-spin" />
         {encoding.label} {encoding.progress}%
       </span>
-      <div className="mt-1 bg-white/10 rounded-full h-1 overflow-hidden">
+      <div className="mt-1 glass-surface rounded-full h-1 overflow-hidden">
         <div
           className="bg-amber-400 h-full transition-all duration-500"
           style={{ width: `${Math.max(4, encoding.progress)}%` }}
@@ -1113,7 +1113,7 @@ export default function CreatorDashboard() {
 
         {/* KYC Warning */}
         {user?.kycStatus !== "APPROVED" && (
-          <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 flex items-start gap-3">
+          <div className="bg-amber-500/10 border border-amber-500/20 glass-panel p-4 flex items-start gap-3">
             <AlertCircle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
             <div>
               <p className="font-medium text-amber-400 text-sm">
@@ -1131,7 +1131,7 @@ export default function CreatorDashboard() {
 
         {/* Balance Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="glass-card p-5">
+          <div className="glass-panel p-5">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
                 <DollarSign className="w-5 h-5 text-brand-400" />
@@ -1141,7 +1141,7 @@ export default function CreatorDashboard() {
             <p className="text-2xl font-bold">{formatTZS(balance?.totalEarned || 0)}</p>
           </div>
 
-          <div className="glass-card p-5">
+          <div className="glass-panel p-5">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
                 <Wallet className="w-5 h-5 text-emerald-400" />
@@ -1153,7 +1153,7 @@ export default function CreatorDashboard() {
             </p>
           </div>
 
-          <div className="glass-card p-5">
+          <div className="glass-panel p-5">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center">
                 <Banknote className="w-5 h-5 text-amber-400" />
@@ -1176,7 +1176,7 @@ export default function CreatorDashboard() {
             </p>
           </div>
 
-          <div className="glass-card p-5">
+          <div className="glass-panel p-5">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-brand-500/20 flex items-center justify-center">
                 <TrendingUp className="w-5 h-5 text-brand-400" />
@@ -1396,24 +1396,24 @@ export default function CreatorDashboard() {
 
         {/* Stats Row */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="glass-card p-4 text-center">
+          <div className="glass-panel p-4 text-center">
             <Eye className="w-5 h-5 text-white/40 mx-auto mb-1" />
             <p className="text-lg font-bold">{formatCount(creatorData?.totalViews || 0)}</p>
             <p className="text-xs text-white/40">Total Views</p>
           </div>
-          <div className="glass-card p-4 text-center">
+          <div className="glass-panel p-4 text-center">
             <Film className="w-5 h-5 text-white/40 mx-auto mb-1" />
             <p className="text-lg font-bold">{creatorData?.videoStats.length || 0}</p>
             <p className="text-xs text-white/40">Videos</p>
           </div>
-          <div className="glass-card p-4 text-center">
+          <div className="glass-panel p-4 text-center">
             <BarChart3 className="w-5 h-5 text-white/40 mx-auto mb-1" />
             <p className="text-lg font-bold">
               {creatorData?.videoStats.reduce((s, v) => s + v.purchaseCount, 0) || 0}
             </p>
             <p className="text-xs text-white/40">Purchases</p>
           </div>
-          <div className="glass-card p-4 text-center">
+          <div className="glass-panel p-4 text-center">
             <Banknote className="w-5 h-5 text-white/40 mx-auto mb-1" />
             <p className="text-lg font-bold">{CREATOR_REVENUE_SHARE_PERCENT}%</p>
             <p className="text-xs text-white/40">Your Revenue Share</p>
@@ -1470,19 +1470,19 @@ export default function CreatorDashboard() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4 text-sm">
-            <div className="rounded-xl bg-surface-300/30 p-3">
+            <div className="rounded-xl glass-surface p-3">
               <p className="text-xs text-white/50">Available to withdraw</p>
               <p className="font-bold text-emerald-400">
                 {formatTZS(balance?.availableBalance || 0)}
               </p>
             </div>
-            <div className="rounded-xl bg-surface-300/30 p-3">
+            <div className="rounded-xl glass-surface p-3">
               <p className="text-xs text-white/50">You can withdraw from</p>
               <p className="font-bold text-amber-400">
                 {payoutFloorWaived ? "Any amount" : "TZS 30,000"}
               </p>
             </div>
-            <div className="rounded-xl bg-surface-300/30 p-3">
+            <div className="rounded-xl glass-surface p-3">
               <p className="text-xs text-white/50">Minimum per withdrawal</p>
               {/* The rule, as it applies to THIS account: the floor is TZS
                   30,000 unless an admin has lifted it, in which case saying
@@ -1507,7 +1507,7 @@ export default function CreatorDashboard() {
             accounts for the difference. So both are stated here, and the row in
             the history below carries the real numbers once they exist.
           */}
-          <details className="mt-4 rounded-xl bg-surface-300/20 px-3 py-2">
+          <details className="mt-4 rounded-xl glass-surface px-3 py-2">
             <summary className="text-xs text-white/60 cursor-pointer flex items-center gap-1.5">
               <Banknote className="w-3.5 h-3.5 text-emerald-400/80 shrink-0" />
               Pesa yako inahesabiwa vipi? {CREATOR_REVENUE_SHARE_PERCENT}% ni yako, ada ya
@@ -1574,7 +1574,7 @@ export default function CreatorDashboard() {
             they can actually play, so say so rather than letting a creator
             wonder why a finished upload is not live. */}
         {awaitingPublish > 0 && (
-          <div className="glass-card p-4 flex items-start gap-3 border border-amber-500/20 bg-amber-500/5">
+          <div className="glass-panel p-4 flex items-start gap-3 border border-amber-500/20 bg-amber-500/5">
             <Loader2 className="w-5 h-5 text-amber-400 shrink-0 mt-0.5 animate-spin" />
             <div className="text-sm">
               <p className="font-medium text-amber-300">
@@ -1629,7 +1629,7 @@ export default function CreatorDashboard() {
                 {/* Thumbnail — the picture the viewer will see on the feed. A
                     missing one gets the same treatment as a broken one, because
                     from the creator's side both mean "post has no cover". */}
-                <div className="w-24 h-16 shrink-0 rounded-lg overflow-hidden bg-surface-300/40 flex items-center justify-center">
+                <div className="w-24 h-16 shrink-0 rounded-lg overflow-hidden glass-surface flex items-center justify-center">
                   {video.thumbnailUrl ? (
                     <Image
                       src={video.thumbnailUrl}
@@ -1732,7 +1732,7 @@ export default function CreatorDashboard() {
             ))}
 
             {videos.length === 0 && (
-              <div className="px-4 py-12 text-center rounded-b-2xl">
+              <div className="glass-panel px-4 py-12 text-center rounded-b-2xl">
                 <Film className="w-8 h-8 mx-auto text-white/20 mb-3" />
                 <p className="text-white/50 text-sm">You have not posted a video yet</p>
                 <Link href="/creator/upload" className="btn-brand inline-flex items-center gap-2 mt-4">
@@ -1841,13 +1841,13 @@ export default function CreatorDashboard() {
           ) : (
             <>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-xl bg-surface-300/30 p-4">
+                <div className="rounded-xl glass-surface p-4">
                   <p className="text-xs text-white/40">Messages received</p>
                   <p className="text-xl font-bold mt-1">
                     {formatCount(paidMessages.messages)}
                   </p>
                 </div>
-                <div className="rounded-xl bg-surface-300/30 p-4">
+                <div className="rounded-xl glass-surface p-4">
                   <p className="text-xs text-white/40">Earned from messages</p>
                   <p className="text-xl font-bold mt-1 text-emerald-400">
                     {formatTZS(paidMessages.earned)}
@@ -1859,7 +1859,7 @@ export default function CreatorDashboard() {
                       : ""}
                   </p>
                 </div>
-                <div className="rounded-xl bg-surface-300/30 p-4">
+                <div className="rounded-xl glass-surface p-4">
                   <p className="text-xs text-white/40">Available right away</p>
                   <p className="text-xl font-bold mt-1 text-emerald-400">
                     {formatTZS(paidMessages.cleared)}
@@ -1875,7 +1875,7 @@ export default function CreatorDashboard() {
                   {paidMessages.recent.map((m) => (
                     <div
                       key={m.id}
-                      className="flex items-center gap-3 p-3 rounded-xl bg-surface-300/20"
+                      className="flex items-center gap-3 p-3 rounded-xl glass-surface"
                     >
                       <div className="w-9 h-9 rounded-full bg-brand-500/20 flex items-center justify-center text-brand-400 font-bold text-sm shrink-0">
                         {(m.sender.username?.[0] || m.sender.displayName?.[0] || "U").toUpperCase()}
@@ -1917,7 +1917,7 @@ export default function CreatorDashboard() {
             {(creatorData?.recentTransactions || []).map((tx) => (
               <div
                 key={tx.id}
-                className="flex items-center gap-3 p-3 rounded-xl bg-surface-300/30"
+                className="flex items-center gap-3 p-3 rounded-xl glass-surface"
               >
                 <div className="w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
                   <ArrowUpRight className="w-5 h-5 text-emerald-400" />
@@ -1968,9 +1968,9 @@ export default function CreatorDashboard() {
               {(creatorData?.payouts || []).map((payout) => (
                 <div
                   key={payout.id}
-                  className="flex items-center gap-3 p-3 rounded-xl bg-surface-300/30"
+                  className="flex items-center gap-3 p-3 rounded-xl glass-surface"
                 >
-                  <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center shrink-0">
+                  <div className="w-10 h-10 rounded-full glass-surface flex items-center justify-center shrink-0">
                     <Banknote className="w-5 h-5 text-white/60" />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -2039,7 +2039,7 @@ export default function CreatorDashboard() {
       {/* Edit Video Modal — everything a viewer sees before paying, in one form. */}
       {editing && (
         <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-card my-auto w-full max-w-2xl p-6">
+          <div className="glass-overlay my-auto w-full max-w-2xl p-6">
             <h2 className="text-xl font-display font-bold mb-1">Edit video</h2>
             <p className="text-xs text-white/40 mb-5">
               The cover, the title, the description, the price and the free preview —
@@ -2052,7 +2052,7 @@ export default function CreatorDashboard() {
               <div>
                 <label className="text-sm text-white/60 mb-2 block">Cover image</label>
                 <div className="flex items-start gap-4">
-                  <div className="w-40 h-24 shrink-0 rounded-xl overflow-hidden bg-surface-300/40 flex items-center justify-center">
+                  <div className="w-40 h-24 shrink-0 rounded-xl overflow-hidden glass-surface flex items-center justify-center">
                     {editCoverUrl ? (
                       <Image
                         src={editCoverUrl}
@@ -2306,7 +2306,7 @@ export default function CreatorDashboard() {
       {/* Payout Modal — withdraw to a phone number or a bank account. */}
       {showPayoutModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-card w-full max-w-md p-6 animate-slide-up">
+          <div className="glass-overlay w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-2">Withdraw money</h2>
             <p className="text-sm text-white/50 mb-4">
               Available balance: {formatTZS(balance?.availableBalance || 0)} ·{" "}
@@ -2316,7 +2316,7 @@ export default function CreatorDashboard() {
             </p>
 
             {savedPayoutAccount && (
-              <p className="mb-4 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/70">
+              <p className="mb-4 glass-surface px-3 py-2 text-xs text-white/70">
                 Filled in from your last withdrawal:{" "}
                 <span className="text-white/90">{describePayoutAccount(savedPayoutAccount)}</span>.
                 Change it below and the new account is used from then on.
@@ -2440,7 +2440,7 @@ export default function CreatorDashboard() {
           refunded to the same balance it came from. */}
       {showBlueTickModal && blueTick && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="glass-card w-full max-w-md p-6 animate-slide-up">
+          <div className="glass-overlay w-full max-w-md p-6 animate-slide-up">
             <h2 className="text-xl font-display font-bold mb-1 flex items-center gap-2">
               <BadgeCheck className="w-5 h-5 text-sky-400" /> Blue tick
             </h2>
@@ -2473,7 +2473,7 @@ export default function CreatorDashboard() {
                 </div>
               </div>
 
-              <div className="bg-surface-300/40 rounded-xl p-4 flex justify-between text-sm">
+              <div className="glass-surface rounded-xl p-4 flex justify-between text-sm">
                 <span className="text-white/60">Total</span>
                 <span className="font-bold text-brand-400">
                   TZS {(blueTick.price * blueTickMonths).toLocaleString()}

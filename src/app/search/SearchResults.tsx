@@ -132,7 +132,7 @@ export default function SearchResults({ query }: { query: string }) {
   // --- Nothing typed yet -----------------------------------------------------
   if (!query) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 text-center">
+      <div className="glass-panel flex flex-col items-center justify-center px-6 py-20 text-center">
         <Search className="mb-4 h-10 w-10 text-gray-500" />
         <h1 className="text-xl font-semibold text-white">Search Genhub</h1>
         <p className="mt-2 max-w-sm text-sm text-gray-400">
@@ -145,7 +145,7 @@ export default function SearchResults({ query }: { query: string }) {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-24 text-gray-400" role="status">
+      <div className="glass-panel flex items-center justify-center px-6 py-16 text-gray-400" role="status">
         <Loader2 className="mr-2 h-5 w-5 animate-spin" />
         Searching for “{query}”…
       </div>
@@ -154,7 +154,7 @@ export default function SearchResults({ query }: { query: string }) {
 
   if (failed) {
     return (
-      <div className="py-24 text-center">
+      <div className="glass-panel px-6 py-20 text-center">
         <h1 className="text-lg font-semibold text-white">
           Search is not available right now
         </h1>
@@ -187,7 +187,7 @@ export default function SearchResults({ query }: { query: string }) {
           id="search-duration"
           value={duration}
           onChange={(e) => setDuration(e.target.value)}
-          className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
+          className="glass-surface rounded-full px-3 py-2 text-sm text-white"
         >
           <option value="">Any length</option>
           <option value="short">Under 5 min</option>
@@ -204,7 +204,7 @@ export default function SearchResults({ query }: { query: string }) {
               id="search-price"
               value={priceBand}
               onChange={(e) => setPriceBand(e.target.value)}
-              className="rounded-full border border-white/10 bg-white/5 px-3 py-2 text-sm text-white"
+              className="glass-surface rounded-full px-3 py-2 text-sm text-white"
             >
               <option value="">Any price</option>
               <option value="free">Free only</option>
@@ -219,10 +219,10 @@ export default function SearchResults({ query }: { query: string }) {
           type="button"
           onClick={() => setVerifiedOnly((v) => !v)}
           aria-pressed={verifiedOnly}
-          className={`rounded-full border px-3 py-2 text-sm transition ${
+          className={`rounded-full px-3 py-2 text-sm transition ${
             verifiedOnly
-              ? "border-violet-500/60 bg-violet-600/20 text-violet-200"
-              : "border-white/10 bg-white/5 text-gray-300 hover:bg-white/10"
+              ? "border border-violet-500/60 bg-violet-600/25 text-violet-200"
+              : "glass-surface text-gray-300 hover:bg-white/10"
           }`}
         >
           Verified creators
@@ -244,15 +244,12 @@ export default function SearchResults({ query }: { query: string }) {
       </div>
 
       {nothing && (
-        <div className="py-20 text-center">
+        <div className="glass-panel mt-6 px-6 py-16 text-center">
           <h2 className="text-lg font-semibold text-white">Nothing matched</h2>
           <p className="mx-auto mt-2 max-w-md text-sm text-gray-400">
             Try a shorter word, check the spelling, or browse by category instead.
           </p>
-          <Link
-            href="/browse/all"
-            className="mt-6 inline-block rounded-full bg-violet-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-violet-500"
-          >
+          <Link href="/browse/all" className="btn-brand mt-6 inline-flex">
             Browse all videos
           </Link>
         </div>
@@ -266,9 +263,9 @@ export default function SearchResults({ query }: { query: string }) {
               <Link
                 key={creator.id}
                 href={`/creator/${creator.id}`}
-                className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 p-3 transition hover:border-violet-500/40 hover:bg-white/10"
+                className="glass-surface group flex items-center gap-3 p-3 transition hover:border-brand-500/40 hover:bg-white/10"
               >
-                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full bg-white/10">
+                <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-full glass-surface">
                   {creator.avatarUrl ? (
                     <Image
                       src={creator.avatarUrl}

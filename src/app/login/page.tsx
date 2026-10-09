@@ -182,7 +182,7 @@ export default function LoginPage() {
             >
               {/* Acceptance veil — the whole card confirms before it leaves */}
               {phase === "success" && (
-                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-surface-500/95 backdrop-blur">
+                <div className="glass-chrome absolute inset-0 z-20 flex flex-col items-center justify-center gap-3">
                   <div className="auth-pop flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/20 ring-2 ring-emerald-400/60">
                     <Check className="h-8 w-8 text-emerald-400" />
                   </div>
@@ -203,8 +203,8 @@ export default function LoginPage() {
               {/* Method switch with a sliding pill */}
               <div
                 className={cn(
-                  "relative flex rounded-xl p-1",
-                  isLight ? "bg-gray-100" : "bg-surface-300/40"
+                  "relative flex p-1",
+                  "glass-surface"
                 )}
               >
                 <span
@@ -330,8 +330,8 @@ export default function LoginPage() {
             {/* Dev-only demo logins */}
             {process.env.NODE_ENV !== "production" && (
               <div className={cn(
-                "mt-4 rounded-2xl border p-4 text-center",
-                isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/10"
+                "mt-4 p-4 text-center",
+                "glass-panel"
               )}>
                 <p className={cn("text-xs mb-3", isLight ? "text-gray-500" : "text-white/40")}>
                   Development only — one-click sign in with seeded demo accounts

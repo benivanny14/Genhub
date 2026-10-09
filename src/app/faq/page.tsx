@@ -80,8 +80,8 @@ export default function FaqPage() {
             <div
               key={i}
               className={cn(
-                "rounded-2xl border overflow-hidden transition",
-                isLight ? "bg-white border-gray-200" : "bg-surface-400/40 border-white/5"
+                "overflow-hidden transition",
+                "glass-panel"
               )}
             >
               <button

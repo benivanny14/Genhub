@@ -12,8 +12,8 @@ export default function Footer() {
 
   return (
     <footer className={cn(
-      "border-t py-12 px-4",
-      isLight ? "bg-white border-gray-200" : "bg-surface-600/30 border-white/5"
+      "glass-chrome border-t py-12 px-4",
+      isLight ? "border-gray-200/70" : "border-white/5"
     )}>
       <div className="max-w-7xl mx-auto">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">

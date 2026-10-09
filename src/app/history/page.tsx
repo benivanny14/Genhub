@@ -81,7 +81,7 @@ export default function HistoryPage() {
 
     return (
       <Link href={href} className="glass-card p-3 flex gap-3 hover:border-brand-500/40 transition">
-        <div className="relative w-28 sm:w-36 aspect-video rounded-lg overflow-hidden bg-white/5 shrink-0">
+        <div className="relative w-28 sm:w-36 aspect-video rounded-lg overflow-hidden glass-surface shrink-0">
           {item.thumbnailUrl ? (
             <Image
               src={item.thumbnailUrl}
@@ -150,7 +150,7 @@ export default function HistoryPage() {
         {error && <p className="text-sm text-red-400">{error}</p>}
 
         {items && items.length === 0 && (
-          <div className="glass-card p-10 text-center">
+          <div className="glass-panel p-10 text-center">
             <History className="w-10 h-10 mx-auto mb-3 text-white/15" />
             <p className="text-sm text-white/50">
               Nothing here yet — start watching a scene and it will appear here.
