@@ -391,7 +391,7 @@
 
   /* Safe area for mobile */
   .safe-bottom {
-    padding-bottom: max(env(safe-area-inset-bottom), 1rem);
+    padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
   }
 
   .safe-top {
@@ -550,6 +550,7 @@
 .menu-scroll {
   max-height: calc(100vh - var(--site-banner-height, 0px) - 4rem - env(safe-area-inset-top, 0px));
   max-height: calc(100dvh - var(--site-banner-height, 0px) - 4rem - env(safe-area-inset-top, 0px));
+  padding-bottom: var(--site-bottom-nav-height, 0px);
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;

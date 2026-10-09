@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchCurrentUser } from "@/lib/current-user";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -44,6 +44,26 @@ export default function BottomNav({ userRole }: BottomNavProps) {
     };
   }, [userRole]);
 
+  const navRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const el = navRef.current;
+    if (!el) return;
+
+    const root = document.documentElement;
+    const publish = () =>
+      root.style.setProperty("--site-bottom-nav-height", `${el.offsetHeight}px`);
+
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(el);
+
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--site-bottom-nav-height");
+    };
+  }, []);
+
   const navItems = [
     { href: "/", icon: Home, label: "Home" },
     { href: "/favorites", icon: Heart, label: "Saved" },
@@ -52,11 +72,14 @@ export default function BottomNav({ userRole }: BottomNavProps) {
   ];
 
   return (
-    <nav className={cn(
-      "md:hidden fixed bottom-0 left-0 right-0 z-50 border-t safe-bottom glass-chrome",
-      isLight ? "border-gray-200/60" : "border-white/5"
-    )}>
-      <div className="flex items-center justify-around px-2 py-2">
+    <nav
+      ref={navRef}
+      className={cn(
+        "md:hidden fixed bottom-0 left-0 right-0 z-50 border-t safe-bottom glass-chrome",
+        isLight ? "border-gray-200/60" : "border-white/5"
+      )}
+    >
+      <div className="flex items-center justify-around px-2 py-1">
         {navItems.map((item) => {
           const isActive = pathname === item.href;
           return (
@@ -64,14 +87,14 @@ export default function BottomNav({ userRole }: BottomNavProps) {
               key={item.href}
               href={item.href}
               className={cn(
-                "flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-all duration-200",
+                "flex flex-col items-center gap-0.5 px-2 py-0.5 rounded-lg transition-all duration-200",
                 isActive
                   ? "text-brand-500"
                   : isLight ? "text-gray-400 hover:text-gray-600" : "text-white/40 hover:text-white/70"
               )}
             >
-              <item.icon className={cn("w-5 h-5", isActive && "scale-110")} />
-              <span className="text-[10px] font-medium">{item.label}</span>
+              <item.icon className={cn("w-[18px] h-[18px]", isActive && "scale-110")} />
+              <span className="text-[10px] leading-none font-medium">{item.label}</span>
             </Link>
           );
         })}
