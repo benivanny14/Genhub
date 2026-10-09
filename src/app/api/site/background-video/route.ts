@@ -90,7 +90,13 @@ function parseRange(header: string | null, size: number): Slice | "unsatisfiable
   }
 
   if (size === 0) return "unsatisfiable";
-  return { status: start === 0 && end === size - 1 ? 200 : 206, start, end };
+  // 206 even when the range happens to span the whole file. A 200 is legal
+  // here and fatal in practice: the browser reads it as "this server cannot
+  // serve bytes", stops asking for offsets, and for a clip of any real size
+  // the download it then waits for never finishes — so the backdrop never
+  // plays and never loops. `bytes=0-` is the FIRST thing every <video> sends,
+  // so this is not an edge case, it is the normal path.
+  return { status: 206, start, end };
 }
 
 async function serve(request: NextRequest, bodyAllowed: boolean) {

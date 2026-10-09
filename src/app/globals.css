@@ -583,9 +583,12 @@
   z-index: -11;
   pointer-events: none;
   overflow: hidden;
-  /* What shows if the file 404s: the page colour, so a missing clip is
-     indistinguishable from no clip at all. */
-  background-color: #050506;
+  /* Transparent until the clip can actually paint. Both the backing colour and
+     the scrim below are keyed to html.gh-has-bgvideo, which BackgroundVideo
+     only sets on the first frame — so a slow, large or missing file leaves the
+     page exactly as it was rather than dimming every pane of glass by 55%
+     while an 800 MB download crawls. */
+  background-color: transparent;
 }
 
 .gh-bgvideo-clip {
@@ -602,14 +605,22 @@
   content: "";
   position: absolute;
   inset: 0;
+  background-color: transparent;
+}
+
+html.gh-has-bgvideo .gh-bgvideo {
+  background-color: #050506;
+}
+
+html.gh-has-bgvideo .gh-bgvideo::after {
   background-color: rgba(5, 5, 6, 0.55);
 }
 
-.light .gh-bgvideo {
+html.gh-has-bgvideo.light .gh-bgvideo {
   background-color: #f0edf6;
 }
 
-.light .gh-bgvideo::after {
+html.gh-has-bgvideo.light .gh-bgvideo::after {
   background-color: rgba(240, 237, 246, 0.6);
 }
 

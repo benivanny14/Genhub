@@ -135,6 +135,19 @@ describe("GET /api/site/background-video", () => {
     expect(body).toEqual(payload().subarray(0, 100));
   });
 
+  it("answers the whole-file range a <video> opens with a 206, never a 200", async () => {
+    // `bytes=0-` is the very first request every <video> makes. Answering it
+    // with a 200 tells the browser this server cannot serve bytes at all: it
+    // stops seeking, waits out the whole download, and on a clip of any real
+    // size that download never completes — so the backdrop never plays.
+    const response = await get(`?v=${TOKEN}`, { Range: "bytes=0-" });
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(`bytes 0-${SIZE - 1}/${SIZE}`);
+    expect(response.headers.get("Content-Length")).toBe(String(SIZE));
+    expect(await bytes(response)).toEqual(payload());
+  });
+
   it("answers an open-ended range from the offset to the end", async () => {
     const response = await get(`?v=${TOKEN}`, { Range: `bytes=${SIZE - 16}-` });
 

@@ -60,6 +60,7 @@ export default function BackgroundVideo() {
   const video = useBackgroundVideo();
   const [allowed, setAllowed] = useState(false);
   const [broken, setBroken] = useState(false);
+  const [painted, setPainted] = useState(false);
   const url = backgroundVideoUrl(video);
 
   useEffect(() => {
@@ -68,21 +69,24 @@ export default function BackgroundVideo() {
 
   // Tell the document, so the aurora can stand back for the clip instead of
   // washing its violet over it. Toggled rather than derived from `:has()` so
-  // the behaviour does not depend on the reader supporting it.
+  // the behaviour does not depend on the reader supporting it. Held back until
+  // the first frame has arrived: a clip is up to 800 MB, and claiming the page
+  // for something that is still downloading dims every pane of glass for as
+  // long as that takes, on a file that may never arrive at all.
   useEffect(() => {
     const root = document.documentElement;
-    if (!url) {
+    if (!url || !allowed || !painted || broken) {
       root.classList.remove("gh-has-bgvideo");
       return;
     }
     root.classList.add("gh-has-bgvideo");
     return () => root.classList.remove("gh-has-bgvideo");
-  }, [url]);
+  }, [url, allowed, painted, broken]);
 
-  // The row can outlive the file (a host whose disk was wiped, a manual
-  // delete). Falling back to the aurora-only page beats a dark rectangle.
+  // A replacement is a different URL and starts from nothing again.
   useEffect(() => {
     setBroken(false);
+    setPainted(false);
   }, [url]);
 
   if (!url || !allowed || broken) return null;
@@ -99,6 +103,8 @@ export default function BackgroundVideo() {
         preload="auto"
         disablePictureInPicture
         tabIndex={-1}
+        onLoadedData={() => setPainted(true)}
+        onCanPlay={() => setPainted(true)}
         onError={() => setBroken(true)}
       />
     </div>
