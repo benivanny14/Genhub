@@ -9,6 +9,17 @@ import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import VerifiedBadge from "@/components/VerifiedBadge";
 import { formatTZS } from "@/lib/utils";
+// Sizes on this screen are read at a glance — "437 MB", never a raw number.
+import { formatBytes } from "@/lib/host-bytes";
+// The rules for the clip that sits behind every page. Shared with the layer
+// that plays it so the button and the route can never disagree about the
+// ceiling or about which containers are accepted.
+import {
+  BACKGROUND_VIDEO_ACCEPT,
+  MAX_BACKGROUND_VIDEO_LABEL,
+  backgroundVideoRefusal,
+  type BackgroundVideo,
+} from "@/lib/background-video";
 // How long a withdrawal has waited and what it needs next. The rule lives in
 // one place so this screen and the API cannot describe the same row two
 // different ways.
@@ -1213,6 +1224,16 @@ export default function AdminDashboard() {
     // a quiet default is how one gets missed.
   }>({ active: false, message: "", tone: "danger" });
   const [announcementBusy, setAnnouncementBusy] = useState(false);
+  // The clip behind every page, and the upload of its replacement. Null until
+  // the Overview card has read it, so "no backdrop yet" and "not read yet" are
+  // different states rather than one blank row.
+  const [backgroundVideo, setBackgroundVideo] = useState<BackgroundVideo | null>(null);
+  const [backgroundBusy, setBackgroundBusy] = useState(false);
+  // 0-100 while an upload is running, null otherwise. A file near the ceiling
+  // takes minutes, and a button that only says "Working…" for three of them is
+  // a button people press again.
+  const [backgroundProgress, setBackgroundProgress] = useState<number | null>(null);
+  const backgroundFileRef = useRef<HTMLInputElement>(null);
   // Starting a worker by hand: which one is running, which one is waiting for
   // the operator to confirm that it may charge a customer's phone, and what the
   // last manual run came back with.
@@ -1541,6 +1562,7 @@ export default function AdminDashboard() {
         setFlagUploads(Boolean(data.data.flags?.uploadsEnabled));
         setFlagCheckout(Boolean(data.data.flags?.checkoutEnabled));
         if (data.data.announcement) setAnnouncement(data.data.announcement);
+        if (data.data.backgroundVideo) setBackgroundVideo(data.data.backgroundVideo);
       }
     } catch {
       // Informational, like readiness — never an error toast
@@ -1578,6 +1600,100 @@ export default function AdminDashboard() {
       toast("error", "The request failed.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Put a clip behind every page, replacing whatever is there.
+   *
+   * Sent with XMLHttpRequest rather than fetch for one reason: upload
+   * PROGRESS. `fetch` has no way to report bytes going out, and an 800 MB file
+   * on an ordinary connection is minutes of a button that will not say whether
+   * it is still working — which is how an upload gets pressed again halfway
+   * through and left. The server streams the body straight to disk; see
+   * /api/admin/background-video.
+   *
+   * Checked here first as well as there: the size rule is enforced on the
+   * server, but a person who is told now has not just waited out the transfer
+   * to be told no.
+   */
+  function uploadBackgroundVideo(file: File) {
+    const refusal = backgroundVideoRefusal(file);
+    if (refusal) {
+      toast("error", refusal);
+      return;
+    }
+
+    setBackgroundBusy(true);
+    setBackgroundProgress(0);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/admin/background-video");
+    // The file itself is the body. The type and name travel as headers because
+    // multipart would have to assemble the whole file in memory first — see the
+    // route's header for why that is exactly what an 800 MB clip must not do.
+    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
+    xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name || "background.mp4"));
+    xhr.setRequestHeader("X-File-Size", String(file.size));
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        setBackgroundProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      }
+    };
+
+    xhr.onload = () => {
+      setBackgroundBusy(false);
+      setBackgroundProgress(null);
+      let body: {
+        success?: boolean;
+        message?: string;
+        error?: string;
+        data?: { backgroundVideo?: BackgroundVideo };
+      } | null = null;
+      try {
+        body = JSON.parse(xhr.responseText);
+      } catch {
+        body = null;
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300 && body?.success) {
+        if (body.data?.backgroundVideo) setBackgroundVideo(body.data.backgroundVideo);
+        toast("success", body.message || "Background video updated");
+        return;
+      }
+      toast("error", body?.error || "The upload failed — try again.");
+    };
+
+    xhr.onerror = () => {
+      setBackgroundBusy(false);
+      setBackgroundProgress(null);
+      toast("error", "The upload failed. Check your connection and try again.");
+    };
+    xhr.onabort = () => {
+      setBackgroundBusy(false);
+      setBackgroundProgress(null);
+    };
+
+    xhr.send(file);
+  }
+
+  /** Take the backdrop down. The aurora is what the page had before it. */
+  async function removeBackgroundVideo() {
+    setBackgroundBusy(true);
+    try {
+      const res = await adminFetch("/api/admin/background-video", { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        if (data.data?.backgroundVideo) setBackgroundVideo(data.data.backgroundVideo);
+        toast("success", data.message || "Background video removed");
+      } else {
+        toast("error", data.error || "Could not remove that.");
+      }
+    } catch {
+      toast("error", "The request failed.");
+    } finally {
+      setBackgroundBusy(false);
     }
   }
 
@@ -2864,6 +2980,95 @@ export default function AdminDashboard() {
                     </button>
                   )}
                 </div>
+              </div>
+
+              {/* Background video — the clip behind every page */}
+              <div className="mt-3 glass-surface p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium">Background video</p>
+                    <p className="text-xs text-white/50">
+                      Plays behind every page, under the glass. Max {MAX_BACKGROUND_VIDEO_LABEL} ·
+                      MP4, WebM, MOV or MKV.
+                    </p>
+                  </div>
+                  {backgroundVideo?.active && (
+                    <span className="text-xs text-emerald-400">LIVE</span>
+                  )}
+                </div>
+
+                {backgroundVideo?.active && (
+                  <div className="mt-2 flex items-center gap-3">
+                    {/* The clip itself, so the answer to "which one is live?" is
+                        the clip and not a filename. Metadata only — the admin
+                        does not need the whole file to recognise it. */}
+                    <video
+                      src={`/api/site/background-video?v=${backgroundVideo.token}`}
+                      controls
+                      muted
+                      loop
+                      playsInline
+                      preload="metadata"
+                      className="h-20 w-36 shrink-0 rounded-lg bg-black object-cover"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm truncate">{backgroundVideo.name}</p>
+                      <p className="text-xs text-white/40">
+                        {formatBytes(backgroundVideo.size)} · {backgroundVideo.mimeType}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                <input
+                  ref={backgroundFileRef}
+                  type="file"
+                  accept={BACKGROUND_VIDEO_ACCEPT}
+                  className="hidden"
+                  disabled={backgroundBusy}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) uploadBackgroundVideo(file);
+                    // Cleared so choosing the SAME file again still fires a
+                    // change event — without it the second attempt is silent.
+                    e.currentTarget.value = "";
+                  }}
+                />
+
+                <div className="flex items-center gap-2 mt-2">
+                  <button
+                    type="button"
+                    onClick={() => backgroundFileRef.current?.click()}
+                    disabled={backgroundBusy}
+                    className="btn-brand text-xs disabled:opacity-50"
+                  >
+                    {backgroundBusy
+                      ? backgroundProgress === null
+                        ? "Working…"
+                        : `Uploading… ${backgroundProgress}%`
+                      : backgroundVideo?.active
+                        ? "Replace video"
+                        : `Upload video`}
+                  </button>
+                  {backgroundVideo?.active && !backgroundBusy && (
+                    <button
+                      type="button"
+                      onClick={removeBackgroundVideo}
+                      className="btn-ghost text-xs"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+
+                {backgroundBusy && backgroundProgress !== null && (
+                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                    <div
+                      className="h-full rounded-full bg-brand-500 transition-[width] duration-200"
+                      style={{ width: `${backgroundProgress}%` }}
+                    />
+                  </div>
+                )}
               </div>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

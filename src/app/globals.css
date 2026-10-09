@@ -556,6 +556,74 @@
 }
 
 /* ===========================================================================
+   THE BACKGROUND CLIP
+
+   An operator can put one silent looping video at the very back of every page.
+   It is the deepest layer there is: z-index -11, one below the aurora, so it is
+   never seen directly — only through the colour fields, the graph paper, the
+   vignette and then whatever pane of glass the reader is looking at. That is
+   the whole point of putting it there rather than on top: it changes what the
+   glass has to frost, and touches no layout, no text and no hit-testing.
+
+   `.gh-bgvideo::after` is a scrim, and it is the difference between a backdrop
+   and an unreadable page. Body copy sits on glass that is at most 62% opaque
+   over this; without a wash of the page colour on top of the clip, a bright
+   frame turns every paragraph into a contrast failure. The vignette above it
+   then darkens the edges further, which is where headings happen to sit.
+
+   `html.gh-has-bgvideo` is set by components/BackgroundVideo while a clip is
+   mounted, and it stands the aurora down — a 62%-alpha violet field over a
+   video is not frosted glass, it is a colour cast over somebody's footage.
+   ========================================================================= */
+
+.gh-bgvideo {
+  position: fixed;
+  inset: 0;
+  z-index: -11;
+  pointer-events: none;
+  overflow: hidden;
+  /* What shows if the file 404s: the page colour, so a missing clip is
+     indistinguishable from no clip at all. */
+  background-color: #050506;
+}
+
+.gh-bgvideo-clip {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Cover, not contain: a letterboxed backdrop would show the page colour in
+     bars down two sides and read as a broken layer rather than as video. */
+  object-fit: cover;
+}
+
+.gh-bgvideo::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-color: rgba(5, 5, 6, 0.55);
+}
+
+.light .gh-bgvideo {
+  background-color: #f0edf6;
+}
+
+.light .gh-bgvideo::after {
+  background-color: rgba(240, 237, 246, 0.6);
+}
+
+/* The aurora exists to give a flat page something to frost. With a clip behind
+   it there is already something there, so it steps back to a tint instead of
+   standing in front of the footage. */
+html.gh-has-bgvideo .gh-aurora {
+  opacity: 0.45;
+}
+
+html.gh-has-bgvideo .gh-grid {
+  opacity: 0.3;
+}
+
+/* ===========================================================================
    THE AURORA
 
    Glass has nothing to be glass OVER unless there is colour behind it. The old

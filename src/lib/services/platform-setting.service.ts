@@ -7,6 +7,7 @@
 //   features.uploads    false PAUSES creator uploads without a deploy
 //   features.checkout   false PAUSES mobile-money checkout without a deploy
 //   site.announcement   a JSON banner { active, message, tone }
+//   site.background_video  a JSON row naming the clip behind every page
 //
 // READ PATH: every value is read through one cached snapshot, so a request can
 // ask for as many as it likes without a round trip each. The cache is per
@@ -22,6 +23,12 @@
 // =============================================================================
 
 import prisma from "@/lib/db";
+import {
+  NO_BACKGROUND_VIDEO,
+  backgroundVideoRelativePath,
+  isBackgroundToken,
+  type BackgroundVideo,
+} from "@/lib/background-video";
 
 export const PLATFORM_SETTING_KEYS = {
   /** "true" while every video is free to watch for everyone. */
@@ -32,6 +39,8 @@ export const PLATFORM_SETTING_KEYS = {
   checkoutEnabled: "features.checkout",
   /** JSON: { active: boolean, message: string, tone: "info"|"warning"|"success" } */
   announcement: "site.announcement",
+  /** JSON: { active, token, mimeType, name, size } — the clip behind every page. */
+  backgroundVideo: "site.background_video",
 } as const;
 
 export type PlatformSettingKey =
@@ -143,6 +152,43 @@ export async function getAnnouncement(): Promise<Announcement> {
     };
   } catch {
     return NO_ANNOUNCEMENT;
+  }
+}
+
+/**
+ * The clip an operator has put behind every page, or none.
+ *
+ * Parse failures and half-written rows answer "none" rather than throwing: this
+ * is read on the public status endpoint, and a damaged row must not take the
+ * page down with it. A row whose token or MIME this app would not itself have
+ * written is also "none" — `backgroundVideoRelativePath` is the check, because
+ * that same pair is what names the file on disk, and anything it refuses is
+ * something we would rather not serve.
+ */
+export async function getBackgroundVideo(): Promise<BackgroundVideo> {
+  const values = await loadAll();
+  const raw = values[PLATFORM_SETTING_KEYS.backgroundVideo];
+  if (!raw) return NO_BACKGROUND_VIDEO;
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<BackgroundVideo>;
+    const video: BackgroundVideo = {
+      active: parsed.active === true,
+      token: typeof parsed.token === "string" ? parsed.token : "",
+      mimeType: typeof parsed.mimeType === "string" ? parsed.mimeType : "",
+      name: typeof parsed.name === "string" ? parsed.name.slice(0, 200) : "",
+      size: typeof parsed.size === "number" && Number.isFinite(parsed.size) && parsed.size > 0
+        ? Math.floor(parsed.size)
+        : 0,
+    };
+
+    if (!video.active) return NO_BACKGROUND_VIDEO;
+    if (!isBackgroundToken(video.token) || !backgroundVideoRelativePath(video)) {
+      return NO_BACKGROUND_VIDEO;
+    }
+    return video;
+  } catch {
+    return NO_BACKGROUND_VIDEO;
   }
 }
 

@@ -8,6 +8,10 @@
 //   checkoutEnabled   kill switch for mobile-money checkout
 //   announcement      the site-wide banner ({ active, message, tone })
 //
+// GET also answers with `backgroundVideo`, the clip behind every page, so the
+// Overview card needs one call on load instead of two. Writing it belongs to
+// /api/admin/background-video, which has to handle the file itself.
+//
 // Its own route rather than a field on /api/admin/overview: the overview is
 // cached for two minutes, and an operator switch that takes two minutes to be
 // believed is a switch nobody trusts. Reading here is uncached.
@@ -22,6 +26,7 @@ import {
   PLATFORM_SETTING_KEYS,
   getAllVideosFree,
   getAnnouncement,
+  getBackgroundVideo,
   getFeatureFlags,
   normalizeAnnouncementTone,
   setSetting,
@@ -33,12 +38,13 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   try {
     await requireRole("ADMIN");
-    const [allVideosFree, flags, announcement] = await Promise.all([
+    const [allVideosFree, flags, announcement, backgroundVideo] = await Promise.all([
       getAllVideosFree(),
       getFeatureFlags(),
       getAnnouncement(),
+      getBackgroundVideo(),
     ]);
-    return api.success({ allVideosFree, flags, announcement });
+    return api.success({ allVideosFree, flags, announcement, backgroundVideo });
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);

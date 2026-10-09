@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter, Poppins } from "next/font/google";
 import "./globals.css";
 import ClientProviders from "@/components/ClientProviders";
+import BackgroundVideo from "@/components/BackgroundVideo";
 import SiteBanner from "@/components/SiteBanner";
 import config from "@/lib/config";
 import { serializeJsonLd } from "@/lib/json-ld";
@@ -119,6 +120,11 @@ export default function RootLayout({
           Without this the frosted panels have nothing to be frosted over, which
           is what made the old translucent cards read as grey boxes.
         */}
+        {/* The operator's backdrop, if there is one: one layer DEEPER than the
+            aurora, so it is only ever seen through it. Renders nothing at all
+            when no clip is set, when the browser asked for reduced motion, or
+            when it is on Save-Data — see components/BackgroundVideo. */}
+        <BackgroundVideo />
         <div aria-hidden className="gh-aurora" />
         <div aria-hidden className="gh-grid" />
         <div aria-hidden className="gh-vignette" />
