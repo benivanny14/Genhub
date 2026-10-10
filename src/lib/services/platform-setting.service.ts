@@ -25,8 +25,7 @@
 import prisma from "@/lib/db";
 import {
   NO_BACKGROUND_VIDEO,
-  backgroundVideoRelativePath,
-  isBackgroundToken,
+  backgroundVideoAssetId,
   type BackgroundVideo,
 } from "@/lib/background-video";
 
@@ -161,9 +160,9 @@ export async function getAnnouncement(): Promise<Announcement> {
  * Parse failures and half-written rows answer "none" rather than throwing: this
  * is read on the public status endpoint, and a damaged row must not take the
  * page down with it. A row whose token or MIME this app would not itself have
- * written is also "none" — `backgroundVideoRelativePath` is the check, because
- * that same pair is what names the file on disk, and anything it refuses is
- * something we would rather not serve.
+ * written is also "none" — `backgroundVideoAssetId` is the check, because that
+ * same pair is what addresses the stored bytes, and anything it refuses is
+ * something we would rather not look up at all.
  */
 export async function getBackgroundVideo(): Promise<BackgroundVideo> {
   const values = await loadAll();
@@ -183,7 +182,7 @@ export async function getBackgroundVideo(): Promise<BackgroundVideo> {
     };
 
     if (!video.active) return NO_BACKGROUND_VIDEO;
-    if (!isBackgroundToken(video.token) || !backgroundVideoRelativePath(video)) {
+    if (!backgroundVideoAssetId(video)) {
       return NO_BACKGROUND_VIDEO;
     }
     return video;

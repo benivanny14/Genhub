@@ -1221,6 +1221,32 @@ model PlatformSetting {
   @@index([key])
 }
 
+/// The clip an operator has put behind every page, bytes included.
+///
+/// It lives in the database rather than on disk because there IS no persistent
+/// disk: the deployment runs on Vercel, where `public/` is read-only, `/tmp`
+/// belongs to one instance and is gone by the next request, and any payload a
+/// function sends or receives is capped at 4.5 MB. The clip is therefore small
+/// by construction (see MAX_BACKGROUND_VIDEO_BYTES), and this row is the whole
+/// of it — no path, no bucket, no second store to keep in step.
+///
+/// `id` is the SAME 24-hex token the settings row carries and the browser puts
+/// in `?v=`. It was the filename before; it is the primary key now, which is
+/// why the token check in lib/background-video.ts is still the only thing
+/// standing between a stored row and the bytes it is allowed to reach.
+model BackgroundVideoAsset {
+  id        String   @id
+  mimeType  String
+  /// The name the operator chose, kept for their own card. Never used as a path.
+  name      String
+  /// Bytes in `data`, duplicated here so a HEAD or a range request can answer
+  /// without pulling the clip out of storage.
+  size      Int
+  /// The clip itself.
+  data      Bytes
+  createdAt DateTime @default(now())
+}
+
 model CronWatch {
   id           String    @id @default(cuid())
   worker       String    @unique

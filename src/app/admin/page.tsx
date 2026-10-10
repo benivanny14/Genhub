@@ -23,6 +23,7 @@ import {
   BACKGROUND_VIDEO_ACCEPT,
   MAX_BACKGROUND_VIDEO_LABEL,
   backgroundVideoRefusal,
+  backgroundVideoUploadFailure,
   type BackgroundVideo,
 } from "@/lib/background-video";
 // How long a withdrawal has waited and what it needs next. The rule lives in
@@ -1612,15 +1613,15 @@ export default function AdminDashboard() {
    * Put a clip behind every page, replacing whatever is there.
    *
    * Sent with XMLHttpRequest rather than fetch for one reason: upload
-   * PROGRESS. `fetch` has no way to report bytes going out, and an 800 MB file
-   * on an ordinary connection is minutes of a button that will not say whether
-   * it is still working — which is how an upload gets pressed again halfway
-   * through and left. The server streams the body straight to disk; see
+   * PROGRESS. `fetch` has no way to report bytes going out, and a clip on a
+   * phone connection is a stretch of a button that will not say whether it is
+   * still working — which is how an upload gets pressed again halfway through
+   * and left. The server reads the body into a bounded buffer and stores it; see
    * /api/admin/background-video.
    *
-   * Checked here first as well as there: the size rule is enforced on the
-   * server, but a person who is told now has not just waited out the transfer
-   * to be told no.
+   * Checked here first as well as there: the rules are enforced on the server,
+   * but a person who is told now has not just waited out the transfer to be told
+   * no.
    */
   function uploadBackgroundVideo(file: File) {
     const refusal = backgroundVideoRefusal(file);
@@ -1636,7 +1637,7 @@ export default function AdminDashboard() {
     xhr.open("POST", "/api/admin/background-video");
     // The file itself is the body. The type and name travel as headers because
     // multipart would have to assemble the whole file in memory first — see the
-    // route's header for why that is exactly what an 800 MB clip must not do.
+    // route's header for why that is exactly what an oversized clip must not do.
     xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
     xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name || "background.mp4"));
     xhr.setRequestHeader("X-File-Size", String(file.size));
@@ -1671,7 +1672,15 @@ export default function AdminDashboard() {
         toast("success", body.message || "Background video updated");
         return;
       }
-      toast("error", body?.error || "The upload failed — try again.");
+
+      // The response is not always ours. A platform that refuses a request before
+      // it reaches this app answers with plain text, not JSON — which is how a
+      // body over the deployment's own payload limit arrived here as "the upload
+      // failed, try again", with nothing to act on and no way to tell it apart
+      // from a dropped connection. So the STATUS is read as well as the body, and
+      // when the body cannot be parsed the status is all there is: it is the only
+      // fact in that exchange that is ours to interpret.
+      toast("error", body?.error || backgroundVideoUploadFailure(xhr.status));
     };
 
     xhr.onerror = () => {

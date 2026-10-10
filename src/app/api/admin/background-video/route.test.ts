@@ -3,23 +3,23 @@
 //
 // The button that puts a clip behind the whole interface. What is pinned here:
 //
-//   1. A REFUSAL MUST NOT LEAVE ANYTHING BEHIND. The body is streamed to a
-//      `.staging-<token>` file and renamed once it is known good. A rejection
-//      returns from inside the `try`, so it never reaches a `catch` — which is
-//      how every refused upload used to leave a staging file on disk that
-//      nothing would ever read or clean up. The cleanup is a `finally`.
-//   2. The ceiling is answered BEFORE the bytes arrive, from the size the
-//      client declared, and again by the counter while they stream.
+//   1. NOTHING IS STORED UNTIL THE BYTES ARE KNOWN GOOD. The clip is read into a
+//      bounded buffer, checked against the container's own magic, and only then
+//      written. A rejection returns from inside the `try`, so every refusal has
+//      to be checked for "and nothing was saved" — the fault this route shipped
+//      with once, when a refused upload left a staging file on disk forever.
+//   2. The ceiling is answered BEFORE the bytes arrive, from the size the client
+//      declared, and again by the counter while they arrive.
 //   3. The MIME type is a claim; the bytes decide.
+//   4. A replacement removes the clip it replaced, and only after the new one is
+//      safe — a failed write must never leave the site with no backdrop.
 //
-// Auth, rate limiting, the audit log and the settings service are mocked. The
-// file on disk is real, and each test removes what it made.
+// Auth, rate limiting, the audit log, the settings service and the storage
+// service are all mocked. This suite writes nothing anywhere.
 // =============================================================================
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { NextRequest } from "next/server";
-import { readdir, unlink } from "node:fs/promises";
-import path from "node:path";
 
 const mocks = vi.hoisted(() => ({
   getBackgroundVideo: vi.fn(),
@@ -27,12 +27,19 @@ const mocks = vi.hoisted(() => ({
   checkRateLimit: vi.fn(),
   audit: vi.fn(),
   requireRole: vi.fn(),
+  save: vi.fn(),
+  remove: vi.fn(),
 }));
 
 vi.mock("@/lib/services/platform-setting.service", () => ({
   PLATFORM_SETTING_KEYS: { backgroundVideo: "site.background_video" },
   getBackgroundVideo: mocks.getBackgroundVideo,
   setSetting: mocks.setSetting,
+}));
+
+vi.mock("@/lib/services/background-video.service", () => ({
+  saveBackgroundVideoAsset: mocks.save,
+  deleteBackgroundVideoAsset: mocks.remove,
 }));
 
 vi.mock("@/lib/redis", () => ({
@@ -59,8 +66,7 @@ import { POST } from "./route";
 // The route answers with `instanceof AuthError`, so the rejection has to be an
 // instance of the SAME class it imports — the mocked one.
 import { AuthError } from "@/lib/auth";
-
-const SITE_DIR = path.join(process.cwd(), "public", "uploads", "site");
+import { MAX_BACKGROUND_VIDEO_BYTES } from "@/lib/background-video";
 
 /** 4 bytes of box length then `ftyp` — the marker this route looks for. */
 const MP4 = Uint8Array.from([
@@ -82,32 +88,11 @@ function upload(
   );
 }
 
-async function stagingFiles(): Promise<string[]> {
-  try {
-    return (await readdir(SITE_DIR)).filter((name) => name.startsWith(".staging-"));
-  } catch {
-    return [];
-  }
+/** What the route asked the storage service to keep, if it asked at all. */
+function storedToken(): string | null {
+  const call = mocks.save.mock.calls[0];
+  return call ? (call[0] as { id: string }).id : null;
 }
-
-/** The path the route wrote, learned from the row it saved. */
-function storedPath(): string | null {
-  const call = mocks.setSetting.mock.calls.find(
-    ([key]) => key === "site.background_video"
-  );
-  if (!call) return null;
-  const row = JSON.parse(call[1] as string);
-  if (!row.active) return null;
-  return path.join(SITE_DIR, `background-${row.token}.${String(row.mimeType === "video/webm" ? "webm" : "mp4")}`);
-}
-
-afterEach(async () => {
-  const stored = storedPath();
-  if (stored) await unlink(stored).catch(() => {});
-  for (const name of await stagingFiles()) {
-    await unlink(path.join(SITE_DIR, name)).catch(() => {});
-  }
-});
 
 describe("POST /api/admin/background-video", () => {
   beforeEach(() => {
@@ -117,6 +102,8 @@ describe("POST /api/admin/background-video", () => {
     mocks.getBackgroundVideo.mockResolvedValue(NO_CLIP);
     mocks.setSetting.mockResolvedValue(undefined);
     mocks.audit.mockResolvedValue(undefined);
+    mocks.save.mockResolvedValue(undefined);
+    mocks.remove.mockResolvedValue(undefined);
   });
 
   it("refuses anyone who is not an admin", async () => {
@@ -126,6 +113,7 @@ describe("POST /api/admin/background-video", () => {
 
     expect(response.status).toBe(401);
     expect((await response.json()).code).toBe("UNAUTHORIZED");
+    expect(mocks.save).not.toHaveBeenCalled();
     expect(mocks.setSetting).not.toHaveBeenCalled();
   });
 
@@ -135,17 +123,18 @@ describe("POST /api/admin/background-video", () => {
     const response = await upload(MP4);
 
     expect(response.status).toBe(429);
+    expect(mocks.save).not.toHaveBeenCalled();
     expect(mocks.setSetting).not.toHaveBeenCalled();
   });
 
-  it("refuses a container it cannot play, before writing anything", async () => {
+  it("refuses a container it cannot play, before storing anything", async () => {
     const response = await upload(MP4, {
       "content-type": "video/x-msvideo",
       "x-filename": "clip.avi",
     });
 
     expect(response.status).toBe(422);
-    expect(await stagingFiles()).toEqual([]);
+    expect(mocks.save).not.toHaveBeenCalled();
     expect(mocks.setSetting).not.toHaveBeenCalled();
   });
 
@@ -154,22 +143,46 @@ describe("POST /api/admin/background-video", () => {
 
     expect(response.status).toBe(413);
     expect((await response.json()).code).toBe("FILE_TOO_LARGE");
-    expect(await stagingFiles()).toEqual([]);
+    expect(mocks.save).not.toHaveBeenCalled();
     expect(mocks.setSetting).not.toHaveBeenCalled();
   });
 
-  // The regression: a refusal returns from inside the `try`, so the staging
-  // file only goes if the cleanup is a `finally`. Before it was, every upload
-  // a human rejected left a `.staging-*` file on disk forever.
-  it("leaves no staging file behind when the bytes are not a video", async () => {
-    const before = await stagingFiles();
+  it("refuses on the content-length the browser sends, without reading the body", async () => {
+    const response = await upload(MP4, { "content-length": "900000000" });
 
+    expect(response.status).toBe(413);
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+
+  // A declared length is a CLAIM. The counter is what actually bounds the read,
+  // and it is the reason a client that lies about its size cannot make this route
+  // buffer whatever it likes.
+  it("refuses an undeclared body that grows past the ceiling while it arrives", async () => {
+    const response = await upload(Buffer.alloc(MAX_BACKGROUND_VIDEO_BYTES + 1));
+
+    expect(response.status).toBe(413);
+    expect((await response.json()).code).toBe("FILE_TOO_LARGE");
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(mocks.setSetting).not.toHaveBeenCalled();
+  });
+
+  // The regression: a refusal returns from inside the `try`, so the check that
+  // nothing was stored has to be made on every rejection path, not just in the
+  // one that throws.
+  it("stores nothing when the bytes are not a video", async () => {
     const response = await upload(new TextEncoder().encode("hello, not a video"));
 
     expect(response.status).toBe(422);
     expect((await response.json()).code).toBe("VALIDATION_ERROR");
-    expect(await stagingFiles()).toEqual(before);
+    expect(mocks.save).not.toHaveBeenCalled();
     expect(mocks.setSetting).not.toHaveBeenCalled();
+  });
+
+  it("stores nothing for an empty body", async () => {
+    const response = await upload(new Uint8Array(0));
+
+    expect(response.status).toBe(422);
+    expect(mocks.save).not.toHaveBeenCalled();
   });
 
   it("stores a real clip, records the row and audits who did it", async () => {
@@ -179,28 +192,83 @@ describe("POST /api/admin/background-video", () => {
     const body = await response.json();
     expect(body.data.backgroundVideo.active).toBe(true);
     expect(body.data.backgroundVideo.mimeType).toBe("video/mp4");
+    expect(body.data.backgroundVideo.size).toBe(MP4.length);
+
+    // The bytes that were validated are the bytes that were stored, under the
+    // token the row now names.
+    expect(mocks.save).toHaveBeenCalledTimes(1);
+    const saved = mocks.save.mock.calls[0][0] as {
+      id: string;
+      mimeType: string;
+      name: string;
+      data: Uint8Array;
+    };
+    expect(saved.id).toMatch(/^[0-9a-f]{24}$/);
+    expect(saved.mimeType).toBe("video/mp4");
+    expect(saved.name).toBe("clip.mp4");
+    expect(Array.from(saved.data)).toEqual(Array.from(MP4));
 
     expect(mocks.setSetting).toHaveBeenCalledTimes(1);
     const [key, value, actor] = mocks.setSetting.mock.calls[0];
     expect(key).toBe("site.background_video");
     expect(JSON.parse(value as string)).toMatchObject({
       active: true,
+      token: saved.id,
       mimeType: "video/mp4",
       size: MP4.length,
     });
     expect(actor).toBe("admin-1");
 
     expect(mocks.audit).toHaveBeenCalledTimes(1);
-    expect(await stagingFiles()).toEqual([]);
-    expect(storedPath()).not.toBeNull();
   });
 
-  it("keeps memory flat: the size is counted as the bytes arrive, not after", async () => {
-    // A declared length over the ceiling is answered without reading the body —
-    // the point of refusing on the header at all.
-    const response = await upload(MP4, { "content-length": "900000000" });
+  it("replaces the previous clip only once the new one is in place", async () => {
+    const previous = {
+      active: true,
+      token: "ffffffffffffffffffffffff",
+      mimeType: "video/mp4",
+      name: "old.mp4",
+      size: 1024,
+    };
+    mocks.getBackgroundVideo.mockResolvedValue(previous);
 
-    expect(response.status).toBe(413);
-    expect(await stagingFiles()).toEqual([]);
+    const response = await upload(MP4);
+
+    expect(response.status).toBe(200);
+    expect(mocks.remove).toHaveBeenCalledTimes(1);
+    expect(mocks.remove).toHaveBeenCalledWith(previous.token);
+    // Removed after the write, never before: deleting first would leave the site
+    // with no backdrop if the store then failed.
+    expect(mocks.save.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.remove.mock.invocationCallOrder[0]
+    );
+  });
+
+  it("keeps the old clip when the new one cannot be stored", async () => {
+    mocks.getBackgroundVideo.mockResolvedValue({
+      active: true,
+      token: "ffffffffffffffffffffffff",
+      mimeType: "video/mp4",
+      name: "old.mp4",
+      size: 1024,
+    });
+    mocks.save.mockRejectedValue(new Error("database is down"));
+
+    const response = await upload(MP4);
+
+    expect(response.status).toBe(503);
+    expect((await response.json()).code).toBe("STORAGE_NOT_CONFIGURED");
+    expect(mocks.remove).not.toHaveBeenCalled();
+    expect(mocks.setSetting).not.toHaveBeenCalled();
+  });
+
+  it("removes the clip it just stored when the setting cannot be written", async () => {
+    mocks.setSetting.mockRejectedValue(new Error("database is down"));
+
+    const response = await upload(MP4);
+
+    expect(response.status).toBe(500);
+    // Otherwise the bytes are an orphan nothing will ever serve or clean up.
+    expect(mocks.remove).toHaveBeenCalledWith(storedToken());
   });
 });

@@ -4,15 +4,17 @@
 // Every rule the admin's upload button and the layer that plays the result
 // both depend on. The ones worth naming:
 //
-//   * the ceiling is exactly 800 MB, because the interface says "800 MB" and a
-//     label that disagrees with the number is a label people cannot act on;
-//   * the token is the whole security boundary on the path — 24 hex, nothing
-//     else, so a row that names `../../something` resolves to "no file" rather
-//     than to a path of the row's choosing;
+//   * the ceiling is exactly 4 MB, because the interface says "4 MB" and a label
+//     that disagrees with the number is a label people cannot act on — and
+//     because that number is what keeps a clip inside the deployment's payload
+//     limit in both directions;
+//   * the token is the whole security boundary on the bytes — 24 hex, nothing
+//     else, so a row that names `../../something` resolves to "no clip" rather
+//     than to a key of the row's choosing;
 //   * the extension comes from an allowlisted MIME, never from the filename.
 //
 // No database, no network, no disk: this module is imported by client
-// components and is pure string and byte work by design.
+// components and is pure string, number and byte work by design.
 // =============================================================================
 
 import { describe, it, expect } from "vitest";
@@ -22,9 +24,12 @@ import {
   BACKGROUND_VIDEO_TYPES,
   MAX_BACKGROUND_VIDEO_BYTES,
   MAX_BACKGROUND_VIDEO_LABEL,
+  MAX_BACKGROUND_VIDEO_SLICE_BYTES,
   NO_BACKGROUND_VIDEO,
+  backgroundVideoAssetId,
+  backgroundVideoExtension,
   backgroundVideoRefusal,
-  backgroundVideoRelativePath,
+  backgroundVideoUploadFailure,
   backgroundVideoUrl,
   isBackgroundToken,
   looksLikeBackgroundVideo,
@@ -46,14 +51,24 @@ function active(overrides: Partial<typeof NO_BACKGROUND_VIDEO> = {}) {
 }
 
 describe("the ceiling", () => {
-  it("is 800 MB in bytes, not 800 million", () => {
-    expect(MAX_BACKGROUND_VIDEO_BYTES).toBe(800 * 1024 * 1024);
-    expect(MAX_BACKGROUND_VIDEO_BYTES).toBe(838_860_800);
+  it("is 4 MB in bytes, not 4 million", () => {
+    expect(MAX_BACKGROUND_VIDEO_BYTES).toBe(4 * 1024 * 1024);
+    expect(MAX_BACKGROUND_VIDEO_BYTES).toBe(4_194_304);
   });
 
   it("is labelled the way the interface says it", () => {
-    expect(MAX_BACKGROUND_VIDEO_LABEL).toBe("800 MB");
-    expect(MAX_BACKGROUND_VIDEO_BYTES).toBe(800 * 1024 * 1024);
+    expect(MAX_BACKGROUND_VIDEO_LABEL).toBe("4 MB");
+    expect(MAX_BACKGROUND_VIDEO_BYTES).toBe(4 * 1024 * 1024);
+  });
+
+  // A clip travels through a serverless function in BOTH directions, and the
+  // platform refuses a request or a response body over 4.5 MB. One number decides
+  // both halves, so one assertion keeps them inside it.
+  it("and every response slice stay inside the deployment's payload limit", () => {
+    const PAYLOAD_LIMIT = 4.5 * 1024 * 1024;
+    expect(MAX_BACKGROUND_VIDEO_BYTES).toBeLessThan(PAYLOAD_LIMIT);
+    expect(MAX_BACKGROUND_VIDEO_SLICE_BYTES).toBeLessThan(PAYLOAD_LIMIT);
+    expect(MAX_BACKGROUND_VIDEO_SLICE_BYTES).toBeGreaterThan(0);
   });
 
   it("offers a file picker the four containers we can actually play", () => {
@@ -110,21 +125,31 @@ describe("backgroundVideoUrl", () => {
   });
 });
 
-describe("backgroundVideoRelativePath", () => {
-  it("builds the path from the token and an allowlisted extension only", () => {
-    expect(backgroundVideoRelativePath(active())).toBe(
-      `public/uploads/site/background-${TOKEN}.mp4`
-    );
-    expect(
-      backgroundVideoRelativePath(active({ mimeType: "video/x-matroska" }))
-    ).toBe(`public/uploads/site/background-${TOKEN}.mkv`);
+describe("backgroundVideoAssetId", () => {
+  it("answers with the token, which is the key the bytes are stored under", () => {
+    expect(backgroundVideoAssetId(active())).toBe(TOKEN);
+    expect(backgroundVideoAssetId(active({ mimeType: "video/x-matroska" }))).toBe(TOKEN);
   });
 
-  it("refuses a row that could walk out of the directory", () => {
-    expect(backgroundVideoRelativePath(active({ token: "../../evil" }))).toBe(null);
-    expect(backgroundVideoRelativePath(active({ mimeType: "text/html" }))).toBe(null);
-    expect(backgroundVideoRelativePath(null)).toBe(null);
-    expect(backgroundVideoRelativePath(undefined)).toBe(null);
+  it("refuses a row that could address something we did not store", () => {
+    expect(backgroundVideoAssetId(active({ token: "../../evil" }))).toBe(null);
+    expect(backgroundVideoAssetId(active({ mimeType: "text/html" }))).toBe(null);
+    expect(backgroundVideoAssetId(null)).toBe(null);
+    expect(backgroundVideoAssetId(undefined)).toBe(null);
+  });
+});
+
+describe("backgroundVideoExtension", () => {
+  it("names the file a stored clip is served as", () => {
+    expect(backgroundVideoExtension("video/mp4")).toBe(".mp4");
+    expect(backgroundVideoExtension("video/x-matroska")).toBe(".mkv");
+  });
+
+  // It ends up in a Content-Disposition header, so a type we do not store has to
+  // contribute nothing to the name rather than whatever it happens to contain.
+  it("contributes nothing for a type we do not store", () => {
+    expect(backgroundVideoExtension("text/html")).toBe("");
+    expect(backgroundVideoExtension("")).toBe("");
   });
 });
 
@@ -176,7 +201,7 @@ describe("resolveBackgroundType", () => {
 describe("backgroundVideoRefusal", () => {
   it("lets a normal clip through", () => {
     expect(
-      backgroundVideoRefusal({ size: 5_000_000, type: "video/mp4", name: "a.mp4" })
+      backgroundVideoRefusal({ size: 1_200_000, type: "video/mp4", name: "a.mp4" })
     ).toBe(null);
   });
 
@@ -186,7 +211,17 @@ describe("backgroundVideoRefusal", () => {
       type: "video/mp4",
       name: "a.mp4",
     });
-    expect(reason).toContain("800 MB");
+    expect(reason).toContain("4 MB");
+  });
+
+  it("accepts a clip exactly at the ceiling", () => {
+    expect(
+      backgroundVideoRefusal({
+        size: MAX_BACKGROUND_VIDEO_BYTES,
+        type: "video/mp4",
+        name: "a.mp4",
+      })
+    ).toBe(null);
   });
 
   it("refuses an empty file and a file that is not a video", () => {
@@ -196,6 +231,34 @@ describe("backgroundVideoRefusal", () => {
     expect(backgroundVideoRefusal({ size: 10, type: "text/plain", name: "a.txt" })).toContain(
       "not a video"
     );
+  });
+});
+
+describe("backgroundVideoUploadFailure", () => {
+  // A body over the deployment's own payload limit is refused by the platform
+  // before the route runs, and its answer is not JSON — so there is no sentence
+  // of ours to show and the status is the only fact available. It has to name the
+  // same ceiling the picker enforced.
+  it("names the ceiling for the 413 the platform sends", () => {
+    expect(backgroundVideoUploadFailure(413)).toContain("4 MB");
+  });
+
+  it("tells an operator to sign in again rather than to retry", () => {
+    expect(backgroundVideoUploadFailure(401)).toContain("Sign in");
+    expect(backgroundVideoUploadFailure(403)).toContain("Sign in");
+  });
+
+  it("explains a rate limit", () => {
+    expect(backgroundVideoUploadFailure(429)).toContain("Too many uploads");
+  });
+
+  it("speaks about the server, not about the operator's file, for a 5xx", () => {
+    expect(backgroundVideoUploadFailure(503)).toContain("server");
+  });
+
+  it("falls back to a sentence that at least says to retry", () => {
+    expect(backgroundVideoUploadFailure(0)).toContain("try again");
+    expect(backgroundVideoUploadFailure(400)).toContain("try again");
   });
 });
 
