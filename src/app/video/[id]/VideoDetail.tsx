@@ -311,6 +311,9 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     setIntroClipFailed(false);
     setIntroFinished(false);
     setIntroKey(0);
+    // A new scene starts with its write-up clamped again: the previous scene's
+    // "Show more" is not a preference about how to read this one.
+    setShowFullDescription(false);
     // The end card belongs to one scene too: walking to the next video has to
     // bring its own, fresh countdown rather than inherit a finished one.
     setSceneEnded(false);
@@ -346,6 +349,10 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
   const [playlistBusy, setPlaylistBusy] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [linkCopied, setLinkCopied] = useState(false);
+  // A long write-up is the one block under the picture that can grow without
+  // limit, so it starts clamped and the reader opens it. See the description
+  // block below.
+  const [showFullDescription, setShowFullDescription] = useState(false);
   const { toast } = useToast();
   const { format } = useCurrency();
   // The platform-wide free-views switch. The paywall itself is already gone
@@ -1684,14 +1691,20 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
 
         {/* Everything under the picture.
 
-            One readable column, so the title, the description and the row of
-            actions stop spreading across a wide screen as a stack of separate
-            full-width cards — the thing that made the page read as clutter.
-            The width is capped for reading, not for the grid below. */}
-        <div className="mx-auto mt-5 w-full max-w-6xl space-y-4 px-4 sm:px-6">
+            One readable column, kept deliberately SHORT: the title, the
+            creator, the description and the row of actions stop spreading down
+            the page as a stack of full-width cards. That last part matters past
+            looks — every block stacked here pushes the recommendations further
+            down, and an unbounded comments list below them meant the scenes a
+            viewer might actually watch next were a scroll away. So the boxes
+            are tight, the write-up is clamped until asked for, and the two
+            unbounded sections (gallery, comments) now sit BELOW the More scenes
+            grid instead of above it. The width is capped for reading, not for
+            the grid below. */}
+        <div className="mx-auto mt-4 w-full max-w-6xl space-y-3 px-4 sm:px-6">
 
         {/* Video Info */}
-        <div className="space-y-4">
+        <div className="space-y-3">
           <div>
             <h1 className="text-2xl md:text-3xl font-display font-bold">{video.title}</h1>
 
@@ -1839,11 +1852,33 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             )}
           </div>
 
-          {/* Description */}
+          {/* Description — clamped to three lines at first.
+
+              This is the block that quietly ate the page: a thorough write-up
+              is several screens tall, and everything after it (the actions, the
+              recommendations) got pushed off the bottom. Three lines are enough
+              to know what the scene is, and "Show more" hands the space back to
+              the reader who wants it rather than taking it from everyone. */}
           {video.description && (
             <div className="glass-card p-4">
               <h3 className="font-medium text-sm text-white/70 mb-2">Description</h3>
-              <p className="text-sm text-white/60 whitespace-pre-wrap">{video.description}</p>
+              <p
+                className={`text-sm text-white/60 whitespace-pre-wrap ${
+                  showFullDescription ? "" : "line-clamp-3"
+                }`}
+              >
+                {video.description}
+              </p>
+              {video.description.length > 180 && (
+                <button
+                  type="button"
+                  onClick={() => setShowFullDescription((open) => !open)}
+                  aria-expanded={showFullDescription}
+                  className="mt-2 text-xs font-medium text-brand-400 hover:underline"
+                >
+                  {showFullDescription ? "Show less" : "Show more"}
+                </button>
+              )}
             </div>
           )}
 
@@ -1858,8 +1893,19 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             </div>
           )}
 
-          {/* Action Buttons */}
-          <div className="flex items-center gap-3 border-t border-white/10 pt-4 flex-wrap">
+          {/* Action Buttons
+
+              One row on a phone, wrapping only from `sm` up. Wrapped, this is
+              the tallest block under the picture on a narrow screen — seven
+              buttons become four stacked lines (measured: 202px on a 390px
+              viewport, on a page whose whole detail block is 436px), which is
+              most of a phone screen spent on chrome before the viewer ever
+              reaches the recommendations. So it scrolls horizontally there
+              instead, the way the same row behaves on a phone everywhere else;
+              from `sm` up there is room and it wraps as before. The last
+              control keeps its place at the right edge only on the widths where
+              the row actually has room to spare. */}
+          <div className="no-scrollbar flex flex-nowrap items-center gap-2 overflow-x-auto border-t border-white/10 pt-4 sm:flex-wrap sm:gap-3 sm:overflow-visible [&>*]:shrink-0">
             {/* Like / Dislike rating */}
             <div className="flex items-center gap-1 glass-surface rounded-full px-2 py-1.5">
               <button
@@ -1957,7 +2003,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             </button>
             <button
               onClick={() => setShowReportModal(true)}
-              className="btn-ghost flex items-center gap-2 text-sm text-red-400 hover:text-red-300 ml-auto"
+              className="btn-ghost flex items-center gap-2 text-sm text-red-400 hover:text-red-300 sm:ml-auto"
             >
               <Flag className="w-4 h-4" /> Report
             </button>
@@ -2089,48 +2135,17 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
             </div>
           )}
 
-          {/* Scene photo gallery — below the details, where it is a set of
-              stills to browse instead of a strip pushing the title off-screen. */}
-          {(video.galleryImages?.length ?? 0) > 0 && (
-            <section>
-              <h2 className="font-display font-bold text-sm flex items-center gap-2 mb-2 text-white/80">
-                <Images className="w-4 h-4 text-brand-400" /> Gallery
-                <span className="text-white/40 font-normal">({video.galleryImages!.length})</span>
-              </h2>
-              <div className="flex gap-3 overflow-x-auto pb-2">
-                {video.galleryImages!.map((img, i) => (
-                  <button
-                    key={img.id}
-                    onClick={() => setLightboxIndex(i)}
-                    className="relative shrink-0 w-36 sm:w-44 aspect-video rounded-xl overflow-hidden group/gallery border border-white/5 hover:border-brand-500/60 transition"
-                    aria-label={`Open photo ${i + 1}`}
-                  >
-                    <Image
-                      src={img.url}
-                      alt={`${video.title} — photo ${i + 1}`}
-                      fill
-                      className="object-cover group-hover/gallery:scale-105 transition-transform duration-300"
-                      sizes="176px"
-                    />
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Comments */}
-          <CommentsSection
-            videoId={video.id}
-            user={user ? { id: user.id, role: user.role } : null}
-          />
           </div>
         </div>
 
-        {/* More scenes — full width beneath everything, several to a row, the
-            same card language as the browse grids (cover, length badge, price
-            chip, category tag). As a 320px sidebar it both squeezed the player
-            and hid the scenes in one thin column nobody scrolled. */}
-        <div className="mx-auto mt-10 w-full max-w-7xl px-4 sm:px-6">
+        {/* More scenes — full width, several to a row, the same card language
+            as the browse grids (cover, length badge, price chip, category tag).
+            As a 320px sidebar it both squeezed the player and hid the scenes in
+            one thin column nobody scrolled, so it stays full width — but it now
+            comes before the gallery and the comments, which are the two blocks
+            that grow without limit. Recommendations a viewer has to scroll past
+            a comment thread to find are recommendations nobody sees. */}
+        <div className="mx-auto mt-6 w-full max-w-7xl px-4 sm:px-6">
             <h2 className="font-display font-bold text-lg mb-4 flex items-center gap-2">
               <Play className="w-4 h-4 text-brand-400" /> More scenes
             </h2>
@@ -2200,6 +2215,47 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
                 })
               )}
             </div>
+        </div>
+        {/* Gallery and comments — below the recommendations on purpose.
+
+            Both can be arbitrarily tall (a long thread, a large photo set), and
+            anything tall sitting above the More scenes grid is what buried it.
+            They are still here, in the reading column, for the viewer who has
+            finished browsing — just no longer in the way of it. */}
+        <div className="mx-auto mt-8 w-full max-w-6xl space-y-4 px-4 sm:px-6">
+          {/* Scene photo gallery */}
+          {(video.galleryImages?.length ?? 0) > 0 && (
+            <section>
+              <h2 className="font-display font-bold text-sm flex items-center gap-2 mb-2 text-white/80">
+                <Images className="w-4 h-4 text-brand-400" /> Gallery
+                <span className="text-white/40 font-normal">({video.galleryImages!.length})</span>
+              </h2>
+              <div className="flex gap-3 overflow-x-auto pb-2">
+                {video.galleryImages!.map((img, i) => (
+                  <button
+                    key={img.id}
+                    onClick={() => setLightboxIndex(i)}
+                    className="relative shrink-0 w-36 sm:w-44 aspect-video rounded-xl overflow-hidden group/gallery border border-white/5 hover:border-brand-500/60 transition"
+                    aria-label={`Open photo ${i + 1}`}
+                  >
+                    <Image
+                      src={img.url}
+                      alt={`${video.title} — photo ${i + 1}`}
+                      fill
+                      className="object-cover group-hover/gallery:scale-105 transition-transform duration-300"
+                      sizes="176px"
+                    />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {/* Comments */}
+          <CommentsSection
+            videoId={video.id}
+            user={user ? { id: user.id, role: user.role } : null}
+          />
         </div>
       </main>
 

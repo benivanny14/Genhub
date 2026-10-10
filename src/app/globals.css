@@ -389,6 +389,24 @@
     background-clip: text;
   }
 
+  /* A row that scrolls sideways without a scrollbar strip.
+
+     The base layer sets `::-webkit-scrollbar { width: 6px }`, which is the
+     VERTICAL width — a horizontal bar takes its thickness from `height` and so
+     falls back to the ~15px default, drawn on `bg-surface-600`: a dark band
+     across the page under the row. The video page's action row scrolls
+     sideways on phones, and a phone hides its scrollbars anyway (an overlay
+     that fades), so this matches what a handset already shows instead of
+     painting a desktop artefact over it. */
+  .no-scrollbar {
+    scrollbar-width: none; /* Firefox */
+    -ms-overflow-style: none; /* legacy Edge */
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
   /* Safe area for mobile */
   .safe-bottom {
     padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
