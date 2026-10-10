@@ -401,6 +401,10 @@ Set these in your hosting provider (Vercel → Project → Settings → Env vars
 | `BUNNY_CDN_HOSTNAME` | Pull-zone hostname, e.g. `genhub.b-cdn.net` |
 | `BUNNY_TOKEN_SECRET` | Token Authentication key of that pull zone — **required**, see 2.1 |
 | `BUNNY_STORAGE_ZONE` / `BUNNY_STORAGE_ACCESS_KEY` | Optional: only for thumbnail uploads |
+| `R2_ACCOUNT_ID` | Cloudflare account id — the `<id>` in the bucket's S3 endpoint `<id>.r2.cloudflarestorage.com` |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 → API → **Manage API tokens** → *Create API token*, permission **Object Read & Write** for this bucket. **Not** a Cloudflare API token — that one cannot sign an S3 request |
+| `R2_BUCKET` | `genhub-uploads`. Its **CORS policy must name your domain** — see 2.5 |
+| `R2_PUBLIC_BASE_URL` | Optional: the bucket's public hostname. Without it every visitor's clip bytes are proxied through the app, one range at a time |
 | `NEXT_PUBLIC_COMPANY_LEGAL_NAME` | Registered entity — shown on `/2257` |
 | `NEXT_PUBLIC_COMPANY_ADDRESS` | Custodian's real place of business (28 C.F.R. § 75.2 requires it) |
 | `NEXT_PUBLIC_SUPPORT_EMAIL` | Compliance/reporting inbox |
@@ -585,6 +589,71 @@ Nothing about it depends on Prisma's cascade list alone: most relations to `User
 are not declared `onDelete: Cascade`, so a bare `user.delete()` fails on a
 foreign key — after the user has already been told their account is gone. See
 `src/lib/services/account-erasure.service.ts`.
+
+### 2.5 Cloudflare R2 — the background clip, and the CORS policy it cannot work without
+
+The clip an operator puts behind every page is the one upload that can be
+hundreds of megabytes. A serverless function may neither receive nor return more
+than 4.5 MB, so the browser sends the file **straight to R2** against a URL this
+server signs, and playback either redirects to the bucket's public hostname or is
+proxied a range at a time.
+
+That direct upload makes the bucket's **CORS policy part of the deployment**, and
+it is the one setting whose absence looks like a different problem entirely:
+
+- The PUT is cross-origin and carries a `content-type`, so the browser sends an
+  `OPTIONS` preflight first.
+- If the policy's `AllowedOrigins` does not name the address the admin is
+  browsing from, R2 answers that preflight `403` with no `Access-Control-*`
+  headers. The browser then never sends the file, and `XMLHttpRequest` reports the
+  refusal exactly as it reports a dead connection: **no status, no body, only
+  `onerror`**.
+- The app can therefore say only "the browser could not reach the video store". An
+  operator reads a network problem into a configuration problem — the hour this
+  section exists to save.
+
+It goes stale whenever the site moves: a `*.vercel.app` host that becomes a custom
+domain, a second domain added later, a dev server on a port other than 3000.
+None of those break anything visible until someone replaces the backdrop.
+
+Checklist:
+
+- [ ] In Cloudflare: **R2 → `genhub-uploads` → Settings → CORS Policy → Add CORS
+      policy**, listing every origin the admin panel is reached by (keep
+      `http://localhost:3000` for the dev server):
+      ```xml
+      <CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+        <CORSRule>
+          <AllowedMethod>GET</AllowedMethod>
+          <AllowedMethod>PUT</AllowedMethod>
+          <AllowedMethod>HEAD</AllowedMethod>
+          <AllowedMethod>DELETE</AllowedMethod>
+          <AllowedOrigin>https://www.genhub-two.site</AllowedOrigin>
+          <AllowedOrigin>https://genhub-two.site</AllowedOrigin>
+          <AllowedOrigin>http://localhost:3000</AllowedOrigin>
+          <AllowedHeader>*</AllowedHeader>
+          <ExposeHeader>ETag</ExposeHeader>
+          <MaxAgeSeconds>3000</MaxAgeSeconds>
+        </CORSRule>
+      </CORSConfiguration>
+      ```
+      The same policy can be applied through the S3 API (`PutBucketCors`), which
+      needs an R2 token with **Admin Read & Write** — the object-level token the
+      app itself uses can read the policy but not write it.
+- [ ] Check it without a browser — an OPTIONS preflight is evaluated against the
+      policy alone, so this needs no credentials and changes nothing:
+      ```bash
+      npm run verify:r2
+      # or, against a domain you are about to move to:
+      npm run verify:r2 -- --origin https://www.genhub-two.site
+      ```
+      Exit code 1 names the origins that are missing.
+- [ ] Know the reset: a policy change takes **about a minute** to appear, so a
+      probe run immediately after the write can still answer `403`.
+- [ ] Confirm the real thing: as an admin on the deployment, replace the
+      background video and watch it appear behind the page. A 500 MB clip is
+      possible, but ten to twenty seconds of 720p looks the same and costs every
+      visitor far less data.
 
 ## 3. Payments go-live (SonicPesa)
 

@@ -1735,6 +1735,17 @@ export default function AdminDashboard() {
         await putClipToR2(upload, file, (percent) => setBackgroundProgress(percent));
       } catch (error) {
         const status = error instanceof UploadToStoreError ? error.status : 0;
+        // Two causes produce the same silent failure here — no usable connection,
+        // and a bucket whose CORS policy does not name this site — and neither
+        // reaches the server, so both observable facts are written where whoever
+        // debugs it can see them: the status (0 means the request never left) and
+        // the origin the browser is sending. The signed URL is NOT logged: it is
+        // a credential, and only its host is a diagnostic.
+        console.error("[Background Video] the store did not accept the upload", {
+          status,
+          origin: window.location.origin,
+          bucket: new URL(upload.uploadUrl).host,
+        });
         toast("error", backgroundVideoStoreFailure(status));
         return;
       }

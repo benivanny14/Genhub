@@ -281,6 +281,15 @@ export function backgroundVideoStoreFailure(status: number): string {
   if (status === 413) {
     return `That video is too large — the limit is ${MAX_BACKGROUND_VIDEO_LABEL}.`;
   }
-  return "The video could not be sent to storage. Check your connection and try again.";
+  // Zero is the browser declining to make the request at all, and there are two
+  // causes that are indistinguishable from inside XMLHttpRequest: no usable
+  // connection, and a bucket whose CORS policy does not name this site — a
+  // refused preflight produces the same silent `onerror` with no status and no
+  // body. Naming only the network sends an operator to check the one thing that
+  // is usually fine, so both are said out loud.
+  if (status === 0) {
+    return "The browser could not reach the video store. Check your connection — and if that is fine, the store is refusing this site's address, so tell support.";
+  }
+  return "The video could not be sent to storage. Please try again in a moment.";
 }
 

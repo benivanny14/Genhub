@@ -279,8 +279,19 @@ describe("backgroundVideoStoreFailure", () => {
     expect(backgroundVideoStoreFailure(413)).toContain("500 MB");
   });
 
-  it("reads a statusless failure as a connection to check", () => {
-    expect(backgroundVideoStoreFailure(0)).toContain("connection");
-    expect(backgroundVideoStoreFailure(500)).toContain("connection");
+  // Zero is the browser declining to send the request, and a bucket whose CORS
+  // policy does not name this site produces exactly the same thing as a dead
+  // connection: no status, no body. A sentence that blamed only the network sent
+  // an operator to check the one thing that was fine, so both causes are named.
+  it("names both causes of a statusless failure, not just the network", () => {
+    const message = backgroundVideoStoreFailure(0);
+    expect(message).toContain("connection");
+    expect(message).toMatch(/refus|address/i);
+  });
+
+  // A store that ANSWERED is not a network problem, and saying so was the bug.
+  it("does not blame the operator's connection when the store answered", () => {
+    expect(backgroundVideoStoreFailure(500)).not.toContain("connection");
+    expect(backgroundVideoStoreFailure(404)).not.toContain("connection");
   });
 });

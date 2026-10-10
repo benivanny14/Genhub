@@ -30,6 +30,7 @@
     "launch:check:wait": "node scripts/launch-check.mjs --remote --wait",
     "verify:env": "node scripts/verify-env.mjs",
     "verify:lockfile": "node scripts/verify-lockfile.mjs",
+    "verify:r2": "node scripts/verify-r2.mjs",
     "verify:live": "node scripts/verify-connections.mjs",
     "watchdog": "node scripts/watchdog.mjs",
     "smoke:sonicpesa": "node scripts/sonicpesa-smoke.mjs",
