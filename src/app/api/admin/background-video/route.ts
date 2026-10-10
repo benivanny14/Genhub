@@ -1,43 +1,44 @@
 // =============================================================================
 // GENHUB - The background clip behind every page (admin)
 // GET    /api/admin/background-video - what is set right now
-// POST   /api/admin/background-video - replace it (raw body)
+// POST   /api/admin/background-video - start an upload (JSON, small)
 // DELETE /api/admin/background-video - take it down
+// POST   /api/admin/background-video/complete - confirm one (JSON, small)
 //
 // The clip an operator can put at the very back of the interface: under the
 // aurora, under the grid, under the vignette, seen through every pane of glass.
 // See components/BackgroundVideo.tsx for the layer and lib/background-video.ts
 // for the rules both halves share.
 //
-// WHY THE BODY IS NOT multipart/form-data
+// WHY THIS ROUTE ONLY SIGNS
 //
-//   `request.formData()` assembles the whole upload in memory before this
-//   handler sees a single field, and the one number that matters — the size —
-//   would not be known until it had already been paid for. The client sends the
-//   file itself as the body with its name and size in headers, and this route
-//   reads it through a counter that stops at the ceiling, so an oversized body is
-//   abandoned while it is still arriving and a refused upload costs only the
-//   bytes it managed to send.
+//   The clip can be up to 500 MB, and a serverless function may neither receive
+//   nor return more than 4.5 MB. Every earlier shape of this feature died on
+//   that one fact: the bytes were written to a disk that does not exist on the
+//   deployment, then streamed into memory the platform would not accept, and
+//   finally kept in a database — which is fine for a 4 MB clip and no place for
+//   a 500 MB one. So the bytes go where a large file belongs: the browser sends
+//   them STRAIGHT to Cloudflare R2 against a URL signed here (lib/r2.ts), and the
+//   only things this app handles are the signature, the confirmation and the
+//   settings row that names the result.
 //
-// WHERE IT IS STORED
+// WHY THERE ARE TWO REQUESTS
 //
-//   A row in the database (BackgroundVideoAsset), written and read through
-//   lib/services/background-video.service.ts. It was a file in
-//   `public/uploads/site/` until that was measured against the deployment, where
-//   `public/` is read-only, `/tmp` is per-instance and discarded, and a function
-//   may neither receive nor return more than 4.5 MB — so the clip could not be
-//   written at all, and the 413 that answered a 6 MB upload came from the
-//   platform, not from this code. The bytes now travel in one request in each
-//   direction, which is why the ceiling is small enough to fit: see
-//   MAX_BACKGROUND_VIDEO_BYTES.
+//   The presigned URL is minted before the file moves, so the size, the media
+//   type and the destination are all decided and recorded in a signed session
+//   first. The confirmation then asks R2 what it actually holds — a claim from
+//   the client is not evidence, and a half-finished PUT must not be recorded as
+//   live, or the layer would wait on bytes that never arrive.
 //
-// Guardrails: ADMIN only, 5 uploads per 10 minutes, four containers, 4 MB.
+// Guardrails: ADMIN only, 5 uploads per 10 minutes, four containers, 500 MB.
 // =============================================================================
 
 import { NextRequest } from "next/server";
 import { randomBytes } from "node:crypto";
+import { z } from "zod";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
+import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
 import {
@@ -46,69 +47,47 @@ import {
   setSetting,
 } from "@/lib/services/platform-setting.service";
 import {
-  deleteBackgroundVideoAsset,
-  saveBackgroundVideoAsset,
-} from "@/lib/services/background-video.service";
-import {
   MAX_BACKGROUND_VIDEO_BYTES,
   MAX_BACKGROUND_VIDEO_LABEL,
-  backgroundVideoAssetId,
-  looksLikeBackgroundVideo,
   resolveBackgroundType,
   type BackgroundVideo,
 } from "@/lib/background-video";
+import {
+  isBackgroundVideoUploadConfigured,
+  startBackgroundVideoUpload,
+} from "@/lib/background-video-session";
+import { r2BackgroundKeyFor, r2DeleteObject } from "@/lib/r2";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-// One request, one small file. The ceiling is answered from the declared size
-// before the body is read, and the read itself is bounded, so this only has to
-// outlast a slow phone sending a few megabytes.
-export const maxDuration = 60;
+// Signing a URL and reading a settings row. The upload itself does not happen
+// here, so nothing about this route depends on the size of the clip.
+export const maxDuration = 30;
 
-/** Raised by the reader when the stream passes the ceiling. */
-class UploadTooLarge extends Error {
-  constructor() {
-    super("upload exceeds the background video limit");
-  }
-}
+/**
+ * What the browser sends to open an upload.
+ *
+ * No ceiling in the schema: the size bound is checked below so the refusal can
+ * name the limit in the same words the picker used. A schema violation reports
+ * "number must be less than or equal to 524288000", which is not a sentence an
+ * operator can act on.
+ */
+const startSchema = z.object({
+  name: z.string().trim().max(200).optional(),
+  mimeType: z.string().trim().max(100).optional(),
+  size: z.number().int().positive(),
+});
 
 async function currentVideo(): Promise<BackgroundVideo> {
   return getBackgroundVideo();
 }
 
-/**
- * Read the body, refusing to grow past the ceiling.
- *
- * The counter is on the CHUNKS rather than on a length header, because a
- * declared length is a claim: a client can send `Content-Length: 1024` and then
- * 800 MB, and a route that trusts it has allocated all of it. The chunks are
- * collected and joined once, so a 4 MB clip costs one 4 MB buffer and an
- * oversized one is dropped the moment it crosses the line.
- */
-async function readBodyWithin(
-  body: ReadableStream<Uint8Array>,
-  limit: number
-): Promise<Buffer> {
-  const reader = body.getReader();
-  const chunks: Buffer[] = [];
-  let bytes = 0;
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      bytes += value.byteLength;
-      if (bytes > limit) throw new UploadTooLarge();
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    // Stops the request body being read further once we have decided. A no-op
-    // when the stream has already ended, which is the common path.
-    await reader.cancel().catch(() => {});
-  }
-
-  return Buffer.concat(chunks, bytes);
+/** Forget the object a stored row names, if it names one. */
+async function removeStoredClip(video: BackgroundVideo | null | undefined): Promise<void> {
+  if (!video?.active) return;
+  const key = r2BackgroundKeyFor(video.token, video.mimeType);
+  if (!key) return;
+  await r2DeleteObject(key).catch(() => {});
 }
 
 // -----------------------------------------------------------------------------
@@ -130,7 +109,7 @@ export async function GET() {
 }
 
 // -----------------------------------------------------------------------------
-// POST — replace it.
+// POST — open an upload and hand the browser a signed destination.
 // -----------------------------------------------------------------------------
 export async function POST(request: NextRequest) {
   try {
@@ -145,133 +124,82 @@ export async function POST(request: NextRequest) {
       return api.rateLimited("Too many background video uploads — wait a few minutes.");
     }
 
-    // What the file CLAIMS to be, resolved once. A browser that sends no usable
-    // type still gets through on the strength of its extension — see
-    // resolveBackgroundType — but a type and a name that disagree with every
-    // container we know are refused before a byte is read.
-    const declaredType = request.headers.get("content-type") ?? "";
-    let fileName = "";
-    try {
-      fileName = decodeURIComponent(request.headers.get("x-filename") ?? "");
-    } catch {
-      fileName = "";
-    }
-    const resolved = resolveBackgroundType(declaredType, fileName);
-    if (!resolved) {
-      return api.validation(
-        `Upload an MP4, WebM, MOV or MKV video (max ${MAX_BACKGROUND_VIDEO_LABEL})`
+    // Which store and which secret are missing is for the log; the operator can
+    // only be told that it is not working, and naming the deployment's own
+    // configuration to whoever asks is free reconnaissance.
+    if (!isBackgroundVideoUploadConfigured()) {
+      console.error(
+        "[Background Video] not configured: R2 credentials, R2_BUCKET and JWT_SECRET must all be set"
       );
-    }
-
-    // Refused on the declared length so an oversized body is answered without
-    // being read at all, and again by the counter while it arrives for a client
-    // that lied about it. BOTH numbers are checked because they fail differently:
-    // `content-length` is what an ordinary browser sends, `x-file-size` is what
-    // the client worked out before it opened the file and is all there is when
-    // the body is chunked.
-    const tooLarge = `That video is too large — the limit is ${MAX_BACKGROUND_VIDEO_LABEL}.`;
-    const declaredLength = Number(request.headers.get("content-length") ?? "");
-    if (Number.isFinite(declaredLength) && declaredLength > MAX_BACKGROUND_VIDEO_BYTES) {
-      return api.error(tooLarge, 413, "FILE_TOO_LARGE");
-    }
-    const declaredSize = Number(request.headers.get("x-file-size") ?? "");
-    if (Number.isFinite(declaredSize) && declaredSize > MAX_BACKGROUND_VIDEO_BYTES) {
-      return api.error(tooLarge, 413, "FILE_TOO_LARGE");
-    }
-
-    if (!request.body) {
-      return api.validation("The upload was empty — choose a video and try again.");
-    }
-
-    let data: Buffer;
-    try {
-      data = await readBodyWithin(request.body, MAX_BACKGROUND_VIDEO_BYTES);
-    } catch (error) {
-      if (error instanceof UploadTooLarge) return api.error(tooLarge, 413, "FILE_TOO_LARGE");
-      throw error;
-    }
-
-    if (data.byteLength === 0) {
-      return api.validation("That file is empty.");
-    }
-
-    // The bytes, not the label. A MIME type and an extension are both claims;
-    // this is the file's own first bytes, and an executable wearing a video's
-    // name is never stored under a video's content type.
-    if (!looksLikeBackgroundVideo(data, resolved.extension)) {
-      return api.validation(
-        "That file is not a video this site can play. Choose an MP4, WebM, MOV or MKV file."
-      );
-    }
-
-    const previous = await currentVideo();
-
-    // A fresh token per upload: it is the key of the stored clip and the version
-    // in the URL, so replacing the clip is a new address and every browser picks
-    // it up without a hard refresh.
-    const token = randomBytes(12).toString("hex");
-    const backgroundVideo: BackgroundVideo = {
-      active: true,
-      token,
-      mimeType: resolved.mimeType,
-      name: (fileName || `background.${resolved.extension.slice(1)}`).slice(0, 200),
-      size: data.byteLength,
-    };
-
-    try {
-      await saveBackgroundVideoAsset({
-        id: token,
-        mimeType: resolved.mimeType,
-        name: backgroundVideo.name,
-        data,
-      });
-    } catch (error) {
-      // Which store could not be written is for the log: the admin can only be
-      // told that it did not stick.
-      console.error("[Background Video] could not store the upload", error);
       return api.error(
-        "This server cannot store a video right now. Try again, or ask support.",
+        "Video storage is not configured on this deployment. Tell support.",
         503,
         "STORAGE_NOT_CONFIGURED"
       );
     }
 
-    try {
-      await setSetting(
-        PLATFORM_SETTING_KEYS.backgroundVideo,
-        JSON.stringify(backgroundVideo),
-        auth.userId
+    const parsed = startSchema.safeParse(await readJsonBody(request));
+    if (!parsed.success) {
+      return api.error(
+        "Choose a video file and try again.",
+        422,
+        "VALIDATION_ERROR"
       );
-    } catch (error) {
-      // The clip is stored but no row points at it: remove it, or it is an
-      // orphan nothing will ever serve or clean up.
-      await deleteBackgroundVideoAsset(token).catch(() => {});
-      console.error("[Background Video] could not save the setting", error);
-      return api.internal("could not persist the background video setting");
     }
 
-    // The old clip goes only once the new one is recorded. Deleting first would
-    // leave the site with no backdrop at all if the write below failed.
-    if (previous?.active) {
-      await deleteBackgroundVideoAsset(backgroundVideoAssetId(previous)).catch(() => {});
+    if (parsed.data.size > MAX_BACKGROUND_VIDEO_BYTES) {
+      return api.error(
+        `That video is too large — the limit is ${MAX_BACKGROUND_VIDEO_LABEL}.`,
+        413,
+        "FILE_TOO_LARGE"
+      );
     }
 
-    await recordAudit({
-      actorId: auth.userId,
-      action: AUDIT_ACTIONS.featureToggle,
-      targetType: "PlatformSetting",
-      targetId: PLATFORM_SETTING_KEYS.backgroundVideo,
-      summary: `Replaced the site background video (${backgroundVideo.name.slice(0, 120)})`,
-      detail: {
-        token,
-        mimeType: backgroundVideo.mimeType,
-        name: backgroundVideo.name,
-        size: backgroundVideo.size,
-        replaced: previous?.active ? previous.name : null,
-      },
+    // What the file CLAIMS to be, resolved once. A browser that sends no usable
+    // type still gets through on the strength of its extension — see
+    // resolveBackgroundType — but a type and a name that disagree with every
+    // container we know are refused before anything is signed.
+    const resolved = resolveBackgroundType(
+      parsed.data.mimeType ?? "",
+      parsed.data.name ?? ""
+    );
+    if (!resolved) {
+      return api.error(
+        "Choose an MP4, WebM, MOV or MKV video — that file is not one this site can play.",
+        422,
+        "VALIDATION_ERROR"
+      );
+    }
+
+    // A fresh token per upload: it is the object's name and the version in the
+    // URL, so replacing the clip is a new address and every browser picks it up
+    // without a hard refresh.
+    const token = randomBytes(12).toString("hex");
+    const name = (parsed.data.name || `background${resolved.extension}`).slice(0, 200);
+
+    const upload = await startBackgroundVideoUpload({
+      userId: auth.userId,
+      token,
+      mimeType: resolved.mimeType,
+      name,
+      size: parsed.data.size,
     });
 
-    return api.success({ backgroundVideo }, "Background video updated");
+    return api.success(
+      {
+        upload: {
+          sessionToken: upload.sessionToken,
+          token: upload.token,
+          uploadUrl: upload.uploadUrl,
+          headers: upload.headers,
+          expiresAt: upload.expiresAt,
+          size: upload.size,
+          mimeType: upload.mimeType,
+          name: upload.name,
+        },
+      },
+      "Upload started"
+    );
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403
@@ -279,7 +207,11 @@ export async function POST(request: NextRequest) {
         : api.unauthorized(error.message);
     }
     console.error("[Background Video POST Error]", error);
-    return api.internal();
+    return api.error(
+      "The upload could not be started. Please try again in a moment.",
+      502,
+      "UPLOAD_SESSION_FAILED"
+    );
   }
 }
 
@@ -292,8 +224,8 @@ export async function DELETE() {
 
     const previous = await currentVideo();
 
-    // The row goes first. The bytes are unreferenced the moment the setting is
-    // clear, so an interrupted delete leaves an orphan nobody can reach rather
+    // The row goes first. The object is unreferenced the moment the setting is
+    // clear, so an interrupted delete leaves an object nothing can reach rather
     // than a page pointing at a clip that is no longer there.
     try {
       await setSetting(
@@ -306,7 +238,7 @@ export async function DELETE() {
       return api.internal("could not clear the background video setting");
     }
 
-    await deleteBackgroundVideoAsset(backgroundVideoAssetId(previous)).catch(() => {});
+    await removeStoredClip(previous);
 
     if (previous?.active) {
       await recordAudit({

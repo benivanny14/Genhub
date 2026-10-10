@@ -1,0 +1,13 @@
+-- The clip behind every page briefly lived here, as a row of bytes. That was the
+-- right shape for the 4 MB a serverless function can carry and the wrong one for
+-- the 500 MB the operator asked for: a function may neither receive nor return
+-- more than 4.5 MB, so nothing large can travel through this application in
+-- either direction, and a database is not where half a gigabyte of video
+-- belongs.
+--
+-- The clips are objects in Cloudflare R2 now (lib/r2.ts): the browser uploads
+-- straight to the bucket against a URL this server signs, and playback is a
+-- redirect to the CDN. The settings row that names the clip is unchanged — it
+-- still carries the token, the media type, the operator's filename and the size,
+-- which is all the app needs to know about it.
+DROP TABLE IF EXISTS "BackgroundVideoAsset";

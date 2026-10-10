@@ -140,6 +140,26 @@ const config = {
     webhookSecret: process.env.BUNNY_STREAM_WEBHOOK_SECRET || "",
   },
 
+  // Cloudflare R2 — where a big file actually goes.
+  //
+  // The background clip is the one upload that can be hundreds of megabytes, and
+  // a serverless function neither receives nor returns more than 4.5 MB. So the
+  // browser is handed a URL this server signs and sends the file straight to the
+  // bucket (see lib/r2.ts). `publicBaseUrl` is the bucket's own public hostname
+  // when one is connected: with it, playback is a redirect to the CDN; without
+  // it, the serving route proxies ranges through the app, which works and pays
+  // for the bandwidth twice.
+  r2: {
+    accountId: process.env.R2_ACCOUNT_ID || "",
+    accessKeyId: process.env.R2_ACCESS_KEY_ID || "",
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY || "",
+    // Two names exist in this project's environments for the same thing; the
+    // plain one wins and the other is accepted so an older deployment is not
+    // broken by a rename.
+    bucket: process.env.R2_BUCKET || process.env.R2_BUCKET_NAME || "",
+    publicBaseUrl: (process.env.R2_PUBLIC_BASE_URL || "").replace(/\/+$/, ""),
+  },
+
   // SonicPesa — the only payment gateway (USSD push via mobile money).
   //
   // Auth is a static header, `X-API-KEY: <access key>` (see

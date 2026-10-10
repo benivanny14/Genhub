@@ -7,20 +7,24 @@
 //
 //   * no clip set -> 404 with no-store, so the layer unmounts instead of
 //     spinning on an address that will never return bytes;
-//   * `?v=` matching the stored token -> cacheable for a year, because a
-//     backdrop is the same bytes on every page;
-//   * `?v=` NOT matching -> the current clip, but never remembered, so a
-//     replaced backdrop cannot outlive its replacement;
+//   * a row this app would not have written -> 404 too, and NOT a request to the
+//     bucket at all;
+//   * a configured public hostname -> a redirect, so the CDN carries the clip
+//     and this app never touches a byte of it;
+//   * without one -> ranges proxied through the app, in slices bounded by the
+//     platform's 4.5 MB payload limit, INCLUDING a request that carried no Range
+//     — because a 500 MB clip cannot be sent by a function in one piece at all;
+//   * `?v=` matching the stored token -> cacheable for a year, because a backdrop
+//     is the same bytes on every page; a version that does NOT match -> the
+//     current clip, but never remembered;
 //   * Range -> 206 with Content-Range, and 416 past the end. A server that
 //     answers a range with the whole clip and a 200 is a server browsers treat
 //     as unable to stream;
-//   * a response never larger than the platform's payload limit, which is what
-//     the slice cap below is for;
-//   * a slice that does not come back whole -> 500, never a 200 that promises
+//   * a slice that does not come back whole -> 502, never a 200 that promises
 //     bytes it does not have.
 //
-// The settings service and the storage service are mocked. Nothing here touches
-// a database or a disk.
+// The settings service and the R2 client are mocked. Nothing here touches a
+// database or a network.
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -29,22 +33,25 @@ import { MAX_BACKGROUND_VIDEO_SLICE_BYTES } from "@/lib/background-video";
 
 const mocks = vi.hoisted(() => ({
   getBackgroundVideo: vi.fn(),
-  readAsset: vi.fn(),
-  readSlice: vi.fn(),
+  keyFor: vi.fn(),
+  getRange: vi.fn(),
+  publicUrl: vi.fn(),
 }));
 
 vi.mock("@/lib/services/platform-setting.service", () => ({
   getBackgroundVideo: mocks.getBackgroundVideo,
 }));
 
-vi.mock("@/lib/services/background-video.service", () => ({
-  readBackgroundVideoAsset: mocks.readAsset,
-  readBackgroundVideoSlice: mocks.readSlice,
+vi.mock("@/lib/r2", () => ({
+  r2BackgroundKeyFor: mocks.keyFor,
+  r2GetObjectRange: mocks.getRange,
+  r2PublicUrl: mocks.publicUrl,
 }));
 
 import { GET, HEAD } from "./route";
 
 const TOKEN = "0123456789abcdef01234567";
+const KEY = `site/background/${TOKEN}.mp4`;
 const SIZE = 256;
 
 /** Bytes that are recognisably not all the same, so a slice can be checked. */
@@ -54,13 +61,14 @@ function payload(): Buffer {
   return buf;
 }
 
-function active() {
+function active(overrides: Record<string, unknown> = {}) {
   return {
     active: true,
     token: TOKEN,
     mimeType: "video/mp4",
     name: "hero.mp4",
     size: SIZE,
+    ...overrides,
   };
 }
 
@@ -79,9 +87,14 @@ async function bytes(response: Response): Promise<Buffer> {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.getBackgroundVideo.mockResolvedValue(active());
-  mocks.readAsset.mockResolvedValue({ mimeType: "video/mp4", name: "hero.mp4", size: SIZE });
-  mocks.readSlice.mockImplementation(async (_id: string, start: number, end: number) =>
-    payload().subarray(start, end + 1)
+  mocks.keyFor.mockImplementation((token: string, mimeType: string) =>
+    token === TOKEN && mimeType === "video/mp4" ? KEY : null
+  );
+  // Proxy by default: the deployment has no public bucket hostname set.
+  mocks.publicUrl.mockReturnValue(null);
+  // The same cast the route itself uses to hand a Buffer to a Response body.
+  mocks.getRange.mockImplementation(async (_key: string, start: number, end: number) =>
+    new Response(payload().subarray(start, end + 1) as unknown as BodyInit, { status: 206 })
   );
 });
 
@@ -100,6 +113,20 @@ describe("GET /api/site/background-video", () => {
     expect(response.status).toBe(404);
     expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
     expect((await response.json()).code).toBe("NOT_FOUND");
+    expect(mocks.keyFor).not.toHaveBeenCalled();
+    expect(mocks.getRange).not.toHaveBeenCalled();
+  });
+
+  // A row we would not have written must not become a request to the bucket at
+  // all: the token and the media type together are what address the object.
+  it("404s a stored row this app would not have written, without reaching storage", async () => {
+    mocks.getBackgroundVideo.mockResolvedValue(active({ token: "../../etc" }));
+
+    const response = await get("?v=../../etc");
+
+    expect(response.status).toBe(404);
+    expect(mocks.keyFor).toHaveBeenCalledWith("../../etc", "video/mp4");
+    expect(mocks.getRange).not.toHaveBeenCalled();
   });
 
   it("serves the whole clip when the version matches, cacheable for a year", async () => {
@@ -123,10 +150,10 @@ describe("GET /api/site/background-video", () => {
     expect(await bytes(response)).toEqual(payload());
   });
 
-  it("asks storage for the slice it is going to answer with, not the whole clip", async () => {
+  it("asks storage for exactly the slice it is going to answer with", async () => {
     await get(`?v=${TOKEN}`, { Range: "bytes=10-19" });
 
-    expect(mocks.readSlice).toHaveBeenCalledWith(TOKEN, 10, 19);
+    expect(mocks.getRange).toHaveBeenCalledWith(KEY, 10, 19);
   });
 
   it("answers a range with 206 and exactly the bytes asked for", async () => {
@@ -160,9 +187,10 @@ describe("GET /api/site/background-video", () => {
   // a range, and Content-Range is where the browser learns to continue from.
   it("answers with a shorter range than was asked for, and says where to continue", async () => {
     const big = MAX_BACKGROUND_VIDEO_SLICE_BYTES * 3;
-    mocks.readAsset.mockResolvedValue({ mimeType: "video/mp4", name: "hero.mp4", size: big });
-    mocks.readSlice.mockImplementation(async (_id: string, start: number, end: number) =>
-      Buffer.alloc(end - start + 1)
+    mocks.getBackgroundVideo.mockResolvedValue(active({ size: big }));
+    mocks.getRange.mockImplementation(
+      async (_key: string, start: number, end: number) =>
+        new Response(Buffer.alloc(end - start + 1) as unknown as BodyInit, { status: 206 })
     );
 
     const response = await get(`?v=${TOKEN}`, { Range: "bytes=0-" });
@@ -174,24 +202,39 @@ describe("GET /api/site/background-video", () => {
     expect(response.headers.get("Content-Length")).toBe(
       String(MAX_BACKGROUND_VIDEO_SLICE_BYTES)
     );
-    expect(mocks.readSlice).toHaveBeenCalledWith(TOKEN, 0, MAX_BACKGROUND_VIDEO_SLICE_BYTES - 1);
+    expect(mocks.getRange).toHaveBeenCalledWith(
+      KEY,
+      0,
+      MAX_BACKGROUND_VIDEO_SLICE_BYTES - 1
+    );
   });
 
-  // No Range means no truncation: a 206 is only legal in answer to a range, and
-  // the whole clip is safe here anyway because the ceiling is below the
-  // platform's payload limit. The cap exists for the request that HAS a range.
-  it("answers a request with no Range whole, however big the clip is", async () => {
+  // No Range is NOT the whole clip any more. Nothing larger than the payload
+  // limit can leave a function at all, so the first slice is what leaves and the
+  // browser continues from its own offset — the same mechanism it already uses
+  // for a clip it has not finished downloading.
+  it("opens a big clip with a bounded first slice even when no Range was sent", async () => {
     const big = MAX_BACKGROUND_VIDEO_SLICE_BYTES * 3;
-    mocks.readAsset.mockResolvedValue({ mimeType: "video/mp4", name: "hero.mp4", size: big });
-    mocks.readSlice.mockImplementation(async (_id: string, start: number, end: number) =>
-      Buffer.alloc(end - start + 1)
+    mocks.getBackgroundVideo.mockResolvedValue(active({ size: big }));
+    mocks.getRange.mockImplementation(
+      async (_key: string, start: number, end: number) =>
+        new Response(Buffer.alloc(end - start + 1) as unknown as BodyInit, { status: 206 })
     );
 
     const response = await get();
 
-    expect(response.status).toBe(200);
-    expect(response.headers.get("Content-Length")).toBe(String(big));
-    expect(mocks.readSlice).toHaveBeenCalledWith(TOKEN, 0, big - 1);
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(
+      `bytes 0-${MAX_BACKGROUND_VIDEO_SLICE_BYTES - 1}/${big}`
+    );
+    expect(response.headers.get("Content-Length")).toBe(
+      String(MAX_BACKGROUND_VIDEO_SLICE_BYTES)
+    );
+    expect(mocks.getRange).toHaveBeenCalledWith(
+      KEY,
+      0,
+      MAX_BACKGROUND_VIDEO_SLICE_BYTES - 1
+    );
   });
 
   it("answers an open-ended range from the offset to the end", async () => {
@@ -220,6 +263,18 @@ describe("GET /api/site/background-video", () => {
     expect(response.status).toBe(416);
     expect(response.headers.get("Content-Range")).toBe(`bytes */${SIZE}`);
     expect((await response.text()).length).toBe(0);
+    expect(mocks.getRange).not.toHaveBeenCalled();
+  });
+
+  // A Range header this route cannot parse is ignored rather than fatal: the
+  // spec says a server may answer the whole clip instead, and multipart ranges
+  // buy nothing for media.
+  it("ignores a Range it cannot parse instead of refusing the clip", async () => {
+    const response = await get(`?v=${TOKEN}`, { Range: "bytes=not-a-range" });
+
+    expect(response.status).toBe(200);
+    expect(await bytes(response)).toEqual(payload());
+    expect(mocks.getRange).toHaveBeenCalledWith(KEY, 0, SIZE - 1);
   });
 
   // Someone is holding an address from before the clip was replaced. Serve the
@@ -240,44 +295,79 @@ describe("GET /api/site/background-video", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
   });
 
-  it("404s when the row survived but the clip did not", async () => {
-    mocks.readAsset.mockResolvedValue(null);
+  // The clip is there, so this is a fault, not an absence. A 200 promising bytes
+  // it does not have is what a player stalls on silently.
+  it("502s rather than answering a short slice", async () => {
+    mocks.getRange.mockResolvedValue(new Response(Buffer.alloc(8), { status: 206 }));
+
+    const response = await get(`?v=${TOKEN}`, { Range: "bytes=0-99" });
+
+    expect(response.status).toBe(502);
+    expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
+    expect((await response.json()).code).toBe("UPSTREAM_ERROR");
+  });
+
+  it("502s rather than answering an empty slice", async () => {
+    mocks.getRange.mockResolvedValue(new Response(new Uint8Array(0), { status: 206 }));
+
+    const response = await get(`?v=${TOKEN}`, { Range: "bytes=0-99" });
+
+    expect(response.status).toBe(502);
+  });
+
+  // An unreachable store is not a missing clip: the row says there IS one, and
+  // telling the layer 404 would make it unmount and never ask again.
+  it("502s when the bucket cannot be reached", async () => {
+    mocks.getRange.mockResolvedValue(null);
 
     const response = await get(`?v=${TOKEN}`);
 
-    expect(response.status).toBe(404);
-    expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
-    expect(mocks.readSlice).not.toHaveBeenCalled();
+    expect(response.status).toBe(502);
+    expect((await response.json()).code).toBe("UPSTREAM_ERROR");
   });
 
-  // A row we would not have written must not become a query at all: the token is
-  // the key, and the MIME type decides the extension in a response header.
-  it("404s a stored row this app would not have written", async () => {
-    mocks.getBackgroundVideo.mockResolvedValue({ ...active(), token: "../../etc" });
+  describe("with a public bucket hostname", () => {
+    beforeEach(() => {
+      mocks.publicUrl.mockReturnValue(
+        `https://cdn.example.com/site/background/${TOKEN}.mp4`
+      );
+    });
 
-    const response = await get("?v=../../etc");
+    it("redirects to the CDN, so no byte of the clip passes through the app", async () => {
+      const response = await get();
 
-    expect(response.status).toBe(404);
-    expect(mocks.readAsset).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(307);
+      expect(response.headers.get("Location")).toBe(
+        `https://cdn.example.com/site/background/${TOKEN}.mp4`
+      );
+      expect(response.headers.get("Cache-Control")).toBe(
+        "public, max-age=31536000, immutable"
+      );
+      expect(mocks.getRange).not.toHaveBeenCalled();
+      expect((await bytes(response)).length).toBe(0);
+    });
 
-  // The clip is there, so this is a fault, not an absence. A 200 promising bytes
-  // it does not have is what a player stalls on silently.
-  it("500s rather than answering a short slice", async () => {
-    mocks.readSlice.mockResolvedValue(Buffer.alloc(8));
+    it("redirects uncacheably for a version that is not the current one", async () => {
+      const response = await get("?v=ffffffffffffffffffffffff");
 
-    const response = await get(`?v=${TOKEN}`, { Range: "bytes=0-99" });
+      expect(response.status).toBe(307);
+      expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
+    });
 
-    expect(response.status).toBe(500);
-    expect(response.headers.get("Cache-Control")).toBe("no-store, max-age=0");
-  });
+    it("404s without redirecting when there is no clip", async () => {
+      mocks.getBackgroundVideo.mockResolvedValue({
+        active: false,
+        token: "",
+        mimeType: "",
+        name: "",
+        size: 0,
+      });
 
-  it("500s rather than answering an empty slice", async () => {
-    mocks.readSlice.mockResolvedValue(new Uint8Array(0));
+      const response = await get();
 
-    const response = await get(`?v=${TOKEN}`, { Range: "bytes=0-99" });
-
-    expect(response.status).toBe(500);
+      expect(response.status).toBe(404);
+      expect(response.headers.get("Location")).toBeNull();
+    });
   });
 });
 
@@ -291,7 +381,20 @@ describe("HEAD /api/site/background-video", () => {
     expect(response.headers.get("Content-Type")).toBe("video/mp4");
     expect((await bytes(response)).length).toBe(0);
     // A HEAD is a question about the clip, not a request for it.
-    expect(mocks.readSlice).not.toHaveBeenCalled();
+    expect(mocks.getRange).not.toHaveBeenCalled();
+  });
+
+  it("describes the first slice of a big clip without fetching it", async () => {
+    const big = MAX_BACKGROUND_VIDEO_SLICE_BYTES * 3;
+    mocks.getBackgroundVideo.mockResolvedValue(active({ size: big }));
+
+    const response = await HEAD(new NextRequest(url()));
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("Content-Range")).toBe(
+      `bytes 0-${MAX_BACKGROUND_VIDEO_SLICE_BYTES - 1}/${big}`
+    );
+    expect(mocks.getRange).not.toHaveBeenCalled();
   });
 
   it("404s the same way GET does when there is nothing to play", async () => {

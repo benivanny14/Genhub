@@ -23,6 +23,7 @@ import {
   BACKGROUND_VIDEO_ACCEPT,
   MAX_BACKGROUND_VIDEO_LABEL,
   backgroundVideoRefusal,
+  backgroundVideoStoreFailure,
   backgroundVideoUploadFailure,
   type BackgroundVideo,
 } from "@/lib/background-video";
@@ -80,6 +81,74 @@ import {
   describeUploadFailureAttempts,
   formatUploadBytes,
 } from "@/lib/upload-failure-reading";
+
+/**
+ * What the server hands back before a clip may be sent.
+ *
+ * `uploadUrl` is a presigned R2 URL: it can write ONE object, named by the
+ * server, and it expires. `headers` are the ones the signature covers, so they
+ * have to be sent exactly as they arrive.
+ */
+interface BackgroundUploadTarget {
+  sessionToken: string;
+  token: string;
+  uploadUrl: string;
+  headers: Record<string, string>;
+  expiresAt: number;
+  size: number;
+  mimeType: string;
+  name: string;
+}
+
+/** A failure that came back with an HTTP status, so the copy can name it. */
+class UploadToStoreError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`upload to storage failed with ${status}`);
+    this.name = "UploadToStoreError";
+    this.status = status;
+  }
+}
+
+/**
+ * Send the clip to R2, reporting how much has gone.
+ *
+ * XMLHttpRequest and not fetch: `fetch` cannot tell anyone how far a body has
+ * got, and a 500 MB clip over a phone connection is minutes of a button that
+ * would otherwise say "Working…" and nothing else. Rejections carry the STATUS
+ * rather than a sentence, because only the caller knows which of the three
+ * requests of this upload the status belongs to.
+ */
+function putClipToR2(
+  target: BackgroundUploadTarget,
+  file: File,
+  onProgress: (percent: number) => void
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("PUT", target.uploadUrl);
+    for (const [name, value] of Object.entries(target.headers ?? {})) {
+      xhr.setRequestHeader(name, value);
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        onProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve();
+      else reject(new UploadToStoreError(xhr.status));
+    };
+    // No status at all: the browser refused the exchange. Treated as zero, which
+    // is the same class as our own unreachable network.
+    xhr.onerror = () => reject(new UploadToStoreError(0));
+    xhr.onabort = () => reject(new UploadToStoreError(0));
+
+    xhr.send(file);
+  });
+}
 
 /**
  * Live readiness of the things that cannot be fixed from the code — the video
@@ -1612,18 +1681,26 @@ export default function AdminDashboard() {
   /**
    * Put a clip behind every page, replacing whatever is there.
    *
-   * Sent with XMLHttpRequest rather than fetch for one reason: upload
-   * PROGRESS. `fetch` has no way to report bytes going out, and a clip on a
-   * phone connection is a stretch of a button that will not say whether it is
-   * still working — which is how an upload gets pressed again halfway through
-   * and left. The server reads the body into a bounded buffer and stores it; see
-   * /api/admin/background-video.
+   * Three requests, and only the middle one carries the file:
+   *
+   *   1. open the upload — the server decides the object's name and signs a URL
+   *      that can write exactly that one object, and nothing else;
+   *   2. PUT the bytes STRAIGHT to Cloudflare R2, which is the only reason a
+   *      500 MB clip is possible at all: a serverless function refuses a body
+   *      over 4.5 MB, and the browser is the one party that has no such limit;
+   *   3. confirm it — the server asks R2 what it holds and only then makes the
+   *      clip live.
+   *
+   * Step 2 is XMLHttpRequest rather than fetch for one reason: PROGRESS. `fetch`
+   * cannot report bytes going out, and a large clip on a phone connection is a
+   * stretch of a button that will not say whether it is still working — which is
+   * how an upload gets pressed again halfway through and left.
    *
    * Checked here first as well as there: the rules are enforced on the server,
    * but a person who is told now has not just waited out the transfer to be told
    * no.
    */
-  function uploadBackgroundVideo(file: File) {
+  async function uploadBackgroundVideo(file: File) {
     const refusal = backgroundVideoRefusal(file);
     if (refusal) {
       toast("error", refusal);
@@ -1633,67 +1710,66 @@ export default function AdminDashboard() {
     setBackgroundBusy(true);
     setBackgroundProgress(0);
 
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", "/api/admin/background-video");
-    // The file itself is the body. The type and name travel as headers because
-    // multipart would have to assemble the whole file in memory first — see the
-    // route's header for why that is exactly what an oversized clip must not do.
-    xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
-    xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name || "background.mp4"));
-    xhr.setRequestHeader("X-File-Size", String(file.size));
+    try {
+      const opened = await adminFetch("/api/admin/background-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: file.name, mimeType: file.type, size: file.size }),
+      });
+      const started: {
+        success?: boolean;
+        message?: string;
+        error?: string;
+        data?: { upload?: BackgroundUploadTarget };
+      } = await opened.json().catch(() => ({}));
 
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && event.total > 0) {
-        setBackgroundProgress(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+      const upload = started.data?.upload;
+      if (!opened.ok || !started.success || !upload) {
+        toast("error", started.error || backgroundVideoUploadFailure(opened.status));
+        return;
       }
-    };
 
-    xhr.onload = () => {
-      setBackgroundBusy(false);
-      setBackgroundProgress(null);
-      let body: {
+      // The bytes go to the signed URL itself. Nothing about the clip is ours to
+      // hold: what this request proves is that the browser can reach the bucket.
+      try {
+        await putClipToR2(upload, file, (percent) => setBackgroundProgress(percent));
+      } catch (error) {
+        const status = error instanceof UploadToStoreError ? error.status : 0;
+        toast("error", backgroundVideoStoreFailure(status));
+        return;
+      }
+
+      const done = await adminFetch("/api/admin/background-video/complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionToken: upload.sessionToken }),
+      });
+      const body: {
         success?: boolean;
         message?: string;
         error?: string;
         data?: { backgroundVideo?: BackgroundVideo };
-      } | null = null;
-      try {
-        body = JSON.parse(xhr.responseText);
-      } catch {
-        body = null;
-      }
+      } = await done.json().catch(() => ({}));
 
-      if (xhr.status >= 200 && xhr.status < 300 && body?.success) {
-        if (body.data?.backgroundVideo) setBackgroundVideo(body.data.backgroundVideo);
-        // The card above redrew from the response, but the LAYER at the back of
-        // the page reads its own cache — publish the new clip to it now rather
-        // than leaving the admin staring at the old footage until a reload.
-        void refreshSiteStatus();
-        toast("success", body.message || "Background video updated");
+      if (!done.ok || !body.success) {
+        toast("error", body.error || backgroundVideoUploadFailure(done.status));
         return;
       }
 
-      // The response is not always ours. A platform that refuses a request before
-      // it reaches this app answers with plain text, not JSON — which is how a
-      // body over the deployment's own payload limit arrived here as "the upload
-      // failed, try again", with nothing to act on and no way to tell it apart
-      // from a dropped connection. So the STATUS is read as well as the body, and
-      // when the body cannot be parsed the status is all there is: it is the only
-      // fact in that exchange that is ours to interpret.
-      toast("error", body?.error || backgroundVideoUploadFailure(xhr.status));
-    };
-
-    xhr.onerror = () => {
+      if (body.data?.backgroundVideo) setBackgroundVideo(body.data.backgroundVideo);
+      // The card above redrew from the response, but the LAYER at the back of
+      // the page reads its own cache — publish the new clip to it now rather
+      // than leaving the admin staring at the old footage until a reload.
+      void refreshSiteStatus();
+      toast("success", body.message || "Background video updated");
+    } catch {
+      // A request of ours failed without an answer at all: the network, or the
+      // route's own 500, either way the sentence is the same and it says retry.
+      toast("error", backgroundVideoUploadFailure(0));
+    } finally {
       setBackgroundBusy(false);
       setBackgroundProgress(null);
-      toast("error", "The upload failed. Check your connection and try again.");
-    };
-    xhr.onabort = () => {
-      setBackgroundBusy(false);
-      setBackgroundProgress(null);
-    };
-
-    xhr.send(file);
+    }
   }
 
   /** Take the backdrop down. The aurora is what the page had before it. */

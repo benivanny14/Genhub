@@ -8,44 +8,40 @@
 // first thing the site paints, and gating it behind a session would make the
 // site's own background a request that fails for anyone signed out.
 //
-// WHERE THE BYTES COME FROM
+// WHERE THE BYTES COME FROM, AND WHY THIS ROUTE IS STILL HERE
 //
-//   A row in the database (BackgroundVideoAsset), read through
-//   lib/services/background-video.service.ts. They used to be a file in
-//   `public/uploads/site/` — which is not writable where this runs, so there was
-//   never anything to serve there.
+//   The clip is an object in Cloudflare R2, and it may be 500 MB — far past the
+//   4.5 MB a function may return. So there are two ways to answer it, and this
+//   route picks whichever the deployment has configured:
 //
-// WHY THIS ROUTE STILL EXISTS INSTEAD OF A STATIC URL
+//   REDIRECT  With a public bucket hostname (R2_PUBLIC_BASE_URL) the answer is a
+//             redirect to it. The clip is then carried by the CDN, cached for a
+//             year, and this app never touches a byte of it. That is the shape a
+//             backdrop wants, and it is what a large clip needs.
 //
-//   1. RANGE. A <video> asks for bytes=… as soon as it wants to seek, and it
-//      asks before it will play in several browsers. A server that answers a
-//      range request with the whole clip and a 200 is a server those browsers
-//      treat as unable to stream. So 206, Content-Range and Accept-Ranges are
-//      written here, and the bytes are fetched from the database as the slice
-//      that was asked for rather than all of it.
-//   2. ONE ADDRESS. The URL never changes; `?v=` carries the token. The clip can
-//      then be cached hard (a backdrop is the same bytes on every page) and a
-//      replacement is simply a different URL — no stale backdrop, no cache
-//      busting on the query.
-//   3. NO TOKEN IN A QUERY FOR STORAGE. The row is found by the validated token
-//      and nothing else about the request reaches the lookup.
+//   PROXY     Without one, the object is read a range at a time and passed
+//             through. Every answer stays inside the platform's payload limit,
+//             because a range is bounded (MAX_BACKGROUND_VIDEO_SLICE_BYTES) and
+//             browsers ask for ranges anyway — a <video> sends `bytes=0-` before
+//             it will play in several of them. Correct, and it pays for the same
+//             bytes twice: once at R2 and once here.
+//
+// WHY THE ADDRESS NEVER CHANGES
+//
+//   `/api/site/background-video?v=<token>` is the one URL the layer and the
+//   admin's card use, and it outlives a replacement — the token in `?v=` is the
+//   version. So the clip can be cached hard and a new clip is simply a new
+//   address: no stale backdrop, no cache busting anywhere else.
 //
 // The name in Content-Disposition is a fixed word plus the stored extension —
 // never the operator's filename, which would otherwise be reflected to every
-// visitor in a header that some clients render.
+// visitor in a header some clients render.
 // =============================================================================
 
 import { NextRequest, NextResponse } from "next/server";
 import { getBackgroundVideo } from "@/lib/services/platform-setting.service";
-import {
-  readBackgroundVideoAsset,
-  readBackgroundVideoSlice,
-} from "@/lib/services/background-video.service";
-import {
-  MAX_BACKGROUND_VIDEO_SLICE_BYTES,
-  backgroundVideoAssetId,
-  backgroundVideoExtension,
-} from "@/lib/background-video";
+import { MAX_BACKGROUND_VIDEO_SLICE_BYTES, backgroundVideoExtension } from "@/lib/background-video";
+import { r2BackgroundKeyFor, r2GetObjectRange, r2PublicUrl } from "@/lib/r2";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -100,77 +96,67 @@ function parseRange(header: string | null, size: number): Slice | "unsatisfiable
   }
 
   if (size === 0) return "unsatisfiable";
-  // 206 even when the range happens to span the whole clip. A 200 is legal here
-  // and fatal in practice: the browser reads it as "this server cannot serve
-  // bytes", stops asking for offsets, and for a clip of any real size the
-  // download it then waits for never finishes — so the backdrop never plays and
-  // never loops. `bytes=0-` is the FIRST thing every <video> sends, so this is
-  // not an edge case, it is the normal path.
+  // A real range is ALWAYS answered 206, even when it happens to span the whole
+  // clip. A 200 is legal here and fatal in practice: the browser reads it as
+  // "this server cannot serve bytes", stops asking for offsets, and for a clip
+  // of any real size the download it then waits for never finishes — so the
+  // backdrop never plays and never loops. `bytes=0-` is the FIRST thing every
+  // <video> sends, so this is not an edge case, it is the normal path.
   return { status: 206, start, end };
 }
 
-/**
- * Answer a RANGE with no more bytes than this.
- *
- * The platform refuses a function's response body past 4.5 MB, and `bytes=0-` on
- * a clip at the ceiling is exactly how a working backdrop turns into a 413 that
- * nobody can reproduce locally — see MAX_BACKGROUND_VIDEO_SLICE_BYTES.
- *
- * Only a range is capped this way. Fewer bytes than were asked for is still a 206
- * with an honest Content-Range, and the browser continues from there; a request
- * that carried no Range at all is answered whole, and is safe because the
- * ceiling itself is already below the platform's limit.
- */
-function bounded(slice: Slice): Slice {
-  const cappedEnd = Math.min(slice.end, slice.start + MAX_BACKGROUND_VIDEO_SLICE_BYTES - 1);
-  if (cappedEnd === slice.end) return slice;
-  return { status: 206, start: slice.start, end: cappedEnd };
+/** A 404 the layer can act on: it unmounts instead of waiting for bytes. */
+function notFound(bodyAllowed: boolean): NextResponse {
+  return bodyAllowed
+    ? new NextResponse(
+        JSON.stringify({ success: false, error: "No background video is set", code: "NOT_FOUND" }),
+        {
+          status: 404,
+          headers: { "Content-Type": "application/json", "Cache-Control": "no-store, max-age=0" },
+        }
+      )
+    : new NextResponse(null, { status: 404, headers: { "Cache-Control": "no-store, max-age=0" } });
 }
 
 async function serve(request: NextRequest, bodyAllowed: boolean) {
   const video = await getBackgroundVideo();
-  const id = backgroundVideoAssetId(video);
-  if (!video.active || !id) {
-    return bodyAllowed
-      ? new NextResponse(JSON.stringify({ success: false, error: "No background video is set", code: "NOT_FOUND" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json", "Cache-Control": "no-store, max-age=0" },
-        })
-      : new NextResponse(null, { status: 404, headers: { "Cache-Control": "no-store, max-age=0" } });
-  }
+  const key = video.active ? r2BackgroundKeyFor(video.token, video.mimeType) : null;
+  // No clip, or a row this app would not have written: both are "nothing to
+  // play", and neither may become a request to a store.
+  if (!key) return notFound(bodyAllowed);
 
-  const asset = await readBackgroundVideoAsset(id);
+  const isCurrentVersion = request.nextUrl.searchParams.get("v") === video.token;
+  const cacheControl = isCurrentVersion
+    ? // A backdrop is the same bytes on every page, at this address, forever.
+      "public, max-age=31536000, immutable"
+    : // Someone is holding an address from before the clip was replaced. Serve
+      // the CURRENT clip so they are not shown a backdrop that no longer exists,
+      // but never let that answer be remembered.
+      "no-store, max-age=0";
 
-  if (!asset) {
-    // The row survived but the clip did not. Answering 404 lets the layer
-    // unmount rather than spin on a request that will never return bytes.
-    return new NextResponse(null, {
-      status: 404,
-      headers: { "Cache-Control": "no-store, max-age=0" },
+  // --- the CDN path -----------------------------------------------------------
+  const publicUrl = r2PublicUrl(key);
+  if (publicUrl) {
+    // 307: every case that matters is a GET, and a client should follow rather
+    // than pin the redirect — the address above is the only one worth caching.
+    return NextResponse.redirect(publicUrl, {
+      status: 307,
+      headers: { "Cache-Control": cacheControl },
     });
   }
 
-  const size = asset.size;
-  const requestedVersion = request.nextUrl.searchParams.get("v");
-  const isCurrentVersion = requestedVersion === video.token;
+  // --- the proxy path ---------------------------------------------------------
+  const size = video.size;
   const extension = backgroundVideoExtension(video.mimeType);
-
   const headers = new Headers({
     "Content-Type": video.mimeType,
     "Accept-Ranges": "bytes",
-    // A fixed word, never the operator's filename — see the header.
     "Content-Disposition": `inline; filename="background${extension}"`,
-    "Cache-Control": isCurrentVersion
-      ? "public, max-age=31536000, immutable"
-      : // Someone is holding an address from before the clip was replaced. Serve
-        // the CURRENT clip so they are not shown a backdrop that no longer
-        // exists, but never let that answer be remembered.
-        "no-store, max-age=0",
+    "Cache-Control": cacheControl,
     ...SECURITY_HEADERS,
   });
 
   const range = parseRange(request.headers.get("range"), size);
-
   if (range === "unsatisfiable") {
     return new NextResponse(null, {
       status: 416,
@@ -178,30 +164,62 @@ async function serve(request: NextRequest, bodyAllowed: boolean) {
     });
   }
 
-  const slice: Slice = range ? bounded(range) : { status: 200, start: 0, end: size - 1 };
-  headers.set("Content-Length", String(slice.end - slice.start + 1));
-  if (slice.status === 206) {
-    headers.set("Content-Range", `bytes ${slice.start}-${slice.end}/${size}`);
-  }
+  // Everything is answered in bounded slices, because a 500 MB clip cannot be
+  // sent by a function in one piece at all.
+  const start = range ? range.start : 0;
+  const wantedEnd = range ? range.end : size - 1;
+  const end = Math.min(wantedEnd, start + MAX_BACKGROUND_VIDEO_SLICE_BYTES - 1);
+  const isWhole = start === 0 && end === size - 1;
 
-  if (!bodyAllowed) return new NextResponse(null, { status: slice.status, headers });
+  // A request that CARRIED a Range is always answered 206, even when the range
+  // happens to span the whole clip. That last part is not pedantry: `bytes=0-` is
+  // the first request every <video> makes, and a 200 there reads to several
+  // browsers as "this server cannot serve bytes" — they stop asking for offsets
+  // and wait out a download that, on a clip of any real size, never completes.
+  //
+  // No Range is the ordinary case, and a clip that fits in one slice is answered
+  // whole as a 200. One that does NOT fit is the first 206 slice, and the client
+  // continues from its own offset.
+  const status: 200 | 206 = range || !isWhole ? 206 : 200;
 
-  const chunk = await readBackgroundVideoSlice(id, slice.start, slice.end);
+  headers.set("Content-Length", String(end - start + 1));
+  if (status === 206) headers.set("Content-Range", `bytes ${start}-${end}/${size}`);
 
-  // The row is there, so this is a fault rather than an absence: a slice that
-  // came back empty or short would be a 200 promising bytes it does not have,
-  // and a player given that stalls instead of saying anything.
-  if (!chunk || chunk.byteLength !== slice.end - slice.start + 1) {
+  if (!bodyAllowed) return new NextResponse(null, { status, headers });
+
+  const upstream = await r2GetObjectRange(key, start, end);
+  const wanted = end - start + 1;
+
+  // READ BEFORE ANSWERING, rather than passing the store's stream through.
+  //
+  // Measured on this route, the pass-through truncated: a 1.1 MB clip arrived as
+  // 737,280 bytes, with a Content-Length that promised all of it — which is the
+  // worst possible failure for a <video>, because the player waits for bytes the
+  // response has already said it would send. Reading the slice into memory first
+  // means the body is either complete or it is a 502, and a slice is bounded at
+  // MAX_BACKGROUND_VIDEO_SLICE_BYTES, so this never holds more than a couple of
+  // megabytes.
+  const chunk = upstream?.ok ? Buffer.from(await upstream.arrayBuffer().catch(() => new ArrayBuffer(0))) : null;
+
+  if (!upstream?.ok || !chunk || chunk.byteLength !== wanted) {
     console.error(
-      `[Background Video Serve] stored clip ${id} answered ${chunk?.byteLength ?? 0} bytes for ${slice.start}-${slice.end}`
+      `[Background Video Serve] ${key} answered ${upstream?.status ?? "nothing"} for ${start}-${end}` +
+        (chunk ? ` (${chunk.byteLength} of ${wanted} bytes)` : "")
     );
-    return new NextResponse(null, {
-      status: 500,
-      headers: { "Cache-Control": "no-store, max-age=0" },
-    });
+    return new NextResponse(
+      JSON.stringify({ success: false, error: "That video could not be read right now", code: "UPSTREAM_ERROR" }),
+      {
+        status: 502,
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store, max-age=0",
+          "X-Content-Type-Options": "nosniff",
+        },
+      }
+    );
   }
 
-  return new NextResponse(chunk as unknown as BodyInit, { status: slice.status, headers });
+  return new NextResponse(chunk as unknown as BodyInit, { status, headers });
 }
 
 export async function GET(request: NextRequest) {

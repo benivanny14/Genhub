@@ -13,59 +13,61 @@
 //
 // WHERE THE BYTES LIVE
 //
-// They are a row in the database (BackgroundVideoAsset), not a file. The clip
-// used to be written to `public/uploads/site/` and streamed back off the disk,
-// which is the one place it cannot survive: the deployment's filesystem is
-// read-only apart from a per-instance /tmp, and a function's request and
-// response bodies are both capped at 4.5 MB. That is also why the ceiling here
-// is a few megabytes and not the hundreds it once was — see
-// MAX_BACKGROUND_VIDEO_BYTES.
+// In Cloudflare R2, reached by a signed URL the browser is handed — see
+// lib/r2.ts and the two admin routes. They have been a file on disk (which the
+// deployment cannot write), bytes in a function (which it will not carry past
+// 4.5 MB) and a row in the database (which is no place for half a gigabyte), and
+// an object store is the only one of those a 500 MB clip can actually use.
 //
 // The token is the whole security boundary on the bytes. It is generated as 24
 // hex characters on upload and re-checked against that pattern on every read,
 // and the MIME type is checked against an allowlist this file owns rather than
-// trusted from anything the caller sent. The token is the key bytes are read
-// from, so a row naming a path, a host, or a token of the wrong shape resolves
-// to "no clip" instead of to bytes of its choosing.
+// trusted from anything the caller sent. The token and the type together are
+// what the object's key is built from, so a row naming a path, a host, or a
+// token of the wrong shape resolves to "no clip" instead of to somebody else's
+// object.
+//
+// The bytes themselves are the one thing this module can no longer inspect: they
+// go from the operator's browser straight to the bucket, so no code here ever
+// sees the head of the file. What replaces that check is the destination — a URL
+// this server signs for ONE key, under an allowlisted type, for one admin — and
+// the fact that a clip nobody can decode is a clip the operator sees fail and
+// replaces.
 // =============================================================================
 
 /**
  * The ceiling on an upload, in bytes.
  *
- * 4 MB, and the number is not a preference — it is the deployment's own limit
- * with room to spare. The clip is carried through a serverless function in both
- * directions (the browser posts it, the layer downloads it), and that payload is
- * capped at 4.5 MB whichever way it is going. 4 MB keeps a margin for headers
- * and for the JSON answer that follows a rejected upload, on a platform that
- * refuses an oversized body with a 413 whose body is not even JSON.
+ * 500 MB, and it is reachable BECAUSE nothing large travels through this
+ * application any more. The clip goes from the browser straight to Cloudflare R2
+ * against a URL the server signs, and comes back from the CDN — so the 4.5 MB a
+ * serverless function will accept in either direction is no longer the size of
+ * the clip, it is only the size of the requests that sign and confirm it.
  *
- * It is also the right size for what this is. A backdrop loops behind a page a
- * visitor is reading; ten to twenty seconds of 720p footage is one to three
- * megabytes, and every megabyte past that is spent on somebody's phone to
- * decorate a page they did not come here to look at.
+ * It is a ceiling rather than a target, and a background clip is the one upload
+ * where the operator should stay far below it: this loops behind a page a
+ * visitor is reading, and every megabyte here is a megabyte of their data. Ten
+ * to twenty seconds of 720p footage is a few megabytes and looks the same.
  */
-export const MAX_BACKGROUND_VIDEO_BYTES = 4 * 1024 * 1024; // 4 MB
+export const MAX_BACKGROUND_VIDEO_BYTES = 500 * 1024 * 1024; // 500 MB
 
 /** The same ceiling, written the way the interface says it. */
-export const MAX_BACKGROUND_VIDEO_LABEL = "4 MB";
+export const MAX_BACKGROUND_VIDEO_LABEL = "500 MB";
 
 /**
- * The most bytes one RANGED response may carry.
+ * The most bytes one response may carry.
  *
- * The serving route hands out a clip a range at a time, and a range may ask for
- * all of it (`bytes=0-`, which is the first request every `<video>` makes). The
- * platform caps a function's RESPONSE at 4.5 MB, so a clip at the ceiling could
- * be answered in one piece only while the ceiling stays below that — a margin
- * nobody would remember when raising it. This is that margin, written down.
- *
- * A request that carried no Range at all is answered whole, and is safe for the
- * same reason: the ceiling itself is already below the platform's limit.
+ * The clip may be 500 MB and the deployment refuses a function's response body
+ * past 4.5 MB, so every answer is a bounded slice — including one that carried
+ * no Range at all, because there is no way to send half a gigabyte in one piece.
+ * (A bucket with a public hostname does not need this route at all: the serving
+ * route redirects there and the CDN carries the clip.)
  *
  * Answering with a SHORTER range than was asked for is ordinary HTTP: the 206
  * carries the range actually sent, and the browser asks for the rest from that
- * offset, which is the same mechanism it uses for a clip it has not finished
- * downloading. For a 4 MB backdrop this splits the first play into two requests
- * and changes nothing else.
+ * offset — the same mechanism it already uses for a clip it has not finished
+ * downloading. `bytes=0-` is the first request every `<video>` makes, so this is
+ * the normal path, not an edge case.
  */
 export const MAX_BACKGROUND_VIDEO_SLICE_BYTES = 2 * 1024 * 1024; // 2 MB
 
@@ -164,11 +166,11 @@ export function backgroundVideoUrl(video: BackgroundVideo | null | undefined): s
 }
 
 /**
- * Where the clip is read from, or null if this row cannot name one.
+ * The token that names the stored clip, or null if this row cannot name one.
  *
- * Pure string work on purpose — see the header. The caller looks the token up
- * as a primary key; nothing else about the row reaches the query, so a row
- * carrying a path, a script or a token of the wrong length cannot address
+ * Pure string work on purpose — see the header. The caller turns this into an
+ * object key with the media type; nothing else about the row reaches a store, so
+ * a row carrying a path, a script or a token of the wrong length cannot address
  * anything at all.
  */
 export function backgroundVideoAssetId(
@@ -263,31 +265,22 @@ export function backgroundVideoUploadFailure(status: number): string {
 }
 
 /**
- * Does the head of the file look like one of the containers we claimed?
+ * What to say when the clip could not be handed to the bucket.
  *
- * A MIME type and an extension are both claims the sender makes; these are the
- * bytes. Every accepted container starts with a marker that is hard to
- * accidentally produce: `ftyp` at offset 4 for MP4/MOV, the EBML magic for the
- * Matroska family (WebM is Matroska). Checked once, on the first bytes read,
- * which costs nothing and means an executable wearing a .mp4 name is never
- * stored under a video's content type.
+ * A different failure from `backgroundVideoUploadFailure`: that one covers the
+ * requests that go to THIS app, and this one covers the PUT that goes straight
+ * to storage against a signed URL. They need different sentences because they
+ * have different fixes — a 403 here means the signature was refused or has
+ * expired, not that the session ended, and telling an operator to sign in again
+ * would send them to fix the wrong thing.
  */
-export function looksLikeBackgroundVideo(head: Uint8Array, extension: string): boolean {
-  if (extension === ".mp4" || extension === ".mov") {
-    // 4 bytes of box length, then the box type. Needs the first 8 bytes.
-    return (
-      head.length >= 8 &&
-      head[4] === 0x66 && head[5] === 0x74 && head[6] === 0x79 && head[7] === 0x70
-    );
+export function backgroundVideoStoreFailure(status: number): string {
+  if (status === 401 || status === 403) {
+    return "The upload link was refused or has expired. Press Upload video to start again.";
   }
-
-  if (extension === ".webm" || extension === ".mkv") {
-    // 1A 45 DF A3 — the EBML header every Matroska container opens with.
-    return (
-      head.length >= 4 &&
-      head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3
-    );
+  if (status === 413) {
+    return `That video is too large — the limit is ${MAX_BACKGROUND_VIDEO_LABEL}.`;
   }
-
-  return false;
+  return "The video could not be sent to storage. Check your connection and try again.";
 }
+
