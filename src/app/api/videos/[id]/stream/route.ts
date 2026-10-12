@@ -39,6 +39,19 @@ import { resolveVideoEntitlement } from "@/lib/services/video-entitlement.servic
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 
+// Prisma and getCurrentUser open real connections, and the managed Postgres can
+// take seconds to wake from idle. That is on TOP of UPSTREAM_TIMEOUT_MS below,
+// so the honest budget for this route is the slow database plus the slow CDN,
+// not either one alone.
+//
+// Without this the function is killed by the platform's default duration in the
+// middle of that sequence — and a killed function never reaches the handler's
+// error path, so the viewer gets the platform's own 502 with a body that is not
+// ours. That body carries no `error` and no `reference`, the player has nothing
+// to report but "HTTP 502", and the log line this route would have written
+// (with the host, the status and the reason) is never written at all.
+export const maxDuration = 30;
+
 /** How long the CDN gets to answer before this route gives up on it. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
 

@@ -339,15 +339,32 @@ export default function VideoPlayer({
         // variable is wrong, which host answered what) is exactly what the
         // viewer needs to read back to whoever runs the deployment. Passing the
         // raw status on would throw it away and leave "HTTP 502".
-        const reasonFromServer = (() => {
+        //
+        // The body carries a `reference` alongside it, and that reference is the
+        // one thing that finds the matching log line — the route writes
+        // "[StreamProxy] reference=<it> <everything we know>", where everything
+        // we know means the host, the upstream status and which secret the
+        // signature had to match. It is eight characters of random alphabet, not
+        // a secret, and a report of "it says 502, reference K7QW2M1A" is a grep
+        // away from the cause where a report of "it says 502" is not.
+        const serverBody = (() => {
           if (!response?.text) return null;
           try {
-            const parsed = JSON.parse(response.text) as { error?: unknown };
-            return typeof parsed?.error === "string" ? parsed.error : null;
+            const parsed = JSON.parse(response.text) as {
+              error?: unknown;
+              reference?: unknown;
+            };
+            const error = typeof parsed?.error === "string" ? parsed.error : null;
+            const reference =
+              typeof parsed?.reference === "string" ? parsed.reference : null;
+            return error || reference ? { error, reference } : null;
           } catch {
             return null;
           }
         })();
+        const reasonFromServer = serverBody?.error ?? null;
+        const withReference = (message: string) =>
+          serverBody?.reference ? `${message} (Reference: ${serverBody.reference})` : message;
 
         // A status means the SERVER answered, and the same request will get the
         // same answer — 401/403 above all, but every one of them. Retrying is
@@ -366,7 +383,9 @@ export default function VideoPlayer({
             httpStatus === 401 || httpStatus === 403
               ? `This video was refused by the video host (HTTP ${httpStatus}). ` +
                   "It is a server-side fault, not your connection — the team has been told."
-              : (reasonFromServer ?? `The stream could not be loaded (HTTP ${httpStatus}).`)
+              : withReference(
+                  reasonFromServer ?? `The stream could not be loaded (HTTP ${httpStatus}).`
+                )
           );
           return;
         }
@@ -381,10 +400,12 @@ export default function VideoPlayer({
                 clearTimeout(watchdog);
                 setIsLoading(false);
                 setFatalError(
-                  reasonFromServer ??
-                    (httpStatus
-                      ? `The stream could not be loaded (HTTP ${httpStatus}).`
-                      : "The stream could not be loaded after several attempts.")
+                  withReference(
+                    reasonFromServer ??
+                      (httpStatus
+                        ? `The stream could not be loaded (HTTP ${httpStatus}).`
+                        : "The stream could not be loaded after several attempts.")
+                  )
                 );
               }
               break;
