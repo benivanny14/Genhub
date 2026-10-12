@@ -349,14 +349,24 @@ export default function VideoPlayer({
           }
         })();
 
-        // 401/403 is the CDN refusing the URL itself. Retrying sends the same
-        // rejected request, so say so instead of looping.
-        if (httpStatus === 401 || httpStatus === 403) {
+        // A status means the SERVER answered, and the same request will get the
+        // same answer — 401/403 above all, but every one of them. Retrying is
+        // not resilience here, and it was worse than pointless: after a fatal
+        // manifest error `startLoad()` never issued a second request, so
+        // `networkRetries` never reached its limit, the real reason was never
+        // written, and the only message the viewer ever saw was the watchdog's
+        // — "check your connection" — for a server that had answered in half a
+        // second. That is the exact complaint this replaces: the phone has
+        // signal, the site is blaming it anyway. 408 and 429 are the two that
+        // mean "later", not "never", so they stay retryable.
+        if (httpStatus && httpStatus !== 408 && httpStatus !== 429) {
           clearTimeout(watchdog);
           setIsLoading(false);
           setFatalError(
-            `This video was refused by the video host (HTTP ${httpStatus}). ` +
-              "It is a server-side fault, not your connection — the team has been told."
+            httpStatus === 401 || httpStatus === 403
+              ? `This video was refused by the video host (HTTP ${httpStatus}). ` +
+                  "It is a server-side fault, not your connection — the team has been told."
+              : (reasonFromServer ?? `The stream could not be loaded (HTTP ${httpStatus}).`)
           );
           return;
         }
