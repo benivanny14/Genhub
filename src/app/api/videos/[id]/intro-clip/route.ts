@@ -49,6 +49,18 @@ import {
   planClipSegments,
 } from "@/lib/intro-clip";
 
+// Prisma and getCurrentUser open real connections, and this route then makes
+// TWO CDN fetches (the master playlist and the chosen rendition), each allowed
+// UPSTREAM_TIMEOUT_MS below. Twenty seconds of that can be CDN alone, on top of
+// a managed Postgres that may be waking from idle.
+//
+// Without this the function is killed by the platform's default duration in the
+// middle of that sequence, and a killed function never reaches the error path
+// below — so the viewer gets the platform's own 502 with a body that is not
+// ours, carrying no `error` and no `reference`. It is the same gap the playback
+// route had, on the route the watch page hits FIRST for anyone who has not paid.
+export const maxDuration = 30;
+
 /** How long the CDN gets to answer one playlist request. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
 

@@ -29,6 +29,12 @@ import { resolveIntroPreviewUrl } from "@/lib/bunny";
 import { checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 
+// Prisma, the session and one CDN fetch, which is allowed UPSTREAM_TIMEOUT_MS
+// below. Without a budget of its own the platform may kill the function before
+// any of it answers, and a killed function writes no log line and returns a
+// body that is not ours — the same gap the playback and intro-clip routes had.
+export const maxDuration = 30;
+
 /** How long the CDN gets to answer before this route gives up on it. */
 const UPSTREAM_TIMEOUT_MS = 10_000;
 
