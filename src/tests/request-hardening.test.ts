@@ -139,9 +139,7 @@ describe("the security-critical routes actually use the fail-closed limiter", ()
     "src/app/api/videos/route.ts",
     "src/app/api/creators/route.ts",
     "src/app/api/media/[...path]/route.ts",
-    "src/app/api/videos/[id]/stream/route.ts",
-    "src/app/api/videos/[id]/intro/route.ts",
-    "src/app/api/videos/[id]/intro-clip/route.ts",
+    "src/app/api/videos/upload-status/route.ts",
     "src/app/api/videos/status/route.ts",
   ];
 
@@ -151,9 +149,4 @@ describe("the security-critical routes actually use the fail-closed limiter", ()
     });
   }
 
-  it("the Bunny webhook caps the raw body before buffering it", () => {
-    const src = read("src/app/api/webhooks/bunny/route.ts");
-    expect(src).toContain("readRawBodyCapped");
-    expect(src).toContain("MAX_BUNNY_WEBHOOK_BODY_BYTES");
-  });
 });

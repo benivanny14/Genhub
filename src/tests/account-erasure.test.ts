@@ -11,10 +11,10 @@
 //     is still there.
 //   · It takes the deployment with it. An admin erasing the last admin account
 //     leaves a site nobody can administer.
-//   · It lies about the leftovers. Bunny can be unreachable; that must not stop
+//   · It lies about the leftovers. A media provider can be unreachable; that must not stop
 //     the database part, and it must not be reported as success either.
 //
-// The database and Bunny are mocked, so the ORDER and the GUARDS are what is
+// The database and Streamtape are mocked, so the ORDER and the GUARDS are what is
 // checked — no rows are touched.
 // =============================================================================
 
@@ -22,11 +22,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/config", () => ({
   default: {
-    bunny: {
+    bunnyStorage: {
       storageZone: "genhub-thumbs",
       storageAccessKey: "storage-key",
-      apiKey: "stream-key",
-      cdnHostname: "vz-test.b-cdn.net",
+      cdnHostname: "storage.genhub.co.tz",
     },
   },
 }));
@@ -80,17 +79,14 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
-vi.mock("@/lib/bunny", () => ({
-  isBunnyVideoId: (id: string) => /^[0-9a-f-]{36}$/i.test(id),
-  deleteBunnyVideo: vi.fn(async () => undefined),
+vi.mock("@/lib/streamtape", () => ({
+  deleteStreamtapeFile: vi.fn(async () => undefined),
 }));
 
-import { deleteBunnyVideo } from "@/lib/bunny";
+import { deleteStreamtapeFile } from "@/lib/streamtape";
 import { canEraseAccount, eraseAccount } from "@/lib/services/account-erasure.service";
 
-const deleteBunny = vi.mocked(deleteBunnyVideo);
-
-const GUID = "39ea50b0-bee6-4175-90fe-99710ecc3848";
+const deleteStreamtape = vi.mocked(deleteStreamtapeFile);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -129,7 +125,7 @@ describe("canEraseAccount", () => {
 describe("eraseAccount", () => {
   it("deletes the reports and the videos before the user", async () => {
     videoFindMany.mockResolvedValue([
-      { id: "v1", title: "One", bunnyVideoId: GUID, thumbnailUrl: null },
+      { id: "v1", title: "One", streamtapeFileId: "file_123", thumbnailUrl: null },
     ]);
 
     await eraseAccount("u1");
@@ -154,34 +150,34 @@ describe("eraseAccount", () => {
     expect(order).toContain("user.updateMany");
   });
 
-  it("removes the video from Bunny and reports how many went", async () => {
+  it("removes the video from Streamtape and reports how many went", async () => {
     videoFindMany.mockResolvedValue([
-      { id: "v1", title: "One", bunnyVideoId: GUID, thumbnailUrl: null },
-      { id: "v2", title: "Two", bunnyVideoId: GUID, thumbnailUrl: null },
+      { id: "v1", title: "One", streamtapeFileId: "file_123", thumbnailUrl: null },
+      { id: "v2", title: "Two", streamtapeFileId: "file_456", thumbnailUrl: null },
     ]);
     const report = await eraseAccount("u1");
-    expect(deleteBunny).toHaveBeenCalledTimes(2);
+    expect(deleteStreamtape).toHaveBeenCalledTimes(2);
     expect(report.videosRemoved).toBe(2);
   });
 
-  it("does not ask Bunny to delete a row that was never a real video", async () => {
+  it("does not ask Streamtape to delete a row without a hosted file", async () => {
     videoFindMany.mockResolvedValue([
-      { id: "v1", title: "Demo", bunnyVideoId: "demo-1", thumbnailUrl: null },
+      { id: "v1", title: "Legacy", streamtapeFileId: null, thumbnailUrl: null },
     ]);
     const report = await eraseAccount("u1");
-    expect(deleteBunny).not.toHaveBeenCalled();
+    expect(deleteStreamtape).not.toHaveBeenCalled();
     expect(report.videosRemoved).toBe(0);
   });
 
-  it("finishes the database work even when Bunny is unreachable, and says so", async () => {
+  it("finishes database work even when Streamtape is unreachable, and says so", async () => {
     videoFindMany.mockResolvedValue([
-      { id: "v1", title: "One", bunnyVideoId: GUID, thumbnailUrl: null },
+      { id: "v1", title: "One", streamtapeFileId: "file_123", thumbnailUrl: null },
     ]);
-    deleteBunny.mockRejectedValueOnce(new Error("Bunny is down"));
+    deleteStreamtape.mockRejectedValueOnce(new Error("Streamtape is down"));
 
     const report = await eraseAccount("u1");
 
-    expect(report.failures.join(" ")).toMatch(/Bunny is down/);
+    expect(report.failures.join(" ")).toMatch(/Streamtape is down/);
     // The account still goes: an outage at the video host is not the user's
     // problem, and trapping them in an account they asked to leave is worse.
     expect(order[order.length - 1]).toBe("user.deleteMany");
@@ -196,7 +192,7 @@ describe("eraseAccount", () => {
           deleted.push(String(url));
           return { ok: true, status: 200, json: async () => [] } as unknown as Response;
         }
-        // Directory listings, answered the way Bunny does: the owner folder
+        // Directory listings: the owner folder
         // contains the `kyc` subfolder, which contains the documents.
         const listing = String(url).includes("/kyc/") ? ["id.png"] : ["kyc"];
         return {
@@ -215,7 +211,7 @@ describe("eraseAccount", () => {
       {
         id: "v1",
         title: "One",
-        bunnyVideoId: GUID,
+        streamtapeFileId: "file_123",
         thumbnailUrl: "/api/media/uploads/2026-09/thumb.jpg",
       },
     ]);
@@ -248,7 +244,7 @@ describe("eraseAccount", () => {
       {
         id: "v1",
         title: "One",
-        bunnyVideoId: GUID,
+        streamtapeFileId: "file_123",
         thumbnailUrl: "/api/media/private/someone-else/kyc/id.png",
       },
     ]);

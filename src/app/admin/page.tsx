@@ -418,7 +418,7 @@ interface CouponItem {
 /**
  * One failed video upload, as the creator's browser reported it.
  *
- * The byte transfer goes straight to Bunny, so this record is the only copy
+ * The byte transfer goes straight to R2, so this record is the only copy
  * that exists: there is no video row yet, and the toast died with the tab. Every
  * field is optional-capable because a report that carried only a code is still
  * worth more than the nothing that came before it.
@@ -431,7 +431,7 @@ interface UploadFailureItem {
   status: number | null;
   message: string;
   providerBody: string | null;
-  bunnyVideoId: string | null;
+  uploadSessionId: string | null;
   fileName: string | null;
   fileSize: number | null;
   bytesSent: number | null;
@@ -692,25 +692,6 @@ interface SetupReport {
   summary: { done: number; todo: number; manual: number; restartPending: number };
   envFile: { path: string; present: boolean };
   probes?: SetupProbe[];
-}
-
-/** Result of the real upload round trip (POST /api/admin/bunny-self-test). */
-interface PipelineTest {
-  verdict: "ok" | "accepted-not-stored" | "failed";
-  headline: string;
-  detail: string;
-  bytesSent: number;
-  steps: { label: string; ok: boolean; detail: string }[];
-}
-
-/** Result of the webhook round trip (POST /api/admin/bunny-webhook-test). */
-interface WebhookTest {
-  verdict: "ok" | "not-configured" | "failed";
-  headline: string;
-  detail: string;
-  /** The URL that was tested, so it can be compared with Bunny's setting. */
-  target: string;
-  steps: { label: string; ok: boolean; detail: string }[];
 }
 
 function SetupStateIcon({ state }: { state: SetupItem["state"] }) {
@@ -1323,10 +1304,6 @@ export default function AdminDashboard() {
   const [setupBusy, setSetupBusy] = useState(false);
   // Which manual launch step is mid-save, so its button locks.
   const [stepBusy, setStepBusy] = useState<string | null>(null);
-  const [pipeline, setPipeline] = useState<PipelineTest | null>(null);
-  const [pipelineBusy, setPipelineBusy] = useState(false);
-  const [webhookTest, setWebhookTest] = useState<WebhookTest | null>(null);
-  const [webhookBusy, setWebhookBusy] = useState(false);
   // Failed video uploads, reported by the creators' own browsers. The transfer
   // goes straight to the video host, so nothing else on this page can see one.
   const [uploadFailures, setUploadFailures] = useState<UploadFailureItem[]>([]);
@@ -1552,9 +1529,9 @@ export default function AdminDashboard() {
       });
       checks.push({
         key: "videoHost",
-        ok: health?.checks?.bunny === "configured",
-        value: health?.checks?.bunny,
-        hint: "Bunny Stream — uploads and signed playback need it",
+        ok: health?.checks?.uploadStorage?.streamtape === true,
+        value: health?.checks?.uploadStorage?.streamtape ? "configured" : "missing",
+        hint: "Streamtape upload and playback; R2 is required for staging",
       });
       checks.push({
         key: "email",
@@ -2394,7 +2371,7 @@ export default function AdminDashboard() {
   function confirmDeleteVideo(video: CreatorVideo) {
     askReason({
       title: `Delete “${video.title}”`,
-      label: "This removes the video from Bunny and the site. Type the reason to confirm.",
+      label: "This removes the video from Streamtape and the site. Type the reason to confirm.",
       placeholder: "e.g. Guideline violation / reported content",
       confirmLabel: "Delete video permanently",
       tone: "danger",
@@ -2760,55 +2737,6 @@ export default function AdminDashboard() {
       toast("error", "Could not load the setup checklist");
     } finally {
       setSetupBusy(false);
-    }
-  }
-
-  /**
-   * Drive the real upload path end to end. Slow enough that the button shows
-   * progress, and honest about the difference between "the key works" and
-   * "the file survived".
-   */
-  async function runPipelineTest() {
-    setPipelineBusy(true);
-    setPipeline(null);
-    try {
-      const res = await adminFetch("/api/admin/bunny-self-test", { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setPipeline(data.data as PipelineTest);
-      } else {
-        toast("error", data.error || "The pipeline test could not run");
-      }
-    } catch {
-      toast("error", "Network error while testing the pipeline");
-    } finally {
-      setPipelineBusy(false);
-    }
-  }
-
-  /**
-   * The receiving half of instant publishing: post a signed callback to this
-   * deployment's own endpoint, and a forged one to prove it is refused.
-   *
-   * Bunny is never asked anything — its API cannot report the Webhook URL — so
-   * the answer is entirely about our own side, which is the half that can be
-   * broken by a wrong secret, a stale build or a blocked host.
-   */
-  async function runWebhookTest() {
-    setWebhookBusy(true);
-    setWebhookTest(null);
-    try {
-      const res = await adminFetch("/api/admin/bunny-webhook-test", { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        setWebhookTest(data.data as WebhookTest);
-      } else {
-        toast("error", data.error || "The webhook test could not run");
-      }
-    } catch {
-      toast("error", "Network error while testing the webhook");
-    } finally {
-      setWebhookBusy(false);
     }
   }
 
@@ -5935,8 +5863,8 @@ export default function AdminDashboard() {
                       <span>
                         Origin: {failure.origin || "not reported"} · creator {failure.creatorId}
                       </span>
-                      {failure.bunnyVideoId && (
-                        <span>Reserved slot: {failure.bunnyVideoId}</span>
+                      {failure.uploadSessionId && (
+                        <span>Upload session: {failure.uploadSessionId}</span>
                       )}
                       {failure.attemptMs && failure.attemptMs.length > 0 && (
                         <span>Attempts: {failure.attemptMs.join(" ms, ")} ms</span>
@@ -6076,139 +6004,20 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            {/* The only check that can tell "the key is valid" apart from
-                "uploads actually work". It writes to the live Bunny library, so
-                it is a button, never part of the Re-check sweep. */}
             <div className="glass-card p-5">
               <h2 className="font-display font-bold flex items-center gap-2">
                 <Upload className="w-5 h-5 text-brand-400" />
-                Video pipeline test
+                Video hosting
               </h2>
-              <p className="text-sm text-white/50 mt-1">
-                Creates a video object in your Bunny library, uploads a few
-                kilobytes through the same signed path a creator uses, then reads
-                it back and deletes it. A valid API key does not prove uploads
-                work — this does. Takes a few seconds.
+              <p className="text-sm text-white/50 mt-2">
+                New videos use Streamtape. Files are uploaded to private Cloudflare R2 staging,
+                then imported and converted by Streamtape before a video post can be published.
+                Bunny Stream credentials and webhook tests are not used.
               </p>
-              <button
-                onClick={runPipelineTest}
-                disabled={pipelineBusy}
-                className="btn-brand text-sm mt-3 disabled:opacity-50 inline-flex items-center gap-2"
-              >
-                {pipelineBusy ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Uploading…
-                  </>
-                ) : (
-                  <>
-                    <Upload className="w-4 h-4" /> Test upload pipeline
-                  </>
-                )}
-              </button>
-
-              {pipeline && (
-                <div
-                  className={`mt-4 rounded-xl border p-3 ${
-                    pipeline.verdict === "ok"
-                      ? "border-emerald-500/30 bg-emerald-500/5"
-                      : pipeline.verdict === "accepted-not-stored"
-                        ? "border-amber-500/30 bg-amber-500/5"
-                        : "border-red-500/30 bg-red-500/5"
-                  }`}
-                >
-                  <p className="text-sm font-semibold">
-                    {pipeline.verdict === "ok" ? "✓ " : "✗ "}
-                    {pipeline.headline}
-                  </p>
-                  <p className="text-xs text-white/60 mt-1">{pipeline.detail}</p>
-
-                  {pipeline.steps.length > 0 && (
-                    <ul className="mt-3 space-y-1">
-                      {pipeline.steps.map((step, i) => (
-                        <li key={i} className="flex items-start gap-2 text-xs">
-                          <span
-                            className={
-                              step.ok ? "text-emerald-400" : "text-red-400"
-                            }
-                          >
-                            {step.ok ? "✓" : "✗"}
-                          </span>
-                          <span className="text-white/70">
-                            <span className="font-medium">{step.label}</span>
-                            <span className="text-white/40"> — {step.detail}</span>
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* The other half of instant publishing. A secret in the environment
-                proves nothing on its own — this posts one genuinely signed
-                callback to our own endpoint and one forged one, so "configured"
-                becomes "accepted, and forgeries refused". */}
-            <div className="glass-card p-5">
-              <h2 className="font-display font-bold flex items-center gap-2">
-                <Webhook className="w-5 h-5 text-brand-400" />
-                Webhook test
-              </h2>
-              <p className="text-sm text-white/50 mt-1">
-                Posts a signed callback to this deployment&apos;s own webhook endpoint, then a
-                forged one. Bunny cannot be asked whether its Webhook URL is right, so this proves
-                everything on our side: the secret, the route, and the rule that refuses a body
-                which does not match its signature.
+              <p className="text-sm text-white/50 mt-2">
+                Verify the full path by uploading a small test video from a creator account.
+                Confirm R2 CORS and Streamtape conversion if the upload cannot finish.
               </p>
-              <button
-                onClick={runWebhookTest}
-                disabled={webhookBusy}
-                className="btn-brand text-sm mt-3 disabled:opacity-50 inline-flex items-center gap-2"
-              >
-                {webhookBusy ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Calling…
-                  </>
-                ) : (
-                  <>
-                    <Webhook className="w-4 h-4" /> Test webhook endpoint
-                  </>
-                )}
-              </button>
-
-              {webhookTest && (
-                <div
-                  className={`mt-4 rounded-xl border p-3 ${
-                    webhookTest.verdict === "ok"
-                      ? "border-emerald-500/30 bg-emerald-500/5"
-                      : webhookTest.verdict === "not-configured"
-                        ? "border-amber-500/30 bg-amber-500/5"
-                        : "border-red-500/30 bg-red-500/5"
-                  }`}
-                >
-                  <p className="text-sm font-semibold">
-                    {webhookTest.verdict === "ok" ? "✓ " : "✗ "}
-                    {webhookTest.headline}
-                  </p>
-                  <p className="text-xs text-white/60 mt-1">{webhookTest.detail}</p>
-
-                  {webhookTest.steps.length > 0 && (
-                    <ul className="mt-3 space-y-1">
-                      {webhookTest.steps.map((step, i) => (
-                        <li key={i} className="flex items-start gap-2 text-xs">
-                          <span className={step.ok ? "text-emerald-400" : "text-red-400"}>
-                            {step.ok ? "✓" : "✗"}
-                          </span>
-                          <span className="text-white/70">
-                            <span className="font-medium">{step.label}</span>
-                            <span className="text-white/40"> — {step.detail}</span>
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
             </div>
 
             {setup?.groups.map((group) => (

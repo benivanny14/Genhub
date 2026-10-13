@@ -25,6 +25,7 @@ afterEach(() => {
 
 function sessionFor(videoId = "slot-1"): VideoUploadSession {
   return {
+    provider: "STREAMTAPE",
     sessionToken: "token",
     videoId,
     headers: {},
@@ -69,7 +70,7 @@ describe("buildUploadFailureReport", () => {
       reason: "reset",
       stage: "chunk",
       status: null,
-      bunnyVideoId: "slot-1",
+      uploadSessionId: "slot-1",
       offset: 62 * 1024 * 1024,
       bytesSent: 62 * 1024 * 1024,
       chunkIndex: 41,

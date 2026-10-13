@@ -27,7 +27,6 @@ import checklist from "./setup-checklist.json";
 import prisma from "./db";
 import { verifyRedisWritable, redisBackendName, redisDataCallState } from "./redis";
 import { sonicpesaBreakerNotice } from "./payments/sonicpesa";
-import { bunnyWebhookUrl, lastBunnyWebhookDelivery } from "./services/bunny-webhook.service";
 import config from "./config";
 
 // ---------------------------------------------------------------- checklist
@@ -68,9 +67,7 @@ export const SETUP_ITEMS: ChecklistItem[] = SETUP_GROUPS.flatMap((g) => g.items)
 
 // The classification rules are data too, in the same file, so the terminal
 // script and this module cannot drift apart. They did: written twice, they
-// disagreed on the first real value either of them saw (.env.local held
-// BUNNY_TOKEN_SECRET="dev-token-secret-..."; the app called it configured and
-// the script called it a placeholder). One source, compiled by both.
+// disagreed on real environment values. One source, compiled by both.
 const RULES = (checklist as { rules: { placeholder: string; local: string } }).rules;
 
 // ------------------------------------------------------------------- states
@@ -413,258 +410,24 @@ async function probeRedis(): Promise<ProbeResult> {
   }
 }
 
-async function probeBunny(): Promise<ProbeResult> {
-  const base = { id: "bunny", name: "Bunny Stream" };
-  const key = env("BUNNY_STREAM_API_KEY");
-  const library = env("BUNNY_STREAM_LIBRARY_ID");
-
-  // ---------------------------------------------------------------------------
-  // Two credentials, two audiences, and only the second one a viewer needs.
-  //
-  // The management API key creates videos and reads encode status. The token
-  // secret signs the manifest a player fetches. They are set on different
-  // screens and rotated independently, so one being dead says nothing about
-  // the other — but this probe used to ask about playback only AFTER the
-  // management key had succeeded, and returned the moment it did not.
-  //
-  // That made the pair fail invisibly: a rotated Bunny account leaves the
-  // management key revoked and the token secret stale at the same time, the
-  // probe reports "HTTP 401 - wrong key", and the operator fixes exactly that,
-  // redeploys, and every video still 502s — because nothing here had looked at
-  // playback. So the management fault is COLLECTED rather than returned from,
-  // and playback is asked either way, from a video this deployment already
-  // knows about when Bunny will no longer hand one over.
-  // ---------------------------------------------------------------------------
-  let managementProblem: string | null = null;
-  let label = library;
-  let tokenAuthEnabled: boolean | null = null;
-  let hostMismatch: string | null = null;
-  let guidFromBunny: string | null = null;
-
-  if (!key || !library) {
-    managementProblem = "BUNNY_STREAM_API_KEY / BUNNY_STREAM_LIBRARY_ID not set";
-  } else {
-    try {
-      const res = await fetch(`https://video.bunnycdn.com/library/${library}`, {
-        headers: { AccessKey: key },
-        signal: timeout(15_000),
-      });
-      const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-      if (res.ok) {
-        label = String(body.name || library);
-        const { sampleBunnyVideo } = await import("./bunny");
-
-        // An empty library has no playback to check, and "no videos yet" is not a
-        // fault — say so instead of reporting a healthy library that nobody has
-        // proved can serve anything.
-        const sample = await sampleBunnyVideo();
-        if (!sample) {
-          return { ...base, state: "ok", detail: `library "${label}" · no video to test playback with yet` };
-        }
-
-        tokenAuthEnabled = sample.tokenAuthEnabled;
-        guidFromBunny = sample.guid ?? null;
-
-        // The other silent killer: BUNNY_CDN_HOSTNAME pointing at the Stream library
-        // is correct, but a host copied from somewhere else serves nothing. Bunny
-        // just told us the right one for this video, so compare instead of assuming.
-        try {
-          const bunnyHost = sample.thumbnailUrl ? new URL(sample.thumbnailUrl).hostname : "";
-          const configuredHost = env("BUNNY_CDN_HOSTNAME")
-            .replace(/^https?:\/\//, "")
-            .replace(/\/$/, "");
-          if (bunnyHost && configuredHost && bunnyHost !== configuredHost) {
-            hostMismatch =
-              `BUNNY_CDN_HOSTNAME is ${configuredHost} but this library's CDN host is ${bunnyHost} - every video URL would 404/403`;
-          }
-        } catch {
-          // A thumbnailUrl we cannot parse is not worth failing over.
-        }
-      } else {
-        managementProblem =
-          `management API HTTP ${res.status}` +
-          (res.status === 401 || res.status === 403
-            ? " - wrong key, or it cannot reach this library"
-            : "");
-      }
-    } catch (error) {
-      managementProblem = `management API: ${String((error as Error)?.message || error).slice(0, 120)}`;
-    }
+async function probeStreamtape(): Promise<ProbeResult> {
+  const base = { id: "streamtape", name: "Streamtape video" };
+  if (!config.streamtape.login || !config.streamtape.apiKey) {
+    return { ...base, state: "fail", detail: "STREAMTAPE_LOGIN or STREAMTAPE_API_KEY is not set" };
   }
-
-  // The setting that silently breaks paid playback: without Token
-  // Authentication the signature in the URL is ignored, so a copied link plays
-  // a video the viewer never bought. Read from the VIDEO, not from the library —
-  // `GET /library/{id}` does not report it at all, which is how this check used
-  // to pass unconditionally. Only askable through a working management key, and
-  // the signed fetch below is stronger evidence anyway when it is not.
-  if (tokenAuthEnabled === false) {
-    return {
-      ...base,
-      state: "fail",
-      detail: `library "${label}" · Token Authentication is OFF - paid videos are unprotected (Stream -> Security)`,
-    };
-  }
-  if (!env("BUNNY_TOKEN_SECRET")) {
-    return {
-      ...base,
-      state: "fail",
-      detail: "BUNNY_TOKEN_SECRET is empty - signed URLs would be rejected and no video would play",
-    };
-  }
-  if (hostMismatch) return { ...base, state: "fail", detail: hostMismatch };
-
-  // Present is not the same as accepted. Token auth is on, so the ONLY way to
-  // know playback will work is to sign a real manifest and fetch it: a
-  // generated secret (rather than the pull zone's own key) signs URLs Bunny
-  // refuses, while every other check here still reports healthy and the player
-  // spins forever. See probeSignedPlayback in lib/bunny.ts.
-  //
-  // The sample normally comes from Bunny. When the management key is dead
-  // Bunny will not hand one over, and that is precisely when this check matters
-  // most — so fall back to a video this deployment already holds a GUID for.
-  let sampleGuid = guidFromBunny;
-  if (!sampleGuid) {
-    try {
-      const row = await prisma.video.findFirst({
-        where: { isDeleted: false, bunnyVideoId: { not: "" } },
-        select: { bunnyVideoId: true },
-        orderBy: { createdAt: "desc" },
-      });
-      sampleGuid = row?.bunnyVideoId || null;
-    } catch {
-      // A database that will not answer is the database probe's report.
-    }
-  }
-
-  const { probeSignedPlayback } = await import("./bunny");
-  const playback = sampleGuid
-    ? await probeSignedPlayback(sampleGuid)
-    : { state: "skip" as const, detail: "no video in the library or the database to test playback with" };
-
-  const suffix = managementProblem ? ` · ALSO ${managementProblem}` : "";
-
-  if (playback.state === "fail") {
-    return { ...base, state: "fail", detail: playback.detail + suffix };
-  }
-  if (managementProblem) {
-    return {
-      ...base,
-      state: "fail",
-      detail:
-        `${managementProblem} - uploads, encode status and deletes all fail; ` +
-        "playback for videos already in the library is unaffected by this credential" +
-        (playback.state === "ok" ? ` · ${playback.detail}` : ""),
-    };
-  }
-  if (playback.state === "skip") {
-    return { ...base, state: "warn", detail: `library "${label}" · ${playback.detail}` };
+  if (
+    !config.r2.accountId ||
+    !config.r2.accessKeyId ||
+    !config.r2.secretAccessKey ||
+    !config.r2.bucket
+  ) {
+    return { ...base, state: "fail", detail: "Cloudflare R2 credentials are incomplete" };
   }
   return {
     ...base,
     state: "ok",
-    detail: `library "${label}" · Token Auth ON · ${playback.detail}`,
+    detail: "Streamtape and R2 credentials are configured; verify end-to-end with a test upload",
   };
-}
-
-/**
- * The webhook secret, and whether Bunny has ever actually called us.
- *
- * A signature cannot be verified without seeing one, and Bunny's library API
- * cannot report the Webhook URL it is configured with, so both halves are asked
- * here from the evidence that does exist: does the secret verify a correctly
- * signed body, and when did a callback last arrive (`recordBunnyWebhookDelivery`
- * stamps every verified one). "No callback yet" is a warning rather than a
- * failure — a deployment with nothing uploaded yet has nothing to hear from —
- * but it is the one line that distinguishes a wired webhook from a hopeful one.
- */
-async function probeWebhook(): Promise<ProbeResult> {
-  const base = { id: "bunnyWebhook", name: "Bunny webhook" };
-  const secret = env("BUNNY_STREAM_WEBHOOK_SECRET");
-
-  if (!secret) {
-    return process.env.NODE_ENV === "production"
-      ? {
-          ...base,
-          state: "fail",
-          detail:
-            "BUNNY_STREAM_WEBHOOK_SECRET is not set, so production refuses every callback (401). " +
-            "A finished upload still publishes, but only on the next dashboard visit or worker sweep.",
-        }
-      : {
-          ...base,
-          state: "skip",
-          detail: "not set — unsigned callbacks are accepted in development only",
-        };
-  }
-
-  if (secret === env("BUNNY_STREAM_API_KEY")) {
-    return {
-      ...base,
-      state: "warn",
-      // The mistake the panel exists to catch: it looks configured, and every
-      // real callback is refused.
-      detail:
-        "this is the library's MAIN API key. Callbacks are signed with the library's Read-Only " +
-        "key, so every genuine callback would be refused — copy the Read-Only key instead.",
-    };
-  }
-
-  const last = await lastBunnyWebhookDelivery();
-  const target = bunnyWebhookUrl(config.appUrl);
-
-  if (!last) {
-    return {
-      ...base,
-      state: "warn",
-      detail:
-        `secret set (not the main API key) but no callback has ever been recorded — set the Stream ` +
-        `library's Webhook URL to ${target}, then the next finished upload appears here.`,
-    };
-  }
-
-  const event = last.label ? `Status ${last.status} — ${last.label}` : "no status in the body";
-  const outcome = last.matched
-    ? last.published
-      ? "published a video"
-      : "no change to the row"
-    : "no matching video";
-
-  return {
-    ...base,
-    state: "ok",
-    detail: `secret set · last callback ${relativeAge(last.at)} (${event}, ${outcome})`,
-  };
-}
-
-/** "12 min ago" — enough for a card, and never a wall of digits. */
-function relativeAge(iso: string, now: number = Date.now()): string {
-  const ms = now - new Date(iso).getTime();
-  if (!Number.isFinite(ms) || ms < 0) return "just now";
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return "moments ago";
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours} h ago`;
-  return `${Math.round(hours / 24)} d ago`;
-}
-
-async function probeCdn(): Promise<ProbeResult> {
-  const base = { id: "cdn", name: "Bunny CDN" };
-  const host = env("BUNNY_CDN_HOSTNAME").replace(/^https?:\/\//, "").replace(/\/$/, "");
-  if (!host) return { ...base, state: "skip", detail: "BUNNY_CDN_HOSTNAME not set" };
-  try {
-    // Any HTTP answer - even 403 - proves DNS and TLS resolve, which is what is
-    // being tested here. The token itself is validated by real playback.
-    const res = await fetch(`https://${host}/`, { method: "HEAD", signal: timeout(15_000) });
-    return { ...base, state: "ok", detail: `${host} answered HTTP ${res.status}` };
-  } catch (error) {
-    return {
-      ...base,
-      state: "fail",
-      detail: `${host} did not resolve (${String((error as Error)?.message || error).slice(0, 90)})`,
-    };
-  }
 }
 
 async function probeSmtp(): Promise<ProbeResult> {
@@ -887,9 +650,7 @@ export async function runLiveProbes(): Promise<ProbeResult[]> {
   return Promise.all([
     probeDatabase(),
     probeRedis(),
-    probeBunny(),
-    probeWebhook(),
-    probeCdn(),
+    probeStreamtape(),
     probeSmtp(),
     probeSonicPesa(),
     probeAppUrl(),

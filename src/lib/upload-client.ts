@@ -1,6 +1,6 @@
 // =============================================================================
 // GENHUB - Client-side image and caption uploads
-// Video uploads use lib/video-upload.ts and Bunny Stream TUS. This helper is
+// Video uploads use the signed R2 staging flow in lib/video-upload.ts. This helper is
 // deliberately limited to small files that must pass through /api/upload.
 // =============================================================================
 

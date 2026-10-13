@@ -127,18 +127,23 @@ export function launchBlockers(): LaunchBlocker[] {
   }
 
   // --- able to deliver video, mail and compliance
-  if (!config.bunny.apiKey || !config.bunny.libraryId || !config.bunny.cdnHostname) {
+  if (!config.streamtape.login || !config.streamtape.apiKey) {
     add(
-      "bunnyStream",
-      "Bunny Stream credentials are incomplete — uploads and CDN playback cannot work",
-      "SETUP.md §3 (BUNNY_STREAM_LIBRARY_ID, BUNNY_STREAM_API_KEY, BUNNY_CDN_HOSTNAME)"
+      "streamtape",
+      "Streamtape credentials are incomplete — video upload and playback cannot work",
+      "Set STREAMTAPE_LOGIN and STREAMTAPE_API_KEY in the deployment environment"
     );
   }
-  if (!config.bunny.tokenSecret) {
+  if (
+    !config.r2.accountId ||
+    !config.r2.accessKeyId ||
+    !config.r2.secretAccessKey ||
+    !config.r2.bucket
+  ) {
     add(
-      "bunnyToken",
-      "BUNNY_TOKEN_SECRET is not set — signed playback URLs would be handed out unsigned",
-      "SETUP.md §3"
+      "videoUploadStorage",
+      "Cloudflare R2 credentials are incomplete — browser video uploads cannot be staged",
+      "Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET"
     );
   }
   if (!config.email.host) {

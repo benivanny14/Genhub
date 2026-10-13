@@ -2,24 +2,9 @@
 // GENHUB - Publish / Unpublish a Video
 // POST /api/creator/videos/[id]/publish  { published: boolean }
 //
-// A post is published the moment it is uploaded and carries an "Inachakatwa..."
-// badge until Bunny can serve it (see lib/video-status.ts); the player appears
-// in place, with no reload, when the encode finishes. This is the creator's
-// manual override over that state, in both directions.
-//
-// The override exists for a specific failure: if Bunny never reports the video
-// as finished — a stuck encode, an account problem, a code Bunny changes without
-// telling anyone — then an automatic gate with no exit would leave the creator
-// permanently unable to publish, with no error and nothing to click. A gate that
-// cannot be opened by hand is worse than no gate.
-//
-// Unpublishing is allowed at any time and is never reversed by the poller: it
-// only ever flips a video from unpublished to published, never back — with one
-// exception that is not the creator's doing and happens at most once. A scene
-// Bunny measures as shorter than the guidelines minimum is taken down when that
-// becomes known (see refreshVideoEncoding), because posts are now published the
-// moment they are uploaded and a too-short one would otherwise have been live
-// for the minutes before its length was known.
+// A video is published only after Streamtape conversion has completed. This
+// endpoint lets its creator or admin toggle publication afterward; it does not
+// trigger encoding or provider-side status checks.
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -27,7 +12,6 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
-import { describeEncoding } from "@/lib/services/video-encoding.service";
 
 export async function POST(
   request: NextRequest,
@@ -51,21 +35,28 @@ export async function POST(
         id: true,
         title: true,
         slug: true,
-        encodingStatus: true,
-        encodeProgress: true,
+        streamtapeFileId: true,
       },
     });
 
     if (!video) return api.notFound("Video not found");
 
-    const encoding = describeEncoding(video.encodingStatus, video.encodeProgress);
+    if (body.published && !video.streamtapeFileId) {
+      return api.error(
+        "This legacy video must be reuploaded before it can be published.",
+        409,
+        "VIDEO_REUPLOAD_REQUIRED"
+      );
+    }
 
-    // Publishing something Bunny cannot serve yet is allowed, but the caller is
-    // told plainly rather than being let into a silent broken player.
-    const warning =
-      body.published && encoding.state !== "ready"
-        ? `This video is still ${encoding.label.toLowerCase()}. Viewers may not be able to play it yet.`
-        : null;
+    const encoding = {
+      state: "ready" as const,
+      status: null,
+      progress: 100,
+      label: "Ready",
+      error: null,
+    };
+    const warning = null;
 
     const updated = await prisma.video.update({
       where: { id: video.id },

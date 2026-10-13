@@ -8,13 +8,13 @@ SonicPesa USSD pushes, not cards.
 ## What it does
 
 **Viewers** — browse by category, trending, top rated and most viewed; watch free
-teasers on hover; buy a video, subscribe to a creator, tip, add to watch-later
-playlists and favourites; keep a wallet and a billing history.
+videos; buy a video, subscribe to a creator, tip, add to watch-later playlists
+and favourites; keep a wallet and a billing history.
 
 **Creators** — onboard and verify (KYC), upload through a signed direct upload to
-Bunny Stream (resumable, so a dropped mobile connection resumes), set prices and
-teasers, publish status posts, see earnings with the 70/30 split, and request
-payouts.
+private Cloudflare R2 staging; Streamtape imports and converts videos before
+they can be published. Creators set prices, publish status posts, see earnings
+with the 70/30 split, and request payouts.
 
 **Admins** — moderation queue, KYC review, payouts, coupons, earnings, a payment
 reconciliation view for charges the network never settled, and a launch checklist
@@ -22,9 +22,9 @@ that probes every external service for real.
 
 ## Stack
 
-Next.js 14 (App Router) · TypeScript · Prisma + Postgres · Tailwind ·
-Bunny Stream (video) · SonicPesa (payments) · Upstash Redis (rate limits + cache)
-· Resend/SMTP (email) · Vitest (309 tests)
+Next.js 15 (App Router) · TypeScript · Prisma + Postgres · Tailwind ·
+Streamtape + Cloudflare R2 (video) · Bunny Storage (images) · SonicPesa (payments) · Upstash Redis (rate limits + cache)
+· Resend/SMTP (email) · Vitest
 
 ## Running it locally
 
@@ -40,13 +40,13 @@ npm run dev
 it. Two commands tell you the truth about your configuration at any time:
 
 ```bash
-npm run verify:live      # real connections: Postgres, Redis, Bunny, SMTP, SonicPesa
+npm run verify:live      # real connections: Postgres, Redis, Streamtape/R2, SMTP, SonicPesa
 npm run preflight:prod   # what is still blocking real users
 ```
 
-The admin panel's **Setup** tab shows the same thing in the browser, including a
-**Test upload pipeline** button that drives a real upload through Bunny and
-reports whether the file was actually stored.
+The admin panel's **Setup** tab shows the same readiness checks. For R2 access
+and upload CORS, use `npm run verify:r2`; then test a small video upload and
+playback after deployment (see `PRODUCTION.md`).
 
 ## Scripts
 
@@ -64,17 +64,15 @@ reports whether the file was actually stored.
 | `npm run launch:check:remote` | The same verdict asked of the deployment (`--json` for CI; needs only `CRON_SECRET`) |
 | `npm run launch:check:wait` | The remote check, repeated until READY — for the minutes a redeploy takes |
 | `npm run setup` | Show what is left to configure, and open `.env.local` |
-| `npm run smoke:bunny` | Bunny video pipeline check (`--storage`, `--upload`) |
+| `npm run verify:r2` | Verify R2 bucket access and production-origin upload CORS |
 
 ## Money
 
 Single purchases and tips use a 70/30 split, with the creator's share held for 14
 days before it becomes withdrawable (chargeback window). Subscriptions renew
-automatically and are charged from the wallet or by USSD push. Four background
-workers handle holding release, payment reconciliation, subscription renewal and
-video encoding; they are driven by the GitHub Actions workflows in
-`.github/workflows/`, and need the `APP_URL` variable and `CRON_SECRET` secret
-set on the repository (see `PRODUCTION.md` §4.0.1).
+automatically and are charged from the wallet or by USSD push. Scheduled
+operational jobs release matured earnings and renew subscriptions; see
+`PRODUCTION.md` for their deployment and monitoring requirements.
 
 ## Payments and compliance
 

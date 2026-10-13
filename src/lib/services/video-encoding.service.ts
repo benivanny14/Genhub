@@ -648,7 +648,7 @@ export async function refreshVideoEncoding(videoId: string): Promise<RefreshResu
     },
   });
 
-  if (!video || video.isDeleted || video.encodingStatus === null) return null;
+  if (!video || video.isDeleted || !video.bunnyVideoId || video.encodingStatus === null) return null;
 
   const result = await fetchEncodingFromBunny(video.bunnyVideoId);
   if (!result) return null;

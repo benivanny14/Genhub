@@ -29,9 +29,10 @@ import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { videoStatus } from "@/lib/video-status";
-import { checkRateLimit } from "@/lib/redis";
+import { cacheDel, checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
 import { getCurrentUser } from "@/lib/auth";
+import { refreshLinkedStreamtapeUpload } from "@/lib/streamtape-upload-session";
 
 /**
  * The most ids one request may ask about.
@@ -109,6 +110,7 @@ export async function POST(request: NextRequest) {
         id: true,
         encodingStatus: true,
         encodeProgress: true,
+        streamtapeFileId: true,
         isPublished: true,
         creatorId: true,
       },
@@ -119,6 +121,28 @@ export async function POST(request: NextRequest) {
       const maySeePrivate =
         !!viewer && (viewer.role === "ADMIN" || viewer.userId === row.creatorId);
       if (!row.isPublished && !maySeePrivate) continue;
+      if (row.streamtapeFileId?.startsWith("pending_")) {
+        const uploadId = row.streamtapeFileId.slice("pending_".length);
+        {
+          const result = await refreshLinkedStreamtapeUpload(uploadId, row.creatorId);
+          if (!result) {
+            statuses[row.id] = { status: "PROCESSING", progress: row.encodeProgress ?? 0 };
+            continue;
+          }
+          if (result.state === "READY" && result.fileId) {
+            await prisma.video.updateMany({
+              where: { id: row.id, streamtapeFileId: `pending_${uploadId}` },
+              data: { streamtapeFileId: result.fileId, encodingStatus: null, encodeProgress: 100 },
+            });
+            await cacheDel("home:feed:v3");
+            await cacheDel("videos:*");
+            statuses[row.id] = { status: "READY", progress: 100 };
+            continue;
+          }
+          statuses[row.id] = { status: result.state === "FAILED" ? "FAILED" : "PROCESSING", progress: result.progress };
+          continue;
+        }
+      }
       statuses[row.id] = {
         status: videoStatus(row.encodingStatus, row.encodeProgress),
         // `?? 0` because the column is non-null in the schema but a row written

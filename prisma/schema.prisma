@@ -212,6 +212,7 @@ model User {
 
   // Relations
   videos              Video[]
+  streamtapeUploads   StreamtapeUpload[]
   transactions        Transaction[]      @relation("ViewerTransactions")
   creatorTransactions Transaction[]      @relation("CreatorTransactions")
   videoAccess         VideoAccess[]
@@ -354,17 +355,13 @@ model Video {
   title           String
   description     String?
   slug            String?  @unique
-  bunnyVideoId    String   @unique // Bunny.net Stream Video ID
-  previewUrl      String?  // Optional custom HLS URL (demo/migrated content overrides Bunny)
-  /// Bunny id of a SEPARATE short clip shown to non-buyers. Without it a paid
-  /// scene has no preview at all (see resolveTeaserUrl) — signing the main
-  /// video for non-buyers hands them the whole scene, because Bunny tokens
-  /// authorise a path and cannot limit duration.
-  teaserBunnyVideoId String? @unique
-  /// Same idea for side-loaded content: a stored, publicly reachable trailer
-  /// URL (demo / migrated rows), symmetric with previewUrl. Ignored when
-  /// teaserBunnyVideoId is set.
-  teaserClipUrl   String?
+  // Retained as private legacy metadata for archived Bunny uploads. New
+  // playback and upload paths use StreamtapeFileId exclusively.
+  bunnyVideoId       String?  @unique
+  previewUrl         String?
+  teaserBunnyVideoId String?  @unique
+  teaserClipUrl      String?
+  streamtapeFileId String?  @unique
   thumbnailUrl    String?
   /// WebVTT captions for this scene, as a URL the browser can fetch.
   ///
@@ -447,7 +444,6 @@ model Video {
   watchProgresses WatchProgress[]
   playlistItems   PlaylistItem[]
   galleryImages   GalleryImage[]
-
   @@index([creatorId])
   @@index([isPublished])
   @@index([createdAt])
@@ -456,6 +452,26 @@ model Video {
   @@index([encodingStatus])
   // Drives the scheduled-publish sweep: find posts whose time has come.
   @@index([scheduledAt])
+}
+
+model StreamtapeUpload {
+  id               String   @id @default(cuid())
+  userId           String
+  objectKey        String   @unique
+  fileName         String
+  totalBytes       Int
+  mimeType         String
+  state            String   @default("UPLOADING")
+  remoteUploadId   String?  @unique
+  streamtapeFileId String?  @unique
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, state])
+  @@index([state, createdAt])
 }
 
 // =============================================================================

@@ -34,10 +34,6 @@ import {
   sendDueEarningsDigests,
   type EarningsDigestResult,
 } from "./earnings-digest.service";
-import {
-  refreshPendingVideoEncodings,
-  type PendingEncodingSweepResult,
-} from "./video-encoding.service";
 
 // ---------------------------------------------------------------------------
 // Wording
@@ -97,13 +93,6 @@ export function describeEarningsDigest(result: EarningsDigestResult): string {
   );
 }
 
-export function describeVideoEncoding(result: PendingEncodingSweepResult): string {
-  return (
-    `Encoding refresh: ${result.refreshed} refreshed of ${result.checked} checked` +
-    (result.failed > 0 ? `, ${result.failed} failed` : "")
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Running
 // ---------------------------------------------------------------------------
@@ -144,10 +133,6 @@ export function runWorkerNow(
   id: "earnings-digest",
   options?: WorkerRunOptions
 ): Promise<CronRunOutcome<EarningsDigestResult>>;
-export function runWorkerNow(
-  id: "video-encoding",
-  options?: WorkerRunOptions
-): Promise<CronRunOutcome<PendingEncodingSweepResult>>;
 /**
  * A worker id that is only known at runtime — the admin panel takes it from a
  * request body. Callers here get `unknown`, which is the honest type: they have
@@ -182,12 +167,5 @@ export async function runWorkerNow(
     case "earnings-digest":
       return runCronJob("earnings-digest", () => sendDueEarningsDigests(), describeEarningsDigest, origin);
 
-    case "video-encoding":
-      return runCronJob(
-        "video-encoding",
-        () => refreshPendingVideoEncodings(),
-        describeVideoEncoding,
-        origin
-      );
   }
 }

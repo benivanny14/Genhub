@@ -3,7 +3,7 @@
 //
 // The creator's browser tells us a transfer died. See
 // lib/services/upload-failure.service.ts for why this exists at all: the upload
-// goes straight to Bunny, so without this the server has no idea it happened.
+// goes straight to private R2 staging, so without this the server has no idea it happened.
 //
 // Three rules shape the route:
 //
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
       message: data.message,
       providerBody: data.providerBody ?? null,
       reason: data.reason ?? null,
-      bunnyVideoId: data.bunnyVideoId ?? null,
+      uploadSessionId: data.uploadSessionId ?? null,
       fileName: data.fileName ?? null,
       fileSize: data.fileSize ?? null,
       bytesSent: data.bytesSent ?? null,

@@ -131,7 +131,7 @@ describe("GET /api/home-feed", () => {
     expect(mocks.cacheSet).toHaveBeenCalledTimes(1);
 
     const [key, payload, ttl] = mocks.cacheSet.mock.calls[0];
-    expect(key).toBe("home:feed:v2");
+    expect(key).toBe("home:feed:v3");
     expect(ttl).toBe(60);
     expect(payload.totalVideos).toBe(24);
     // Covers come from the first video in each category, and the "all" tile
@@ -230,7 +230,13 @@ describe("GET /api/home-feed", () => {
     const res = await GET({} as any);
     const body = await res.json();
 
-    const forbidden = ["previewUrl", "bunnyVideoId", "teaserClipUrl", "teaserBunnyVideoId"];
+    const forbidden = [
+      "previewUrl",
+      "streamtapeFileId",
+      "bunnyVideoId",
+      "teaserClipUrl",
+      "teaserBunnyVideoId",
+    ];
     for (const video of body.data.rows.new) {
       for (const key of forbidden) {
         expect(video, `${video.id} leaked ${key}`).not.toHaveProperty(key);
@@ -261,7 +267,7 @@ describe("GET /api/home-feed", () => {
     expect(body.data.rows.new[0].teaserUrl).toBeNull();
   });
 
-  it("serves the trailer clip — never the scene — when one exists", async () => {
+  it("does not expose legacy trailer media when it exists", async () => {
     mocks.cacheGet.mockResolvedValueOnce(null);
     const withTrailer = [
       makeVideo("paid", {
@@ -285,6 +291,7 @@ describe("GET /api/home-feed", () => {
     const res = await GET({} as any);
     const body = await res.json();
 
-    expect(body.data.rows.new[0].teaserUrl).toBe("https://trailer.test/short.m3u8");
+    expect(body.data.rows.new[0].teaserUrl).toBeNull();
+    expect(body.data.rows.new[0].introUrl).toBeNull();
   });
 });

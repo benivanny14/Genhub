@@ -1,39 +1,21 @@
 // =============================================================================
 // GENHUB - "Can this be watched yet?" — one vocabulary, shared by API and UI
 //
-// Instagram-like publication: the POST exists the moment the bytes arrive at
-// the video host, and the feed shows it right away — thumbnail, title, an
-// "Inachakatwa..." badge — while the host still has to transcode it into
-// playable renditions. Bunny accepts an upload seconds after it starts and
-// answers 201, but it cannot serve a manifest for minutes afterwards, so
-// "this post is live" and "this video can play" became two different facts.
+// New uploads are not published until Streamtape conversion finishes. This
+// helper remains to interpret the stored status codes on legacy video rows.
 //
-// Everything that has to tell them apart reads them through here, which is
-// what keeps the feed card, the watch page and the API from disagreeing about
-// which state a video is in — the failure mode this codebase has hit before,
-// twice, with Bunny's own status numbers.
-//
-// DERIVED, NEVER STORED. The database keeps Bunny's own numbers
-// (`encodingStatus`, `encodeProgress`), the only fields Bunny can move by
-// itself; a separate stored `status` column would be a second copy of the same
-// truth, and one missed webhook would leave it permanently wrong — a post
-// labelled "ready" that plays nothing, with nothing left to reconcile it
-// against. `status` is what the API answers, what the client switches on, and
-// what the database would say if it were asked.
+// DERIVED, NEVER STORED. Convert legacy `encodingStatus` and `encodeProgress`
+// values to the one status shape the API and client understand.
 //
 // ---------------------------------------------------------------- the numbers
-// Bunny numbers its states 0..10 and uses one list for the webhook body and
-// for a video object's `status` field. The three that decide publication:
+// Legacy provider state numbers retained only to interpret archived rows:
 //
 //   3 Finished  · 4 Resolution finished (Bunny: the first means it can play)
 //   5 Failed
 //
 // Anything else (0 Queued, 1 Processing, 2 Encoding, …) is still on its way.
 //
-// This module is PURE — no prisma, no Bunny, no node:crypto — because it is
-// imported by client components. See BUNNY_STATUS_LABELS in
-// lib/services/video-encoding.service.ts for the full map; describeEncoding
-// there is built on these functions, so there is exactly one rule.
+// This module is pure because it is imported by client components.
 // =============================================================================
 
 /** 3 — encoding finished; the video is fully available. */

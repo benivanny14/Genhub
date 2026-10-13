@@ -40,12 +40,16 @@ vi.mock("@/lib/redis", () => ({
   checkRateLimit: () => mocks.checkRateLimit(),
 }));
 
-// Bunny storage configured, so the route takes the production branch and the
+// Bunny Storage configured, so the route takes the production branch and the
 // test never writes to this checkout's disk.
 vi.mock("@/lib/config", () => ({
   default: {
     nodeEnv: "production",
-    bunny: { storageZone: "genhub-thumbs", storageAccessKey: "key", cdnHostname: "cdn.test" },
+    bunnyStorage: {
+      storageZone: "genhub-thumbs",
+      storageAccessKey: "key",
+      cdnHostname: "cdn.test",
+    },
     rateLimit: { upload: { max: 20, windowMs: 300_000 } },
   },
 }));
@@ -61,13 +65,13 @@ function upload(file: File, kind?: string) {
   return new NextRequest("https://app.test/api/upload", { method: "POST", body: form });
 }
 
-/** The key Bunny was asked to store the file under. */
+/** The key Bunny Storage was asked to store the file under. */
 function storedKey(): string {
   const url = String(fetchMock.mock.calls[0][0]);
   return url.replace("https://storage.bunnycdn.com/genhub-thumbs/", "");
 }
 
-/** The headers Bunny was given for that file. */
+/** The headers Bunny Storage was given for that file. */
 function storedHeaders(): Record<string, string> {
   return fetchMock.mock.calls[0][1].headers as Record<string, string>;
 }

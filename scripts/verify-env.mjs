@@ -7,7 +7,7 @@
 //
 // Wired into `prebuild`, so a production build cannot ship with placeholder
 // secrets. In development it only prints the report — a local `npm run build`
-// must never fail because the machine has no Bunny key.
+// must never fail because a local machine has no production credentials.
 //
 // "Production" is detected from the platform (VERCEL_ENV / NODE_ENV) rather than
 // from `next build`'s own NODE_ENV, because `prebuild` runs before Next starts
@@ -89,39 +89,17 @@ check(
   "PAYMENT_SANDBOX=true — no USSD push is ever sent and no real money moves"
 );
 
-// ------------------------------------------------------------------ Media
+// ------------------------------------------------------------------ Video
 check(
-  !!env("BUNNY_STREAM_API_KEY") && !!env("BUNNY_STREAM_LIBRARY_ID"),
-  "Bunny Stream credentials are missing — video upload and playback cannot work"
+  !!env("STREAMTAPE_LOGIN") && !!env("STREAMTAPE_API_KEY"),
+  "STREAMTAPE_LOGIN / STREAMTAPE_API_KEY are missing — video upload and playback cannot work"
 );
 check(
-  !!env("BUNNY_CDN_HOSTNAME"),
-  "BUNNY_CDN_HOSTNAME is missing — playback and download URLs cannot be built"
-);
-check(
-  !!env("BUNNY_TOKEN_SECRET"),
-  "BUNNY_TOKEN_SECRET is missing — paid video URLs are not signed, and with Token Authentication " +
-    "off on the pull zone they can be shared freely outside the paywall"
-);
-// Bunny signs Stream callbacks with the library's READ-ONLY API key, never with
-// the read-write one (bunny.net/docs/stream/webhooks — "the signing secret is
-// your library's Read-Only API key"). Pasting the main key here is the trap: it
-// LOOKS configured, both values are present, and every genuine callback is then
-// refused with a 401 — so a finished upload sits on "processing" until somebody
-// opens the dashboard or the sweep runs, which reads exactly like the upload
-// having failed. Nothing else catches it before production: /api/health cannot
-// see it and the admin self-test only reports it to whoever opens that tab.
-//
-// A blocker rather than a warning, because this combination can never be
-// correct — unlike a MISSING secret, which degrades (below) and is only
-// reported as a warning.
-check(
-  !env("BUNNY_STREAM_WEBHOOK_SECRET") ||
-    env("BUNNY_STREAM_WEBHOOK_SECRET") !== env("BUNNY_STREAM_API_KEY"),
-  "BUNNY_STREAM_WEBHOOK_SECRET is the SAME value as BUNNY_STREAM_API_KEY — Bunny signs webhooks with " +
-    "the library's Read-Only API key, so production would refuse every callback (401) and finished " +
-    "uploads would wait for a dashboard visit or the worker sweep. Copy the Read-Only key instead " +
-    "(Bunny -> Stream -> your library -> API)"
+  !!env("R2_ACCOUNT_ID") &&
+    !!env("R2_ACCESS_KEY_ID") &&
+    !!env("R2_SECRET_ACCESS_KEY") &&
+    !!(env("R2_BUCKET") || env("R2_BUCKET_NAME")),
+  "Streamtape video uploads require the Cloudflare R2 S3 credentials for temporary staging"
 );
 
 // ---------------------------------------------------------- Infrastructure

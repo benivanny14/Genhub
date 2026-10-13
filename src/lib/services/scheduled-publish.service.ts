@@ -31,6 +31,7 @@ export async function publishDueVideos(now: Date = new Date()): Promise<number> 
         isPublished: false,
         isDraft: false,
         isDeleted: false,
+        streamtapeFileId: { not: null },
         scheduledAt: { not: null, lte: now },
       },
       data: {

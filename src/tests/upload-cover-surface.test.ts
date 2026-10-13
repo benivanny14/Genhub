@@ -124,9 +124,10 @@ describe("the teaser clip is gone from the upload form", () => {
     expect(UPLOAD).toContain("Preview seconds");
   });
 
-  it("no longer asks the publish API for a trailer", () => {
+  it("publishes the Streamtape file and its signed upload session", () => {
     const payload = between(UPLOAD, "await fetch(\"/api/videos\"", "const body = await response.json()");
-    expect(payload).toContain("bunnyVideoId");
+    expect(payload).toContain("streamtapeFileId");
+    expect(payload).toContain("uploadSessionToken");
     expect(payload).not.toContain("teaserBunnyVideoId");
     expect(payload).not.toContain("teaserUploadSessionToken");
   });

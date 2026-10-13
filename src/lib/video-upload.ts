@@ -123,12 +123,14 @@ export const VIDEO_UPLOAD_CREATE_TIMEOUT_MS = 30_000;
  * the browser learns it from Bunny, at the moment it opens the upload.
  */
 export interface VideoUploadSession {
+  provider?: "BUNNY" | "STREAMTAPE";
   sessionToken: string;
   videoId: string;
   headers: Record<string, string>;
   totalBytes: number;
   mimeType: string;
   expiresAt: number;
+  uploadUrl?: string;
 }
 
 /** Everything one PATCH needs: where to send it, with what, and how much. */
@@ -136,6 +138,7 @@ export interface VideoUploadTarget {
   uploadUrl: string;
   headers: Record<string, string>;
   totalBytes: number;
+  provider?: "BUNNY" | "STREAMTAPE";
 }
 
 /** A session whose upload resource this browser has already opened. */
@@ -160,6 +163,37 @@ export interface VideoUploadProgress {
  * where a creator's video goes, and data: URLs and lookalike hosts both parse.
  */
 export async function openVideoUpload(session: VideoUploadSession): Promise<OpenedVideoUpload> {
+  if (session.provider !== "STREAMTAPE") {
+    throw new VideoUploadError(
+      "HTTP",
+      "This site accepts video uploads through Streamtape only.",
+      410,
+      { reason: "provider", stage: "reserve" }
+    );
+  }
+  if (session.provider === "STREAMTAPE") {
+    let url: URL | null = null;
+    try {
+      url = session.uploadUrl ? new URL(session.uploadUrl) : null;
+    } catch {
+      url = null;
+    }
+    if (
+      !url ||
+      url.protocol !== "https:" ||
+      !/^[a-z0-9-]+\.r2\.cloudflarestorage\.com$/i.test(url.hostname) ||
+      !url.pathname.includes("/video-staging/")
+    ) {
+      throw new VideoUploadError(
+        "HTTP",
+        "This upload was opened somewhere unexpected, so nothing was sent. Try again.",
+        502,
+        { reason: "provider", stage: "reserve" }
+      );
+    }
+    return { ...session, uploadUrl: url.toString() };
+  }
+
   // What Bunny is TOLD the file is. A video's own type is passed through so an
   // MKV is described as an MKV; anything else is declared as MP4, which is what
   // the host reads for itself anyway. Forwarding whatever the picker said would
@@ -692,6 +726,14 @@ export async function uploadVideoFile(
     offset?: number;
   } = {}
 ): Promise<void> {
+  if (session.provider !== "STREAMTAPE") {
+    throw new VideoUploadError(
+      "HTTP",
+      "This site accepts video uploads through Streamtape only.",
+      410,
+      { reason: "provider", stage: "put" }
+    );
+  }
   if (!file || !file.size) {
     throw new VideoUploadError("INVALID_FILE", "Choose a video up to 2 GB");
   }
@@ -702,6 +744,11 @@ export async function uploadVideoFile(
       "INVALID_FILE",
       "That is a different file from the one being uploaded. Choose it again."
     );
+  }
+
+  if (session.provider === "STREAMTAPE") {
+    await uploadR2StagingFile(file, session, options);
+    return;
   }
 
   const total = file.size;
@@ -932,6 +979,105 @@ export async function uploadVideoFile(
   report?.({ uploadedBytes: total, totalBytes: total, percent: 100 });
 }
 
+function uploadR2StagingFile(
+  file: File,
+  session: VideoUploadTarget,
+  options: {
+    onProgress?: (progress: VideoUploadProgress) => void;
+    signal?: AbortSignal;
+  }
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    let settled = false;
+    const finish = (error?: VideoUploadError) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", onAbort);
+      if (error) reject(error);
+      else resolve();
+    };
+    const onAbort = () => xhr.abort();
+
+    if (options.signal?.aborted) {
+      finish(new VideoUploadError("ABORTED", "Upload cancelled", undefined, { reason: "cancelled" }));
+      return;
+    }
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+
+    xhr.open("PUT", session.uploadUrl, true);
+    xhr.withCredentials = false;
+    for (const [name, value] of Object.entries(session.headers)) {
+      xhr.setRequestHeader(name, value);
+    }
+    xhr.upload.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      const uploadedBytes = Math.min(event.loaded, file.size);
+      options.onProgress?.({
+        uploadedBytes,
+        totalBytes: file.size,
+        percent: Math.floor((uploadedBytes / file.size) * 100),
+      });
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        options.onProgress?.({
+          uploadedBytes: file.size,
+          totalBytes: file.size,
+          percent: 100,
+        });
+        finish();
+      } else if (xhr.status === 401 || xhr.status === 403) {
+        finish(
+          new VideoUploadError(
+            "EXPIRED",
+            "This upload has expired. Please choose the video again.",
+            xhr.status,
+            { reason: "provider", stage: "put", providerBody: xhr.responseText }
+          )
+        );
+      } else {
+        finish(
+          new VideoUploadError(
+            "HTTP",
+            "The video could not be sent. Press Resume upload to try again.",
+            xhr.status,
+            { reason: "provider", stage: "put", providerBody: xhr.responseText }
+          )
+        );
+      }
+    };
+    xhr.onerror = () =>
+      finish(
+        new VideoUploadError(
+          "NETWORK",
+          "The connection dropped while sending this video. Press Resume upload to try again.",
+          undefined,
+          { reason: "reset", stage: "put" }
+        )
+      );
+    xhr.ontimeout = () =>
+      finish(
+        new VideoUploadError(
+          "NETWORK",
+          "The upload timed out. Press Resume upload to try again.",
+          undefined,
+          { reason: "timeout", stage: "put" }
+        )
+      );
+    xhr.onabort = () =>
+      finish(
+        new VideoUploadError(
+          "ABORTED",
+          "Upload cancelled",
+          undefined,
+          { reason: "cancelled", stage: "put" }
+        )
+      );
+    xhr.send(file);
+  });
+}
+
 /**
  * The sentence the creator reads, built from where the transfer actually got to.
  *
@@ -957,7 +1103,19 @@ function failureMessage(failure: VideoUploadError, offset: number, total: number
   }
 }
 
-export async function completeVideoUpload(sessionToken: string): Promise<string> {
+export async function completeVideoUpload(
+  sessionToken: string,
+  provider?: "BUNNY" | "STREAMTAPE",
+  onPreparing?: () => void
+): Promise<string> {
+  if (provider !== "STREAMTAPE") {
+    throw new VideoUploadError(
+      "HTTP",
+      "This site accepts video uploads through Streamtape only.",
+      410,
+      { reason: "provider", stage: "reserve" }
+    );
+  }
   let response: Response;
   try {
     response = await fetch("/api/videos/upload-complete", {
@@ -975,10 +1133,10 @@ export async function completeVideoUpload(sessionToken: string): Promise<string>
   const body = (await response.json().catch(() => null)) as {
     success?: boolean;
     error?: string;
-    data?: { videoId?: string };
+    data?: { videoId?: string; state?: string };
   } | null;
 
-  if (!response.ok || !body?.success || !body.data?.videoId) {
+  if (!response.ok || !body?.success) {
     throw new VideoUploadError(
       response.status === 409 ? "CONFLICT" : "HTTP",
       body?.error || "Genhub could not confirm the completed upload",
@@ -986,7 +1144,71 @@ export async function completeVideoUpload(sessionToken: string): Promise<string>
       { stage: "reserve", providerBody: body?.error || null }
     );
   }
-  return body.data.videoId;
+
+  if (provider !== "STREAMTAPE") {
+    if (!body.data?.videoId) {
+      throw new VideoUploadError("HTTP", "Genhub could not confirm the completed upload", 502);
+    }
+    return body.data.videoId;
+  }
+  if (!body.data?.state) {
+    throw new VideoUploadError("HTTP", "Genhub could not start video processing", 502);
+  }
+  if (body.data.state === "FAILED" || body.data.state === "CANCELLED") {
+    throw new VideoUploadError("HTTP", "The video could not be sent for processing. Upload it again.", 422);
+  }
+  onPreparing?.();
+
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    let statusResponse: Response;
+    try {
+      statusResponse = await fetch("/api/videos/upload-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionToken }),
+      });
+    } catch {
+      throw new VideoUploadError(
+        "NETWORK",
+        "The video was uploaded but its processing status could not be checked. Press Resume upload to check again.",
+        undefined,
+        { reason: "reset", stage: "reserve" }
+      );
+    }
+
+    const statusBody = (await statusResponse.json().catch(() => null)) as {
+      success?: boolean;
+      error?: string;
+      data?: { state?: string; fileId?: string };
+    } | null;
+    if (!statusResponse.ok || !statusBody?.success) {
+      throw new VideoUploadError(
+        "HTTP",
+        statusBody?.error || "The video is uploaded, but processing is still being checked.",
+        statusResponse.status,
+        { stage: "reserve", providerBody: statusBody?.error || null }
+      );
+    }
+    if (statusBody.data?.state === "READY" && statusBody.data.fileId) {
+      return statusBody.data.fileId;
+    }
+    if (statusBody.data?.state === "FAILED") {
+      throw new VideoUploadError(
+        "HTTP",
+        "Streamtape could not process this video. Choose it again to retry.",
+        422,
+        { reason: "provider", stage: "reserve" }
+      );
+    }
+
+    await new Promise((resolve) => window.setTimeout(resolve, 5_000));
+  }
+  throw new VideoUploadError(
+    "HTTP",
+    "The video is still being prepared. Press Resume upload to check its status again.",
+    202,
+    { reason: "provider", stage: "reserve" }
+  );
 }
 
 export async function abortVideoUpload(sessionToken: string): Promise<void> {

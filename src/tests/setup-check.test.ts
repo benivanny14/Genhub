@@ -63,20 +63,15 @@ describe("checklist integrity", () => {
     const manual = SETUP_ITEMS.filter((i) => !i.key);
 
     expect(SETUP_GROUPS.length).toBeGreaterThan(0);
-    expect(itemsWithKeys.length).toBe(21);
-    // Three steps are work in someone else's dashboard, not a variable: the
-    // SonicPesa account activation, the Bunny pull zone's Allowed Referrers list — which
-    // refuses the manifest and every segment of any host it does not name, so a
-    // missing entry there is a video that only spins (see probeSignedPlayback) —
-    // and the library's Webhook URL, which is what makes a finished encode go
-    // live in seconds rather than at the next poll.
-    expect(manual).toHaveLength(3);
+    expect(itemsWithKeys.length).toBe(22);
+    // Live collections activation is work in SonicPesa's dashboard, not a
+    // variable the app can inspect.
+    expect(manual).toHaveLength(1);
     const manualText = manual
       .map((i) => [i.title, ...(i.steps || [])].join(" "))
       .join(" ");
     expect(manualText).toMatch(/collections/i);
-    expect(manualText).toMatch(/Referrers/i);
-    expect(manualText).toMatch(/webhook/i);
+    expect(manualText).toMatch(/USSD-PUSH collections/i);
   });
 
   it("never lists the same variable twice", () => {

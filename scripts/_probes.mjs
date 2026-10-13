@@ -6,13 +6,13 @@
 //   "did you set this?"      -> the environment checks in each caller
 //   "does it actually work?" -> these probes, which open real connections
 //
-// A connection string with a typo, a sandbox API key, a Bunny account with Token
-// Authentication still off, an SMTP host that no longer resolves — all of them
+// A connection string with a typo, a sandbox API key, missing R2 access, an SMTP
+// host that no longer resolves — all of them
 // LOOK configured, and the worst moment to find out is after a customer paid.
 //
 // They live here, once, because the alternative already burned this project: the
 // setup checklist was written twice and the two copies disagreed on the very
-// first real value either of them saw (.env.local held a placeholder Bunny token;
+// first real value either of them saw (.env.local held placeholder provider keys;
 // the app called it configured and the script called it a placeholder). Callers
 // are free to format differently — verify-connections prints each record,
 // preflight counts a `fail` as a launch blocker — but what is called, with what
@@ -23,8 +23,8 @@
 //           SETEX), so a server that answers reads while rejecting writes —
 //           Redis MISCONF — has to fail here rather than silently downgrade
 //           rate limiting to per-instance buckets.
-//   Bunny   library lookup (GET) + a CDN HEAD. Any HTTP answer from the CDN
-//           proves DNS and TLS; the signature itself is proven by playback.
+//   Streamtape/R2 configuration is checked here; `verify:r2` tests bucket access
+//           and browser CORS separately.
 //   SMTP    transport.verify() — opens a session and sends nothing.
 // =============================================================================
 
@@ -187,120 +187,19 @@ export async function probeRedis() {
 }
 
 // =============================================================================
-// Bunny Stream + CDN
+// Streamtape video + Cloudflare R2 staging
+// =============================================================================
+// Streamtape video + Cloudflare R2 staging
 // =============================================================================
 
-/** The Stream library itself: proves the key, and reads Token Auth back. */
-async function probeBunnyStream() {
-  const key = env("BUNNY_STREAM_API_KEY");
-  const library = env("BUNNY_STREAM_LIBRARY_ID");
-  if (!key || !library) {
-    return [
-      {
-        name: "Bunny Stream",
-        state: "skip",
-        detail: "BUNNY_STREAM_API_KEY / BUNNY_STREAM_LIBRARY_ID not set",
-      },
-    ];
-  }
-
-  try {
-    const res = await fetch(`https://video.bunnycdn.com/library/${library}`, {
-      headers: { AccessKey: key },
-      signal: timeout(15_000),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return [
-        {
-          name: "Bunny Stream",
-          state: "fail",
-          detail:
-            `HTTP ${res.status} ${JSON.stringify(body).slice(0, 110)}` +
-            (res.status === 401 || res.status === 403
-              ? " · wrong key, or it lacks access to this library"
-              : ""),
-        },
-      ];
-    }
-
-    // The setting that silently breaks paid playback: without Token
-    // Authentication the signature in the URL is ignored, so anyone who copies a
-    // link can watch a video they never bought.
-    const tokenAuth =
-      body?.TokenAuthenticationEnabled ?? body?.tokenAuthenticationEnabled ?? null;
-    const signed = !!env("BUNNY_TOKEN_SECRET");
-    const records = [
-      {
-        name: "Bunny Stream",
-        state: tokenAuth === false ? "fail" : "ok",
-        detail:
-          `library "${body.name || library}" · plan ${body.plan ?? "?"} · videos ${body.totalVideos ?? "?"}` +
-          (tokenAuth === false
-            ? ` · ${RED} Token Authentication is OFF — paid videos are unprotected. Turn it ON in Stream → Security.`
-            : tokenAuth === true
-              ? " · Token Auth ON"
-              : ""),
-      },
-    ];
-
-    if (tokenAuth === true && !signed) {
-      records.push({
-        name: "Bunny token",
-        state: "fail",
-        detail:
-          "Token Auth is ON but BUNNY_TOKEN_SECRET is empty — playback URLs will not be accepted",
-      });
-    }
-
-    return records;
-  } catch (error) {
-    return [
-      {
-        name: "Bunny Stream",
-        state: "fail",
-        detail: String(error.message || error).slice(0, 150),
-      },
-    ];
-  }
-}
-
-/** The pull zone: DNS + TLS only, so even a 403 is an answer. */
-async function probeBunnyCdn() {
-  const host = env("BUNNY_CDN_HOSTNAME").replace(/^https?:\/\//, "").replace(/\/$/, "");
-  if (!host) {
-    return [{ name: "Bunny CDN", state: "skip", detail: "BUNNY_CDN_HOSTNAME not set" }];
-  }
-
-  try {
-    const res = await fetch(`https://${host}/`, { method: "HEAD", signal: timeout(15_000) });
-    return [
-      {
-        name: "Bunny CDN",
-        // Any HTTP answer (even 403) proves DNS + TLS work, which is what we are
-        // testing here; the token itself is validated by playback.
-        state: "ok",
-        detail: `${host} answered HTTP ${res.status}`,
-      },
-    ];
-  } catch (error) {
-    return [
-      {
-        name: "Bunny CDN",
-        state: "fail",
-        detail: `${host} did not resolve/answer — check the pull-zone hostname (${String(
-          error.message || error
-        ).slice(0, 80)})`,
-      },
-    ];
-  }
-}
-
-/**
- * @returns {Promise<ProbeRecord[]>} Stream, optionally a token warning, then CDN
- */
-export async function probeBunny() {
-  return [...(await probeBunnyStream()), ...(await probeBunnyCdn())];
+/** Checks configuration without claiming remote playback was tested. */
+export async function probeStreamtape() {
+  const streamConfigured = !!env("STREAMTAPE_LOGIN") && !!env("STREAMTAPE_API_KEY");
+  const r2Configured = !!env("R2_ACCOUNT_ID") && !!env("R2_ACCESS_KEY_ID") && !!env("R2_SECRET_ACCESS_KEY") && !!(env("R2_BUCKET") || env("R2_BUCKET_NAME"));
+  return [
+    { name: "Streamtape", state: streamConfigured ? "warn" : "fail", detail: streamConfigured ? "credentials are present; complete a test upload to verify import and playback" : "STREAMTAPE_LOGIN / STREAMTAPE_API_KEY not set" },
+    { name: "Cloudflare R2 staging", state: r2Configured ? "ok" : "fail", detail: r2Configured ? "S3 credentials and bucket are present; run npm run verify:r2 to check access and CORS" : "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET are required" },
+  ];
 }
 
 // =============================================================================

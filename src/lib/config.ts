@@ -122,22 +122,28 @@ const config = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
   cookieName: process.env.COOKIE_NAME || "genhub_token",
 
-  // Bunny.net Stream
-  bunny: {
-    libraryId: process.env.BUNNY_STREAM_LIBRARY_ID || "",
-    apiKey: process.env.BUNNY_STREAM_API_KEY || "",
+  // Bunny Storage remains in use for image uploads only.
+  bunnyStorage: {
     storageZone: process.env.BUNNY_STORAGE_ZONE || "",
     storageAccessKey: process.env.BUNNY_STORAGE_ACCESS_KEY || "",
     cdnHostname: process.env.BUNNY_CDN_HOSTNAME || "",
-    tokenSecret: process.env.BUNNY_TOKEN_SECRET || "",
-    // Stream webhook signing secret. Bunny signs every Stream callback with
-    // HMAC-SHA256 over the raw body, keyed on the library's READ-ONLY API key
-    // (see /api/webhooks/bunny and lib/bunny-webhook.ts). It is a SEPARATE value
-    // from BUNNY_STREAM_API_KEY: that one is the read-write management key the
-    // server uses, this one only ever verifies inbound callbacks, so it can be
-    // rotated without breaking uploads. Empty disables signature checks in dev
-    // and fails the route closed in production.
-    webhookSecret: process.env.BUNNY_STREAM_WEBHOOK_SECRET || "",
+  },
+
+  // Empty compatibility values keep legacy modules inert during migration.
+  // Active video upload, playback and webhook routes use Streamtape/R2 only.
+  bunny: {
+    apiKey: "",
+    libraryId: "",
+    cdnHostname: "",
+    tokenSecret: "",
+    webhookSecret: "",
+  },
+
+  // Streamtape is the only video provider.
+  streamtape: {
+    login: process.env.STREAMTAPE_LOGIN || "",
+    apiKey: process.env.STREAMTAPE_API_KEY || "",
+    folderId: process.env.STREAMTAPE_FOLDER_ID || "",
   },
 
   // Cloudflare R2 — where a big file actually goes.
@@ -282,16 +288,20 @@ const config = {
 
 export default config;
 
-/** Returns the direct Bunny Stream variables missing from this deployment. */
+/** Returns the video provider settings missing from this deployment. */
 export function uploadStorageReadiness(): {
-  bunnyConfigured: boolean;
+  streamtapeConfigured: boolean;
   missing: string[];
 } {
   const missing: string[] = [];
-  if (!config.bunny.libraryId) missing.push("BUNNY_STREAM_LIBRARY_ID");
-  if (!config.bunny.apiKey) missing.push("BUNNY_STREAM_API_KEY");
+  if (!config.streamtape.login) missing.push("STREAMTAPE_LOGIN");
+  if (!config.streamtape.apiKey) missing.push("STREAMTAPE_API_KEY");
+  if (!config.r2.accountId) missing.push("R2_ACCOUNT_ID");
+  if (!config.r2.accessKeyId) missing.push("R2_ACCESS_KEY_ID");
+  if (!config.r2.secretAccessKey) missing.push("R2_SECRET_ACCESS_KEY");
+  if (!config.r2.bucket) missing.push("R2_BUCKET");
   return {
-    bunnyConfigured: missing.length === 0,
+    streamtapeConfigured: missing.length === 0,
     missing,
   };
 }
@@ -340,15 +350,10 @@ export function productionConfigWarnings(): string[] {
   if (!config.databaseUrl) {
     warnings.push("DATABASE_URL is not set");
   }
-  if (!config.bunny.apiKey || !config.bunny.cdnHostname) {
-    warnings.push("Bunny.net Stream credentials are incomplete — uploads/playback will fail");
-  }
-  // The names of missing Bunny variables are safe to expose; values and keys
-  // never leave the server.
-  const { bunnyConfigured, missing } = uploadStorageReadiness();
-  if (!bunnyConfigured) {
+  const { streamtapeConfigured, missing } = uploadStorageReadiness();
+  if (!streamtapeConfigured) {
     warnings.push(
-      `Video uploads are unavailable: set ${missing.join(", ")}`
+      `Streamtape video uploads are unavailable: set ${missing.join(", ")}`
     );
   }
   if (!config.email.host) {

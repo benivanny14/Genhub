@@ -94,6 +94,7 @@ function videoRow(overrides: Record<string, unknown> = {}) {
     slug: "still-processing",
     thumbnailUrl: null,
     previewUrl: null,
+    streamtapeFileId: "file_123",
     bunnyVideoId: null,
     teaserBunnyVideoId: null,
     teaserClipUrl: null,
@@ -275,26 +276,24 @@ describe("PATCH /api/videos/[id] — a teaser may not be the scene", () => {
     return { status: response.status, body: await response.json() };
   }
 
-  it("refuses to point the teaser at the video's own Bunny id", async () => {
+  it("refuses legacy Bunny teaser metadata instead of silently accepting it", async () => {
     mocks.videoFindUnique.mockResolvedValue(videoRow({ bunnyVideoId: SCENE }));
 
     const { status, body } = await patch({ teaserBunnyVideoId: SCENE });
 
     expect(status).toBe(422);
-    expect(body.error).toMatch(/different video from the main video/);
+    expect(body.success).toBe(false);
     expect(mocks.videoUpdate).not.toHaveBeenCalled();
   });
 
-  it("accepts a genuinely separate trailer clip", async () => {
+  it("does not accept legacy Bunny trailer uploads", async () => {
     mocks.videoFindUnique.mockResolvedValue(videoRow({ bunnyVideoId: SCENE }));
-    mocks.videoUpdate.mockResolvedValue({ id: "video-1", title: "x" });
-
     const { status } = await patch({
       teaserBunnyVideoId: "trailer-guid-2222",
       teaserUploadSessionToken: "session-token-" + "x".repeat(90),
     });
-
-    expect(status).toBe(200);
+    expect(status).toBe(422);
+    expect(mocks.videoUpdate).not.toHaveBeenCalled();
   });
 
   it("still lets a creator edit their own video", async () => {

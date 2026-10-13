@@ -66,6 +66,7 @@ import { pickIntroMedium } from "@/lib/intro-trailer";
 // serializer is what stops them from closing the tag (see lib/json-ld.ts).
 import { serializeJsonLd } from "@/lib/json-ld";
 import IntroClipPlayer from "@/components/IntroClipPlayer";
+import StreamtapePlayer from "@/components/StreamtapePlayer";
 import { displayHandle } from "@/lib/usernames";
 import { categoryHref, getCategory } from "@/lib/categories";
 import { PAID_MESSAGE_PRICE } from "@/lib/pay-message";
@@ -141,7 +142,9 @@ interface VideoData {
     createdAt: string;
   } | null;
   playbackUrl: string | null;
+  playbackType?: "HLS" | "EMBED";
   teaserUrl: string | null;
+  teaserType?: "HLS" | "EMBED";
   /**
    * Bunny's own generated animated preview, signed for this viewer. Sent only
    * when the viewer has no entitlement AND no trailer clip is attached — the
@@ -1092,6 +1095,7 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
     : canPlayFull
       ? video.playbackUrl
       : video.teaserUrl;
+  const playerType = canPlayFull ? video.playbackType : video.teaserType;
 
   // Which intro this viewer gets: the creator's uploaded trailer, Bunny's own
   // animated preview as the automatic floor, or nothing. The rule is pure, so it
@@ -1342,21 +1346,25 @@ export default function VideoDetailPage({ params }: { params: { id: string } }) 
           </div>
         ) : videoSrc ? (
           <div className="relative">
-            <VideoPlayer
-              key={showIntroTrailer ? `intro-${introKey}` : "full"}
-              src={videoSrc}
-              poster={video.thumbnailUrl || undefined}
-              title={video.title}
-              videoId={video.id}
-              viewerId={user?.id}
-              isTeaser={!canPlayFull}
-              startAt={canPlayFull ? startAt : 0}
-              onEnded={showIntroTrailer ? handleIntroEnded : handleSceneEnded}
-              // Captions belong to the scene, so a viewer previewing the teaser
-              // does not get the full scene's captions over a clip they may not be
-              // entitled to hear.
-              captionsUrl={canPlayFull ? video.captionsUrl : null}
-            />
+            {playerType === "EMBED" ? (
+              <StreamtapePlayer src={videoSrc} title={video.title} />
+            ) : (
+              <VideoPlayer
+                key={showIntroTrailer ? `intro-${introKey}` : "full"}
+                src={videoSrc}
+                poster={video.thumbnailUrl || undefined}
+                title={video.title}
+                videoId={video.id}
+                viewerId={user?.id}
+                isTeaser={!canPlayFull}
+                startAt={canPlayFull ? startAt : 0}
+                onEnded={showIntroTrailer ? handleIntroEnded : handleSceneEnded}
+                // Captions belong to the scene, so a viewer previewing the teaser
+                // does not get the full scene's captions over a clip they may not be
+                // entitled to hear.
+                captionsUrl={canPlayFull ? video.captionsUrl : null}
+              />
+            )}
 
             {/* Up next — what plays when this one ends.
 

@@ -7,7 +7,7 @@
 // question: "does it work?" — by opening a real connection to each service.
 //
 // Why both are needed: a connection string with a typo, an API key from the
-// sandbox account, a Bunny token-authentication key that was never switched on,
+// sandbox account, a Streamtape key that no longer authenticates,
 // a database that needs ?sslmode=require — all of them LOOK configured. The
 // difference only shows up when something tries to use them, and the worst time
 // to find out is after a customer has paid.
@@ -15,13 +15,12 @@
 // Every check here is READ-ONLY or self-cleaning:
 //   Postgres  SELECT 1
 //   Redis     PING
-//   Bunny     library lookup (GET)
-//   CDN       HEAD on the pull-zone hostname
+//   Streamtape/R2 configuration (bucket access and CORS are tested separately)
 //   SMTP      transport verify (opens a session, sends nothing)
 //   SonicPesa POST /third-parties/generate-token (proves the credentials)
 //   App URL   GET /api/health
 //
-// The Redis, Bunny and SMTP probes live in ./_probes.mjs because
+// The Redis, Streamtape/R2 configuration and SMTP probes live in ./_probes.mjs because
 // `preflight:prod` runs the same three — one definition, so the two commands
 // cannot disagree about whether a service works.
 //
@@ -31,7 +30,7 @@
 // =============================================================================
 
 import { loadEnv, assessSecret } from "./_env.mjs";
-import { GREEN, RED, AMBER, DIM, probeRedis, probeBunny, probeSmtp } from "./_probes.mjs";
+import { GREEN, RED, AMBER, DIM, probeRedis, probeStreamtape, probeSmtp } from "./_probes.mjs";
 
 loadEnv();
 
@@ -100,7 +99,7 @@ async function checkDatabase() {
 }
 
 // =============================================================================
-// 2-4. Redis, Bunny Stream + CDN, SMTP — see ./_probes.mjs
+// 2-4. Redis, Streamtape/R2 configuration, SMTP — see ./_probes.mjs
 // =============================================================================
 
 // =============================================================================
@@ -250,7 +249,7 @@ console.log("\n=== GENHUB connection check === (this opens real connections)\n")
 
 await checkDatabase();
 for (const result of await probeRedis()) record(result);
-for (const result of await probeBunny()) record(result);
+for (const result of await probeStreamtape()) record(result);
 for (const result of await probeSmtp()) record(result);
 await checkSonicPesa();
 await checkAppUrl();

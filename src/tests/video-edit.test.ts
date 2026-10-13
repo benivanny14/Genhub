@@ -111,7 +111,8 @@ describe("createVideoSchema price", () => {
   const base = {
     title: "A scene",
     price: 1000,
-    bunnyVideoId: "39ea50b0-bee6-4175-90fe-99710ecc3848",
+    streamtapeFileId: "file_123",
+    uploadSessionToken: "s".repeat(100),
     complianceAttested: true,
   };
 

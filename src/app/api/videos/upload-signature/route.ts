@@ -1,21 +1,21 @@
 // =============================================================================
 // POST /api/videos/upload-signature
 //
-// Starts the only video transport used by Genhub. The server creates a Bunny
-// video slot and a resumable TUS resource, then returns a signed session. The
-// browser sends every video byte directly to Bunny; Vercel, R2 and a Worker are
-// not in the data path.
+// Creates an R2 staging upload signed for one object and one PUT. After the
+// browser sends the bytes, the server asks Streamtape to import and convert it.
 // =============================================================================
 
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { requireRole, AuthError } from "@/lib/auth";
+import config from "@/lib/config";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
-import config from "@/lib/config";
-import { isBunnyConfigured } from "@/lib/bunny";
-import { createVideoUploadSession, isUploadSessionConfigured } from "@/lib/video-upload-session";
+import {
+  createStreamtapeUploadSession,
+  isStreamtapeUploadConfigured,
+} from "@/lib/streamtape-upload-session";
 import { MAX_VIDEO_BYTES } from "@/lib/video-upload";
 
 export const runtime = "nodejs";
@@ -24,23 +24,16 @@ export const maxDuration = 30;
 
 const schema = z.object({
   title: z.string().trim().min(1).max(200),
+  fileName: z.string().trim().min(1).max(200).optional(),
   size: z.number().int().positive().max(MAX_VIDEO_BYTES),
   /**
    * What the device called the file — a HINT, never a gate.
    *
-   * This used to refuse anything that did not start with `video/`, and the
-   * intent behind that was good: keep a creator from pushing a 2 GB document
-   * through a video pipeline. What it did in practice was refuse the videos.
-   * The value comes from the picker, and on Android that is the document
-   * provider's guess: a `.mkv` off an SD card, a `.mov` a camera app wrote
-   * itself, anything downloaded by a chat app arrives as an empty string or as
-   * `application/octet-stream`, and every one of them was turned away here with
-   * "Choose a video file" — for a file the creator had just chosen and could
-   * see playing in their gallery.
+   * Provider MIME guesses are inconsistent: `.mkv` files, camera recordings
+   * and downloads may arrive as an empty string or `application/octet-stream`.
    *
-   * Bunny decides what a file is by reading its bytes, and the encoding
-   * lifecycle already takes down anything that turns out not to be a video, so
-   * nothing is gained by guessing first. Bounded in length only.
+   * Streamtape inspects the imported file. The browser-reported MIME type only
+   * selects the signed R2 content-type header; unknown types use video/mp4.
    */
   mimeType: z.string().trim().max(100).optional(),
 });
@@ -83,23 +76,17 @@ export async function POST(request: NextRequest) {
     // name, and naming the deployment's own configuration to whoever asked is
     // free reconnaissance, so the response carries one sentence and the two
     // causes are written where an operator will actually read them.
-    if (!isBunnyConfigured()) {
-      console.error("[Video Upload] not configured: the video host library key is missing");
-      return api.error("Video uploads are temporarily unavailable. Tell support.", 503, "NOT_CONFIGURED");
-    }
-    if (!isUploadSessionConfigured()) {
-      console.error(
-        "[Video Upload] not configured: JWT_SECRET is missing or still the development default, so no upload session can be signed"
-      );
-      return api.error("Video uploads are temporarily unavailable. Tell support.", 503, "NOT_CONFIGURED");
-    }
-
     const parsed = schema.safeParse(await readJsonBody(request));
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
 
-    const session = await createVideoUploadSession({
+    if (!isStreamtapeUploadConfigured()) {
+      console.error("[Video Upload] Streamtape, R2 or upload-session signing is not configured");
+      return api.error("Video uploads are temporarily unavailable. Tell support.", 503, "NOT_CONFIGURED");
+    }
+
+    const session = await createStreamtapeUploadSession({
       userId: auth.userId,
-      title: parsed.data.title,
+      fileName: parsed.data.fileName || parsed.data.title,
       totalBytes: parsed.data.size,
       mimeType: parsed.data.mimeType,
     });

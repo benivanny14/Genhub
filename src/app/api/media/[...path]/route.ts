@@ -163,14 +163,14 @@ export async function GET(
   // Bunny is the production source of truth. Without storage credentials (a
   // laptop, CI) the same keys are read from disk, which is where the upload
   // route put them — so the whole media path can be exercised offline.
-  if (!config.bunny.storageZone || !config.bunny.storageAccessKey) {
+  if (!config.bunnyStorage.storageZone || !config.bunnyStorage.storageAccessKey) {
     return serveFromDisk(key);
   }
 
   let upstream: Response;
   try {
-    upstream = await fetch(`${BUNNY_STORAGE_ORIGIN}/${config.bunny.storageZone}/${key}`, {
-      headers: { AccessKey: config.bunny.storageAccessKey },
+    upstream = await fetch(`${BUNNY_STORAGE_ORIGIN}/${config.bunnyStorage.storageZone}/${key}`, {
+      headers: { AccessKey: config.bunnyStorage.storageAccessKey },
       signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
       // Images are immutable under one key, so the CDN/edge may hold them.
       cache: "force-cache",

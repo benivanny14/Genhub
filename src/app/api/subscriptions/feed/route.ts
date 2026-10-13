@@ -7,8 +7,7 @@ import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
-import { introClipPath, resolveTeaserUrl } from "@/lib/bunny";
-import { BUNNY_FAILED, videoStatus } from "@/lib/video-status";
+import { videoStatus } from "@/lib/video-status";
 
 export async function GET(request: NextRequest) {
   try {
@@ -32,12 +31,7 @@ export async function GET(request: NextRequest) {
               creatorId: { in: creatorIds },
               isPublished: true,
               isDeleted: false,
-              // Published the moment the upload lands (see /api/videos POST), so
-              // a subscribed creator's newest post shows up here straight away
-              // behind its "Inachakatwa..." badge. One whose encode FAILED is a
-              // post that can never play, so it is not in the timeline; the
-              // creator sees it on their own dashboard instead.
-              OR: [{ encodingStatus: null }, { encodingStatus: { not: BUNNY_FAILED } }],
+              streamtapeFileId: { not: null },
             },
             orderBy: { createdAt: "desc" },
             take: 50,
@@ -46,10 +40,7 @@ export async function GET(request: NextRequest) {
               title: true,
               slug: true,
               thumbnailUrl: true,
-              previewUrl: true,
-              bunnyVideoId: true,
-              teaserBunnyVideoId: true,
-              teaserClipUrl: true,
+              streamtapeFileId: true,
               price: true,
               teaserDuration: true,
               duration: true,
@@ -60,9 +51,6 @@ export async function GET(request: NextRequest) {
               isPremium: true,
               isFeatured: true,
               createdAt: true,
-              // Read to answer "can this play?" and then replaced below by the
-              // single derived `status`, so a card has one thing to switch on
-              // and the raw Bunny codes never reach the browser.
               encodingStatus: true,
               encodeProgress: true,
               creator: {
@@ -88,32 +76,14 @@ export async function GET(request: NextRequest) {
 
     return api.success({
       creators: subs.map((s) => s.creator),
-      // Bunny-hosted rows previously got `teaserUrl: previewUrl` regardless,
-      // so a subscriber's feed had no teaser at all for them.
       videos: videos.map(
         ({
-          previewUrl,
-          bunnyVideoId,
-          teaserBunnyVideoId,
-          teaserClipUrl,
+          streamtapeFileId,
           price,
           encodingStatus,
           encodeProgress,
           ...v
         }) => {
-          // `id` is the row id: a Bunny-hosted trailer is served through
-          // /api/videos/<rowId>/stream so its manifest can be rewritten rather
-          // than handed to a player that cannot authorise its segments.
-          const teaserUrl = resolveTeaserUrl({
-            id: v.id,
-            bunnyVideoId,
-            previewUrl,
-            teaserBunnyVideoId,
-            teaserClipUrl,
-            price,
-          });
-
-          // Same derivation the public feed uses — one rule, two routes.
           const status = videoStatus(encodingStatus, encodeProgress);
 
           return {
@@ -122,14 +92,9 @@ export async function GET(request: NextRequest) {
             price,
             status,
             encodeProgress: encodeProgress ?? 0,
-            // False while Bunny is still transcoding, so the card shows a poster
-            // and a badge instead of hovering a manifest that 404s.
-            playable: status === "READY",
-            teaserUrl,
-            // A subscription covers a creator's whole catalogue, but a feed also
-            // carries scenes the viewer has NOT unlocked, and those are the ones
-            // whose cards need something to show on hover.
-            introUrl: teaserUrl ? null : introClipPath({ id: v.id, bunnyVideoId }),
+            playable: status === "READY" && Boolean(streamtapeFileId),
+            teaserUrl: null,
+            introUrl: null,
           };
         }
       ),

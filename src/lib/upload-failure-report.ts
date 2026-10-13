@@ -1,12 +1,12 @@
 // =============================================================================
 // GENHUB - Telling the server that a video upload died
 //
-// The byte transfer happens in the creator's browser and goes STRAIGHT to Bunny,
+// The byte transfer happens in the creator's browser and goes STRAIGHT to R2,
 // so the application server never sees it — and the video row is only created
 // after the transfer finishes. A failed upload therefore leaves nothing at all:
 // no row to look at, no log line, no counter, and a toast that is gone the
 // moment the creator closes the tab. That is how a live library ended up with
-// fourteen orphaned slots against nine rows while the only description of the
+// a growing list of orphaned staging sessions while the only description of the
 // fault in existence was "video zinafail inaandika connection interrupted".
 //
 // The transport already knows why it gave up — the reason, the offset, the
@@ -19,7 +19,7 @@
 //      looking at a failure; turning the report into a second one on screen
 //      would be a worse outcome than a missing row in a list.
 //   2. The payload carries FACTS the browser measured, not conclusions. Which
-//      physical fault it was, how many bytes Bunny had confirmed, how long each
+//      physical fault it was, how many bytes the staging store confirmed, how long each
 //      attempt lasted — the fields that tell a phone that lost signal apart from
 //      a socket a carrier reset, which are the same toast on screen.
 // =============================================================================
@@ -53,7 +53,7 @@ export interface UploadFailureReport {
   message: string;
   providerBody: string | null;
   reason: string | null;
-  bunnyVideoId: string | null;
+  uploadSessionId: string | null;
   fileName: string | null;
   fileSize: number | null;
   bytesSent: number | null;
@@ -96,7 +96,7 @@ export function buildUploadFailureReport(
     }`.slice(0, 300),
     providerBody: failure?.providerBody ?? null,
     reason: failure?.reason ?? null,
-    bunnyVideoId: context.session?.videoId ?? null,
+    uploadSessionId: context.session?.videoId ?? null,
     fileName: context.file?.name ?? null,
     fileSize: context.file?.size ?? null,
     bytesSent: typeof failure?.bytesSent === "number" ? failure.bytesSent : null,

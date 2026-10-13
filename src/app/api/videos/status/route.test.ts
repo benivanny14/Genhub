@@ -18,22 +18,32 @@ import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
+  updateMany: vi.fn(),
+  uploadFindFirst: vi.fn(),
   bunnyDetails: vi.fn(),
   currentUser: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
-  default: { video: { findMany: mocks.findMany } },
+  default: {
+    video: { findMany: mocks.findMany, updateMany: mocks.updateMany },
+    streamtapeUpload: { findFirst: mocks.uploadFindFirst },
+  },
 }));
 
 // The shared rate limiter, stubbed so the suite never dials Redis, and the
 // session, stubbed so the privacy branch is exercised without a cookie jar.
 vi.mock("@/lib/redis", () => ({
   checkRateLimit: async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false }),
+  cacheDel: vi.fn(),
 }));
 
 vi.mock("@/lib/auth", () => ({
   getCurrentUser: () => mocks.currentUser(),
+}));
+
+vi.mock("@/lib/streamtape-upload-session", () => ({
+  refreshLinkedStreamtapeUpload: vi.fn(async () => ({ state: "IMPORTING", progress: 45 })),
 }));
 
 vi.mock("@/lib/bunny", async (importOriginal) => {
@@ -59,6 +69,8 @@ function where() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.findMany.mockResolvedValue([]);
+  mocks.updateMany.mockResolvedValue({ count: 1 });
+  mocks.uploadFindFirst.mockResolvedValue(null);
   mocks.currentUser.mockResolvedValue(null);
 });
 
@@ -87,12 +99,12 @@ describe("POST /api/videos/status", () => {
 
   it("reports the three states, and calls an untracked row READY", async () => {
     mocks.findMany.mockResolvedValue([
-      { id: "processing", encodingStatus: 1, encodeProgress: 30, isPublished: true, creatorId: "c1" },
-      { id: "ready", encodingStatus: 4, encodeProgress: 100, isPublished: true, creatorId: "c1" },
-      { id: "failed", encodingStatus: 5, encodeProgress: 0, isPublished: true, creatorId: "c1" },
+      { id: "processing", encodingStatus: 1, encodeProgress: 30, streamtapeFileId: "file_processing", isPublished: true, creatorId: "c1" },
+      { id: "ready", encodingStatus: 4, encodeProgress: 100, streamtapeFileId: "file_ready", isPublished: true, creatorId: "c1" },
+      { id: "failed", encodingStatus: 5, encodeProgress: 0, streamtapeFileId: "file_failed", isPublished: true, creatorId: "c1" },
       // Side-loaded/demo rows: Bunny never transcodes them, and a badge here
       // would be permanent.
-      { id: "untracked", encodingStatus: null, encodeProgress: 0, isPublished: true, creatorId: "c1" },
+      { id: "untracked", encodingStatus: null, encodeProgress: 0, streamtapeFileId: "file_untracked", isPublished: true, creatorId: "c1" },
     ]);
 
     const response = await POST(request({ ids: ["processing", "ready", "failed", "untracked"] }));
@@ -133,7 +145,7 @@ describe("POST /api/videos/status", () => {
     // uploading) must not have its existence or its encode progress confirmed to
     // a stranger, or the endpoint becomes an oracle for hidden videos.
     mocks.findMany.mockResolvedValue([
-      { id: "hidden", encodingStatus: 1, encodeProgress: 42, isPublished: false, creatorId: "c1" },
+      { id: "hidden", encodingStatus: 1, encodeProgress: 42, streamtapeFileId: "file_hidden", isPublished: false, creatorId: "c1" },
     ]);
 
     const response = await POST(request({ ids: ["hidden"] }));
@@ -146,7 +158,7 @@ describe("POST /api/videos/status", () => {
   it("lets the owner see their own unpublished video's status", async () => {
     mocks.currentUser.mockResolvedValue({ userId: "c1", role: "CREATOR" });
     mocks.findMany.mockResolvedValue([
-      { id: "draft", encodingStatus: 1, encodeProgress: 12, isPublished: false, creatorId: "c1" },
+      { id: "draft", encodingStatus: 1, encodeProgress: 12, streamtapeFileId: "file_draft", isPublished: false, creatorId: "c1" },
     ]);
 
     const response = await POST(request({ ids: ["draft"] }));

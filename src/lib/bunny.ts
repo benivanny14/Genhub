@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import config from "./config";
 import { reportCredentialFault } from "./credential-alert";
+import { streamtapeEmbedUrl } from "@/lib/streamtape";
 
 // The Stream management API lives on video.bunnycdn.com/library/{libraryId}.
 // NOT video.bunny.net, and NOT the /api/v2 prefix — that host does not resolve
@@ -364,6 +365,7 @@ export interface VideoSourceLocation {
    */
   id?: string | null;
   bunnyVideoId?: string | null;
+  streamtapeFileId?: string | null;
   previewUrl?: string | null;
   /** Bunny id of a separate short clip to show non-buyers. */
   teaserBunnyVideoId?: string | null;
@@ -432,6 +434,8 @@ export function resolvePlaybackUrl(
   expirationMinutes = 10,
   viewerId?: string
 ): string | null {
+  if (video.streamtapeFileId) return streamtapeEmbedUrl(video.streamtapeFileId);
+
   // The proxy wins whenever it is possible: it is the only form that can serve
   // HLS end to end (the CDN refuses every token that is not in the query string,
   // and a query string does not survive an HLS player's relative-URL

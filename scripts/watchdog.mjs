@@ -75,9 +75,9 @@
 // The credentials behind the site, not only the app's own verdict
 //
 // With CRON_SECRET set the run also asks /api/health/services, which runs the
-// same live probes `npm run preflight:prod` runs: Postgres, Redis, Bunny, SMTP,
-// SonicPesa and the app URL. A revoked Bunny key or a rotated SMTP password
-// leaves a site that answers every request and cannot stream a video or send a
+// same live probes `npm run preflight:prod` runs: Postgres, Redis, Streamtape/R2,
+// SMTP, SonicPesa and the app URL. A broken upload-host key or a rotated SMTP password
+// leaves a site that answers every request and cannot upload a video or send a
 // password reset — nothing inside the app fails loudly, so an outside check is
 // the only thing that can notice, and this one is already hourly.
 //
@@ -196,9 +196,9 @@ export function describeStoppedWorkers(detail) {
 /**
  * Services that are configured but no longer working, as alarms.
  *
- * The failure this catches has no symptom inside the app: a revoked Bunny key or
- * a rotated SMTP password leaves a site that answers every request perfectly and
- * cannot stream a video, send a password reset, or cache anything. Nothing in
+ * The failure this catches has no symptom inside the app: a revoked Streamtape
+ * key or a rotated SMTP password leaves a site that answers every request
+ * perfectly and cannot accept a video upload, send a password reset, or cache anything. Nothing in
  * the app fails loudly, so the only place it can surface is an outside check.
  *
  * Pure, so the wording is pinned by tests rather than discovered in a chat
@@ -260,19 +260,11 @@ export function alertMessage(baseUrl, report, extras = []) {
 // old watchdog until somebody adds it here on purpose.
 // ---------------------------------------------------------------------------
 
-// `video-encoding` is on the list and needs no reasoning beyond the same one
-// `earnings-digest` gets: it is read-only against Bunny, idempotent, reaches no
-// customer, and a missed pass only means a video waits longer for a badge it
-// would have got anyway. (The comment lives here rather than inside the array
-// because the supervisor test reads this list with a regex, and a comma in a
-// comment between the brackets reads as another worker.)
-
 /** Workers this script may start by itself. See the note above. */
 export const RECOVERABLE_WORKERS = [
   "release-earnings",
   "reconcile-payments",
   "earnings-digest",
-  "video-encoding",
 ];
 
 /**

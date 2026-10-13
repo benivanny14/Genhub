@@ -11,23 +11,10 @@ import { getCurrentUser, requireAuth, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { updateVideoSchema } from "@/lib/validation";
-import {
-  resolvePlaybackUrl,
-  resolveTeaserUrl,
-  introPreviewPath,
-  introClipPath,
-  deleteBunnyVideo,
-  isBunnyConfigured,
-} from "@/lib/bunny";
 import { resolveVideoEntitlement, type EntitlementSource } from "@/lib/services/video-entitlement.service";
 import { normalizeMediaUrl } from "@/lib/media";
 import config from "@/lib/config";
-import { confirmVideoUpload, verifyVideoUploadSession } from "@/lib/video-upload-session";
-import {
-  describeEncoding,
-  refreshVideoEncoding,
-  ENCODING_RECHECK_FLOOR_MS,
-} from "@/lib/services/video-encoding.service";
+import { deleteStreamtapeFile, streamtapeEmbedUrl } from "@/lib/streamtape";
 import { videoStatus } from "@/lib/video-status";
 import { cacheDel, claimOnce, checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
@@ -91,6 +78,10 @@ export async function GET(
     if (!video) {
       return api.notFound("Video not found");
     }
+    const streamtapeImportPending = video.streamtapeFileId?.startsWith("pending_") ?? false;
+    if (video.isPublished && (!video.streamtapeFileId || streamtapeImportPending)) {
+      return api.notFound("Video not found");
+    }
 
     // Unpublished is private. The page shell refuses these too, but this route
     // is reachable on its own, and a row id is guessable enough — the only
@@ -100,44 +91,6 @@ export async function GET(
       authUser?.userId === video.creatorId || authUser?.role === "ADMIN";
     if (!video.isPublished && !maySeeUnpublished) {
       return api.notFound("Video not found");
-    }
-
-    // A creator who opens their own video to ask "why is this still queued?"
-    // deserves an answer, not a stale row. This route is the page they actually
-    // look at, so polling here means the lifecycle advances on the page they
-    // visit — instead of only on the dashboard poll and the cron worker, one of
-    // which nobody is watching and the other of which this deployment's
-    // scheduler runs hours late.
-    //
-    // Owner and admin only. A viewer's page load must never be able to spend a
-    // Bunny API call, and a refresh triggered by a stranger could publish a
-    // video its creator has not looked at yet.
-    if (maySeeUnpublished && video.encodingStatus !== null) {
-      const checkedAt = video.encodingCheckedAt;
-      const staleMs = checkedAt
-        ? Date.now() - checkedAt.getTime()
-        : Number.POSITIVE_INFINITY;
-
-      if (staleMs > ENCODING_RECHECK_FLOOR_MS) {
-        try {
-          const refreshed = await refreshVideoEncoding(video.id);
-          if (refreshed) {
-            // Patched in place rather than re-read: the response below is built
-            // from this object, and a second SELECT on every load of a video
-            // that is still encoding is not worth it.
-            video.encodingStatus = refreshed.snapshot.status;
-            video.encodeProgress = refreshed.snapshot.progress;
-            video.encodingError = refreshed.snapshot.error;
-            if (refreshed.published) video.isPublished = true;
-          }
-        } catch (error) {
-          // A Bunny outage must not take the video page down with it.
-          console.warn(
-            "[Video] Encoding refresh failed:",
-            (error as Error)?.message
-          );
-        }
-      }
     }
 
     // Count the view, once per viewer per hour.
@@ -172,9 +125,9 @@ export async function GET(
 
     // Teaser for anyone who has not paid: the creator's separate trailer clip
     // when one exists, the video itself only when it is free, otherwise nothing.
-    // A paid scene must never be previewed by signing its own stream, because a
-    // Bunny token cannot limit duration — see resolveTeaserUrl.
-    teaserUrl = resolveTeaserUrl(video);
+    // A paid scene must never be previewed by exposing its full Streamtape
+    // embed; only free videos are shown to non-entitled viewers.
+    teaserUrl = !streamtapeImportPending && video.price === 0 ? streamtapeEmbedUrl(video.streamtapeFileId ?? "") : null;
 
     // Free videos (price = 0) are open to everyone — no purchase row needed.
     // Without this branch, free videos stayed hasAccess=false forever and the
@@ -200,7 +153,7 @@ export async function GET(
     if (isFree) {
       hasAccess = true;
       accessSource = "free";
-      playbackUrl = resolvePlaybackUrl(video, 10, authUser?.userId);
+      playbackUrl = streamtapeImportPending ? null : streamtapeEmbedUrl(video.streamtapeFileId ?? "");
     } else {
       // The shared service is asked even when nobody is signed in, because the
       // platform-wide "everything is free" switch entitles a signed-out visitor
@@ -217,7 +170,7 @@ export async function GET(
 
       // Generate full playback URL only if user has access
       if (hasAccess) {
-        playbackUrl = resolvePlaybackUrl(video, 10, viewer?.userId);
+        playbackUrl = streamtapeImportPending ? null : streamtapeEmbedUrl(video.streamtapeFileId ?? "");
       }
 
       // No access yet — but is a charge for THIS video stuck in limbo? A USSD
@@ -247,30 +200,15 @@ export async function GET(
       }
     }
 
-    // `include:` (not `select:`) means the entire row is in hand, so anything
-    // internal would be published here — and any column added to Video later
-    // would leak by default. Playback and the teaser are resolved server-side
-    // now, so the client has no use for the raw Bunny id, and
-    // moderation state must never be public: isFlagged tells the world which
-    // reports landed, and complianceAttestedAt is an internal legal record.
-    //
-    // previewUrl is the FULL scene for side-loaded and demo rows (Bunny rows use
-    // bunnyVideoId, but those producers are seeded with previewUrl), and the
-    // client never reads it — playback and teaser arrive already resolved in
-    // `playbackUrl`/`teaserUrl`. Leaving it in meant any logged-out visitor
-    // could GET this route and stream a paid scene for free.
     const {
-      previewUrl: _previewUrl,
-      bunnyVideoId: _bunnyVideoId,
-      teaserBunnyVideoId: _teaserBunnyVideoId,
-      teaserClipUrl: _teaserClipUrl,
+      bunnyVideoId: _legacyBunnyVideoId,
+      previewUrl: _legacyPreviewUrl,
+      teaserBunnyVideoId: _legacyTeaserBunnyVideoId,
+      teaserClipUrl: _legacyTeaserClipUrl,
+      streamtapeFileId: _streamtapeFileId,
       isFlagged: _isFlagged,
       isDeleted: _isDeleted,
       complianceAttestedAt: _complianceAttestedAt,
-      // The encoding columns are stripped for the same reason as the rest: the
-      // client gets the ONE curated `encoding` object below instead of the raw
-      // row. `encodingNotifiedAt` is internal bookkeeping, and `encodingError`
-      // can carry Bunny's own diagnostics.
       encodingStatus: _encodingStatus,
       encodeProgress: _encodeProgress,
       encodingError: _encodingError,
@@ -278,28 +216,10 @@ export async function GET(
       encodingNotifiedAt: _encodingNotifiedAt,
       ...publicVideo
     } = video;
-
-    // The intro a viewer with no entitlement sees. A creator-uploaded trailer
-    // wins (`teaserUrl` above, already resolved); when there is none, Bunny's own
-    // generated animated preview fills the gap so the page is never an empty
-    // black box. Buyers need neither, so it is not even computed for them.
-    //
-    // The value is an IN-APP url, not the signed CDN one: this pull zone refuses
-    // any request that carries a Referer, and a browser always sends one for an
-    // <img> — so the CDN URL 200s in curl and 403s in the page. The route that
-    // serves it holds the token, and the token opens only that one file, never
-    // the scene's playlist.
-    const introPreviewUrl =
-      !hasAccess && !teaserUrl ? introPreviewPath(video) : null;
-
-    // The stitched clip — four four-second pieces of the scene itself, cut and
-    // signed by /api/videos/[id]/intro-clip. It is preferred over the webp
-    // animation because it is real motion, and it is offered under the same
-    // conditions: no entitlement, and no trailer the creator chose instead.
-    // Nothing about the scene is decided here; the route re-derives both the
-    // segments and the signatures on every request.
-    const introClipUrl =
-      !hasAccess && !teaserUrl ? introClipPath(video) : null;
+    const playbackType = "EMBED" as const;
+    const teaserType = "EMBED" as const;
+    const introPreviewUrl = null;
+    const introClipUrl = null;
 
     return api.success({
       ...publicVideo,
@@ -307,15 +227,23 @@ export async function GET(
       // not yet playable — most often because the creator published it early
       // (see /api/creator/videos/[id]/publish). Saying so is the difference
       // between "this site is broken" and "this is still processing".
-      encoding: describeEncoding(video.encodingStatus, video.encodeProgress),
+      encoding: {
+        state: streamtapeImportPending ? "processing" : "ready",
+        status: streamtapeImportPending ? 2 : null,
+        progress: streamtapeImportPending ? 0 : 100,
+        label: streamtapeImportPending ? "Inachakatwa..." : "Ready",
+        error: null,
+      },
       // The publication state in one word, for the client that has to decide
       // whether to mount a player or the "Inachakatwa..." placeholder.
-      status: videoStatus(video.encodingStatus, video.encodeProgress),
+      status: streamtapeImportPending ? "PROCESSING" : videoStatus(video.encodingStatus, video.encodeProgress),
       hasAccess,
       accessSource,
       paymentUnderInvestigation,
       playbackUrl,
+      playbackType,
       teaserUrl,
+      teaserType,
       introPreviewUrl,
       introClipUrl,
       viewsCount: video.viewsCount + (counted ? 1 : 0), // Reflect the view we just added
@@ -357,7 +285,7 @@ export async function PATCH(
       return api.validation(result.error.errors[0].message);
     }
 
-    const { teaserUploadSessionToken, publishAt, ...updateData } = result.data;
+    const { publishAt, ...updateData } = result.data;
 
     // Scheduling / drafts, resolved into real columns. `publishAt` is not a
     // column, so it must never be spread into the update; isPublished and
@@ -392,33 +320,15 @@ export async function PATCH(
       schedulePatch.scheduledAt = null;
       schedulePatch.isPublished = false;
     }
-
-    if (updateData.teaserBunnyVideoId && updateData.teaserBunnyVideoId === video.bunnyVideoId) {
-      return api.validation("The teaser must be a different video from the main video");
-    }
-
-    if (updateData.teaserBunnyVideoId && video.creatorId === auth.userId && isBunnyConfigured()) {
-      if (!teaserUploadSessionToken) {
-        return api.validation("The teaser upload session is missing");
-      }
-      const session = await verifyVideoUploadSession(teaserUploadSessionToken, auth.userId);
-      if (!session || session.videoId !== updateData.teaserBunnyVideoId) {
-        return api.forbidden("This teaser upload session does not belong to this creator");
-      }
-      const confirmed = await confirmVideoUpload(session);
-      if (!confirmed.ok) {
-        return api.error("The teaser upload is not complete yet", 409, "TEASER_UPLOAD_INCOMPLETE");
-      }
-    }
-
-    // The same rule the upload schema enforces, checked against the row that is
-    // actually stored. It matters more here than it does at upload time, because
-    // this is the route that can point the teaser column of an ALREADY LIVE
-    // video at the video itself — and the teaser door serves without asking for
-    // entitlement, so the result would be a paid scene playable by anyone,
-    // signed in or not.
-    if (updateData.teaserBunnyVideoId && updateData.teaserBunnyVideoId === video.bunnyVideoId) {
-      return api.validation("The teaser must be a different video from the main video");
+    if (
+      (updateData.isPublished === true || schedulePatch.isPublished === true) &&
+      !video.streamtapeFileId
+    ) {
+      return api.error(
+        "This legacy video must be reuploaded before it can be published.",
+        409,
+        "VIDEO_REUPLOAD_REQUIRED"
+      );
     }
 
     const updated = await prisma.video.update({
@@ -429,7 +339,7 @@ export async function PATCH(
         // Same healing as create: a stored Bunny CDN URL is rewritten to the
         // in-app path that actually serves the file.
         ...(result.data.thumbnailUrl !== undefined
-          ? { thumbnailUrl: normalizeMediaUrl(result.data.thumbnailUrl, config.bunny.cdnHostname) }
+          ? { thumbnailUrl: normalizeMediaUrl(result.data.thumbnailUrl, config.bunnyStorage.cdnHostname) }
           : {}),
         // "" is the form's way of saying "remove them". Storing the empty string
         // would leave a <track> whose src is the current page, so the removal is
@@ -489,12 +399,12 @@ export async function DELETE(
       data: { isDeleted: true, isPublished: false },
     });
 
-    // Also delete from Bunny.net
-    try {
-      await deleteBunnyVideo(video.bunnyVideoId);
-    } catch (e) {
-      console.error("[Bunny Delete Error]", e);
-      // Continue even if Bunny delete fails
+    if (video.streamtapeFileId) {
+      try {
+        await deleteStreamtapeFile(video.streamtapeFileId);
+      } catch (error) {
+        console.error("[Streamtape Delete Error]", error);
+      }
     }
 
     await cacheDel(`videos:*`);

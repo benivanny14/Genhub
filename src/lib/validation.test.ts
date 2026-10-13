@@ -159,53 +159,18 @@ describe("loginSchema", () => {
 });
 
 describe("createVideoSchema", () => {
-  // The teaser is a SEPARATE asset. Pointing it at the scene itself would put a
-  // non-buyer on the same playlist a buyer gets, which is the exact leak the
-  // column exists to close — so the schema refuses the shortcut.
-  it("rejects a teaser that is the main video", () => {
-    const result = createVideoSchema.safeParse({
-      title: "Scene with a fake trailer",
-      price: 5000,
-      teaserDuration: 15,
-      bunnyVideoId: "scene-abc",
-      teaserBunnyVideoId: "scene-abc",
-      complianceAttested: true,
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.error?.errors[0].path).toContain("teaserBunnyVideoId");
-  });
-
-  it("accepts a distinct teaser asset", () => {
-    const result = createVideoSchema.safeParse({
-      title: "Scene with a real trailer",
-      price: 5000,
-      teaserDuration: 15,
-      bunnyVideoId: "scene-abc",
-      teaserBunnyVideoId: "trailer-xyz",
-      complianceAttested: true,
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts no teaser at all — a paid scene may simply have none", () => {
-    const result = createVideoSchema.safeParse({
-      title: "Scene without a trailer",
-      price: 5000,
-      teaserDuration: 15,
-      bunnyVideoId: "scene-abc",
-      complianceAttested: true,
-    });
-    expect(result.success).toBe(true);
-  });
+  const uploadProof = {
+    streamtapeFileId: "file_abc123",
+    uploadSessionToken: "s".repeat(100),
+  };
 
   it("should accept valid video data", () => {
     const result = createVideoSchema.safeParse({
+      ...uploadProof,
       title: "My First Video",
       description: "A great video",
       price: 1000,
       teaserDuration: 15,
-      bunnyVideoId: "abc-123",
       category: "music",
       tags: ["tanzania", "music"],
       complianceAttested: true,
@@ -218,7 +183,8 @@ describe("createVideoSchema", () => {
       title: "My Video",
       price: 50,
       teaserDuration: 15,
-      bunnyVideoId: "abc-123",
+      ...uploadProof,
+      complianceAttested: true,
     });
     expect(result.success).toBe(false);
   });
@@ -228,7 +194,7 @@ describe("createVideoSchema", () => {
       title: "My Video",
       price: 499,
       teaserDuration: 15,
-      bunnyVideoId: "abc-123",
+      ...uploadProof,
       complianceAttested: true,
     });
     expect(result.success).toBe(false);
@@ -239,7 +205,8 @@ describe("createVideoSchema", () => {
       title: "Hi",
       price: 1000,
       teaserDuration: 15,
-      bunnyVideoId: "abc-123",
+      ...uploadProof,
+      complianceAttested: true,
     });
     expect(result.success).toBe(false);
   });
@@ -249,7 +216,8 @@ describe("createVideoSchema", () => {
       title: "Valid Title",
       price: 1000,
       teaserDuration: 60, // Max is 30
-      bunnyVideoId: "abc-123",
+      ...uploadProof,
+      complianceAttested: true,
     });
     expect(result.success).toBe(false);
   });
@@ -259,7 +227,7 @@ describe("createVideoSchema", () => {
       title: "ABC",
       price: 500,
       teaserDuration: 15,
-      bunnyVideoId: "test",
+      ...uploadProof,
       complianceAttested: true,
     });
     expect(result.success).toBe(true);
@@ -273,7 +241,7 @@ describe("createVideoSchema", () => {
         title: "ABC",
         price,
         teaserDuration: 15,
-        bunnyVideoId: "test",
+        ...uploadProof,
         complianceAttested: true,
       }).success;
 
@@ -287,7 +255,7 @@ describe("createVideoSchema", () => {
       title: "Valid Title",
       price: 1000,
       teaserDuration: 15,
-      bunnyVideoId: "abc-123",
+      ...uploadProof,
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -300,7 +268,7 @@ describe("createVideoSchema", () => {
       title: "Valid Title",
       price: 1000,
       teaserDuration: 15,
-      bunnyVideoId: "abc-123",
+      ...uploadProof,
       complianceAttested: false,
     });
     expect(result.success).toBe(false);

@@ -16,7 +16,7 @@
 // =============================================================================
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import prisma from "@/lib/db";
@@ -165,7 +165,7 @@ describe("worker registry", () => {
   it("covers every cron route, and no route reports an unregistered worker", () => {
     const dir = join(process.cwd(), "src", "app", "api", "cron");
     const routes = readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isDirectory())
+      .filter((e) => e.isDirectory() && existsSync(join(dir, e.name, "route.ts")))
       .map((e) => ({ name: e.name, code: readFileSync(join(dir, e.name, "route.ts"), "utf8") }));
 
     expect(routes.length).toBeGreaterThan(0);

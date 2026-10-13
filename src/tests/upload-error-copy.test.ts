@@ -30,7 +30,6 @@ const SURFACES = [
   "src/app/api/videos/upload-abort/route.ts",
   "src/app/api/videos/route.ts",
   "src/app/api/videos/[id]/route.ts",
-  "src/app/api/videos/[id]/stream/route.ts",
   "src/app/creator/upload/page.tsx",
   "src/app/creator/page.tsx",
 ];
@@ -138,27 +137,19 @@ describe("the detail is moved, not deleted", () => {
     expect(transport).toMatch(/providerBody:\s*body/);
   });
 
-  it("names the missing configuration in the log, not in the response", () => {
+  it("logs unavailable upload configuration without returning its name", () => {
     const signature = readFileSync("src/app/api/videos/upload-signature/route.ts", "utf8");
-    expect(signature).toContain('console.error(\n        "[Video Upload] not configured:');
-    expect(signature).not.toMatch(/api\.error\(\s*"[^"]*(BUNNY_|JWT_SECRET)/);
+    expect(signature).toContain(
+      'console.error("[Video Upload] Streamtape, R2 or upload-session signing is not configured")'
+    );
+    expect(signature).toContain('api.error("Video uploads are temporarily unavailable. Tell support.", 503');
   });
 
-  it("logs what the host said about an unfinished upload", () => {
+  it("keeps staging and import details out of the incomplete-upload response", () => {
     const complete = readFileSync("src/app/api/videos/upload-complete/route.ts", "utf8");
-    expect(complete).toContain('console.warn("[Video Upload] not complete:",');
-    // The diagnosis is not interpolated into the response any more.
+    expect(complete).toContain('"UPLOAD_INCOMPLETE"');
     expect(complete).not.toMatch(/api\.error\(\s*`[^`]*\$\{confirmed\.detail\}/);
+    expect(complete).toContain('console.error("[Video Upload Complete Error]", error)');
   });
 
-  it("keeps the environment variables in the log behind a reference", () => {
-    const stream = readFileSync("src/app/api/videos/[id]/stream/route.ts", "utf8");
-    expect(stream).toContain("api.upstream(");
-    expect(stream).toContain("BUNNY_CDN_HOSTNAME / BUNNY_TOKEN_SECRET are not both set");
-    // ...and the sentence the viewer reads from that call is not the one that
-    // names them.
-    const message = stream.match(/code: "NOT_CONFIGURED",\s*\n\s*message: "([^"]+)"/);
-    expect(message?.[1]).toBeTruthy();
-    expect(message?.[1]).not.toMatch(/BUNNY_|\bHTTP\b/);
-  });
 });

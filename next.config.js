@@ -40,6 +40,7 @@ const contentSecurityPolicy = [
   "form-action 'self'",
   "object-src 'none'",
   "frame-ancestors 'none'",
+  "frame-src https://streamtape.com https://*.streamtape.com https://*.tapecontent.net",
   `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob: https:",
@@ -65,15 +66,6 @@ const securityHeaders = [
   },
 ];
 
-// `*.bunnycdn.com` was a wildcard over Bunny's WHOLE namespace, and that is a
-// security problem, not a convenience: `storage.bunnycdn.com` matches it, and
-// any Bunny customer can serve a file from a path under that host. Next 14's
-// image optimiser decodes by content, so a free Bunny account was enough to
-// point our optimiser at an AVIF it did not create — the critical libheif RCE
-// (GHSA-2xp9-vwfh-vxw4). The deployed CDN hostname is knowable at build time, so
-// the pattern is narrowed to it. The wildcard is kept only for a build that has
-// no BUNNY_CDN_HOSTNAME configured, where removing it would break every legacy
-// CDN cover instead of protecting anything.
 // `picsum.photos` and `i.pravatar.cc` exist for the DEMO fallbacks in
 // lib/demo-data.ts, which are dead code in a production build (`demoDataEnabled()`
 // is `NODE_ENV !== "production"`, inlined to `false` there). Every host on this
@@ -88,16 +80,6 @@ const demoImagePatterns =
         { protocol: "https", hostname: "picsum.photos" },
         { protocol: "https", hostname: "i.pravatar.cc" },
       ];
-
-const cdnHostname = process.env.BUNNY_CDN_HOSTNAME || "";
-const bunnyImagePatterns = cdnHostname
-  ? [{ protocol: "https", hostname: cdnHostname }]
-  : [
-      {
-        protocol: "https",
-        hostname: "*.bunnycdn.com",
-      },
-    ];
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
@@ -116,7 +98,6 @@ const nextConfig = {
         protocol: "https",
         hostname: "iframe.mediadelivery.net",
       },
-      ...bunnyImagePatterns,
       {
         protocol: "https",
         hostname: "storage.freebuff.co.tz",

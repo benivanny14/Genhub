@@ -1,49 +1,17 @@
 // =============================================================================
 // GENHUB - Creator Videos Route
-// GET /api/creator/videos - The creator's own videos + Bunny processing state
-//
-// Money lives in /api/creator/balance; this route owns the processing lifecycle.
-// Separating them keeps one source of truth per concern instead of a balance
-// endpoint that also knows about video codecs.
-//
-// Reading this route ADVANCES the state: a creator watching the page is the
-// most reliable signal that someone cares. Since the encoding worker was
-// removed this is no longer a convenience — with /api/videos/[id] and the Bunny
-// webhook it is one of the three things that move an upload forward, and the
-// only one that covers a creator's own unfinished uploads in bulk. A re-check
-// floor keeps a polling dashboard from flooding Bunny (see the service).
+// GET /api/creator/videos - The creator's own videos and upload metadata.
 // =============================================================================
 
 import { NextRequest } from "next/server";
 import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
-import {
-  describeEncoding,
-  refreshCreatorPendingEncodings,
-} from "@/lib/services/video-encoding.service";
 import { videoStatus } from "@/lib/video-status";
-
-const IN_FLIGHT = ["pending", "processing"];
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireRole("CREATOR");
-
-    // `?refresh=0` lets a caller read the stored state without touching Bunny —
-    // used by the very first render so a page load is never slower than the API
-    // call it depends on.
-    if (request.nextUrl.searchParams.get("refresh") !== "0") {
-      try {
-        await refreshCreatorPendingEncodings(auth.userId);
-      } catch (error) {
-        // A Bunny outage must not blank out the creator's video list.
-        console.warn(
-          "[Creator Videos] Encoding refresh failed:",
-          (error as Error)?.message
-        );
-      }
-    }
 
     const videos = await prisma.video.findMany({
       where: { creatorId: auth.userId, isDeleted: false },
@@ -73,47 +41,37 @@ export async function GET(request: NextRequest) {
         category: true,
         tags: true,
         captionsUrl: true,
-        // Read only to answer "is a trailer attached?", then stripped below — the
-        // creator's list needs the fact, not the Bunny GUID. The raw id is the
-        // thing the whole playback design keeps off the client.
-        teaserBunnyVideoId: true,
+        streamtapeFileId: true,
         encodingStatus: true,
         encodeProgress: true,
         encodingError: true,
         encodingCheckedAt: true,
-        // What the HOST says it holds, and the creator's own file size. Shown
-        // beside the progress bar so a transfer that has stopped arriving is
-        // visible as a number instead of as a bar that will not move — the
-        // browser's own percentage counts bytes handed to the socket, not bytes
-        // Bunny kept, so on a bad connection the two disagree and only this one
-        // is the host's. See lib/host-bytes.ts for what each can and cannot say.
-        bunnyStorageBytes: true,
         uploadSizeBytes: true,
         createdAt: true,
       },
     });
 
     const withEncoding = videos.map(
-      ({ teaserBunnyVideoId, bunnyStorageBytes, uploadSizeBytes, ...video }) => ({
+      ({ streamtapeFileId, uploadSizeBytes, ...video }) => ({
         ...video,
-        hasTeaser: !!teaserBunnyVideoId,
-        encoding: describeEncoding(video.encodingStatus, video.encodeProgress),
-        // The same three-word vocabulary the feed uses, so the dashboard's badge
-        // and the badge a viewer sees are the same judgement of the same row.
+        hasTeaser: false,
+        encoding: {
+          state: "ready" as const,
+          status: null,
+          progress: 100,
+          label: "Ready",
+          error: null,
+        },
         status: videoStatus(video.encodingStatus, video.encodeProgress),
-        storedBytes: bunnyStorageBytes,
+        storedBytes: streamtapeFileId ? uploadSizeBytes : null,
         sourceBytes: uploadSizeBytes,
       })
     );
 
     return api.success({
       videos: withEncoding,
-      // Drives the UI: poll only while something is actually moving.
-      processing: withEncoding.filter((v) => IN_FLIGHT.includes(v.encoding.state)).length,
-      // Held back from the public feed until Bunny can serve them.
-      awaitingPublish: withEncoding.filter(
-        (v) => !v.isPublished && IN_FLIGHT.includes(v.encoding.state)
-      ).length,
+      processing: 0,
+      awaitingPublish: 0,
     });
   } catch (error) {
     if (error instanceof AuthError) {

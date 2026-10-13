@@ -3,7 +3,7 @@
 //
 // A schedule that stops firing is invisible. No request arrives, so there is no
 // log line, no error and no metric — the app looks exactly like an app with
-// nothing to do. That is how the payment webhook and the Bunny upload both
+// nothing to do. That is how payment callbacks and video uploads can both
 // stayed broken while every endpoint answered "success".
 //
 // So each worker stamps this table on every run, and "silence" becomes a
@@ -44,8 +44,7 @@ export type CronWorkerId =
   | "release-earnings"
   | "reconcile-payments"
   | "renew-subscriptions"
-  | "earnings-digest"
-  | "video-encoding";
+  | "earnings-digest";
 
 export interface CronWorkerDef {
   id: CronWorkerId;
@@ -119,12 +118,9 @@ export interface CronWorkerDef {
  * platform actually keeps — see `staleAfterMinutes` above and §4.0.4. It is not
  * a cadence any worker *wants*; it is the one the alarm can be honest about.
  *
- * NOTE: the video encoding worker is no longer one of these, and that is not an
- * oversight. It is the one lifecycle whose single source of truth is a push
- * (POST /api/webhooks/bunny) with two pull fallbacks that need no scheduler at
- * all: the creator's own dashboard read and the owner/admin read of a video
- * page both refresh a stale row. A video's readiness is nobody's money and
- * nobody's deadline, so it is the one job that did not need a clock.
+ * NOTE: video conversion needs no background worker. The upload flow polls
+ * Streamtape until conversion is complete, and only then can a video be
+ * finalized or published.
  */
 const POKES_STOPPED_AFTER_MINUTES = 360;
 
@@ -179,17 +175,6 @@ export const CRON_WORKERS: readonly CronWorkerDef[] = [
     staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
     inFlightGraceMinutes: 5,
     schedule: "vercel.json or .github/workflows/earnings-digest.yml",
-    sendsCustomerRequests: false,
-  },
-  {
-    id: "video-encoding",
-    name: "Refresh video encoding",
-    consequence:
-      "A missed Bunny callback can leave an uploaded video showing as processing longer than necessary.",
-    everyMinutes: 10,
-    staleAfterMinutes: POKES_STOPPED_AFTER_MINUTES,
-    inFlightGraceMinutes: 10,
-    schedule: "vercel.json or .github/workflows/video-encoding.yml",
     sendsCustomerRequests: false,
   },
 ] as const;

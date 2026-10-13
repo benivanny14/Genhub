@@ -11,7 +11,6 @@ import prisma from "@/lib/db";
 import { api } from "@/lib/api-response";
 import { cacheGet, cacheSet, checkRateLimit } from "@/lib/redis";
 import { clientIp } from "@/lib/utils";
-import { introClipPath, resolveTeaserUrl } from "@/lib/bunny";
 import { rankTrending, buildCategoryCounts, activeCreators } from "@/lib/trending";
 import { firstVideoCoverByCategory } from "@/lib/services/category-cover.service";
 
@@ -34,10 +33,7 @@ const videoSelect = {
   title: true,
   slug: true,
   thumbnailUrl: true,
-  previewUrl: true,
-  bunnyVideoId: true,
-  teaserBunnyVideoId: true,
-  teaserClipUrl: true,
+  streamtapeFileId: true,
   price: true,
   teaserDuration: true,
   duration: true,
@@ -55,53 +51,32 @@ const videoSelect = {
 
 type RawVideo = {
   id: string;
-  previewUrl: string | null;
-  bunnyVideoId: string;
-  teaserBunnyVideoId: string | null;
-  teaserClipUrl: string | null;
+  streamtapeFileId: string | null;
   price: number;
   createdAt: Date;
 } & Record<string, unknown>;
 
-// Demo streams are attached to previewUrl at seed time; Bunny-hosted rows get a
-// signed teaser instead — mirror /api/videos' teaserUrl contract.
-//
-// This used to build the URL by hand:
-//   `https://vz-${id}.b-cdn.net/playback.m3u8`
-// which could never work — it was unsigned (Token Authentication rejects it),
-// the hostname ignored the configured BUNNY_CDN_HOSTNAME pull zone, and Bunny's
-// manifest is `playlist.m3u8`, not `playback.m3u8`. Every hover preview on the
-// home page for a Bunny-hosted video was therefore dead. resolved through the
-// same helper as every other route so the shape cannot drift again.
 function mapVideos(raw: RawVideo[]) {
   return raw.map(
-    ({ previewUrl, bunnyVideoId, teaserBunnyVideoId, teaserClipUrl, price, createdAt, ...v }) => {
-      // `id` is the row id, and the resolver needs it: a Bunny-hosted trailer is
-      // served through /api/videos/<rowId>/stream so its manifest can be
-      // rewritten (see lib/hls.ts) instead of handed over unusable.
-      const teaserUrl = resolveTeaserUrl({
-        id: v.id,
-        bunnyVideoId,
-        previewUrl,
-        teaserBunnyVideoId,
-        teaserClipUrl,
-        price,
-      });
-
+    ({
+      streamtapeFileId,
+      previewUrl: _previewUrl,
+      bunnyVideoId: _bunnyVideoId,
+      teaserClipUrl: _teaserClipUrl,
+      teaserBunnyVideoId: _teaserBunnyVideoId,
+      price,
+      createdAt,
+      ...v
+    }) => {
       return {
         ...v,
-        // `price` is destructured out only so the teaser resolver can see it — it
-        // must go back on the response, or every card loses its price badge and
-        // the UI cannot tell a free scene from a paid one.
         price,
         createdAt: createdAt.toISOString(),
-        teaserUrl,
-        // What a card plays on hover when the scene is LOCKED. Without this the
-        // whole grid moves on hover except the paid scenes — the ones the page
-        // exists to sell — because a paid scene with no uploaded trailer resolves
-        // to null. The clip is sixteen seconds cut from the scene itself and is
-        // signed per file, so it is safe for anyone to receive.
-        introUrl: teaserUrl ? null : introClipPath({ id: v.id, bunnyVideoId }),
+        status: typeof streamtapeFileId === "string" && streamtapeFileId.startsWith("pending_") ? "PROCESSING" : "READY",
+        playable: typeof streamtapeFileId === "string" && !streamtapeFileId.startsWith("pending_"),
+        encodeProgress: 0,
+        teaserUrl: null,
+        introUrl: null,
       };
     }
   );
@@ -116,9 +91,9 @@ export async function GET(request: NextRequest) {
     );
     if (!allowed) return api.rateLimited("Too many requests — please wait a moment");
 
-    // Bumped to v2 when the category covers were added: a shopper holding the
-    // v1 payload would keep seeing the old placeholder tiles for a minute.
-    const cacheKey = "home:feed:v2";
+    // Bumped when Streamtape became the only public video source, so cached
+    // legacy provider fields cannot leak to visitors after deployment.
+    const cacheKey = "home:feed:v3";
     const cached = await cacheGet(cacheKey);
     if (cached) return api.success(cached);
 
@@ -126,6 +101,7 @@ export async function GET(request: NextRequest) {
       isPublished: true,
       isDeleted: false,
       isFlagged: false,
+      streamtapeFileId: { not: null },
     } as const;
 
     const [

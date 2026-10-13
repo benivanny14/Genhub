@@ -10,9 +10,9 @@ import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
 import prisma from "@/lib/db";
 import {
-  abortVideoUploadSession,
-  verifyVideoUploadSession,
-} from "@/lib/video-upload-session";
+  cancelStreamtapeUpload,
+  verifyStreamtapeUploadSession,
+} from "@/lib/streamtape-upload-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,22 +29,29 @@ export async function POST(request: NextRequest) {
     const parsed = schema.safeParse(await readJsonBody(request));
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
 
-    const session = await verifyVideoUploadSession(parsed.data.sessionToken, auth.userId);
-    if (!session) return api.forbidden("This upload session is invalid or belongs to another creator");
+    const session = await verifyStreamtapeUploadSession(parsed.data.sessionToken, auth.userId);
+    if (!session) {
+      return api.forbidden("This upload session is invalid or belongs to another creator");
+    }
 
-    // A valid session token remains in the browser after publishing. Never let
-    // a delayed cancel request delete a Bunny asset already linked to a post.
-    const linked = await prisma.video.findFirst({
-      where: {
-        OR: [{ bunnyVideoId: session.videoId }, { teaserBunnyVideoId: session.videoId }],
-        isDeleted: false,
-      },
-      select: { id: true },
+    const upload = await prisma.streamtapeUpload.findUnique({
+      where: { id: session.uploadId },
+      select: { state: true, streamtapeFileId: true },
     });
+    const linked =
+      upload?.state === "LINKED" ||
+      (upload?.streamtapeFileId
+        ? Boolean(
+            await prisma.video.findFirst({
+              where: { streamtapeFileId: upload.streamtapeFileId, isDeleted: false },
+              select: { id: true },
+            })
+          )
+        : false);
     if (linked) return api.error("This upload is already attached to a video", 409, "UPLOAD_LINKED");
 
-    await abortVideoUploadSession(session);
-    return api.success({ videoId: session.videoId }, "Upload cancelled");
+    await cancelStreamtapeUpload(session);
+    return api.success({ videoId: session.uploadId }, "Upload cancelled");
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);

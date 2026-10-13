@@ -89,6 +89,7 @@ export async function POST(request: NextRequest) {
         // guard below.
         encodingStatus: true,
         encodeProgress: true,
+        streamtapeFileId: true,
       },
     });
 
@@ -110,7 +111,9 @@ export async function POST(request: NextRequest) {
     // hides those rows, but a bookmark, a shared link or a stale page still
     // reaches this route, and access to something that will never play is not
     // access.
-    const status = videoStatus(video.encodingStatus, video.encodeProgress);
+    const status = video.streamtapeFileId?.startsWith("pending_")
+      ? "PROCESSING"
+      : videoStatus(video.encodingStatus, video.encodeProgress);
     if (status === "PROCESSING") {
       return api.error(
         "This scene is still being prepared for playback — it becomes available to buy in a few minutes. You have not been charged.",

@@ -200,13 +200,8 @@ async function diagnostics() {
       sms: config.sms.apiKey ? "africastalking" : "console",
       // "sandbox" = no USSD push and no real money moves (dev default)
       payments: config.sonicPesa.sandbox ? "sandbox" : "live",
-      bunny: config.bunny.apiKey ? "configured" : "missing",
-      // The names of the Bunny Stream variables this deployment is missing,
-      // never a value. Video uploads and playback both need them, and a
-      // deployment with neither set used to publish no warning at all — the
-      // warning was a comparison between two flags rather than a floor.
       uploadStorage: {
-        bunny: uploadStorage.bunnyConfigured,
+        streamtape: uploadStorage.streamtapeConfigured,
         missing: uploadStorage.missing,
       },
       backgroundJobs,

@@ -1,7 +1,7 @@
 // =============================================================================
 // GENHUB - Failed video uploads: the record a failed upload never had
 //
-// The byte transfer happens in the creator's browser and goes STRAIGHT to Bunny,
+// The byte transfer happens in the creator's browser and goes STRAIGHT to R2,
 // so the server never sees it — and the video row is only created after the
 // transfer finishes. A failed upload therefore leaves nothing anywhere: no row
 // to look at, no log line, no counter. The creator gets a toast naming a fault,
@@ -29,7 +29,7 @@ import { cacheDel, cacheGet, cacheSet } from "@/lib/redis";
 import { formatUploadBytes } from "@/lib/upload-failure-reading";
 
 /** One key, so this cannot grow without bound. */
-const FAILURES_KEY = "bunny:upload:failures";
+const FAILURES_KEY = "streamtape:upload:failures";
 
 /**
  * How many failures are kept.
@@ -55,12 +55,12 @@ export interface UploadFailure {
    * error rather than a history lesson.
    */
   stage: "reserve" | "chunk" | "put" | null;
-  /** Bunny's HTTP status, or null when nothing answered. */
+  /** HTTP status, or null when nothing answered. */
   status: number | null;
   /** What the creator was shown. */
   message: string;
   /**
-   * The raw words that name the cause: Bunny's own response body, verbatim, when
+   * The raw words that name the cause: the provider response body, verbatim, when
    * there was a response — and the browser's own error (its `name` and message)
    * when the failure never left the device. Both belong here because they are
    * the same thing: the evidence nobody paraphrased.
@@ -77,8 +77,8 @@ export interface UploadFailure {
    * could not say which one had happened.
    */
   reason: string | null;
-  /** The reserved slot, so the orphan can be found (and cleaned) in Bunny. */
-  bunnyVideoId: string | null;
+  /** The staging session id, for correlating the failure with server logs. */
+  uploadSessionId: string | null;
   fileName: string | null;
   fileSize: number | null;
   /**
@@ -167,7 +167,7 @@ export async function recordUploadFailure(failure: UploadFailureInput): Promise<
       `${entry.fileSize !== null ? ` (${formatUploadBytes(entry.fileSize)})` : ""}` +
       // The number that says whether the request was ever sent.
       `${typeof entry.bytesSent === "number" && typeof entry.bytesTotal === "number" ? ` · died at ${formatUploadBytes(entry.bytesSent)} of ${formatUploadBytes(entry.bytesTotal)}` : ""}` +
-      `${entry.bunnyVideoId ? ` · slot ${entry.bunnyVideoId}` : ""}` +
+      `${entry.uploadSessionId ? ` · session ${entry.uploadSessionId}` : ""}` +
       `\n                 ${entry.message}` +
       (entry.providerBody ? `\n                 Provider said: ${entry.providerBody}` : "")
   );

@@ -116,10 +116,6 @@ export async function POST(request: NextRequest) {
             slug: video.slug,
             title: video.title,
             description: video.description,
-            bunnyVideoId: `demo-${video.id}`,
-            previewUrl: video.teaserUrl, // the FULL scene (historical field name)
-            // A different, shorter clip for non-buyers — see demo-data.ts.
-            teaserClipUrl: video.teaserClipUrl ?? null,
             thumbnailUrl: video.thumbnailUrl,
             price: video.price,
             teaserDuration: video.teaserDuration,
@@ -132,7 +128,8 @@ export async function POST(request: NextRequest) {
             isPremium: video.isPremium,
             isFeatured: video.isFeatured,
             tags: video.tags,
-            isPublished: true,
+            isPublished: false,
+            isDraft: true,
             creatorId: video.creator.id,
             createdAt: new Date(video.createdAt),
           },
@@ -141,18 +138,9 @@ export async function POST(request: NextRequest) {
       } else {
         // Keep publish dates in sync so date filters / trending recency are realistic
         const wanted = new Date(video.createdAt);
-        const patch: { createdAt?: Date; teaserClipUrl?: string | null } = {};
+        const patch: { createdAt?: Date } = {};
         if (existing.createdAt.getTime() !== wanted.getTime()) {
           patch.createdAt = wanted;
-        }
-
-        // Keep the trailer in step too. Rows seeded before the teaser feature
-        // existed have none, so without this every demo scene would keep
-        // showing "no preview" — and a stale trailer left pointing at the scene
-        // would hand the full video to non-buyers.
-        const teaser = video.teaserClipUrl ?? null;
-        if (teaser && teaser !== existing.previewUrl && existing.teaserClipUrl !== teaser) {
-          patch.teaserClipUrl = teaser;
         }
 
         if (Object.keys(patch).length > 0) {

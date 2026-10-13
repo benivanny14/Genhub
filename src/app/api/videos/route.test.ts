@@ -32,16 +32,9 @@ const mocks = vi.hoisted(() => ({
   cacheGet: vi.fn(),
   cacheSet: vi.fn(),
   cacheDel: vi.fn(),
-  /**
-   * What the host answers when the finalizer asks it to confirm an asset.
-   *
-   * `bunnyFails` models Bunny being unreachable or refusing; `bunnyGuid` models
-   * the provider returning a DIFFERENT video than the id the browser sent, which
-   * is the case a client-supplied id makes possible and the one that must never
-   * reach a database write.
-   */
-  bunnyFails: false,
-  bunnyGuid: null as string | null,
+  fileReady: true,
+  invalidSession: false,
+  uploadUpdateMany: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({
@@ -55,6 +48,7 @@ vi.mock("@/lib/db", () => ({
       updateMany: async () => ({ count: 0 }),
     },
     user: { findUnique: mocks.userFindUnique },
+    streamtapeUpload: { updateMany: mocks.uploadUpdateMany },
   },
 }));
 
@@ -65,23 +59,6 @@ vi.mock("@/lib/redis", () => ({
   checkRateLimit: async () => ({ allowed: true, remaining: 99, resetAt: 0, degraded: false }),
 }));
 
-// The upload path only marks a video as needing transcoding when Bunny is
-// configured AND the id looks like Bunny's. Both are mocked here so the
-// instant-publication case below runs the real branch instead of the
-// side-loaded one, without an environment that has a Stream library.
-vi.mock("@/lib/bunny", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/bunny")>();
-  return {
-    ...actual,
-    isBunnyConfigured: () => true,
-    isBunnyVideoId: (id: string) => !!id,
-    getBunnyVideoDetails: async (id: string) => {
-      if (mocks.bunnyFails) throw new Error("bunny is unreachable");
-      return { guid: mocks.bunnyGuid ?? id };
-    },
-  };
-});
-
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
   return {
@@ -90,20 +67,20 @@ vi.mock("@/lib/auth", async (importOriginal) => {
   };
 });
 
-vi.mock("@/lib/video-upload-session", () => ({
-  verifyVideoUploadSession: async (token: string) =>
-    token
-      ? {
-          sessionToken: token,
-          userId: "creator-1",
-          videoId: "abc-123",
-          uploadUrl: "https://video.bunnycdn.com/tusupload/test",
-          headers: {},
-          totalBytes: 100,
-          expiresAt: Math.floor(Date.now() / 1000) + 3600,
-        }
+vi.mock("@/lib/streamtape-upload-session", () => ({
+  verifyStreamtapeUploadSession: async (token: string) =>
+    token && !mocks.invalidSession
+      ? { uploadId: "upload-1", userId: "creator-1", objectKey: "video-staging/creator-1/file", fileName: "scene.mp4", totalBytes: 100, mimeType: "video/mp4", expiresAt: Math.floor(Date.now() / 1000) + 3600 }
       : null,
-  confirmVideoUpload: async () => ({ ok: true, offset: 100 }),
+  getReadyStreamtapeFile: async () => mocks.fileReady,
+}));
+
+vi.mock("@/lib/services/platform-setting.service", () => ({
+  getFeatureFlags: async () => ({ uploadsEnabled: true }),
+}));
+
+vi.mock("@/lib/services/scheduled-publish.service", () => ({
+  publishDueVideos: async () => 0,
 }));
 
 import { GET, POST } from "./route";
@@ -178,17 +155,10 @@ describe("GET /api/videos", () => {
     expect(args.skip).toBe(0);
   });
 
-  it("keeps a post Bunny is still transcoding, and drops one it failed", async () => {
-    // Instant publication: a PROCESSING post is live and must be in the grid —
-    // that is the whole change. A FAILED one can never play, so it must not be.
+  it("excludes legacy videos without a Streamtape file from the public feed", async () => {
     await GET(request(""));
 
-    const filter = findManyArgs().where.OR as { encodingStatus?: unknown }[];
-    // Written as an OR rather than `{ not: 5 }` on purpose: a `not` comparison
-    // matches no NULL, and NULL is every side-loaded, demo and pre-lifecycle
-    // row — the filter would have emptied the catalogue.
-    expect(filter).toContainEqual({ encodingStatus: null });
-    expect(filter).toContainEqual({ encodingStatus: { not: 5 } });
+    expect(findManyArgs().where.streamtapeFileId).toEqual({ not: null });
   });
 
   it("ANDs a search onto that filter instead of replacing it", async () => {
@@ -197,8 +167,15 @@ describe("GET /api/videos", () => {
     await GET(request("?q=ngoma"));
 
     const { where } = findManyArgs();
-    expect(where.OR).toBeDefined();
     expect(where.AND).toBeDefined();
+    expect(where.AND).toEqual([
+      {
+        OR: [
+          { title: { contains: "ngoma", mode: "insensitive" } },
+          { description: { contains: "ngoma", mode: "insensitive" } },
+        ],
+      },
+    ]);
   });
 
   it("does not serve a creator's list from the general feed's cache", async () => {
@@ -224,7 +201,7 @@ describe("POST /api/videos", () => {
     title: "Same title",
     price: 1000,
     teaserDuration: 15,
-    bunnyVideoId: "abc-123",
+    streamtapeFileId: "file_123",
     uploadSessionToken: "session-token-" + "x".repeat(90),
     complianceAttested: true,
   };
@@ -248,8 +225,8 @@ describe("POST /api/videos", () => {
       id: "video-1",
       ...data,
     }));
-    mocks.bunnyFails = false;
-    mocks.bunnyGuid = null;
+    mocks.fileReady = true;
+    mocks.invalidSession = false;
   });
 
   it("gives a second video with the same title its own slug instead of failing", async () => {
@@ -285,18 +262,16 @@ describe("POST /api/videos", () => {
   });
 
   it("publishes the post immediately, with the encode marked as running", async () => {
-    // This is the Instagram behaviour: the post exists the second the bytes
-    // land, and the badge says the video is still being prepared. Holding the
-    // row back until Bunny finished is what made a creator's upload invisible
-    // to everyone, themselves included, for the whole transcode.
+    // Finalization happens only after Streamtape conversion is confirmed.
     mocks.findUnique.mockResolvedValue(null);
 
     const response = await POST(postRequest());
     const data = await response.json();
 
     expect(createdData().isPublished).toBe(true);
-    expect(createdData().encodingStatus).toBe(0);
-    expect(data.data.status).toBe("PROCESSING");
+    expect(createdData().encodingStatus).toBeNull();
+    expect(createdData().streamtapeFileId).toBe("file_123");
+    expect(data.data.status).toBe("READY");
     expect(response.status).toBe(201);
   });
 
@@ -312,13 +287,8 @@ describe("POST /api/videos", () => {
 // =============================================================================
 // POST /api/videos — finalizing a transfer that already happened
 //
-// The bytes go to Bunny before this request is ever made, so a lost response
-// used to be unrecoverable in the worst possible way: the creator saw "Network
-// error" after a 700 MB upload, and their options were to give up or to push the
-// whole file again. Retrying the POST now returns the row that already exists,
-// keyed on the Bunny id — and the id is verified against the host first, because
-// a browser-supplied id must never be able to publish a row for an asset that is
-// not its own.
+// A lost finalization response can be retried with the same Streamtape file id.
+// The route returns the original row only to its creator.
 // =============================================================================
 
 describe("POST /api/videos — finalization is idempotent", () => {
@@ -326,7 +296,7 @@ describe("POST /api/videos — finalization is idempotent", () => {
     title: "Same title",
     price: 1000,
     teaserDuration: 15,
-    bunnyVideoId: "abc-123",
+    streamtapeFileId: "file_123",
     uploadSessionToken: "session-token-" + "x".repeat(90),
     complianceAttested: true,
   };
@@ -345,10 +315,10 @@ describe("POST /api/videos — finalization is idempotent", () => {
     creatorId: "creator-1",
     title: "Same title",
     slug: "same-title",
-    bunnyVideoId: "abc-123",
+    streamtapeFileId: "file_123",
     price: 1000,
     isPublished: true,
-    encodingStatus: 0,
+    encodingStatus: null,
     encodeProgress: 0,
     createdAt: new Date(),
   };
@@ -359,13 +329,13 @@ describe("POST /api/videos — finalization is idempotent", () => {
       id: "video-1",
       ...data,
     }));
-    mocks.bunnyFails = false;
-    mocks.bunnyGuid = null;
+    mocks.fileReady = true;
+    mocks.invalidSession = false;
   });
 
   it("returns the existing post instead of writing a second row", async () => {
     mocks.findUnique.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.bunnyVideoId ? existingRow : null
+      where.streamtapeFileId ? existingRow : null
     );
 
     const response = await POST(postRequest());
@@ -374,17 +344,15 @@ describe("POST /api/videos — finalization is idempotent", () => {
     expect(response.status).toBe(200);
     expect(mocks.create).not.toHaveBeenCalled();
     expect(data.data.id).toBe("video-1");
-    // The row is still transcoding, and the replay says so rather than claiming
-    // the video is ready — the creator is about to be told what to expect.
-    expect(data.data.status).toBe("PROCESSING");
+    expect(data.data.status).toBe("READY");
     expect(data.message).toMatch(/already finalized/i);
   });
 
-  it("refuses a Bunny id that belongs to another creator", async () => {
+  it("refuses a Streamtape file that belongs to another creator", async () => {
     // The id is a client-supplied key into somebody else's upload. Replaying it
     // must not hand this creator a row pointing at an asset they do not own.
     mocks.findUnique.mockImplementation(async ({ where }: { where: Record<string, unknown> }) =>
-      where.bunnyVideoId ? { ...existingRow, creatorId: "someone-else" } : null
+      where.streamtapeFileId ? { ...existingRow, creatorId: "someone-else" } : null
     );
 
     const response = await POST(postRequest());
@@ -393,37 +361,23 @@ describe("POST /api/videos — finalization is idempotent", () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it("refuses to write a row when the host will not confirm the asset", async () => {
-    // Unreachable or refusing is the one answer that must not be treated as
-    // success: a row written without it points at an asset nobody has checked.
+  it("refuses to write a row before Streamtape conversion is ready", async () => {
     mocks.findUnique.mockResolvedValue(null);
-    mocks.bunnyFails = true;
+    mocks.fileReady = false;
 
     const response = await POST(postRequest());
-    const data = await response.json();
 
-    expect(response.status).toBe(503);
-    expect(data.code).toBe("UPLOAD_VERIFY_FAILED");
+    expect(response.status).toBe(409);
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
-  it("refuses an id the host says belongs to a different video", async () => {
-    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("refuses a session that does not belong to the creator", async () => {
     mocks.findUnique.mockResolvedValue(null);
-    mocks.bunnyGuid = "a-different-guid";
+    mocks.invalidSession = true;
 
     const response = await POST(postRequest());
-    const data = await response.json();
 
-    expect(response.status).toBe(502);
-    expect(data.code).toBe("ASSET_MISMATCH");
-    // The two ids involved are the diagnosis and stay in the log; the creator is
-    // told the upload could not be confirmed, without the provider's name.
-    expect(data.error).not.toMatch(/Bunny|bunny/i);
-    expect(String(data.reference)).toMatch(/^[0-9A-HJKMNP-TV-Z]{8}$/);
-    expect(logged.mock.calls.flat().join(" ")).toContain("a-different-guid");
+    expect(response.status).toBe(403);
     expect(mocks.create).not.toHaveBeenCalled();
-
-    logged.mockRestore();
   });
 });

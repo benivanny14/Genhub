@@ -219,7 +219,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 1) Bunny storage (production)
-    const { storageZone, storageAccessKey } = config.bunny;
+    const { storageZone, storageAccessKey } = config.bunnyStorage;
     if (storageZone && storageAccessKey) {
       // The owner id is IN the private key so the media route can authorise a
       // read from the path alone, without depending on a database row existing.

@@ -189,20 +189,17 @@ export const createVideoSchema = z.object({
   teaserDuration: z.number().int().min(15).max(30).default(15),
   category: z.string().optional(),
   tags: z.array(z.string()).max(10).optional(),
-  bunnyVideoId: z.string().min(1, "A video ID is required"),
-  // Signed by the server when the browser starts the direct Bunny TUS upload.
+  streamtapeFileId: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{4,128}$/, "The Streamtape video ID is invalid"),
+  // Signed by the server when the browser starts the staged Streamtape upload.
   // New posts must prove this session belongs to the authenticated creator.
-  uploadSessionToken: z.string().min(80).max(20_000).optional(),
-  teaserUploadSessionToken: z.string().min(80).max(20_000).optional(),
+  uploadSessionToken: z.string().min(80).max(20_000),
   // The creator's own file size, so the dashboard can show what the host holds
   // AGAINST what was sent. Optional on purpose: rows created before this
   // existed, and an older client mid-deploy, must still be accepted — the
   // comparison is useful, not required.
   fileSize: z.number().int().positive().max(MAX_VIDEO_BYTES).optional(),
-  // Optional trailer clip. A paid scene with no trailer shows a poster instead
-  // of a playable preview, because a Bunny token cannot limit how much of the
-  // main video it unlocks (see resolveTeaserUrl).
-  teaserBunnyVideoId: z.string().min(1, "The teaser ID cannot be empty").optional(),
   thumbnailUrl: mediaOrExternalUrl("thumbnail URL").optional(),
   // 18 U.S.C. § 2257 — the uploader must affirm this before content is stored.
   complianceAttested: z
@@ -222,14 +219,7 @@ export const createVideoSchema = z.object({
   // them in that order.
   isDraft: z.boolean().optional(),
   publishAt: z.string().datetime({ offset: true }).optional(),
-})
-  // Pointing the trailer at the scene itself would recreate exactly the leak the
-  // teaser column exists to close: non-buyers would be signed into the whole
-  // video. One Bunny asset may be a scene or a trailer, never both.
-  .refine((v) => !v.teaserBunnyVideoId || v.teaserBunnyVideoId !== v.bunnyVideoId, {
-    message: "The teaser must be a different video from the main video",
-    path: ["teaserBunnyVideoId"],
-  });
+});
 
 /**
  * A WebVTT captions file the player can hand to a <track> element.
@@ -286,13 +276,11 @@ export const updateVideoSchema = z.object({
   // draft until the creator is ready. `""` in publishAt clears the schedule.
   publishAt: z.union([z.string().datetime({ offset: true }), z.literal("")]).optional(),
   isDraft: z.boolean().optional(),
-  teaserBunnyVideoId: z.string().min(1).optional(),
-  teaserUploadSessionToken: z.string().min(80).max(20_000).optional(),
   thumbnailUrl: mediaOrExternalUrl("thumbnail URL").optional(),
   // Edit-only, like the price: the upload flow has no captions step, and
   // captions are usually written after a scene is already live. "" clears them.
   captionsUrl: captionsUrlSchema.optional(),
-});
+}).strict();
 
 // =============================================================================
 // Payment Schemas
@@ -438,7 +426,7 @@ export const creatorPostSchema = z.object({
 // =============================================================================
 // A failed video upload, as the creator's browser reports it
 //
-// The transfer goes straight to Bunny, so the server has no other way to learn
+// The transfer goes straight to R2, so the server has no other way to learn
 // that one died — see lib/services/upload-failure.service.ts. Every field is
 // bounded rather than trusted: the payload is echoed into the admin panel and
 // the log, and it arrives from a browser we do not control.
@@ -452,16 +440,16 @@ export const uploadFailureSchema = z.object({
   /** VideoUploadError.code — NETWORK / HTTP / EXPIRED / CONFLICT / UNKNOWN. */
   code: z.string().trim().min(1).max(40),
   stage: z.enum(["reserve", "chunk", "put"]).nullish(),
-  /** Bunny's HTTP status, or null when nothing answered. */
+  /** HTTP status, or null when nothing answered. */
   status: z.number().int().min(0).max(599).nullish(),
   /** What the creator was shown. */
   message: z.string().trim().min(1).max(300),
-  /** Bunny's own response body, verbatim — the half that names the cause. */
+  /** Provider response body, verbatim — the half that names the cause. */
   providerBody: z.string().max(600).nullish(),
   /** The physical fault, from the closed set the transport can produce. */
   reason: z.enum(UPLOAD_FAILURE_REASONS).nullish(),
-  /** The reserved slot, so an operator can find the orphan in the library. */
-  bunnyVideoId: z.string().trim().max(64).nullish(),
+  /** Server-side upload session id, when session creation succeeded. */
+  uploadSessionId: z.string().trim().max(64).nullish(),
   fileName: z.string().trim().max(200).nullish(),
   // Twice the ceiling the client enforces: a bound, not a policy.
   fileSize: z.number().int().min(0).max(MAX_VIDEO_BYTES * 2).nullish(),

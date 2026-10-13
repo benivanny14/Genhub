@@ -28,7 +28,7 @@
 
 import prisma from "@/lib/db";
 import config from "@/lib/config";
-import { deleteBunnyVideo, isBunnyVideoId } from "@/lib/bunny";
+import { deleteStreamtapeFile } from "@/lib/streamtape";
 import { BUNNY_STORAGE_ORIGIN, mediaKeyFromUrl, mediaKindOf } from "@/lib/media";
 
 export interface ErasureReport {
@@ -36,18 +36,18 @@ export interface ErasureReport {
   removed: Record<string, number>;
   /** Remote media that could not be removed. Surfaced, never hidden. */
   failures: string[];
-  /** Videos Bunny was asked to delete. */
+  /** Streamtape files the service confirmed it deleted. */
   videosRemoved: number;
 }
 
 const STORAGE_TIMEOUT_MS = 15_000;
 
 async function storageDelete(key: string): Promise<boolean> {
-  if (!config.bunny.storageZone || !config.bunny.storageAccessKey) return false;
+  if (!config.bunnyStorage.storageZone || !config.bunnyStorage.storageAccessKey) return false;
   try {
-    const res = await fetch(`${BUNNY_STORAGE_ORIGIN}/${config.bunny.storageZone}/${key}`, {
+    const res = await fetch(`${BUNNY_STORAGE_ORIGIN}/${config.bunnyStorage.storageZone}/${key}`, {
       method: "DELETE",
-      headers: { AccessKey: config.bunny.storageAccessKey },
+      headers: { AccessKey: config.bunnyStorage.storageAccessKey },
       signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
     });
     return res.ok || res.status === 404;
@@ -58,16 +58,16 @@ async function storageDelete(key: string): Promise<boolean> {
 
 /** Every object name under a storage prefix, one level at a time. */
 async function listStorageKeys(prefix: string): Promise<string[]> {
-  if (!config.bunny.storageZone || !config.bunny.storageAccessKey) return [];
+  if (!config.bunnyStorage.storageZone || !config.bunnyStorage.storageAccessKey) return [];
   const keys: string[] = [];
   const walk = async (dir: string, depth: number) => {
     if (depth > 4) return;
     try {
       const res = await fetch(
-        `${BUNNY_STORAGE_ORIGIN}/${config.bunny.storageZone}/${dir}`,
+        `${BUNNY_STORAGE_ORIGIN}/${config.bunnyStorage.storageZone}/${dir}`,
         {
           headers: {
-            AccessKey: config.bunny.storageAccessKey as string,
+            AccessKey: config.bunnyStorage.storageAccessKey as string,
             Accept: "application/json",
           },
           signal: AbortSignal.timeout(STORAGE_TIMEOUT_MS),
@@ -128,18 +128,23 @@ export async function eraseAccount(userId: string): Promise<ErasureReport> {
     }),
     prisma.video.findMany({
       where: { creatorId: userId },
-      select: { id: true, title: true, bunnyVideoId: true, thumbnailUrl: true },
+      select: {
+        id: true,
+        title: true,
+        streamtapeFileId: true,
+        thumbnailUrl: true,
+      },
     }),
   ]);
 
   const videoIds = videos.map((v) => v.id);
   const storageKeys = new Set<string>();
 
-  const avatarKey = mediaKeyFromUrl(user?.avatarUrl, config.bunny.cdnHostname);
+  const avatarKey = mediaKeyFromUrl(user?.avatarUrl, config.bunnyStorage.cdnHostname);
   if (avatarKey) storageKeys.add(avatarKey);
 
   for (const video of videos) {
-    const key = mediaKeyFromUrl(video.thumbnailUrl, config.bunny.cdnHostname);
+    const key = mediaKeyFromUrl(video.thumbnailUrl, config.bunnyStorage.cdnHostname);
     if (key) storageKeys.add(key);
   }
 
@@ -150,12 +155,14 @@ export async function eraseAccount(userId: string): Promise<ErasureReport> {
   // --- 2. Remote media --------------------------------------------------------
   let videosRemoved = 0;
   for (const video of videos) {
-    if (!isBunnyVideoId(video.bunnyVideoId) || !config.bunny.apiKey) continue;
-    try {
-      await deleteBunnyVideo(video.bunnyVideoId);
-      videosRemoved++;
-    } catch (error) {
-      failures.push(`video "${video.title}": ${(error as Error)?.message || error}`);
+    if (video.streamtapeFileId) {
+      try {
+        await deleteStreamtapeFile(video.streamtapeFileId);
+        videosRemoved++;
+      } catch (error) {
+        failures.push(`video "${video.title}": ${(error as Error)?.message || error}`);
+      }
+      continue;
     }
   }
 

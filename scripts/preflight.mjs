@@ -6,7 +6,7 @@
 //       node scripts/preflight.mjs --production          (blocks: launch gate)
 //       node scripts/preflight.mjs --url https://domain  (+ live health probe)
 //       node scripts/preflight.mjs --gateway             (+ live SonicPesa credentials)
-//       node scripts/preflight.mjs --live                (+ Redis/Bunny/SMTP probes)
+//       node scripts/preflight.mjs --live                (+ Redis/Streamtape/R2/SMTP probes)
 //
 // `--production` implies `--live`: the launch gate has to answer "does it work",
 // not only "was it set". In development the probes stay opt-in so `preflight`
@@ -28,7 +28,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadSingleEnv, ok, warn, fail, assessSecret, hasRestRedis } from "./_env.mjs";
 import { checkLockfileSync } from "./verify-lockfile.mjs";
-import { probeRedis, probeBunny, probeSmtp } from "./_probes.mjs";
+import { probeRedis, probeStreamtape, probeSmtp } from "./_probes.mjs";
 
 // -----------------------------------------------------------------------------
 // WHOSE environment is this?
@@ -312,27 +312,18 @@ goLive(
   "PAYMENT_SANDBOX=true — no USSD push is sent and no real money moves"
 );
 goLive(
-  !!env("BUNNY_STREAM_API_KEY") && !!env("BUNNY_STREAM_LIBRARY_ID") && !!env("BUNNY_CDN_HOSTNAME"),
-  "Bunny Stream credentials are set — upload + playback can work",
-  "Bunny Stream vars are missing — creators cannot upload and videos cannot stream (run: npm run smoke:bunny)"
+  !!env("STREAMTAPE_LOGIN") && !!env("STREAMTAPE_API_KEY"),
+  "Streamtape credentials are set",
+  "STREAMTAPE_LOGIN / STREAMTAPE_API_KEY missing — video upload and playback are unavailable"
 );
 goLive(
-  !!env("BUNNY_TOKEN_SECRET"),
-  "BUNNY_TOKEN_SECRET is set — playback URLs are signed",
-  "BUNNY_TOKEN_SECRET is missing — paid video URLs are not signed and can be shared freely"
+  !!env("R2_ACCOUNT_ID") &&
+    !!env("R2_ACCESS_KEY_ID") &&
+    !!env("R2_SECRET_ACCESS_KEY") &&
+    !!(env("R2_BUCKET") || env("R2_BUCKET_NAME")),
+  "Cloudflare R2 staging credentials are set",
+  "R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and R2_BUCKET are required for video uploads"
 );
-// Bunny signs Stream callbacks with the library's READ-ONLY API key, never the
-// read-write one (bunny.net/docs/stream/webhooks). Pasting the main key into the
-// webhook secret looks configured and refuses every genuine callback with a 401,
-// which on screen is indistinguishable from the upload having failed.
-if (env("BUNNY_STREAM_WEBHOOK_SECRET") && env("BUNNY_STREAM_WEBHOOK_SECRET") === env("BUNNY_STREAM_API_KEY")) {
-  goLive(
-    false,
-    "",
-    "BUNNY_STREAM_WEBHOOK_SECRET is the same value as BUNNY_STREAM_API_KEY — Bunny signs webhooks with the " +
-      "Read-Only key, so every callback would be refused (401). Copy the Read-Only key instead"
-  );
-}
 goLive(
   !!env("SMTP_HOST"),
   `SMTP configured (${env("SMTP_HOST")})`,
@@ -357,14 +348,14 @@ goLive(
 // ------------------------------------------------- Live connection checks
 // Everything above asks whether a value was SET. These ask whether it WORKS —
 // a different question, and the one a launch actually depends on: a typo in a
-// connection string, a Bunny account with Token Authentication still off, and an
+// connection string, a Streamtape account with an invalid API key, and an
 // SMTP host that no longer resolves all pass every check above and then fail in
 // front of a customer. The probes are the same ones `npm run verify:live` runs
 // (see ./_probes.mjs), so the two commands cannot disagree about whether a
 // service is up.
 if (wantLive) {
   console.log("\nLive connection checks (opening real connections):");
-  for (const probe of [probeRedis, probeBunny, probeSmtp]) {
+  for (const probe of [probeRedis, probeStreamtape, probeSmtp]) {
     for (const result of await probe()) {
       if (result.state === "fail") {
         fail(`${result.name}: ${result.detail}`);

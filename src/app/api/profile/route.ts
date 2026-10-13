@@ -138,7 +138,7 @@ export async function PATCH(request: NextRequest) {
         if (!parsed.success) {
           return api.validation(parsed.error.errors[0].message);
         }
-        updates.avatarUrl = normalizeMediaUrl(parsed.data, config.bunny.cdnHostname);
+        updates.avatarUrl = normalizeMediaUrl(parsed.data, config.bunnyStorage.cdnHostname);
       }
     }
 

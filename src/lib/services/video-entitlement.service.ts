@@ -1,11 +1,10 @@
 // =============================================================================
 // GENHUB - Who may watch a video
 // =============================================================================
-// One question, one answer, one place. It used to be answered in three
-// different ways by three routes that all touch the same money:
+// One question, one answer, one place. The detail route and payment checks
+// share this service so they cannot disagree about who may watch:
 //
 //   GET  /api/videos/[id]            free, purchase, admin
-//   GET  /api/videos/[id]/stream     free, purchase, admin
 //
 // So a viewer who paid a monthly subscription to a creator could DOWNLOAD the
 // file from a route that honoured a subscription and was then shown a paywall

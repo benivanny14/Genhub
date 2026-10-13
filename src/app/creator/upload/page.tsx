@@ -40,17 +40,19 @@ import {
   needsGuidelineAcceptance,
 } from "@/lib/creator-guidelines";
 import {
-  abortVideoUpload,
   assertFileReadable,
-  completeVideoUpload,
-  openVideoUpload,
-  uploadVideoFile,
   videoFileSizeError,
   VideoUploadError,
-  type OpenedVideoUpload,
   type VideoUploadProgress,
-  type VideoUploadSession,
 } from "@/lib/video-upload";
+import {
+  cancelStreamtapeUpload,
+  parseStreamtapeUploadSession,
+  StreamtapeImportFailedError,
+  StreamtapeUploadNotStagedError,
+  uploadVideoToStaging,
+  type StreamtapeBrowserUploadSession,
+} from "@/lib/streamtape-upload-client";
 import { reportUploadFailure } from "@/lib/upload-failure-report";
 import { cn } from "@/lib/utils";
 
@@ -117,11 +119,11 @@ export default function UploadPage() {
   const [publishAt, setPublishAt] = useState("");
 
   const [mainFile, setMainFile] = useState<File | null>(null);
-  const [mainSession, setMainSession] = useState<OpenedVideoUpload | null>(null);
+  const [mainSession, setMainSession] = useState<StreamtapeBrowserUploadSession | null>(null);
   const [mainProgress, setMainProgress] = useState<VideoUploadProgress | null>(null);
   const [mainUploading, setMainUploading] = useState(false);
   const [mainReady, setMainReady] = useState(false);
-  const [bunnyVideoId, setBunnyVideoId] = useState("");
+  const [uploadedVideoId, setUploadedVideoId] = useState("");
 
   const [thumbnailUrl, setThumbnailUrl] = useState("");
   const [cropFile, setCropFile] = useState<File | null>(null);
@@ -217,22 +219,14 @@ export default function UploadPage() {
     }
   }
 
-  /**
-   * Reserve a slot, then open the upload from HERE.
-   *
-   * The second half is not optional. Bunny serves a TUS resource only to the
-   * network that opened it, so a URL opened by the application server is a 404
-   * to every later request this browser makes — the fault that stalled real
-   * uploads at a few percent while the server that opened them saw a healthy
-   * resource. See `openVideoUpload`.
-   */
-  async function createSession(file: File): Promise<OpenedVideoUpload | null> {
+  async function createSession(file: File): Promise<StreamtapeBrowserUploadSession | null> {
     try {
       const response = await fetch("/api/videos/upload-signature", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: title.trim() || file.name.replace(/\.[^.]+$/, "") || "Video",
+          fileName: file.name,
           size: file.size,
           mimeType: file.type || "video/mp4",
         }),
@@ -242,7 +236,7 @@ export default function UploadPage() {
         toast("error", body.error || "Could not start the video upload");
         return null;
       }
-      return await openVideoUpload(body.data as VideoUploadSession);
+      return parseStreamtapeUploadSession(body.data);
     } catch (error) {
       toast(
         "error",
@@ -254,9 +248,9 @@ export default function UploadPage() {
 
   async function uploadOne(
     file: File,
-    existing: OpenedVideoUpload | null
+    existing: StreamtapeBrowserUploadSession | null
   ): Promise<{
-    session: OpenedVideoUpload | null;
+    session: StreamtapeBrowserUploadSession | null;
     videoId: string;
     /**
      * True when the session this upload was using no longer exists at the host.
@@ -270,87 +264,52 @@ export default function UploadPage() {
      */
     discardSession: boolean;
   } | null> {
-    const setProgress = setMainProgress;
     let session = existing ?? (await createSession(file));
     if (!session) return null;
-
-    /**
-     * Send the file, asking for an offset only when there is one to ask about.
-     *
-     * A session created a moment ago holds nothing, so its first request is the
-     * upload itself; a session already in hand is the one whose position can have
-     * moved, and that is the only case worth a round trip.
-     */
-    async function send(target: OpenedVideoUpload, from?: number) {
-      setProgress({ uploadedBytes: from ?? 0, totalBytes: file.size, percent: 0 });
-      await uploadVideoFile(file, target, {
-        onProgress: setProgress,
-        ...(from === undefined ? {} : { offset: from }),
-      });
-    }
-
-    /**
-     * One restart is allowed, and only one.
-     *
-     * The video host closes an upload the moment it decides the transfer is
-     * over, and the admin panel has now recorded a live case of it: a 192 MB
-     * video whose session was gone by the time the page asked where it had got
-     * to. There is no offset worth keeping in that state — the resource no
-     * longer exists — so the only move is a fresh session and the bytes again
-     * from zero. Doing it here rather than telling the creator to do it is the
-     * difference between a recovery and a dead end: "choose the video again"
-     * re-picks the SAME file, which reuses the SAME dead session, and nothing
-     * about that changes until the page stops asking the question.
-     *
-     * The guard is on the flag, not on where the session came from: a session
-     * the page created a moment ago dies the same way and deserves the same one
-     * attempt. It cannot loop, because the retry is outside this try.
-     */
-    let restarted = false;
-
     try {
-      try {
-        await send(session, existing ? undefined : 0);
-      } catch (error) {
-        if (!(error instanceof VideoUploadError) || error.code !== "EXPIRED" || restarted) {
-          throw error;
+      if (existing) {
+        setMainProgress({ uploadedBytes: file.size, totalBytes: file.size, percent: 100 });
+        try {
+          const response = await fetch("/api/videos/upload-complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sessionToken: session.sessionToken }),
+          });
+          const body = await response.json();
+          if (!response.ok || !body.success) throw new StreamtapeUploadNotStagedError(response.status);
+          return { session, videoId: session.videoId, discardSession: false };
+        } catch (error) {
+          if (!(error instanceof StreamtapeUploadNotStagedError)) throw error;
         }
-        restarted = true;
-        // Said out loud, because the progress bar is about to go back to zero
-        // and a bar that resets with no explanation reads as data lost.
-        toast(
-          "warning",
-          "The connection dropped, so the upload is starting again."
-        );
-        session = await createSession(file);
-        if (!session) return null;
-        await send(session, 0);
+      } else {
+        setMainProgress({ uploadedBytes: 0, totalBytes: file.size, percent: 0 });
       }
-      const videoId = await completeVideoUpload(session.sessionToken);
-      setProgress({ uploadedBytes: file.size, totalBytes: file.size, percent: 100 });
+      await uploadVideoToStaging(file, session, setMainProgress);
+      const completeResponse = await fetch("/api/videos/upload-complete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionToken: session.sessionToken }),
+      });
+      const completeBody = await completeResponse.json();
+      if (!completeResponse.ok || !completeBody.success) {
+        throw new VideoUploadError("HTTP", completeBody.error || "The video upload could not be confirmed.", completeResponse.status, { reason: "provider", stage: "put" });
+      }
+      const videoId = session.videoId;
+      setMainProgress({ uploadedBytes: file.size, totalBytes: file.size, percent: 100 });
       return { session, videoId, discardSession: false };
     } catch (error) {
-      // This is the only record a failed upload will ever have. The bytes went
-      // straight to Bunny and no video row exists yet, so without this the
-      // failure lives and dies in the creator's toast — which is exactly how a
-      // library accumulated orphaned slots that nobody could explain.
       reportUploadFailure(error, { session, file, kind: "main" });
       const message = failureMessageFor(error);
       toast("error", message);
-      // A session the host has closed holds no bytes worth resuming, and keeping
-      // it is what makes the next attempt fail the same way. Any other failure
-      // keeps it, because that is the whole point of a resumable upload: the
-      // bytes already at Bunny are still there and the retry continues from them.
-      const dead = error instanceof VideoUploadError && error.code === "EXPIRED";
-      // A file this device cannot read fails identically on every attempt, and
-      // the slot it reserved holds nothing, so the session is CLOSED rather than
-      // kept. Closing it deletes the empty Bunny object (see
-      // abortVideoUploadSession) and leaves the creator one instruction on
-      // screen instead of a Resume button that cannot work — which is how this
-      // creator came to hold a slot per attempt.
-      const unreadable = error instanceof VideoUploadError && error.reason === "unreadable";
-      if (unreadable) await cancelSession(session);
-      return { session, videoId: "", discardSession: dead || unreadable };
+      const discardSession = error instanceof StreamtapeImportFailedError;
+      if (discardSession) {
+        try {
+          await cancelSession(session);
+        } catch (cleanupError) {
+          console.error("[Streamtape Upload] Could not clean up failed import", cleanupError);
+        }
+      }
+      return { session, videoId: "", discardSession };
     }
   }
 
@@ -436,9 +395,9 @@ export default function UploadPage() {
   async function handleMainFile(file: File, resumeExisting = false) {
     // Everything the picker handed over, in the order that fails cheapest: what
     // the file IS, whether this device can read it, and only then whether it is
-    // the right size. A RESUMED upload skips all three — its bytes are already
-    // at Bunny, and a re-read refusing a file whose first half is stored would
-    // be the worst outcome available here.
+    // the right size. A RESUMED upload skips all three — its bytes may already
+    // be in staging, and refusing a file whose transfer started would be the
+    // worst outcome available here.
     if (!resumeExisting) {
       const kind = classifyFile(file);
       if (kind !== "video") {
@@ -462,9 +421,8 @@ export default function UploadPage() {
     }
 
     // Choosing a file is always a new upload. Reusing a session is reserved for
-    // the explicit Resume button: a file picker retry must never accidentally
-    // send a HEAD to a dead Bunny resource and turn a fresh attempt into HTTP
-    // 404. `reuse` is captured before any state is reset because setState is
+    // the explicit Resume button: a file picker retry must not accidentally
+    // overwrite a live session. `reuse` is captured before any state is reset because setState is
     // asynchronous: the old `mainSession` is still the one in this closure.
     const reuse =
       resumeExisting &&
@@ -479,7 +437,7 @@ export default function UploadPage() {
     }
     setMainFile(file);
     setMainReady(false);
-    setBunnyVideoId("");
+    setUploadedVideoId("");
     setMainUploading(true);
     try {
       // No length gate. Every scene used to be measured here and refused under
@@ -491,13 +449,13 @@ export default function UploadPage() {
       const result = await uploadOne(file, reuse);
       if (!result) {
         // Do not leave a dead session behind when the replacement reservation
-        // itself fails; Resume would otherwise repeat the same Bunny 404.
+        // itself fails; Resume would otherwise repeat the failed reservation.
         if (reuse) setMainSession(null);
         return;
       }
       setMainSession(result.discardSession ? null : result.session);
       if (!result.videoId) return;
-      setBunnyVideoId(result.videoId);
+      setUploadedVideoId(result.videoId);
       setMainReady(true);
       toast("success", "Video uploaded successfully");
     } finally {
@@ -505,13 +463,13 @@ export default function UploadPage() {
     }
   }
 
-  async function cancelSession(session: VideoUploadSession | null) {
-    if (session) await abortVideoUpload(session.sessionToken);
+  async function cancelSession(session: StreamtapeBrowserUploadSession | null) {
+    if (session) await cancelStreamtapeUpload(session.sessionToken);
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!mainReady || !mainSession || !bunnyVideoId) {
+    if (!mainReady || !mainSession || !uploadedVideoId) {
       toast("error", "Upload the main video completely first");
       return;
     }
@@ -532,7 +490,7 @@ export default function UploadPage() {
           teaserDuration,
           category: category || undefined,
           tags: tags.split(",").map((tag) => tag.trim()).filter(Boolean),
-          bunnyVideoId,
+          streamtapeFileId: uploadedVideoId,
           thumbnailUrl: thumbnailUrl || undefined,
           fileSize: mainFile?.size,
           uploadSessionToken: mainSession.sessionToken,
@@ -549,7 +507,7 @@ export default function UploadPage() {
         toast("error", body.error || "The video uploaded but could not be published");
         return;
       }
-      setSuccess({ slug: body.data.slug || body.data.id, processing: body.data.status === "PROCESSING" });
+      setSuccess({ slug: body.data.slug || body.data.id, processing: true });
     } catch {
       toast("error", "The video uploaded, but publishing could not be confirmed. Press publish again.");
     } finally {
@@ -746,7 +704,16 @@ export default function UploadPage() {
                 )}
 
                 {(mainUploading || mainProgress) && !mainReady && (
-                  <ProgressBar percent={mainPercent} label={mainUploading ? "Uploading" : "Upload incomplete — press Resume to continue"} />
+                  <ProgressBar
+                    percent={mainPercent}
+                    label={
+                      mainUploading
+                        ? mainPercent >= 100
+                          ? "Preparing video"
+                          : "Uploading"
+                        : "Upload incomplete — press Resume to continue"
+                    }
+                  />
                 )}
                 {mainSession && !mainReady && !mainUploading && (
                   <button type="button" className="btn-ghost text-sm border border-white/10 inline-flex items-center gap-2" onClick={() => mainFile && void handleMainFile(mainFile, true)}>

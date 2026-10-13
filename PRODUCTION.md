@@ -23,16 +23,16 @@ the environment, not from your laptop:
 
 | Where | Mode | Behaviour |
 |---|---|---|
-| Laptop / CI without `NODE_ENV=production` | advisory | prints every problem, exits **0** — a local build never fails for a missing Bunny key |
+| Laptop / CI without `NODE_ENV=production` | advisory | prints every problem, exits **0** — a local build never fails for missing production credentials |
 | Vercel / any pipeline with `NODE_ENV=production`, or `--strict` | strict | missing or placeholder settings **fail the build** |
 
 `preflight:prod` is the same list plus the checks that need the network: a real
-`SELECT 1` against Postgres, live probes of **Redis, Bunny Stream + CDN and
-SMTP**, a live SonicPesa token mint, and `/api/health`. Both halves of that exist
+`SELECT 1` against Postgres, live probes of **Redis, Streamtape/R2 configuration
+and SMTP**, a live SonicPesa token mint, and `/api/health`. Both halves of that exist
 because "the value is set" and "the value works" are different facts — a
 suspended managed database (Neon sleeps when idle and refuses the first
 connection while it wakes), a connection string with the wrong host or password,
-a Bunny key that no longer authenticates and an SMTP host that stopped resolving
+a Streamtape key that no longer authenticates and an SMTP host that stopped resolving
 all pass every environment check above and then fail in front of an operator or a
 customer. The connection probes are bounded at 15s, so the gate cannot hang on a
 database that is still waking, and they are the *same* probes `npm run
@@ -100,8 +100,7 @@ Integration smoke tests (move from “code exists” to “credentials proven”
 |---|---|
 | `npm run smoke:sonicpesa` | Mints a token via `POST /generate-token` — credentials work, no money moves |
 | `npm run smoke:sonicpesa -- --collect 1000 0712345678` | **Real** USSD push — confirm on your handset, then check the webhook completed the transaction |
-| `npm run smoke:bunny` | Stream API key + library lookup |
-| `npm run smoke:bunny -- --storage` | + storage-zone write access (thumbnails) |
+| `npm run verify:r2` | R2 access and CORS policy for staged video uploads |
 | `npm run admin:create you@domain.com` | Promote your signup to ADMIN (production has **no** demo-login) |
 | `npm run admin:create you@domain.com --create` | Create the admin account with a printed temp password |
 
@@ -138,11 +137,13 @@ Ordered runbook (copy-paste):
 npm ci
 npm run typecheck && npm test && npm run audit:endpoints && npm run build
 
-# 2) production database
+# 2) production database - confirm DATABASE_URL is the intended production DB,
+#    take a backup, then deploy the checked-in migration (never db push)
 export DATABASE_URL="postgresql://…prod…"
-npx prisma db push
+npm run db:deploy
+npm run db:status
 
-# 3) deploy
+# 3) deploy only after the migration reports no pending changes
 npm i -g vercel && vercel link
 #    add every .env.local key in the dashboard (Settings → Env Vars)
 vercel --prod
@@ -152,7 +153,7 @@ APP_URL=https://your-domain.com npm run launch:check  # opens with
 #      the line below plus verify:live, and prints one verdict
 npm run preflight -- --url https://your-domain.com   # blockers + live health
 npm run smoke:sonicpesa                             # credential / token check
-npm run smoke:bunny -- --storage                    # stream + storage check
+npm run verify:r2                                  # video staging access + CORS check
 npm run admin:create you@domain.com                 # bootstrap the first admin
 
 # 5) manual console steps
@@ -396,11 +397,9 @@ Set these in your hosting provider (Vercel → Project → Settings → Env vars
 | `EMAIL_FROM` | e.g. `Genhub <no-reply@your-domain>` (must match the SMTP domain) |
 | `AT_API_KEY` / `AT_USERNAME` | Africa's Talking key + username. **Not required**: password reset is email-only and sign-up requires an email, so no flow sends SMS today (lib/sms.ts is kept for a future channel) |
 | `AT_SENDER_ID` | Optional SMS sender ID |
-| `BUNNY_STREAM_API_KEY` | Stream library API key (Stream → your library → API tab) |
-| `BUNNY_STREAM_LIBRARY_ID` | Stream library id |
-| `BUNNY_CDN_HOSTNAME` | Pull-zone hostname, e.g. `genhub.b-cdn.net` |
-| `BUNNY_TOKEN_SECRET` | Token Authentication key of that pull zone — **required**, see 2.1 |
-| `BUNNY_STORAGE_ZONE` / `BUNNY_STORAGE_ACCESS_KEY` | Optional: only for thumbnail uploads |
+| `STREAMTAPE_LOGIN` / `STREAMTAPE_API_KEY` | Streamtape server-side account credentials; required for video import |
+| `STREAMTAPE_FOLDER_ID` | Optional Streamtape destination folder |
+| `BUNNY_STORAGE_ZONE` / `BUNNY_STORAGE_ACCESS_KEY` | Bunny Storage credentials for images only |
 | `R2_ACCOUNT_ID` | Cloudflare account id — the `<id>` in the bucket's S3 endpoint `<id>.r2.cloudflarestorage.com` |
 | `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 → API → **Manage API tokens** → *Create API token*, permission **Object Read & Write** for this bucket. **Not** a Cloudflare API token — that one cannot sign an S3 request |
 | `R2_BUCKET` | `genhub-uploads`. Its **CORS policy must name your domain** — see 2.5 |
@@ -458,78 +457,40 @@ they are a safety net, not the design: `/api/health` warns whenever the URL was
 inferred, and `preflight:prod` blocks a localhost URL outright. Check it with
 `Admin → Overview → System readiness` ("App URL … (from NEXT_PUBLIC_APP_URL)").
 
-### 2.2 Bunny.net video — Token Authentication, and the key you must COPY
+### 2.2 Video uploads and playback - Streamtape + R2
 
-The player and the teaser both use signed Bunny URLs. The signature is
-`base64url(SHA256(BUNNY_TOKEN_SECRET + path + expires))`, sent in the **query
-string**:
+GenHub uses Streamtape for video hosting and private Cloudflare R2 staging for
+uploads. Bunny Stream credentials and the legacy upload-provider switch are not
+used. The upload path is browser -> signed R2 PUT -> Streamtape remote import from
+a short-lived signed R2 GET -> conversion/status polling. Video bytes never pass
+through a Vercel function. The single-request R2 upload is not resumable: a
+failed transfer must be sent again.
 
-```
-https://<cdn>/<videoId>/playlist.m3u8?token=<token>&expires=<ts>
-```
+Before deploying the provider migration:
 
-Three things about that shape are not cosmetic, and all three were wrong in
-production:
+- [ ] Configure `STREAMTAPE_LOGIN` and `STREAMTAPE_API_KEY` as server-only secrets;
+      optionally set `STREAMTAPE_FOLDER_ID`. Do not add `VIDEO_UPLOAD_PROVIDER`
+      variable.
+- [ ] Keep the R2 S3 credentials configured and apply the CORS policy in
+      section 2.5. Allow PUT and the signed content-type header from the production
+      origin. Run `npm run verify:r2` to validate bucket access and CORS.
+- [ ] Back up the confirmed production database. Run `npm run db:deploy` against
+      that same database and confirm `npm run db:status` reports no pending
+      migrations before deploying the new application.
+- [ ] Migration `20261013010000_streamtape_only_video_provider` preserves old
+      Bunny IDs as private legacy metadata, unpublishes those rows and marks them
+      as drafts. It does not delete videos, purchases, or transaction history.
+      Creators must upload a replacement through Streamtape before publishing
+      those records again.
+- [ ] After deployment, test with a small, non-sensitive video: upload, wait for
+      conversion, publish, then verify the entitled viewer's iframe plays. Check
+      for CSP frame refusals and R2 preflight failures in the browser console.
 
-**The hash is a plain SHA-256 over `secret + path + expires`.** Not HMAC, not the
-other argument order. Measured against the live pull zone: 1200 shape
-combinations were swept (both orders, HMAC / SHA-256 / SHA-256-with-key-prefix,
-hex / base64 / base64url, truncated and full, seconds and milliseconds, query
-form and path form) and exactly one family answered 206. A wrong guess is a bare
-**403** with no explanation attached — which is what production looked like.
-
-**The token goes in the query string, and the pull zone refuses every other
-form.** The `/bcdn_token=…&token_path=…/file` path prefix returns 403 even with a
-correct signature (all combinations tried).
-
-**A signature covers the whole folder it names, so HLS needs one extra hop.** A
-player does not fetch one file: it fetches the manifest and then every segment
-and rendition named inside it, as separate requests. And an HLS player resolves
-those relative URLs against the manifest URL, which **drops its query string** —
-so a signed CDN manifest loads and then every segment 403s: a poster, a spinner,
-and never any video. Playback therefore points at our own
-`/api/videos/<rowId>/stream` instead, which fetches the manifest with an
-authorised request and rewrites every URI in it to carry its own
-folder-signed authorisation (`src/lib/hls.ts`). Nested playlists come back
-through that route; segments are fetched straight from the CDN, so no video
-bandwidth passes through the app.
-
-Checklist:
-
-- [ ] **Token Authentication enabled on the pull zone.** Without it the CDN
-      ignores our tokens and anyone can hot-link paid video. Confirm it with
-      `GET /library/<id>/videos/<guid>/play`, which reports
-      `tokenAuthEnabled: true`.
-- [ ] `BUNNY_TOKEN_SECRET` is the pull zone's own **Token Authentication Key**
-      (Stream library → Security). It is NOT a value you generate, and it must be
-      pasted **character for character** — this value is hashed byte for byte, so
-      one trailing space or a newline is signed into every URL and Bunny answers
-      **403** to all of them.
-      > Which value a deployment is actually holding is reported by the readiness
-      > probe: `BUNNY_TOKEN_SECRET … key <8 hex>` is a fingerprint of the loaded
-      > key. If playback fails and the fingerprint is not the key you pasted in
-      > the dashboard, the deployment has an older value; if it IS the fingerprint
-      > you pasted, the key is wrong (or the pull zone's key was rotated).
-      > This is the trap that broke playback. `.env.example` used to say
-      > `openssl rand -hex 24`, so a generated string was configured. Bunny then
-      > answered **403 to every signed URL**, in a real browser as well as from
-      > the server, and there is no error anywhere: the player just spins. The
-      > only symptom is customers saying the video never loads.
-- [ ] `BUNNY_CDN_HOSTNAME` is the library's real CDN host — copy it from
-      `GET video.bunnycdn.com/library/<libraryId>/videos/<guid>/play`
-      (`thumbnailUrl` starts with it). A Stream host serves the video library
-      and nothing else.
-- [ ] `npm run smoke:bunny` returns the library name (proves the key + id).
-- [ ] Play one **paid** video end to end with the browser's network tab open:
-      `playlist.m3u8` **and** a `…/240p/video0.ts` segment must both be `200`. A
-      200 manifest with 403 segments means the token is in the query string.
-- [ ] `/api/health/services` shows `Bunny Stream … signed manifest accepted`.
-      It signs a real manifest and fetches it, because "the secret is set" and
-      "the secret works" are different questions — and only the second one is
-      worth reporting.
-
-The signing code throws rather than emitting an URL signed with an empty secret
-— an unsigned-but-labelled-signed URL is worse than none, because it looks safe.
+Streamtape embed URLs are public/shareable. GenHub only returns the embed URL to
+a viewer entitled to watch, but that viewer can share it outside GenHub; this
+provider does not offer per-viewer signed playback or DRM. Streamtape scenes do
+not provide the former Bunny HLS teaser/intro preview, so cards use their poster
+until a separate teaser feature is implemented.
 
 ### 2.3 Bunny.net images — served by `/api/media`, not by a CDN hostname
 
@@ -579,7 +540,7 @@ Checklist:
 for the password and a typed `DELETE`, and it refuses when the caller is the last
 admin (a site with no admin cannot approve creators or release payouts).
 
-What it removes, in order: the videos from Bunny, the private document folder,
+What it removes, in order: Streamtape video files, the private document folder,
 the avatar and the thumbnails — then, in one transaction, the videos, the reports
 on them, the user's transactions, the payouts, the messages, and finally the
 account row. Purchases *by other people* that credited this creator are kept (the
@@ -788,8 +749,8 @@ per worker, all four in `.github/workflows/`:
 | `/api/cron/renew-subscriptions` | hourly (minute 15) | charge memberships that expire within 24h |
 | `/api/cron/earnings-digest` | hourly (checks; sends at most weekly per creator) | tell creators when their money clears the 14-day hold |
 
-Video publication is deliberately **not** on that list. It is driven by a push
-from Bunny with two on-read fallbacks and no scheduler at all — see §3.2.
+Video conversion is completed before a post is finalized; no video-provider
+webhook or encoding cron is required.
 
 `vercel.json` deliberately ships only a single DAILY cron, pointed at
 `/api/cron/supervisor`: the same sub-daily schedules there fail a **Hobby**
@@ -797,64 +758,20 @@ deployment outright, and one daily poke is the floor that still runs the workers
 when GitHub goes quiet. On **Pro**, move the real schedules back into
 `vercel.json` for tighter timing — the exact JSON is in §4.0.1.
 
-### 3.2 Video processing (a post is live before its video can play)
+### Video import and publication (Streamtape)
 
-Bunny Stream accepts an upload seconds after the browser starts sending, then
-spends minutes transcoding. Publication is therefore **instant and playback
-waits**: `POST /api/videos` writes the row **published** with
-`encodingStatus = 0`, so the post is on the creator's profile and in the feed
-straight away with an **“Inachakatwa...”** badge over its cover, and it turns
-into a playable video in place — no reload — the moment Bunny finishes.
+Streamtape import and conversion are completed before GenHub creates the video
+post. The upload page polls `POST /api/videos/upload-status` until it has a
+ready Streamtape file id; only then can the creator finalize and publish the
+record. No Bunny Stream webhook or background encoding worker is used.
 
-WHAT DECIDES IT. `status` is derived, never stored: `PROCESSING` / `READY` /
-`FAILED` come from Bunny's `encodingStatus` + `encodeProgress` through one rule
-(`src/lib/video-status.ts`), which is the same rule `describeEncoding()` acts on.
-A second stored status column would be a copy a missed callback could leave
-permanently wrong.
-
-| Bunny `encodingStatus` | Derived `status` | Effect |
-|---|---|---|
-| `0` / `1` / `2` | `PROCESSING` | live, badge over the cover, no playback controls, not purchasable |
-| `3` / `4`, or `encodeProgress` 100 | `READY` | badge replaced by the player; buyable |
-| `5` | `FAILED` | hidden from the public feed and not buyable; the creator sees the reason |
-| `NULL` | `READY` | side-loaded/demo rows Bunny never transcodes — untouched |
-
-WHO MOVES IT TO `READY` — in order of authority:
-
-1. **`POST /api/webhooks/bunny`** — Bunny calls us the instant an encode
-   finishes. This is the source of truth, and the only path that can observe the
-   transition the second it happens. Its signing key is
-   `BUNNY_STREAM_WEBHOOK_SECRET`; the route re-reads the real status from Bunny
-   rather than trusting the payload.
-2. **`GET /api/videos/[id]`** — an owner's or an admin's page read refreshes a
-   stale row (with a re-check floor).
-3. **`GET /api/creator/videos`** — a creator opening their dashboard refreshes
-   their own pending uploads.
-
-Open pages then learn about it from `POST /api/videos/status`, which the client
-poller asks every 8 s while anything on screen is `PROCESSING` (and stops when
-nothing is, when the tab is hidden, or after 20 minutes).
-
-> **There is no encoding poller.** A scheduled sweep was removed on purpose: it
-> was a second source of truth for the same fact, and it could disagree with the
-> webhook. The price of removing it is that a **missed callback** no longer
-> resolves by itself for a creator who never opens their dashboard — which is
-> why the webhook must be configured, and why the two on-read paths exist.
-
-Two escape hatches remain, because an automatic state with no exit is worse than
-one with an exit:
-
-- **The creator's dashboard advances their own uploads** when they open it.
-- **Publish now** — the creator can override the gate from the dashboard. It
-  warns that the video may not play yet, then publishes it. Use this when Bunny
-  never reports a video as finished.
-
-- [ ] Confirm the webhook is configured: Bunny dashboard → Stream library →
-      **Webhook URL** = `https://<domain>/api/webhooks/bunny`, and
-      `BUNNY_STREAM_WEBHOOK_SECRET` = the library's **Read-Only** API key. The
-      self-test in **Admin → System** posts a signed callback to prove it.
-- [ ] Upload one real video and watch the post appear immediately with the
-      “Inachakatwa...” badge, then turn into a player without a reload.
+- [ ] Configure `STREAMTAPE_LOGIN` and `STREAMTAPE_API_KEY` as server-only
+      secrets, with the Cloudflare R2 staging settings and CORS policy.
+- [ ] Upload a small test video, wait for conversion, and confirm the resulting
+      Streamtape iframe plays for an entitled viewer.
+- [ ] Existing Bunny-backed records are retained as unpublished drafts by the
+      provider migration; creators reupload them through Streamtape before
+      restoring publication. Their purchases and financial history remain.
 
 The release job moves matured earnings `pendingBalance → availableBalance`:
 
@@ -1012,9 +929,9 @@ the Actions tab stays quiet instead of red while you are still setting up.
 Three caveats worth knowing before you rely on this:
 
 - **GitHub's minimum interval is 5 minutes**, so no worker here can run more
-  often than that. Nothing breaks: every worker is idempotent, and the one that
-  used to care about a sub-5-minute cadence (encoding) is no longer scheduled at
-  all — it is pushed by Bunny (§3.2).
+  often than that. Nothing breaks: every worker here is idempotent, and video
+  conversion is complete before a video is finalized, so no encoding worker is
+  scheduled.
 - **Scheduled workflows are disabled after 60 days of repository inactivity.**
   GitHub emails the owner first, and any commit re-enables them — but on a quiet
   repo, payments and renewals would stop. Budget one commit (or a
@@ -1070,8 +987,8 @@ Do not paste this on a Hobby account: it does not warn, it fails the build.
 
 A schedule that stops firing is the one failure with no symptom inside the app:
 no request arrives, so there is no log line, no error and no metric to alert on.
-Both the payment webhook and the Bunny upload stayed broken while every
-endpoint answered "success" — this is the check for that class of bug.
+Both the payment webhook and video upload can fail while other endpoints answer
+"success" — this is the check for that class of bug.
 
 Every worker stamps a heartbeat as it runs. **Admin → Overview → Background
 jobs** shows each one with its verdict, when it last finished, what it returned
@@ -1179,15 +1096,15 @@ in the shape both understand. Without it the alarm is GitHub's own failure email
 #### The credentials behind the site, probed hourly
 
 `npm run preflight:prod` asks whether every service actually works, but only when
-somebody runs it. A revoked Bunny key, a rotated SMTP password, a replaced Redis
+somebody runs it. A revoked Streamtape key, a rotated SMTP password, a replaced Redis
 token or a suspended database leaves a site that answers every request perfectly
-while it cannot stream a video, send a password reset or take a payment — nothing
+while it cannot accept a video upload, send a password reset or take a payment — nothing
 inside the app fails loudly, so an outside check is the only thing that can
 notice.
 
 With `CRON_SECRET` set, each watchdog run also asks `GET /api/health/services`,
-which runs the same live probes the admin Setup tab runs: Postgres, Redis, Bunny
-Stream, Bunny CDN, SMTP, SonicPesa and the app URL. The route is guarded by
+which runs the same live probes the admin Setup tab runs: Postgres, Redis,
+Streamtape/R2, SMTP, SonicPesa and the app URL. The route is guarded by
 `CRON_SECRET` and **reads only** — it opens connections and moves nothing.
 
 | Probe state | Watchdog verdict |
@@ -1219,7 +1136,7 @@ Prove it by hand:
 
 ```bash
 APP_URL=https://<domain> CRON_SECRET=$CRON_SECRET npm run watchdog
-#   ✗ Bunny Stream is configured but failing: HTTP 401 — wrong key, or it lacks access to this library
+#   ! Streamtape credentials are present; complete a test upload to verify conversion and playback
 ```
 
 #### The same news, seconds after it happens
@@ -1229,14 +1146,13 @@ means every collect until 11:00 is accepted by a gateway that will never deliver
 it, and a password reset in that window reaches nobody.
 
 So the app reports the fault itself, the moment it discovers one — see
-`src/lib/credential-alert.ts`. Four places raise it, each at the point where the
+`src/lib/credential-alert.ts`. Three places raise it, each at the point where the
 failure is unambiguous:
 
 | Where | What has to be true |
 |---|---|
 | Redis | the data-path breaker tripped (two calls in a row unanswered) |
 | SonicPesa | the breaker tripped, **or** the gateway answered `401`/`403` |
-| Bunny Stream | the management API timed out, could not be reached, or answered `401`/`403` |
 | SMTP | nodemailer failed with an auth or connection code (`EAUTH`, `ECONNECTION`, …) |
 
 Three properties are deliberate, and each is a decision:
@@ -1929,18 +1845,14 @@ It never deletes an ADMIN account, because that is the only way back into the
 panel that approves KYC and clears payouts. Coupons and the operational tables
 (setup steps, worker heartbeats, the watchdog's memory) are left alone.
 
-**The bytes are on Bunny, not in Postgres.** Deleting a video row tells Bunny
-nothing, so the upload stays in the library, keeps counting against storage, and
-appears on no screen at all — every screen lists rows.
-
-```bash
-npm run bunny:orphans            # list assets with no matching row
-npm run bunny:orphans -- --yes   # delete them (check the titles first)
-```
+Streamtape video deletion is performed by the account-erasure and admin-delete
+flows. Legacy Bunny Stream assets are not touched by the current application;
+review and remove them manually in the retired Bunny library after confirming
+that the preserved unpublished records have been reuploaded or are no longer
+needed.
 
 - [ ] Demo content removed (`npm run demo:wipe` reports 0 left).
-- [ ] Test content removed (`npm run clean:launch` reports no content rows), and
-      Bunny left with no orphans (`npm run bunny:orphans` reports 0).
+- [ ] Test content removed (`npm run clean:launch` reports no content rows).
 - [ ] At least one real ADMIN account able to sign in.
 - [ ] At least one CREATOR that can actually upload — see the KYC note below.
 - [ ] Promo codes reviewed: the seed creates `WELCOME10`, `GENHUB500` and
@@ -2123,11 +2035,9 @@ Manual checks:
   field and it is required (`registerSchema` in `src/lib/validation.ts`).
   Existing phone-only accounts still sign in with their number.
 - Sign up a fresh account → welcome email arrives.
-- **Play one video all the way through** on the live domain, and switch quality in
-  the player. Bunny's pull zone decides this by **Referer**, so a host that is not
-  on its *Allowed Referrers* list gets a 403 for the manifest **and** for every
-  segment — the player only spins, on every video, while the CDN reports healthy
-  to a server-side probe. See §8.0.1.
+- **Upload and play a small video** on the live domain after conversion. Confirm
+  the Streamtape iframe loads for an entitled viewer; quality selection and
+  per-viewer playback protection are not provided by Streamtape embeds.
 - Run `npm run smoke:sonicpesa` from your machine against the live key.
 
 
@@ -2145,112 +2055,26 @@ than a short one.
 - [ ] Rate limits verified (Redis-backed; without Redis they fail **open**, so
       Redis must be up in production).
 
-### 8.0 What a non-paying viewer can watch
+### 8.0 What an unauthenticated viewer can watch
 
-**A teaser is a separate asset, by design.** This is not a stylistic choice —
-Bunny's token authorises a *path*, and there is no way to ask it for "the first
-30 seconds". So signing a paid scene's own `playlist.m3u8` for a non-buyer hands
-over the **entire scene** for the life of the token, however short. That is what
-the code used to do, and it meant the paywall gated the URL rather than the
-content.
+Streamtape playback uses an iframe embed. The video-detail API resolves the
+embed URL only after the shared entitlement service grants access; public feeds
+never return the Streamtape file id, and old Bunny playback metadata is stripped
+from API responses. A paid scene without access must return `hasAccess: false`
+and `playbackUrl: null`.
 
-`teaserDuration` (15–30s on every video) is a **UI value only**: the badge on a
-card and how long the hover-preview plays. It never limited anything server-side.
+### 8.0.1 Streamtape playback limitations
 
-#### How it works now
+Streamtape embeds do not provide per-viewer signed URLs, DRM, HLS quality
+selection, or the former Bunny teaser/intro previews. An entitled viewer can
+share the embed URL outside GenHub. This is a provider limitation, not a
+configuration that can be fixed by enabling Bunny Token Authentication. Do not
+re-enable the legacy Bunny playback endpoints or publish legacy Bunny assets;
+those records remain unpublished drafts until creators reupload them.
 
-`resolveTeaserUrl()` in `lib/bunny.ts` decides what someone without entitlement
-receives, in this order:
+### 8.0.2 Verify the paywall
 
-| # | Condition | URL handed out |
-|---|---|---|
-| 1 | `teaserBunnyVideoId` is set | Signed URL for the **separate teaser clip** (5 min) |
-| 2 | `price === 0` (free video) | The video itself — nothing to protect |
-| 3 | otherwise | **nothing** (`teaserUrl: null`) |
-
-Rule 3 is the important one: a paid scene with no teaser clip shows a poster, not
-a preview. A fallback there would undo the whole point of the column. The video
-page says so plainly ("No preview clip for this scene. Buy it to watch in full.")
-instead of looking broken, and the homepage cards simply stay static.
-
-#### Giving a scene a teaser
-
-Creators upload one in **Creator → Upload → "Teaser clip"**, which uses the same
-two-step signed-flow as the main video (a second Bunny asset, stored as
-`teaserBunnyVideoId`). The form refuses a teaser that points at the main video,
-because that is the leak this exists to prevent.
-
-Measurable effect on the current demo data: all 24 seeded videos are paid and
-carry no teaser asset, so **none of them hover-preview** — that is the new
-behaviour working, not a rendering fault. Mark a video free (price 0) to see
-hover previews, or attach a teaser clip to see the intended production path.
-
-#### Migrating existing content
-
-The column is nullable and was added by migration
-`20260923030000_video_teaser_asset`. Nothing is backfilled: every existing paid
-video now has no preview until a teaser is attached. If that is too strict for
-launch, the alternatives are to mark more content free, or to upload short
-trailers for the top-performing scenes first. Do **not** "fix" it by pointing
-`teaserBunnyVideoId` at the scene — the schema rejects that, deliberately.
-
-The signed `uid` viewer fingerprint is still carried on every signed URL, so a
-leaked stream remains traceable to the account that requested it.
-
-### 8.0.1 The quality ladder, and the Referer gate that can hide it
-
-**Two ways the pull zone can refuse a viewer whose token is valid:**
-
-| Gate | Symptom | Where it is set |
-|---|---|---|
-| Token Authentication key wrong | Every signed request 403s, server-side probe included | Library -> Security -> Token Authentication Key |
-| **Allowed Referrers** does not name the domain | Server-to-server requests succeed, **every browser** 403s | Pull Zone -> Security -> Allowed Referrers |
-
-The second one is invisible to a probe that fetches without a `Referer`, which is
-how it went unnoticed: measured against the live zone, one correctly-signed
-manifest answers **206** with no `Referer`, **200** for `*.vercel.app`, and
-**403** for `genhub-two.site`, `www.genhub-two.site` and `http://localhost:3000`.
-`probeSignedPlayback()` therefore asks twice — once bare, once with the app's own
-origin as `Origin`/`Referer` — and fails loudly when the two disagree. Whatever
-domain the site is launched on, plus `http://localhost:3000`, must be listed or
-video playback is dead on that host and works on the other one.
-
-The segments are the part that cannot be worked around: they are fetched by the
-browser **straight** from the CDN (only the manifests come through
-`/api/videos/[id]/stream`), so no server-side change can authorise a request the
-browser makes.
-
-Ask the CDN per origin, rather than trusting a probe that asked about a host
-nobody types:
-
-```bash
-npm run verify:referrers                                   # the app URL, its www form, localhost
-npm run verify:referrers -- --origin https://www.genhub-two.site   # one host at a time
-```
-
-It signs a real manifest and requests it with no Referer (which proves the
-**token** works) and then once per origin, so a 403 from the referrer list cannot
-be mistaken for a wrong `BUNNY_TOKEN_SECRET` — Bunny answers both the same way and
-names neither. The list is matched as a string and never resolved, so this tells
-the truth about a domain that does not resolve yet, which is when the fix is
-still free. There is no API for the list on the Stream key this project holds
-(Bunny's account API answers 401 to it), so it stays a dashboard change.
-
-**What the player offers.** The ladder is whatever Bunny encoded, which is capped
-by the uploaded source — a 360x642 upload produces `240p` and `360p` and nothing
-higher, so "only two qualities" is a property of the file, not a bug. `lib/quality.ts`
-names each rendition by its **shorter side** snapped to the standard ladder
-(`358x640` is *360p*, `198x352` is *240p*) and lists them **best first**, because
-hls.js reports raw pixel dimensions and sorts its own levels by ascending
-bitrate — the raw array labelled the same video "640p" and "352p" with the worst
-rendition at the top. Selecting a tier sets `hls.currentLevel`, which disables ABR
-and refetches at that rendition (verified in a real browser against the live
-manifest: the `<video>` element's decoded size changes `359x640` ⇄ `198x353` while
-playback continues), and choosing **Auto** sets `-1`, which hands ABR back.
-
-### 8.0.2 "The paywall is broken — everyone can watch for free"
-
-Settle it with one command instead of an argument about the code:
+Use the automated check against the deployed site or a local build:
 
 ```bash
 npm run verify:paywall                                        # the live domain
@@ -2258,33 +2082,11 @@ npm run verify:paywall -- --url http://localhost:3000          # a local build
 npm run verify:paywall -- --url https://www.genhub-two.site --limit 5
 ```
 
-It makes **no request with a cookie at all** and asks, per published video, the
-only question that matters: is anything playable handed out to a visitor who has
-not paid? For each row it checks that `GET /api/videos/<id>` answers
-`hasAccess: false` with no `playbackUrl`, that neither the feed nor the front
-page carries `previewUrl` / `bunnyVideoId` / `teaserBunnyVideoId` /
-`teaserClipUrl`, and that `GET /api/videos/<id>/stream` refuses.
-Exit code 1 means a genuine leak; a PASS means the paywall holds.
-
-**The three ways this report is usually wrong, in order of how often they happen:**
-
-1. **You tested signed in as the video's creator, or as an admin.** Both are
-   entitled on purpose (`services/video-entitlement.service.ts`: `owner`, `admin`)
-   so every page plays — and the paywall is working. The watch page now names the
-   reason under the CTA ("Your video — you can always watch it") precisely so this
-   cannot be mistaken for a hole.
-2. **The video's price is 0.** A free video is open to everyone, by design;
-   `verify:paywall` reports it as "free video, open to everyone (expected)" rather
-   than as a leak. Worth checking before anything else, because the creator edit
-   form used to do this by accident: `parseInt("") || 0` meant merely *clearing*
-   the price box saved the video as free, and nothing said so. An empty price is
-   now refused and `0` on a paid row asks for confirmation.
-3. **A real leak** — the case the script exits 1 for. The one configuration that
-   has ever caused it is a row whose teaser points at the scene itself: the teaser
-   door serves without an entitlement check (a trailer is for people who have not
-   paid), so `resolveTeaserUrl()` treats `teaserBunnyVideoId === bunnyVideoId` as
-   *no teaser*, `PATCH /api/videos/[id]` refuses to store it, and the stream route
-   refuses to serve the scene through `?source=teaser`.
+The check makes no authenticated request. For each published video, it expects
+`GET /api/videos/<id>` to return `hasAccess: false` and no `playbackUrl`;
+feed responses must not expose a Streamtape id or any legacy Bunny media fields.
+Free videos are intentionally available to everyone. Admins and creators are
+entitled when signed in, so test with a fresh unauthenticated client.
 
 ### 8.0.3 JWT_SECRET must not be a shared secret
 

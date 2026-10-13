@@ -1,10 +1,7 @@
 // =============================================================================
 // POST /api/videos/upload-complete
 //
-// Confirms that Bunny's TUS resource contains every byte. It does not create a
-// database row; the metadata route does that after this check. Keeping the two
-// steps separate makes retries idempotent and lets teaser uploads use the same
-// transport without creating a video post.
+// Verifies the staged R2 upload and starts Streamtape's remote import.
 // =============================================================================
 
 import { NextRequest } from "next/server";
@@ -13,7 +10,10 @@ import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { checkRateLimit } from "@/lib/redis";
-import { confirmVideoUpload, verifyVideoUploadSession } from "@/lib/video-upload-session";
+import {
+  startOrResumeStreamtapeImport,
+  verifyStreamtapeUploadSession,
+} from "@/lib/streamtape-upload-session";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,22 +33,27 @@ export async function POST(request: NextRequest) {
     const parsed = schema.safeParse(await readJsonBody(request));
     if (!parsed.success) return api.validation(parsed.error.errors[0].message);
 
-    const session = await verifyVideoUploadSession(parsed.data.sessionToken, auth.userId);
-    if (!session) return api.forbidden("This upload session is invalid or belongs to another creator");
-
-    const confirmed = await confirmVideoUpload(session);
-    if (!confirmed.ok) {
-      // `confirmed.detail` names what the host said and how far it says the file
-      // got. That sentence is a diagnosis, so it goes to the log; what comes back
-      // to the browser is the one thing the creator can act on.
-      console.warn("[Video Upload] not complete:", confirmed.status, confirmed.detail);
-      return api.error("The upload is not finished yet. Continue uploading and try again.", 409, "UPLOAD_INCOMPLETE");
+    const session = await verifyStreamtapeUploadSession(parsed.data.sessionToken, auth.userId);
+    if (!session) {
+      return api.forbidden("This upload session is invalid or belongs to another creator");
     }
 
-    return api.success(
-      { videoId: session.videoId, totalBytes: session.totalBytes },
-      "Upload confirmed"
-    );
+    try {
+      const result = await startOrResumeStreamtapeImport(session);
+      if (result.state === "FAILED" || result.state === "CANCELLED") {
+        return api.error("The video could not be sent for processing. Upload it again.", 409, "IMPORT_FAILED");
+      }
+      return api.success({ state: result.state }, "Streamtape is preparing the video");
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("staged video")) {
+        return api.error(
+          "The upload is not complete yet. Continue uploading and try again.",
+          409,
+          "UPLOAD_INCOMPLETE"
+        );
+      }
+      throw error;
+    }
   } catch (error) {
     if (error instanceof AuthError) {
       return error.statusCode === 403 ? api.forbidden(error.message) : api.unauthorized(error.message);

@@ -336,7 +336,7 @@ function runStep(args, quiet) {
   const started = Date.now();
   const result = spawnSync(process.execPath, args, { encoding: "utf8" });
   const output = `${result.stdout || ""}${result.stderr || ""}`;
-  // With --json this has to stay silent: a `\u2713 Bunny Stream` printed before the
+  // With --json this has to stay silent: a success line printed before the
   // object is exactly what breaks the parser reading stdout.
   if (!quiet) process.stdout.write(output);
   return { output, ms: Date.now() - started, status: result.status };

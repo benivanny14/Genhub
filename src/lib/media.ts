@@ -2,9 +2,8 @@
 // GENHUB - Where uploaded images live, and who may read them
 // =============================================================================
 //
-// Two Bunny products are involved and they are NOT interchangeable:
+// Bunny Storage is used only for images; videos are hosted by Streamtape.
 //
-//   Bunny Stream   library 760553  ->  vz-...b-cdn.net/{videoGuid}/playlist.m3u8
 //   Bunny Storage  genhub-thumbs   ->  served through /api/media/... (see below)
 //
 // Thumbnails, avatars, KYC photos are all files in the STORAGE zone. They used

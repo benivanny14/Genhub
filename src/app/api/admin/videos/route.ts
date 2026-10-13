@@ -16,7 +16,7 @@ import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { readJsonBody } from "@/lib/request-body";
 import { AUDIT_ACTIONS, recordAudit } from "@/lib/services/audit.service";
-import { deleteBunnyVideo, isBunnyVideoId } from "@/lib/bunny";
+import { deleteStreamtapeFile } from "@/lib/streamtape";
 
 export async function GET(request: NextRequest) {
   try {
@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
         title: true,
         slug: true,
         creatorId: true,
-        bunnyVideoId: true,
+        streamtapeFileId: true,
         isPublished: true,
         isDeleted: true,
         creator: { select: { displayName: true, email: true } },
@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
 
     if (action === "DELETE") {
       // "Deleted" here means gone: soft-deleted in the database AND removed from
-      // Bunny when it is a real Bunny asset. Soft-deleting alone left the file
+      // Streamtape when it has a remote asset. Soft-deleting alone left the file
       // playable by anyone who already had the signed URL, which is not what an
       // admin means by "delete this video completely".
       await prisma.video.update({
@@ -123,13 +123,11 @@ export async function POST(request: NextRequest) {
         data: { isDeleted: true, isPublished: false },
       });
 
-      if (isBunnyVideoId(video.bunnyVideoId)) {
+      if (video.streamtapeFileId) {
         try {
-          await deleteBunnyVideo(video.bunnyVideoId);
+          await deleteStreamtapeFile(video.streamtapeFileId);
         } catch (error) {
-          // The row is gone regardless; a Bunny outage must not leave an admin
-          // unable to remove content from the site.
-          console.warn("[Admin Video Delete] Bunny delete failed:", (error as Error)?.message);
+          console.warn("[Admin Video Delete] Streamtape delete failed:", (error as Error)?.message);
         }
       }
 
@@ -162,6 +160,13 @@ export async function POST(request: NextRequest) {
     }
 
     if (action === "RESTORE") {
+      if (!video.streamtapeFileId) {
+        return api.error(
+          "This legacy video must be reuploaded before it can be restored.",
+          409,
+          "VIDEO_REUPLOAD_REQUIRED"
+        );
+      }
       await prisma.video.update({
         where: { id: video.id },
         data: { isDeleted: false, isPublished: true, isFlagged: false },
