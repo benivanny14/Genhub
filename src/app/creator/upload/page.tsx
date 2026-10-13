@@ -129,7 +129,7 @@ export default function UploadPage() {
   const [cropFile, setCropFile] = useState<File | null>(null);
   const [thumbnailUploading, setThumbnailUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState<{ slug: string; processing: boolean } | null>(null);
+  const [success, setSuccess] = useState<{ slug: string; processing: boolean; videoId: string } | null>(null);
 
   /**
    * The pictures the creator picked for the cover, before one of them is used.
@@ -199,6 +199,38 @@ export default function UploadPage() {
   useEffect(() => {
     void checkAccess();
   }, [checkAccess]);
+
+  useEffect(() => {
+    if (!success?.processing || !success.videoId) return;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const check = async () => {
+      try {
+        const response = await fetch("/api/videos/status", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids: [success.videoId] }),
+        });
+        const body = await response.json();
+        const status = body?.data?.statuses?.[success.videoId]?.status;
+        if (!active) return;
+        if (status === "READY") {
+          setSuccess((current) => current ? { ...current, processing: false } : current);
+          return;
+        }
+        if (status === "FAILED") {
+          toast("error", "Video imefeli kuchakatwa. Tafadhali wasiliana na support.");
+          return;
+        }
+      } catch {}
+      if (active) timer = setTimeout(check, 8000);
+    };
+    void check();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [success?.processing, success?.videoId, toast]);
 
   async function acceptGuidelines() {
     setAcceptingGuidelines(true);
@@ -507,7 +539,7 @@ export default function UploadPage() {
         toast("error", body.error || "The video uploaded but could not be published");
         return;
       }
-      setSuccess({ slug: body.data.slug || body.data.id, processing: true });
+      setSuccess({ slug: body.data.slug || body.data.id, processing: body.data.status === "PROCESSING", videoId: body.data.id });
     } catch {
       toast("error", "The video uploaded, but publishing could not be confirmed. Press publish again.");
     } finally {

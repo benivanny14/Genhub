@@ -508,7 +508,9 @@ export async function POST(request: NextRequest) {
     return api.success(
       {
         ...video,
-        status: videoStatus(video.encodingStatus, video.encodeProgress),
+        status: uploadState.fileId
+          ? videoStatus(video.encodingStatus, video.encodeProgress)
+          : "PROCESSING",
       },
       holdAsDraft
         ? "Saved as a draft — publish it from your dashboard when you are ready"

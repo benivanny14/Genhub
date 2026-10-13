@@ -8,6 +8,8 @@ import prisma from "@/lib/db";
 import { requireRole, AuthError } from "@/lib/auth";
 import { api } from "@/lib/api-response";
 import { videoStatus } from "@/lib/video-status";
+import { cacheDel } from "@/lib/redis";
+import { refreshLinkedStreamtapeUpload } from "@/lib/streamtape-upload-session";
 
 export async function GET(request: NextRequest) {
   try {
@@ -42,6 +44,7 @@ export async function GET(request: NextRequest) {
         tags: true,
         captionsUrl: true,
         streamtapeFileId: true,
+        creatorId: true,
         encodingStatus: true,
         encodeProgress: true,
         encodingError: true,
@@ -51,26 +54,62 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    const withEncoding = videos.map(
-      ({ streamtapeFileId, uploadSizeBytes, ...video }) => ({
+    const withEncoding = await Promise.all(videos.map(
+      async ({ streamtapeFileId, uploadSizeBytes, creatorId: videoCreatorId, ...video }) => {
+        const importing = streamtapeFileId?.startsWith("pending_") ?? false;
+        let liveStatus: "PROCESSING" | "READY" | "FAILED" | null = null;
+        let liveProgress: number | null = null;
+        if (importing && streamtapeFileId) {
+          const uploadId = streamtapeFileId.slice("pending_".length);
+          const result = await refreshLinkedStreamtapeUpload(uploadId, auth.userId);
+          if (result) {
+            liveStatus = result.state === "READY" ? "READY" : result.state === "FAILED" ? "FAILED" : "PROCESSING";
+            liveProgress = result.progress;
+            if (result.state === "READY" && result.fileId) {
+              await prisma.video.updateMany({
+                where: { id: video.id, creatorId: auth.userId, streamtapeFileId },
+                data: { streamtapeFileId: result.fileId, encodingStatus: null, encodeProgress: 100 },
+              });
+              await cacheDel("home:feed:v3");
+              await cacheDel("videos:*");
+            }
+            if (result.state === "FAILED") {
+              await prisma.video.updateMany({
+                where: { id: video.id, creatorId: auth.userId, streamtapeFileId },
+                data: { encodingStatus: 5, encodeProgress: 0, encodingError: "Streamtape could not process this video. Upload it again." },
+              });
+            }
+          }
+        }
+        const status = liveStatus ?? (importing ? "PROCESSING" : videoStatus(video.encodingStatus, video.encodeProgress));
+        const progress = liveProgress ?? (importing ? 0 : video.encodeProgress ?? 0);
+        const state = importing && status === "PROCESSING"
+          ? "processing"
+          : status === "FAILED"
+            ? "failed"
+            : status === "READY"
+              ? "ready"
+              : "untracked";
+        return ({
         ...video,
         hasTeaser: false,
         encoding: {
-          state: "ready" as const,
-          status: null,
-          progress: 100,
-          label: "Ready",
-          error: null,
+          state,
+          status: importing ? 2 : video.encodingStatus,
+          progress,
+          label: state === "processing" ? "Inachakatwa..." : state === "failed" ? "Failed" : "Ready",
+          error: video.encodingError,
         },
-        status: videoStatus(video.encodingStatus, video.encodeProgress),
+        status,
         storedBytes: streamtapeFileId ? uploadSizeBytes : null,
         sourceBytes: uploadSizeBytes,
-      })
-    );
+      });
+      }
+    ));
 
     return api.success({
       videos: withEncoding,
-      processing: 0,
+      processing: withEncoding.filter((video) => video.status === "PROCESSING").length,
       awaitingPublish: 0,
     });
   } catch (error) {

@@ -273,12 +273,16 @@ export async function pollStreamtapeImport(
       where: { id: session.uploadId },
       data: { state: "FAILED" },
     });
+    await prisma.video.updateMany({
+      where: { streamtapeFileId: `pending_${session.uploadId}` },
+      data: { encodingStatus: 5, encodeProgress: 0, encodingError: "Streamtape could not process this video. Upload it again." },
+    });
     return status;
   }
   if (status.state === "READY") {
     await prisma.streamtapeUpload.update({
       where: { id: session.uploadId },
-      data: { state: "READY", streamtapeFileId: status.fileId },
+      data: { state: upload.state === "LINKED" ? "LINKED" : "READY", streamtapeFileId: status.fileId },
     });
     await r2DeleteObject(upload.objectKey);
   }
