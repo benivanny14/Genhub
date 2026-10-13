@@ -22,6 +22,12 @@ type StreamtapeFileInfo = {
   status?: number;
 };
 
+type StreamtapeConversion = {
+  linkid?: string;
+  status?: string;
+  progress?: number;
+};
+
 export type StreamtapeUploadStatus =
   | { state: "IMPORTING"; progress: number }
   | { state: "FAILED"; progress: number }
@@ -114,7 +120,26 @@ export async function getStreamtapeUploadStatus(
   });
   const file = fileInfo[fileId];
   if (!file || file.id !== fileId) throw new Error("Streamtape file information was incomplete");
-  if (file.converted !== true) return { state: "IMPORTING", progress: 99 };
+  if (file.converted !== true) {
+    const runningResult = await streamtapeRequest<StreamtapeConversion[]>("/file/runningconverts", {});
+    const running = Array.isArray(runningResult)
+      ? runningResult.find((item) => item.linkid === fileId)
+      : undefined;
+    if (!running) {
+      const failedResult = await streamtapeRequest<StreamtapeConversion[]>("/file/failedconverts", {});
+      const failed = Array.isArray(failedResult)
+        ? failedResult.some((item) => item.linkid === fileId)
+        : false;
+      if (failed) return { state: "FAILED", progress: 0 };
+    }
+    const conversionProgress = Number(running?.progress);
+    return {
+      state: "IMPORTING",
+      progress: Number.isFinite(conversionProgress)
+        ? Math.max(0, Math.min(99, Math.floor(conversionProgress * 100)))
+        : progress,
+    };
+  }
 
   return { state: "READY", fileId, progress: 100 };
 }
