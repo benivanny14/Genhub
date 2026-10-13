@@ -269,7 +269,10 @@ export async function GET(request: NextRequest) {
             // Said out loud so a card never *hovers* a manifest that does not
             // exist yet: Bunny 404s a playlist until transcoding finishes, and
             // the preview would spend a request to find that out on every hover.
-            playable: status === "READY" && Boolean(streamtapeFileId) && !streamtapeFileId.startsWith("pending_"),
+            playable:
+              status === "READY" &&
+              streamtapeFileId !== null &&
+              !streamtapeFileId.startsWith("pending_"),
             teaserUrl: null,
             introUrl: null,
           };
